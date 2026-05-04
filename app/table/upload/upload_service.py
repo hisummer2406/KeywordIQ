@@ -146,7 +146,7 @@ class UploadService:
             logger.info(f"文件分片完成: {len(chunk_files)} 个分片")
 
             # 3. 并行处理
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
                 tasks = [
                     loop.run_in_executor(executor, _process_chunk_worker, chunk_file, str(report_date), data_type, i)
