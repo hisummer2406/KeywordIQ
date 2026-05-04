@@ -52,13 +52,21 @@ async def process_csv_background_async(file_path: str, original_filename: str, d
 
 
 def process_csv_background(file_path: str, original_filename: str, data_type: str) -> None:
-    """同步包装器 - 在新的事件循环中运行异步函数"""
+    """同步包装器 - 在新的事件循环中运行异步函数，含超时保护"""
+    # 周报(~300万行)最长允许 2 小时，日报(~30万行)最长 30 分钟
+    timeout = 7200 if data_type == 'weekly' else 1800
     try:
-        asyncio.run(process_csv_background_async(file_path, original_filename, data_type))
+        asyncio.run(
+            asyncio.wait_for(
+                process_csv_background_async(file_path, original_filename, data_type),
+                timeout=timeout
+            )
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"处理超时（>{timeout}s），文件: {original_filename}")
     except Exception as e:
         logger.error(f"后台处理包装器异常: {e}", exc_info=True)
     finally:
-        # 清理文件
         if os.path.exists(file_path):
             try:
                 os.unlink(file_path)
