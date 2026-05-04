@@ -270,11 +270,14 @@ class UploadService:
             return False, f"处理失败: {str(e)}"
 
     async def _split_file_by_lines(self, file_path: str, temp_dir: str, lines_per_chunk: int) -> List[str]:
-        """按行数 分片文件"""
+        """按行数分片文件，在线程池中执行同步 IO，避免阻塞事件循环"""
+        return await asyncio.to_thread(self._split_file_by_lines_sync, file_path, temp_dir, lines_per_chunk)
+
+    def _split_file_by_lines_sync(self, file_path: str, temp_dir: str, lines_per_chunk: int) -> List[str]:
+        """同步分片实现，由 asyncio.to_thread 在线程池中调用"""
         chunk_files = []
 
         with open(file_path, 'r', encoding='utf-8') as source:
-            # 保存头部
             headers = [source.readline(), source.readline()]
 
             chunk_id = 0
@@ -282,7 +285,6 @@ class UploadService:
             chunk_file = None
 
             for line in source:
-                # 创建新分片
                 if chunk_file is None:
                     chunk_path = os.path.join(temp_dir, f"chunk_{chunk_id:03d}.csv")
                     chunk_file = open(chunk_path, 'w', encoding='utf-8')
@@ -293,13 +295,11 @@ class UploadService:
                 chunk_file.write(line)
                 current_lines += 1
 
-                # 检查是否需要切换分片
                 if current_lines >= lines_per_chunk:
                     chunk_file.close()
                     chunk_file = None
                     chunk_id += 1
 
-            # 关闭最后一个文件
             if chunk_file:
                 chunk_file.close()
 
