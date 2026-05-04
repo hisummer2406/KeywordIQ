@@ -1,4 +1,4 @@
-# 🚀 亚马逊关键词分析系统
+# 🚀 KeywordIQ AI选品Agent v0.0.1
 
 > 专业的亚马逊搜索词数据分析平台，支持GB级大文件处理、实时数据分析和可视化展示
 >
@@ -34,10 +34,10 @@
 
 ## 🚀 快速开始
 
-### 环境要求
+### 线上环境
 
-- Docker 20.10+ / Docker Compose 2.0+
-- 磁盘空间 20GB+ / 内存 8GB+
+- ECS Alibaba Cloud Linux 3.2104 LTS 64位 4 核（vCPU）8 GiB
+- RDS PostgreSQL15.0 2C4G默认连接数 400
 
 ### 一键部署
 
