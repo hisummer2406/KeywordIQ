@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import os
 import re
 import tempfile
@@ -15,6 +16,12 @@ from app.table.upload.csv_processor import CSVProcessor, validate_csv_structure
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# 多进程 fork 开销约 2~5 秒/进程，分片数不足时收益低于开销
+# 日报 ~150MB / 500字节行 / 10万行每片 ≈ 3片 → 低于阈值降级单线程
+# 周报 ~1.5GB / 500字节行 / 10万行每片 ≈ 30片 → 高于阈值使用多进程
+_MIN_SHARDS_FOR_MULTIPROCESSING = 6
+_AVG_BYTES_PER_LINE = 500  # Amazon CSV 行平均字节数，用于估算分片数
 
 
 def _process_chunk_worker(chunk_file: str, report_date_str: str, data_type: str, chunk_id: int) -> dict:
@@ -74,11 +81,22 @@ class UploadService:
 
         logger.info(f"文件: {original_filename}, 大小: {file_size_mb:.1f}MB")
 
+        use_multiprocessing = False
         if file_size >= self.multiprocess_threshold:
-            logger.info(f"使用多进程处理大文件: {file_size_mb:.1f}MB")
+            estimated_shards = math.ceil(
+                (file_size / _AVG_BYTES_PER_LINE) / settings.FILE_SPLIT_LINES
+            )
+            use_multiprocessing = estimated_shards >= _MIN_SHARDS_FOR_MULTIPROCESSING
+            logger.info(
+                f"文件 {file_size_mb:.1f}MB，预估分片数 {estimated_shards}，"
+                f"{'使用多进程' if use_multiprocessing else '分片不足降级单线程'}"
+            )
+        else:
+            logger.info(f"文件 {file_size_mb:.1f}MB 未超过阈值，使用单线程")
+
+        if use_multiprocessing:
             return await self._process_with_multiprocessing(file_path, original_filename, data_type)
         else:
-            logger.info(f"使用单线程处理小文件: {file_size_mb:.1f}MB")
             return await self._process_with_single_thread(file_path, original_filename, data_type)
 
     async def _process_with_single_thread(
