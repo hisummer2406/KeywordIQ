@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Amazon Search Analysis System - A professional Amazon search term data analysis platform supporting GB-level file processing, real-time data analysis, and visualization. Built with FastAPI + PostgreSQL, serving ~200 concurrent users for read-heavy operations with periodic batch data imports (~500K records per batch).
+Amazon Search Analysis System - A professional Amazon search term data analysis platform supporting GB-level file processing, real-time data analysis, and visualization. Built with FastAPI + PostgreSQL, serving ~200 concurrent users for read-heavy operations with periodic batch data imports.
+
+**Import data volumes (critical for performance decisions):**
+- Daily report: ~300K rows, ~150MB CSV, imported once per day
+- Weekly report: ~3M rows, ~1.5GB CSV, imported once per week
+- The 10× size difference means daily and weekly imports have fundamentally different performance characteristics and must be treated as separate problem domains
 
 ## Development Commands
 
@@ -86,14 +91,16 @@ database.py            # SQLAlchemy 2.0 sync + async engines, session factories
 
 ### Performance Optimizations
 
-1. **Connection Pooling**: `DB_POOL_SIZE=100`, `MAX_OVERFLOW=50`, `POOL_RECYCLE=1800s`
+1. **Connection Pooling**: `DB_POOL_SIZE=8`, `DB_MAX_OVERFLOW=12` per worker (RDS max_connections=400 is the hard ceiling — total connections across all workers must stay well below it)
 2. **Query Optimization**:
    - Uses PG statistics estimates (`pg_class.reltuples`) for total count on large tables
    - `LIMIT 10000` count for filtered queries on pagination
    - Default filter excludes keywords containing brand name and rank=0 records
    - Blacklist categories filtered out (Books, Grocery, Video Games, etc.)
-3. **Batch Processing**: `BATCH_SIZE=6000` for pandas chunks, `MINIBATCH_SIZE=500` for DB commits
-4. **Multi-processing**: Configurable `MAX_WORKERS=4` for files > `MULTIPROCESSING_THRESHOLD_MB=100MB`
+3. **Batch Processing**: `BATCH_SIZE=10000` for pandas chunks, `MINIBATCH_SIZE=500` for DB commits
+4. **Multi-processing**: `MAX_WORKERS=2`, threshold `MULTIPROCESSING_THRESHOLD_MB=100MB`, `FILE_SPLIT_LINES=100000` lines per shard
+   - Daily (300K rows, ~150MB, ~3 shards): multiprocessing overhead may not be worthwhile
+   - Weekly (3M rows, ~1.5GB, ~30 shards): multiprocessing is essential but still takes 30–60 min on RDS 2C4G
 
 ## Key Configuration (.env)
 
@@ -112,6 +119,18 @@ MINIBATCH_SIZE=500
 DB_POOL_SIZE=100
 DB_MAX_OVERFLOW=50
 ```
+
+## Production Environment
+
+| Category | Spec |
+|----------|------|
+| App Server | Alibaba Cloud ECS · Alibaba Cloud Linux 3.2104 LTS 64-bit · 4 vCPU / 8 GiB RAM |
+| Database | Alibaba Cloud RDS PostgreSQL 15.0 · 2C4G · max_connections = 400 |
+
+**Capacity implications for code changes:**
+- RDS max 400 connections shared across all app processes; total `(DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers` must stay well under 400
+- 4 vCPU constrains `MAX_WORKERS` for multiprocessing CSV imports — use ≤ 3 to leave headroom for concurrent API traffic
+- 8 GiB RAM limits in-memory pandas chunks; keep `BATCH_SIZE` ≤ 6000 rows per chunk
 
 ## Important Constraints
 
