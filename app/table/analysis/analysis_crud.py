@@ -258,7 +258,26 @@ class AnalysisCRUD:
     def _apply_boolean_filters(self, stmt, params: AnalysisSearchRequest):
         """应用布尔值筛选"""
         if params.is_new_day is not None:
-            stmt = stmt.where(AmazonOriginSearchData.is_new_day == params.is_new_day)
+            if params.report_date:
+                try:
+                    target_date_str = datetime.strptime(params.report_date.strip(), "%Y-%m-%d").date().isoformat()
+                    # 指定日期时走 JSONB containment，历史日期也能正确命中
+                    if params.is_new_day:
+                        stmt = stmt.where(
+                            AmazonOriginSearchData.ranking_trend_day.contains(
+                                [{"date": target_date_str, "is_new": True}]
+                            )
+                        )
+                    else:
+                        stmt = stmt.where(
+                            ~AmazonOriginSearchData.ranking_trend_day.contains(
+                                [{"date": target_date_str, "is_new": True}]
+                            )
+                        )
+                except (ValueError, AttributeError):
+                    stmt = stmt.where(AmazonOriginSearchData.is_new_day == params.is_new_day)
+            else:
+                stmt = stmt.where(AmazonOriginSearchData.is_new_day == params.is_new_day)
 
         if params.is_new_week is not None:
             stmt = stmt.where(AmazonOriginSearchData.is_new_week == params.is_new_week)
