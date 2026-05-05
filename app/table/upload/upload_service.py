@@ -326,38 +326,34 @@ class UploadService:
     async def _monitor_progress(
         self, batch_record: ImportBatchRecords, start_time: datetime, stop_event: asyncio.Event
     ):
-        """监控处理进度 - 支持 Event 协调的优雅退出"""
+        """监控处理进度 - 复用长连接 Session，30秒轮询，支持优雅退出"""
+        from database import SessionFactory
         try:
-            while not stop_event.is_set():  # 检查是否应该停止
-                try:
-                    # 使用 wait_for 支持快速响应停止信号（最多等待10秒）
-                    await asyncio.wait_for(stop_event.wait(), timeout=10.0)
-                    # 如果 wait_for 超时，继续执行下面的进度更新逻辑
-                    # 如果 stop_event 被设置，会立即返回并退出循环
-                except asyncio.TimeoutError:
-                    # 超时是正常的，继续执行进度更新
-                    pass
+            with SessionFactory() as monitor_db:
+                while not stop_event.is_set():
+                    try:
+                        await asyncio.wait_for(stop_event.wait(), timeout=30.0)
+                    except asyncio.TimeoutError:
+                        pass
 
-                if stop_event.is_set():
-                    break
+                    if stop_event.is_set():
+                        break
 
-                # 检查批次记录是否还在处理中
-                try:
-                    from database import SessionFactory
-                    with SessionFactory() as fresh_db:
+                    try:
+                        monitor_db.expire_all()  # 防止读到 SQLAlchemy 对象缓存
                         stmt = select(ImportBatchRecords).where(ImportBatchRecords.id == batch_record.id)
-                        fresh_record = fresh_db.execute(stmt).scalar_one_or_none()
+                        fresh_record = monitor_db.execute(stmt).scalar_one_or_none()
 
                         if not fresh_record or fresh_record.status != StatusEnum.PROCESSING:
                             break
 
-                        processing_seconds = int((datetime.now() - start_time).total_seconds())
-                        fresh_record.processing_seconds = processing_seconds
-                        fresh_db.commit()
+                        fresh_record.processing_seconds = int((datetime.now() - start_time).total_seconds())
+                        monitor_db.commit()
 
-                except Exception as e:
-                    logger.warning(f"_monitor_progress:更新进度失败: {e}")
-                    await asyncio.sleep(30)
+                    except Exception as e:
+                        logger.warning(f"_monitor_progress:更新进度失败: {e}")
+                        monitor_db.rollback()
+                        await asyncio.sleep(30)
 
             logger.info("进度监控任务正常退出")
 
