@@ -1,6 +1,7 @@
 import logging
 import os
 import uuid
+import threading
 import aiofiles
 import tempfile
 import asyncio
@@ -25,6 +26,12 @@ chunk_sessions: Dict[str, Dict[str, Any]] = {}
 # 单用户场景优化
 MAX_CONCURRENT_UPLOADS = 2  # 最多2个同时上传（防止误操作）
 upload_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+
+# 每种数据类型同一时刻只允许一个处理任务，防止并发 UPSERT 行锁竞争
+_processing_locks: Dict[str, threading.Lock] = {
+    "daily": threading.Lock(),
+    "weekly": threading.Lock(),
+}
 
 
 async def process_csv_background_async(file_path: str, original_filename: str, data_type: str) -> None:
@@ -52,7 +59,17 @@ async def process_csv_background_async(file_path: str, original_filename: str, d
 
 
 def process_csv_background(file_path: str, original_filename: str, data_type: str) -> None:
-    """同步包装器 - 在新的事件循环中运行异步函数，含超时保护"""
+    """同步包装器 - 在新的事件循环中运行异步函数，含超时保护和串行化锁"""
+    lock = _processing_locks.get(data_type)
+    if lock is None:
+        logger.warning(f"未知 data_type={data_type}，跳过串行锁")
+        lock_acquired = False
+    else:
+        logger.info(f"等待 {data_type} 处理锁: {original_filename}")
+        lock.acquire()
+        lock_acquired = True
+        logger.info(f"获得 {data_type} 处理锁，开始处理: {original_filename}")
+
     # 周报(~300万行)最长允许 2 小时，日报(~30万行)最长 30 分钟
     timeout = 7200 if data_type == 'weekly' else 1800
     try:
@@ -67,6 +84,9 @@ def process_csv_background(file_path: str, original_filename: str, data_type: st
     except Exception as e:
         logger.error(f"后台处理包装器异常: {e}", exc_info=True)
     finally:
+        if lock_acquired:
+            lock.release()
+            logger.info(f"释放 {data_type} 处理锁: {original_filename}")
         if os.path.exists(file_path):
             try:
                 os.unlink(file_path)
