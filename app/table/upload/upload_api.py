@@ -180,7 +180,7 @@ def merge_chunks_and_process(
         upload_dir.mkdir(parents=True, exist_ok=True)
         final_path = upload_dir / final_filename
 
-        # 按序号合并分块文件
+        # 按序号合并分块文件（流式拷贝 + 合并后立即删除分块，降低峰值磁盘占用）
         total_size = 0
         with open(final_path, 'wb') as outfile:
             sorted_parts = sorted(session_data["chunks"].items())
@@ -188,9 +188,12 @@ def merge_chunks_and_process(
                 chunk_path = chunk_info["path"]
                 if os.path.exists(chunk_path):
                     with open(chunk_path, 'rb') as chunk_file:
-                        chunk_data = chunk_file.read()
-                        outfile.write(chunk_data)
-                        total_size += len(chunk_data)
+                        shutil.copyfileobj(chunk_file, outfile)
+                    total_size += os.path.getsize(chunk_path)
+                    try:
+                        os.unlink(chunk_path)
+                    except Exception as e:
+                        logger.warning(f"删除分块文件失败: {chunk_path}: {e}")
                 else:
                     logger.error(f"分块文件不存在: {chunk_path}")
                     return
