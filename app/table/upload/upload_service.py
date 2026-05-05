@@ -158,10 +158,15 @@ class UploadService:
                 data_type == 'daily', data_type == 'weekly'
             )
 
-            # 2. 文件分片
+            # 2. 文件分片（分片完成后立即删除合并文件，降低峰值磁盘占用）
             temp_dir = tempfile.mkdtemp(prefix="upload_")
             chunk_files = await self._split_file_by_lines(file_path, temp_dir, settings.FILE_SPLIT_LINES)
             logger.info(f"文件分片完成: {len(chunk_files)} 个分片")
+            try:
+                os.unlink(file_path)
+                logger.info(f"已删除合并文件: {file_path}")
+            except Exception as e:
+                logger.warning(f"删除合并文件失败: {e}")
 
             # 3. 并行处理
             loop = asyncio.get_running_loop()
