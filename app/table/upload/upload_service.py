@@ -17,10 +17,11 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# 多进程 fork 开销约 2~5 秒/进程，分片数不足时收益低于开销
-# 日报 ~150MB / 500字节行 / 10万行每片 ≈ 3片 → 低于阈值降级单线程
-# 周报 ~1.5GB / 500字节行 / 10万行每片 ≈ 30片 → 高于阈值使用多进程
-_MIN_SHARDS_FOR_MULTIPROCESSING = 6
+# 多进程将重计算放进独立子进程，避免与 uvicorn 主进程竞争 GIL
+# 日报 ~150MB / 500字节行 / 10万行每片 ≈ 3片 → 超过阈值2，使用多进程
+# 周报 ~1.5GB / 500字节行 / 10万行每片 ≈ 30片 → 使用多进程
+# 阈值从6降到2：第二次日报导入因大量UPDATE+JSONB预取持续占用GIL，主进程响应超时(504)
+_MIN_SHARDS_FOR_MULTIPROCESSING = 2
 _AVG_BYTES_PER_LINE = 500  # Amazon CSV 行平均字节数，用于估算分片数
 
 
