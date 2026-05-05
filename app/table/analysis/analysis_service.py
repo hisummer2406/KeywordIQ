@@ -61,6 +61,15 @@ class AnalysisService:
         """获取类目选项"""
         return self.crud.get_categories()
 
+    @staticmethod
+    def _extract_is_new_from_trend(trend: list, date_str: str | None, fallback: bool) -> bool:
+        """从 ranking_trend_day JSONB 中取指定日期的 is_new；老数据无该字段时回退到标量列"""
+        if trend and date_str:
+            for entry in trend:
+                if entry.get('date') == date_str:
+                    return entry.get('is_new', fallback)
+        return fallback
+
     def _format_data_item(self, item: AmazonOriginSearchData) -> AnalysisDataItem:
         """格式化单个数据项"""
         try:
@@ -97,8 +106,12 @@ class AnalysisService:
                 top_product_conversion_share=float(item.top_product_conversion_share),
                 conversion_rate=conversion_rate,
 
-                # 状态标识
-                is_new_day=item.is_new_day,
+                # 状态标识：优先从 ranking_trend_day JSONB 中取对应日期的 is_new，保证历史准确性
+                is_new_day=self._extract_is_new_from_trend(
+                    item.ranking_trend_day,
+                    item.report_date_day.isoformat() if item.report_date_day else None,
+                    item.is_new_day,
+                ),
                 is_new_week=item.is_new_week,
 
                 # 日期信息

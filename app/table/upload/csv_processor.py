@@ -372,12 +372,12 @@ class CSVProcessor:
             logger.warning(f"批量预取趋势失败，降级为空趋势: {e}")
             return {}
 
-    def _merge_ranking_trend(self, existing: list, report_date: date, current_ranking: int) -> str:
-        """在 Python 层合并 ranking_trend_day，保留最近 7 天"""
+    def _merge_ranking_trend(self, existing: list, report_date: date, current_ranking: int, is_new: bool = False) -> str:
+        """在 Python 层合并 ranking_trend_day，保留最近 7 天；is_new 记录该日期是否为新品"""
         import json
         date_str = report_date.isoformat()
         filtered = [item for item in existing if item.get('date') != date_str]
-        merged = [{'date': date_str, 'ranking': current_ranking}] + filtered
+        merged = [{'date': date_str, 'ranking': current_ranking, 'is_new': is_new}] + filtered
         merged.sort(key=lambda x: x['date'], reverse=True)
         return json.dumps(merged[:7])
 
@@ -429,14 +429,16 @@ class CSVProcessor:
 
         # 根据数据类型设置特定字段
         if data_type == 'daily':
+            # existing_trend 为空表示该 keyword 首次出现于日报，即新品
+            is_new_for_date = not existing_trend
             data.update({
                 'current_rangking_day': current_ranking,
                 'report_date_day': report_date,
                 'previous_rangking_day': 0,  # 由数据库处理
                 'ranking_change_day': 0,  # 由数据库计算
-                'is_new_day': True,  # 由数据库处理
+                'is_new_day': True,  # 由数据库 CASE 处理最终值
                 'ranking_trend_day': self._merge_ranking_trend(
-                    existing_trend or [], report_date, current_ranking
+                    existing_trend or [], report_date, current_ranking, is_new=is_new_for_date
                 ),
 
                 # 周数据默认值
