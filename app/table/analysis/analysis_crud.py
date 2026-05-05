@@ -176,14 +176,18 @@ class AnalysisCRUD:
         if params.product_title and params.product_title.strip():
             stmt = stmt.where(AmazonOriginSearchData.top_product_title.ilike(f"%{params.product_title.strip()}%"))
 
-        # 报告日期筛选
+        # 报告日期筛选：同时检查标量列和 ranking_trend_day JSONB，历史日期也能命中
         if params.report_date and params.report_date.strip():
             try:
                 target_date = datetime.strptime(params.report_date.strip(), "%Y-%m-%d").date()
+                target_date_str = target_date.isoformat()
                 stmt = stmt.where(
                     or_(
                         AmazonOriginSearchData.report_date_day == target_date,
-                        AmazonOriginSearchData.report_date_week == target_date
+                        AmazonOriginSearchData.report_date_week == target_date,
+                        AmazonOriginSearchData.ranking_trend_day.contains(
+                            [{"date": target_date_str}]
+                        ),
                     )
                 )
             except ValueError:
