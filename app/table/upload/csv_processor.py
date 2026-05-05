@@ -253,8 +253,8 @@ class CSVProcessor:
                    END \
                    ,
                     report_date_day = EXCLUDED.report_date_day,
-                    is_new_day = CASE 
-                        WHEN amazon_origin_search_data.report_date_day = EXCLUDED.report_date_day 
+                    is_new_day = CASE
+                        WHEN amazon_origin_search_data.report_date_day = EXCLUDED.report_date_day
                         THEN amazon_origin_search_data.is_new_day
                         ELSE false
                    END \
