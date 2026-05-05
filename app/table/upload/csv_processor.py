@@ -376,6 +376,10 @@ class CSVProcessor:
         """在 Python 层合并 ranking_trend_day，保留最近 7 天；is_new 记录该日期是否为新品"""
         import json
         date_str = report_date.isoformat()
+        # 同日期重复导入时，保留已有的 is_new 值，避免覆盖为 False
+        existing_entry = next((e for e in existing if e.get('date') == date_str), None)
+        if existing_entry is not None:
+            is_new = existing_entry.get('is_new', is_new)
         filtered = [item for item in existing if item.get('date') != date_str]
         merged = [{'date': date_str, 'ranking': current_ranking, 'is_new': is_new}] + filtered
         merged.sort(key=lambda x: x['date'], reverse=True)
