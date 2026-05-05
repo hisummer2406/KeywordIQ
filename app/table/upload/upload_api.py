@@ -61,9 +61,9 @@ async def process_csv_background_async(file_path: str, original_filename: str, d
 def process_csv_background(file_path: str, original_filename: str, data_type: str) -> None:
     """同步包装器 - 在新的事件循环中运行异步函数，含超时保护和串行化锁"""
     lock = _processing_locks.get(data_type)
+    lock_acquired = False
     if lock is None:
         logger.warning(f"未知 data_type={data_type}，跳过串行锁")
-        lock_acquired = False
     else:
         logger.info(f"等待 {data_type} 处理锁: {original_filename}")
         lock.acquire()
