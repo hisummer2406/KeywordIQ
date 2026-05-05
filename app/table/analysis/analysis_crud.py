@@ -265,7 +265,6 @@ class AnalysisCRUD:
             if params.report_date:
                 try:
                     target_date_str = datetime.strptime(params.report_date.strip(), "%Y-%m-%d").date().isoformat()
-                    # 指定日期时走 JSONB containment，历史日期也能正确命中
                     if params.is_new_day:
                         stmt = stmt.where(
                             AmazonOriginSearchData.ranking_trend_day.contains(
