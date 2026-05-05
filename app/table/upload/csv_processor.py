@@ -143,9 +143,19 @@ class CSVProcessor:
         """带重试机制的小批次处理"""
         for attempt in range(self.max_retries):
             try:
-                batch_data = []
                 now = datetime.now()
 
+                # daily 需预取现有趋势，1次批量 SELECT 替代 N 次 DB 端 JSONB CTE
+                existing_trends: Dict[str, list] = {}
+                if data_type == 'daily':
+                    keywords = [
+                        str(row.get('keyword', '')).strip()
+                        for _, row in df.iterrows()
+                        if str(row.get('keyword', '')).strip()
+                    ]
+                    existing_trends = self._fetch_existing_trends(keywords, db_session)
+
+                batch_data = []
                 for _, row in df.iterrows():
                     keyword = str(row.get('keyword', '')).strip()
                     if not keyword:
@@ -153,7 +163,10 @@ class CSVProcessor:
 
                     current_ranking = int(float(row.get('current_rangking_day', 0))) if row.get(
                         'current_rangking_day') else 0
-                    record_data = self._prepare_record_data(row, report_date, data_type, current_ranking, now)
+                    record_data = self._prepare_record_data(
+                        row, report_date, data_type, current_ranking, now,
+                        existing_trends.get(keyword, None)
+                    )
                     batch_data.append(record_data)
 
                 if not batch_data:
@@ -246,41 +259,7 @@ class CSVProcessor:
                         ELSE false
                    END \
                    ,
-                    ranking_trend_day = CASE 
-                        WHEN amazon_origin_search_data.report_date_day = EXCLUDED.report_date_day 
-                        THEN (
-                            -- 如果是同一天的数据，更新当天的排名
-                            SELECT jsonb_agg(
-                                CASE 
-                                    WHEN item->>'date' = EXCLUDED.report_date_day::text 
-                                    THEN jsonb_build_object('date', item->>'date', 'ranking', EXCLUDED.current_rangking_day)
-                                    ELSE item
-                                END
-                            )
-                            FROM jsonb_array_elements(amazon_origin_search_data.ranking_trend_day) AS item
-                        )
-                        ELSE (
-                            -- 如果是新的一天，添加新数据并保留最近7天
-                            WITH existing_items AS (
-                                SELECT item
-                                FROM jsonb_array_elements(amazon_origin_search_data.ranking_trend_day) AS item
-                                WHERE (item->>'date')::date != EXCLUDED.report_date_day
-                                ORDER BY (item->>'date')::date DESC
-                                LIMIT 6
-                            ),
-                            new_item AS (
-                                SELECT jsonb_build_object('date', EXCLUDED.report_date_day::text, 'ranking', EXCLUDED.current_rangking_day) AS item
-                            ),
-                            combined AS (
-                                SELECT item FROM new_item
-                                UNION ALL
-                                SELECT item FROM existing_items
-                            )
-                            SELECT jsonb_agg(item ORDER BY (item->>'date')::date DESC)
-                            FROM combined
-                        )
-                   END \
-                   ,
+                    ranking_trend_day = EXCLUDED.ranking_trend_day,
                     top_brand = EXCLUDED.top_brand,
                     top_category = EXCLUDED.top_category,
                     top_product_asin = EXCLUDED.top_product_asin,
@@ -375,8 +354,35 @@ class CSVProcessor:
                     product_conversion_share_3rd = EXCLUDED.product_conversion_share_3rd \
                    """
 
+    def _fetch_existing_trends(self, keywords: List[str], db_session: Session) -> Dict[str, list]:
+        """批量查询现有 ranking_trend_day，1次 SELECT 覆盖整个 mini-batch"""
+        if not keywords:
+            return {}
+        try:
+            result = db_session.execute(
+                text("""
+                    SELECT keyword, ranking_trend_day
+                    FROM analysis.amazon_origin_search_data
+                    WHERE keyword = ANY(:keywords)
+                """),
+                {"keywords": keywords}
+            ).fetchall()
+            return {row.keyword: (row.ranking_trend_day or []) for row in result}
+        except Exception as e:
+            logger.warning(f"批量预取趋势失败，降级为空趋势: {e}")
+            return {}
+
+    def _merge_ranking_trend(self, existing: list, report_date: date, current_ranking: int) -> str:
+        """在 Python 层合并 ranking_trend_day，保留最近 7 天"""
+        import json
+        date_str = report_date.isoformat()
+        filtered = [item for item in existing if item.get('date') != date_str]
+        merged = [{'date': date_str, 'ranking': current_ranking}] + filtered
+        merged.sort(key=lambda x: x['date'], reverse=True)
+        return json.dumps(merged[:7])
+
     def _prepare_record_data(self, row: pd.Series, report_date: date, data_type: str, current_ranking: int,
-                             now: datetime) -> Dict[str, Any]:
+                             now: datetime, existing_trend: list = None) -> Dict[str, Any]:
         """准备记录数据"""
 
         def safe_get(col, default='', dtype=str):
@@ -423,15 +429,15 @@ class CSVProcessor:
 
         # 根据数据类型设置特定字段
         if data_type == 'daily':
-            ranking_trend_data = [{"date": report_date.isoformat(), "ranking": current_ranking}]
-
             data.update({
                 'current_rangking_day': current_ranking,
                 'report_date_day': report_date,
                 'previous_rangking_day': 0,  # 由数据库处理
                 'ranking_change_day': 0,  # 由数据库计算
                 'is_new_day': True,  # 由数据库处理
-                'ranking_trend_day': json.dumps(ranking_trend_data),
+                'ranking_trend_day': self._merge_ranking_trend(
+                    existing_trend or [], report_date, current_ranking
+                ),
 
                 # 周数据默认值
                 'current_rangking_week': 0,
