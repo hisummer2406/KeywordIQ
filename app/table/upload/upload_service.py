@@ -196,7 +196,14 @@ class UploadService:
 
             # 4. 统计结果
             total_processed = sum(r.get('processed_count', 0) for r in results if isinstance(r, dict))
-            failed_count = sum(1 for r in results if isinstance(r, Exception) or r.get('status') == 'failed')
+            failed_count = 0
+            for r in results:
+                if isinstance(r, Exception):
+                    failed_count += 1
+                    logger.error(f"分片异常(Exception): {r}", exc_info=r)
+                elif isinstance(r, dict) and r.get('status') == 'failed':
+                    failed_count += 1
+                    logger.error(f"分片 {r.get('chunk_id')} 失败: {r.get('error')}")
 
             # 5. 更新状态
             processing_time = int((datetime.now() - start_time).total_seconds())
