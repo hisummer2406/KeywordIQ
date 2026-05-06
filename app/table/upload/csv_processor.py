@@ -181,6 +181,7 @@ class CSVProcessor:
                     return len(batch_data)
                 except (OperationalError, DisconnectionError, psycopg2.OperationalError) as e:
                     logger.warning(f"连接错误，尝试重建连接并重试: {e}")
+                    self._safe_rollback(db_session)
                     if attempt < self.max_retries - 1:
                         self._rebuild_connection(db_session)
                         time.sleep(self.retry_delay * (attempt + 1))
@@ -190,10 +191,12 @@ class CSVProcessor:
                         return 0
                 except Exception as e:
                     logger.error(f"批处理失败，跳过本批次: {e}")
+                    self._safe_rollback(db_session)
                     return 0
 
             except Exception as e:
                 logger.error(f"处理失败: {e}")
+                self._safe_rollback(db_session)
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay * (attempt + 1))
                     self._rebuild_connection(db_session)
