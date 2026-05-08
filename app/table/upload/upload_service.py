@@ -205,7 +205,7 @@ class UploadService:
                     failed_count += 1
                     logger.error(f"分片 {r.get('chunk_id')} 失败: {r.get('error')}")
 
-            # 5. 更新状态
+            # 5. 更新状态（带重试，防止长时处理后 DB 连接被断）
             processing_time = int((datetime.now() - start_time).total_seconds())
 
             try:
@@ -213,28 +213,38 @@ class UploadService:
             except:
                 pass
 
-            # 使用新会话更新最终状态
+            if failed_count == 0:
+                message = f"多进程处理完成: {total_processed} 条记录, {processing_time}秒"
+                success = True
+                target_status = StatusEnum.COMPLETED
+            else:
+                message = f"部分失败: 成功 {total_processed} 条, {failed_count} 个分片失败"
+                success = False
+                target_status = StatusEnum.FAILED
+
             from database import SessionFactory
-            with SessionFactory() as fresh_db:
-                stmt = select(ImportBatchRecords).where(ImportBatchRecords.id == batch_record.id)
-                fresh_record = fresh_db.execute(stmt).scalar_one_or_none()
-                if fresh_record:
-                    fresh_record.processed_keywords = total_processed
-                    fresh_record.total_records = total_processed
-                    fresh_record.processing_seconds = processing_time
-
-                    if failed_count == 0:
-                        fresh_record.status = StatusEnum.COMPLETED
-                        fresh_record.completed_at = datetime.now()
-                        message = f"多进程处理完成: {total_processed} 条记录, {processing_time}秒"
-                        success = True
-                    else:
-                        fresh_record.status = StatusEnum.FAILED
-                        fresh_record.error_message = f"{failed_count} 个分片失败"
-                        message = f"部分失败: 成功 {total_processed} 条, {failed_count} 个分片失败"
-                        success = False
-
-                    fresh_db.commit()
+            for attempt in range(5):
+                try:
+                    with SessionFactory() as fresh_db:
+                        stmt = select(ImportBatchRecords).where(ImportBatchRecords.id == batch_record.id)
+                        fresh_record = fresh_db.execute(stmt).scalar_one_or_none()
+                        if fresh_record:
+                            fresh_record.processed_keywords = total_processed
+                            fresh_record.total_records = total_processed
+                            fresh_record.processing_seconds = processing_time
+                            fresh_record.status = target_status
+                            if target_status == StatusEnum.COMPLETED:
+                                fresh_record.completed_at = datetime.now()
+                            else:
+                                fresh_record.error_message = f"{failed_count} 个分片失败"
+                            fresh_db.commit()
+                    break
+                except Exception as e:
+                    wait = 2 ** attempt
+                    logger.warning(f"最终状态更新失败(第{attempt+1}次): {e}，{wait}秒后重试")
+                    await asyncio.sleep(wait)
+            else:
+                logger.error(f"最终状态更新彻底失败，batch_id={batch_record.id}")
 
             return success, message, batch_record
 
@@ -339,21 +349,20 @@ class UploadService:
     async def _monitor_progress(
         self, batch_record: ImportBatchRecords, start_time: datetime, stop_event: asyncio.Event
     ):
-        """监控处理进度 - 复用长连接 Session，30秒轮询，支持优雅退出"""
+        """监控处理进度 - 每次轮询创建独立 Session，避免长连接被 RDS 断开后死连接复用"""
         from database import SessionFactory
         try:
-            with SessionFactory() as monitor_db:
-                while not stop_event.is_set():
-                    try:
-                        await asyncio.wait_for(stop_event.wait(), timeout=30.0)
-                    except asyncio.TimeoutError:
-                        pass
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    pass
 
-                    if stop_event.is_set():
-                        break
+                if stop_event.is_set():
+                    break
 
-                    try:
-                        monitor_db.expire_all()  # 防止读到 SQLAlchemy 对象缓存
+                try:
+                    with SessionFactory() as monitor_db:
                         stmt = select(ImportBatchRecords).where(ImportBatchRecords.id == batch_record.id)
                         fresh_record = monitor_db.execute(stmt).scalar_one_or_none()
 
@@ -363,10 +372,9 @@ class UploadService:
                         fresh_record.processing_seconds = int((datetime.now() - start_time).total_seconds())
                         monitor_db.commit()
 
-                    except Exception as e:
-                        logger.warning(f"_monitor_progress:更新进度失败: {e}")
-                        monitor_db.rollback()
-                        await asyncio.sleep(30)
+                except Exception as e:
+                    logger.warning(f"_monitor_progress:更新进度失败: {e}")
+                    await asyncio.sleep(30)
 
             logger.info("进度监控任务正常退出")
 
