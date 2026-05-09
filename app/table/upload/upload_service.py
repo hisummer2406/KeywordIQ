@@ -79,6 +79,8 @@ class UploadService:
             self, file_path: str, original_filename: str, data_type: str
     ) -> Tuple[bool, str, Optional[ImportBatchRecords]]:
         """选择处理策略：大文件多进程，小文件单线程"""
+        if data_type not in {"daily", "weekly"}:
+            return False, "data_type 只支持 daily 或 weekly", None
 
         # 1. 验证文件结构
         is_valid, validation_message = validate_csv_structure(file_path)
@@ -138,6 +140,8 @@ class UploadService:
 
             if success:
                 logger.info(f"单线程处理完成: {original_filename}")
+            elif batch_record:
+                self._update_batch_record_error(batch_record, message)
 
             return success, message, batch_record
 
@@ -323,6 +327,7 @@ class UploadService:
 
         except Exception as e:
             logger.error(f"处理失败: {e}")
+            self.db.rollback()
             return False, f"处理失败: {str(e)}"
 
     async def _split_file_by_lines(self, file_path: str, temp_dir: str, lines_per_chunk: int) -> List[str]:

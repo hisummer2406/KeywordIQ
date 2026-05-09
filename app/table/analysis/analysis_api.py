@@ -39,7 +39,7 @@ def _parse_optional_value(value: Optional[str], value_type: type = str):
 
 
 @analysis_router.get("/search", response_model=AnalysisSearchResponse)
-async def search_data(
+def search_data(
         current_user: dict = Depends(simple_auth.get_current_user),
         # 分页参数
         page: int = Query(1, ge=1, description="页码"),
@@ -145,7 +145,7 @@ async def search_data(
 
 
 @analysis_router.get("/categories")
-async def get_categories(
+def get_categories(
         current_user: dict = Depends(simple_auth.get_current_user),
         db: Session = Depends(get_db)
 ):
@@ -165,7 +165,7 @@ async def get_categories(
 
 
 @analysis_router.get("/export")
-async def export_data(
+def export_data(
         current_user: dict = Depends(simple_auth.get_current_user),
         db: Session = Depends(get_db),
 

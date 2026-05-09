@@ -1,6 +1,16 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
+
+ALLOWED_ANALYSIS_ORDER_FIELDS = frozenset({
+    "current_rangking_day",
+    "ranking_change_day",
+    "current_rangking_week",
+    "ranking_change_week",
+    "top_product_click_share",
+    "top_product_conversion_share",
+    "report_date_day",
+})
 
 
 class AnalysisSearchRequest(BaseModel):
@@ -44,6 +54,28 @@ class AnalysisSearchRequest(BaseModel):
     # 高级搜索 - 布尔值筛选
     is_new_day: Optional[bool] = Field(None, description="是否日新品")
     is_new_week: Optional[bool] = Field(None, description="是否周新品")
+
+    @field_validator("orderBy")
+    @classmethod
+    def validate_order_by(cls, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+
+        value = value.strip()
+        if value in ALLOWED_ANALYSIS_ORDER_FIELDS:
+            return value
+        return None
+
+    @field_validator("orderDir")
+    @classmethod
+    def validate_order_dir(cls, value: Optional[str]) -> str:
+        if not value:
+            return "asc"
+
+        value = value.strip().lower()
+        if value in {"asc", "desc"}:
+            return value
+        return "asc"
 
 
 class AnalysisDataItem(BaseModel):

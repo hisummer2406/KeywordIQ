@@ -174,6 +174,20 @@ amazon-search-analysis/
 └── config.py              # 配置文件
 ```
 
+### 技术约束
+
+- **SQLAlchemy 2.0 Only**：新增 ORM 代码必须使用 `DeclarativeBase`、`Mapped`、`mapped_column`、`select()`、`Session.execute(...).scalars()` 等 2.0 写法。
+- 禁止引入 SQLAlchemy 1.x 风格 API：`declarative_base()`、模型字段 `Column(...)`、`session.query(...)`。
+- **Pydantic 2.0 Only**：请求/响应模型必须使用 `ConfigDict`、`field_validator`、`model_validate()`、`model_dump()`。
+- 禁止引入 Pydantic v1 风格 API：`class Config`、`@validator`、`@root_validator`、`.dict()`、`.parse_obj()`。
+- ORM 模型、请求 Schema、响应 Schema 应保持明确类型，避免无必要的 `dict`、`Any` 和字符串日期。
+- 数据库结构变更必须通过 Alembic migration 管理；修改 ORM 模型时同步更新迁移，并确认目标 schema 为 `analysis`。
+- Service 层负责事务提交/回滚边界，CRUD 层只做数据访问；大文件导入避免长事务，子进程不得复用父进程数据库连接。
+- FastAPI 请求处理应保持轻量；CSV 解析、阻塞数据库操作、整文件读取等重任务不要直接运行在事件循环中。
+- 大数据路径必须控制内存和结果集大小：禁止一次性读入 GB 级 CSV，禁止返回未分页的大表查询结果，新增筛选/关联查询需考虑索引和执行计划。
+- 单元测试不应依赖真实 PostgreSQL；数据库/导入测试使用 `.env` 和小样本 fixture，新增测试必须可被 `pytest` 正常收集。
+- 新增配置项时同步更新 `.env.example`，说明单位和安全默认值；不要提交 `uploads/`、`logs/`、临时分片文件或真实业务 CSV 数据。
+
 ### API 文档
 
 - Swagger UI: http://localhost:8000/docs
