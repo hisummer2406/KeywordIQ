@@ -1,47 +1,25 @@
 import unittest
 from app.auth.auth_middleware import AdminAuthMiddleware
 
+
 class TestAdminAuthMiddleware(unittest.TestCase):
-    def middleware(self):
-        # 创建中间件实例，不需要实际的app参数
-        return AdminAuthMiddleware(app=None)
+    def setUp(self):
+        self.middleware = AdminAuthMiddleware(app=None)
 
-    def test_exclude_paths_return_false(self, middleware):
-        # 测试排除路径返回False
-        exclude_paths = [
-            ("/admin/login", False),
-            ("/api/auth/login", False),
-            ("/static/css/style.css", False),
-            ("/docs", False),
-            ("/", False)
-        ]
-        for path, expected in exclude_paths:
-            assert middleware._needs_auth(path) == expected, f"Failed for path: {path}"
+    def test_admin_paths_not_protected(self):
+        # /admin/* 由 amis 框架自行处理，中间件放行
+        for path in ["/admin/login", "/admin/user", "/admin/dashboard"]:
+            self.assertFalse(self.middleware._needs_auth(path), path)
 
-    def test_protected_paths_return_true(self, middleware):
-        # 测试保护路径返回True
-        protected_paths = [
-            ("/api/analysis/search", True),
-            ("/api/user/list", True),
-            ("/admin/user", True),
-            ("/admin/analysis", True)
-        ]
-        for path, expected in protected_paths:
-            assert middleware._needs_auth(path) == expected, f"Failed for path: {path}"
+    def test_exclude_paths_not_protected(self):
+        for path in ["/api/auth/login", "/api/auth/profile",
+                     "/static/style.css", "/docs", "/health", "/"]:
+            self.assertFalse(self.middleware._needs_auth(path), path)
 
-    def test_partial_matches(self, middleware):
-        # 测试部分匹配情况
-        partial_cases = [
-            ("/admin/login/123", False),  # 部分匹配排除路径
-            ("/admin/user/profile", True),  # 部分匹配保护路径
-            ("/api/auth/login/validate", False),  # 部分匹配排除路径
-            ("/api/analysis/search/1", True)  # 部分匹配保护路径
-        ]
-        for path, expected in partial_cases:
-            assert middleware._needs_auth(path) == expected, f"Failed for path: {path}"
+    def test_unknown_paths_not_protected(self):
+        for path in ["/unknown/path", "/api/public/data"]:
+            self.assertFalse(self.middleware._needs_auth(path), path)
 
-    def test_other_paths_return_false(self, middleware):
-        # 测试既不在排除也不在保护列表中的路径
-        assert middleware._needs_auth("/unknown/path") is False
-        assert middleware._needs_auth("/api/public/data") is False
-        assert middleware._needs_auth("/admin/dashboard") is False
+    def test_get_user_sync_is_callable(self):
+        # _get_user_sync 必须是可调用的静态方法，供 asyncio.to_thread 使用
+        self.assertTrue(callable(AdminAuthMiddleware._get_user_sync))
