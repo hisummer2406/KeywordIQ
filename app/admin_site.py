@@ -1,14 +1,97 @@
 # app/admin/admin_site.py - 简单修复版本
 from fastapi import Request
+from fastapi.responses import HTMLResponse
 from fastapi_amis_admin import admin
 from fastapi_amis_admin.amis.components import App, Tpl
+from fastapi_amis_admin.amis.components import Page
 from fastapi_amis_admin.admin import Settings, AdminSite
 
 from config import settings
 
 
+ADMIN_SIDEBAR_COLLAPSED_CSS = """
+<style>
+    .admin-sidebar-collapsed [class*="App-aside"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] {
+        width: 56px !important;
+        min-width: 56px !important;
+        max-width: 56px !important;
+        flex: 0 0 56px !important;
+        flex-basis: 56px !important;
+        overflow-x: hidden !important;
+        transition: width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease;
+    }
+
+    .admin-sidebar-collapsed [class*="App-aside"]:hover,
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover {
+        width: 220px !important;
+        min-width: 220px !important;
+        max-width: 220px !important;
+        flex: 0 0 220px !important;
+        flex-basis: 220px !important;
+    }
+
+    .admin-sidebar-collapsed [class*="App-aside"] [class*="brandText"],
+    .admin-sidebar-collapsed [class*="App-aside"] [class*="AppBcn"],
+    .admin-sidebar-collapsed [class*="App-aside"] [class*="AsideNav-itemLabel"],
+    .admin-sidebar-collapsed [class*="App-aside"] [class*="AsideNav-label"],
+    .admin-sidebar-collapsed [class*="App-aside"] [class*="Nav-itemLabel"],
+    .admin-sidebar-collapsed [class*="App-aside"] [class*="Nav-label"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] [class*="brandText"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] [class*="AppBcn"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] [class*="AsideNav-itemLabel"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] [class*="AsideNav-label"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] [class*="Nav-itemLabel"],
+    .admin-sidebar-collapsed [class*="Layout-aside"] [class*="Nav-label"] {
+        opacity: 0 !important;
+        white-space: nowrap !important;
+        transition: opacity 0.15s ease;
+    }
+
+    .admin-sidebar-collapsed [class*="App-aside"]:hover [class*="brandText"],
+    .admin-sidebar-collapsed [class*="App-aside"]:hover [class*="AppBcn"],
+    .admin-sidebar-collapsed [class*="App-aside"]:hover [class*="AsideNav-itemLabel"],
+    .admin-sidebar-collapsed [class*="App-aside"]:hover [class*="AsideNav-label"],
+    .admin-sidebar-collapsed [class*="App-aside"]:hover [class*="Nav-itemLabel"],
+    .admin-sidebar-collapsed [class*="App-aside"]:hover [class*="Nav-label"],
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover [class*="brandText"],
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover [class*="AppBcn"],
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover [class*="AsideNav-itemLabel"],
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover [class*="AsideNav-label"],
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover [class*="Nav-itemLabel"],
+    .admin-sidebar-collapsed [class*="Layout-aside"]:hover [class*="Nav-label"] {
+        opacity: 1 !important;
+    }
+</style>
+"""
+
+
 class CustomAdminSite(AdminSite):
     """自定义管理站点"""
+
+    async def page_parser(self, request: Request, page: Page):
+        """Inject global admin-shell styles into the final HTML page."""
+        response = await super().page_parser(request, page)
+        if request.method != "GET" or not isinstance(response, HTMLResponse):
+            return response
+
+        html = response.body.decode(response.charset or "utf-8")
+        if "admin-sidebar-collapsed" in html and ADMIN_SIDEBAR_COLLAPSED_CSS not in html:
+            html = html.replace(
+                "<body>",
+                '<body class="admin-sidebar-collapsed">',
+                1,
+            )
+            html = html.replace("</head>", f"{ADMIN_SIDEBAR_COLLAPSED_CSS}</head>")
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            return HTMLResponse(
+                content=html,
+                status_code=response.status_code,
+                headers=headers,
+            )
+
+        return response
 
     async def _get_page_as_app1(self, request: Request) -> App:
         """自定义应用页面"""
@@ -36,6 +119,7 @@ class CustomAdminSite(AdminSite):
         app = App()
         app.brandName = self.site.settings.site_title
         app.logo = self.site.settings.site_icon
+        app.className = "admin-shell admin-sidebar-collapsed"
 
         # 添加全局请求拦截器，自动添加Authorization头
         app.requestAdaptor = '''
