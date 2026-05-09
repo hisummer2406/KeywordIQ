@@ -1,4 +1,5 @@
 # app/middleware/auth_middleware.py
+import asyncio
 import logging
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -42,9 +43,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return self._handle_unauthorized(path)
 
         try:
-            from database import SessionFactory
             from app.auth.login_auth import auth_service
-            from app.user.user_crud import UserCenterCRUD
 
             token = auth_header.split(' ')[1]
             payload = auth_service.decode_access_token(token)
@@ -53,22 +52,32 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
                 logger.warning(f"路径 {path} token无效")
                 return self._handle_unauthorized(path)
 
-            with SessionFactory() as db:
-                crud = UserCenterCRUD(db)
-                user = crud.get_user_by_username(payload.get('username'))
+            # 同步 DB 调用放入线程池，避免阻塞事件循环
+            # （连接池压力大时 SessionFactory() 会同步等待 pool_timeout=30s）
+            user = await asyncio.to_thread(
+                self._get_user_sync, payload.get('username')
+            )
 
-                if not user or not user.is_active:
-                    logger.warning(f"路径 {path} 用户不存在或未激活")
-                    return self._handle_unauthorized(path)
+            if not user or not user.is_active:
+                logger.warning(f"路径 {path} 用户不存在或未激活")
+                return self._handle_unauthorized(path)
 
-                request.state.current_user = user
-                logger.debug(f"用户 {user.user_name} 认证成功")
+            request.state.current_user = user
+            logger.debug(f"用户 {user.user_name} 认证成功")
 
         except Exception as e:
             logger.error(f"认证异常: {e}")
             return self._handle_unauthorized(path)
 
         return await call_next(request)
+
+    @staticmethod
+    def _get_user_sync(username: str):
+        """在线程池中执行同步 DB 查询，供 asyncio.to_thread 调用"""
+        from database import SessionFactory
+        from app.user.user_crud import UserCenterCRUD
+        with SessionFactory() as db:
+            return UserCenterCRUD(db).get_user_by_username(username)
 
     def _needs_auth(self, path: str) -> bool:
         """判断路径是否需要认证"""
