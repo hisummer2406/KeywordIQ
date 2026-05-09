@@ -29,15 +29,24 @@ def _process_chunk_worker(chunk_file: str, report_date_str: str, data_type: str,
     """独立工作进程 - 处理单个分片文件"""
     try:
         from datetime import date
-        from database import SessionFactory
+        from sqlalchemy import create_engine, NullPool
+        from sqlalchemy.orm import sessionmaker
         from app.table.upload.csv_processor import CSVProcessor
 
         report_date = date.fromisoformat(report_date_str)
         processor = CSVProcessor(batch_size=settings.BATCH_SIZE)
         processed_count = 0
 
-        # 独立数据库会话
-        with SessionFactory() as db_session:
+        # NullPool: 子进程不继承父进程连接池，每次请求独立建立/关闭连接，
+        # 避免 fork() 后子进程退出时关闭继承的 socket 导致父进程连接池污染
+        worker_engine = create_engine(
+            settings.DATABASE_URL,
+            poolclass=NullPool,
+            connect_args={"options": "-c timezone=Asia/Shanghai"},
+        )
+        WorkerSession = sessionmaker(bind=worker_engine, expire_on_commit=False)
+
+        with WorkerSession() as db_session:
             for chunk_df in processor.read_csv_chunks(chunk_file):
                 chunk_processed = processor.process_chunk_with_upsert(
                     chunk_df, report_date, data_type, db_session
@@ -193,6 +202,12 @@ class UploadService:
                         monitor_task.cancel()
                     except Exception as e:
                         logger.warning(f"监控任务异常: {e}")
+
+            # 子进程全部退出后，主动回收主进程连接池中的空闲连接。
+            # 虽然已改用 NullPool（子进程不再继承连接），此处作为双重保障，
+            # 确保长时处理后任何陈旧连接被清除，下次请求用干净连接。
+            import database as _db_module
+            _db_module.engine.dispose(close=False)
 
             # 4. 统计结果
             total_processed = sum(r.get('processed_count', 0) for r in results if isinstance(r, dict))
