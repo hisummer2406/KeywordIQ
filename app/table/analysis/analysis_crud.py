@@ -32,12 +32,11 @@ class AnalysisCRUD:
 
             # 仅第一页或少量数据时精确统计
             if self._has_user_filters(params) and params.page == 1:
-                count_stmt = select(func.count()).select_from(base_stmt)
+                count_stmt = self._build_exact_count_query(base_stmt)
                 total_count = self.db.execute(count_stmt).scalar() or 0
             elif self._has_user_filters(params):
                 # 后续页使用limit估算（避免全表扫描）
-                limited_stmt = base_stmt.limit(10000)
-                count_stmt = select(func.count()).select_from(limited_stmt)
+                count_stmt = self._build_limited_count_query(base_stmt)
                 total_count = self.db.execute(count_stmt).scalar() or 0
             else:
                 total_count = self._get_table_estimate_count()
@@ -64,6 +63,19 @@ class AnalysisCRUD:
         except Exception as e:
             logger.error(f"分页搜索数据失败: {e}")
             raise
+
+    def _build_exact_count_query(self, base_stmt):
+        """Build a narrow exact count query from the filtered statement."""
+        return base_stmt.with_only_columns(
+            func.count(AmazonOriginSearchData.id)
+        ).order_by(None)
+
+    def _build_limited_count_query(self, base_stmt, limit: int = 10000):
+        """Build a capped count query using only primary keys."""
+        limited_ids = base_stmt.with_only_columns(
+            AmazonOriginSearchData.id
+        ).order_by(None).limit(limit).subquery()
+        return select(func.count()).select_from(limited_ids)
 
     def _get_order_column(self, order_by: str | None):
         """返回允许排序的 ORM 列；非法字段走默认排序。"""
