@@ -1,10 +1,10 @@
-from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Literal
 
 
 class ChunkStartRequest(BaseModel):
     filename: str = Field(..., description="文件名")
-    data_type: str = Field(..., description="文件类型")
+    data_type: Literal["daily", "weekly"] = Field(..., description="文件类型")
 
 
 class Part(BaseModel):

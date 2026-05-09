@@ -26,6 +26,7 @@ chunk_sessions: Dict[str, Dict[str, Any]] = {}
 # 单用户场景优化
 MAX_CONCURRENT_UPLOADS = 2  # 最多2个同时上传（防止误操作）
 upload_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+ALLOWED_DATA_TYPES = {"daily", "weekly"}
 
 # 每种数据类型同一时刻只允许一个处理任务，防止并发 UPSERT 行锁竞争
 _processing_locks: Dict[str, threading.Lock] = {
@@ -293,7 +294,9 @@ async def upload_csv_file(
             return {"status": 1, "msg": "只支持CSV文件"}
 
         # 确定数据类型
-        data_type = data_type or ('daily' if 'day' in file.filename.lower() else 'weekly')
+        data_type = (data_type or ('daily' if 'day' in file.filename.lower() else 'weekly')).strip().lower()
+        if data_type not in ALLOWED_DATA_TYPES:
+            return {"status": 1, "msg": "data_type 只支持 daily 或 weekly"}
 
         # 保存文件
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

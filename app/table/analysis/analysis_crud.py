@@ -5,9 +5,14 @@ from typing import List, Tuple
 from datetime import datetime
 
 from app.table.analysis.analysis_model import AmazonOriginSearchData
-from app.table.search.search_schemas import AnalysisSearchRequest
+from app.table.search.search_schemas import AnalysisSearchRequest, ALLOWED_ANALYSIS_ORDER_FIELDS
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_ORDER_COLUMNS = {
+    field_name: getattr(AmazonOriginSearchData, field_name)
+    for field_name in ALLOWED_ANALYSIS_ORDER_FIELDS
+}
 
 
 class AnalysisCRUD:
@@ -39,11 +44,12 @@ class AnalysisCRUD:
 
             # 应用排序和分页到完整查询
             result_stmt = base_stmt
-            if params.orderBy:
-                if params.orderDir == "desc":
-                    result_stmt = result_stmt.order_by(desc(getattr(AmazonOriginSearchData, params.orderBy)))
+            order_column = self._get_order_column(params.orderBy)
+            if order_column is not None:
+                if (params.orderDir or "").lower() == "desc":
+                    result_stmt = result_stmt.order_by(desc(order_column))
                 else:
-                    result_stmt = result_stmt.order_by(asc(getattr(AmazonOriginSearchData, params.orderBy)))
+                    result_stmt = result_stmt.order_by(asc(order_column))
             else:
                 result_stmt = result_stmt.order_by(
                     desc(AmazonOriginSearchData.report_date_day),
@@ -57,7 +63,17 @@ class AnalysisCRUD:
 
         except Exception as e:
             logger.error(f"分页搜索数据失败: {e}")
-            return [], 0
+            raise
+
+    def _get_order_column(self, order_by: str | None):
+        """返回允许排序的 ORM 列；非法字段走默认排序。"""
+        if not order_by:
+            return None
+
+        order_column = _ALLOWED_ORDER_COLUMNS.get(order_by)
+        if order_column is None:
+            logger.warning(f"忽略不支持的排序字段: {order_by}")
+        return order_column
 
     def get_categories(self) -> List[dict]:
         """获取类目列表 - 使用视图查询"""

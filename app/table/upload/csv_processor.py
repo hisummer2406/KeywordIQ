@@ -17,26 +17,27 @@ def validate_csv_structure(file_path: str) -> tuple[bool, str]:
     """验证CSV文件结构"""
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+            first_line = f.readline()
+            second_line = f.readline()
+            third_line = f.readline()
 
-        if len(lines) < 3:
+        if not first_line or not second_line or not third_line:
             return False, "文件行数不足，至少需要3行（元数据、表头、数据）"
 
         # 检查第一行是否包含元数据
-        first_line = lines[0].strip()
+        first_line = first_line.strip()
         if '报告范围' not in first_line:
             return False, "第一行应包含报告范围元数据"
 
         # 检查第二行是否是表头
-        second_line = lines[1].strip()
+        second_line = second_line.strip()
         if '搜索频率排名' not in second_line or '搜索词' not in second_line:
             return False, "第二行应为表头，包含'搜索频率排名'和'搜索词'"
 
         # 检查第三行是否有数据
-        if len(lines) > 2:
-            third_line = lines[2].strip()
-            if not third_line or len(third_line.split(',')) < 3:
-                return False, "第三行应包含实际数据"
+        third_line = third_line.strip()
+        if not third_line or len(third_line.split(',')) < 3:
+            return False, "第三行应包含实际数据"
 
         return True, "文件结构验证通过"
 
@@ -56,13 +57,14 @@ class CSVProcessor:
         try:
             # 先读取表头信息
             with open(file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+                first_line = f.readline()
+                header_line = f.readline()
 
-            if len(lines) < 3:
+            if not first_line or not header_line:
                 raise ValueError("CSV文件格式不正确，行数不足")
 
             # 获取表头行（第2行）
-            header_line = lines[1].strip()
+            header_line = header_line.strip()
             headers = [h.strip() for h in header_line.split(',')]
 
             # 创建列名映射
@@ -187,12 +189,12 @@ class CSVProcessor:
                         time.sleep(self.retry_delay * (attempt + 1))
                         continue
                     else:
-                        logger.error(f"批处理失败，跳过本批次: {e}")
-                        return 0
+                        logger.error(f"批处理失败: {e}")
+                        raise
                 except Exception as e:
-                    logger.error(f"批处理失败，跳过本批次: {e}")
+                    logger.error(f"批处理失败: {e}")
                     self._safe_rollback(db_session)
-                    return 0
+                    raise
 
             except Exception as e:
                 logger.error(f"处理失败: {e}")
@@ -201,8 +203,8 @@ class CSVProcessor:
                     time.sleep(self.retry_delay * (attempt + 1))
                     self._rebuild_connection(db_session)
                 else:
-                    logger.error(f"处理失败，跳过本批次: {e}")
-                    return 0
+                    logger.error(f"处理失败: {e}")
+                    raise
 
         return 0
 

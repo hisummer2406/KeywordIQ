@@ -72,7 +72,7 @@ class TableComponent:
 
             # 分页配置
             "perPage": 100,
-            "perPageAvailable": [100, 200, 500, 1000],
+            "perPageAvailable": [50, 100, 200],
             "showPerPage": True,
             "showPageInput": True,
 
