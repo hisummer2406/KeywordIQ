@@ -1,5 +1,7 @@
 .venv/
 .idea/
+.vscode/
+.claude/
 .DS_Store
 .env
 logs/*
