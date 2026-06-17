@@ -44,7 +44,7 @@
 ```bash
 # 1. 克隆项目
 git clone <project-repo>
-cd amazon-search-analysis
+cd keywordiq
 
 # 2. 执行部署
 chmod +x deploy.sh
@@ -160,7 +160,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ### 项目结构
 
 ```
-amazon-search-analysis/
+keywordiq/
 ├── app/                    # 应用主目录
 │   ├── auth/              # 认证模块
 │   ├── table/             # 数据模块
@@ -239,7 +239,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 docker-compose restart app
 
 # 进入容器
-docker exec -it amazon-search-analysis-app-1 /bin/bash
+docker exec -it keywordiq-app-1 /bin/bash
 
 # 重启容器应用新配置 
 docker-compose down 
@@ -259,8 +259,8 @@ du 命令可以查看文件或目录的磁盘使用情况。
 * head -n 20：显示前 20 个最大文件或目录。
 
 # Nginx 日志
-    access_log /var/log/nginx/amazon-analysis.access.log;
-    error_log /var/log/nginx/amazon-analysis.error.log;
+    access_log /var/log/nginx/keywordiq.access.log;
+    error_log /var/log/nginx/keywordiq.error.log;
 
 ```
 
@@ -284,7 +284,7 @@ du 命令可以查看文件或目录的磁盘使用情况。
 
 <div align="center">
 
-**© 2025 亚马逊关键词分析系统 | 专业·高效·智能**
+**© 2025 KeywordIQ | 专业·高效·智能**
 
 技术支持: stone_summer24
 

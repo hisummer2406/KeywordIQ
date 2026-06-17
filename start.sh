@@ -10,7 +10,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}======================================${NC}"
-echo -e "${GREEN}Amazon Search Analysis - Production${NC}"
+echo -e "${GREEN}KeywordIQ - Production${NC}"
 echo -e "${GREEN}======================================${NC}"
 
 # 检查 .env 文件

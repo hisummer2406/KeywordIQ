@@ -1,9 +1,9 @@
 #!/bin/bash
-# deploy.sh - Amazon数据分析系统部署脚本
+# deploy.sh - KeywordIQ 部署脚本
 
 set -e
 
-echo "🚀 开始部署Amazon数据分析系统..."
+echo "🚀 开始部署KeywordIQ..."
 
 # 1. 环境检查
 echo "1️⃣ 检查环境..."

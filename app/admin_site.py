@@ -199,7 +199,7 @@ class CustomAdminSite(AdminSite):
                 },
                 {
                     "type": "tpl",
-                    "tpl": "© 2025 亚马逊数据分析系统 v1.0 | 专业·高效·智能",
+                    "tpl": "© 2025 KeywordIQ v1.0 | 专业·高效·智能",
                     "className": "text-xs text-gray-500"
                 },
                 {

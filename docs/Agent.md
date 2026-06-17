@@ -1,4 +1,4 @@
-# 📇 项目速记卡 - 亚马逊关键词分析系统
+# 📇 项目速记卡 - KeywordIQ
 
 > 🎯 **一句话描述**：专业的亚马逊搜索词数据分析平台，支持GB级CSV文件处理和多维度数据分析
 
@@ -8,7 +8,7 @@
 
 | 项目 | 信息 |
 |-----|------|
-| **项目名称** | 亚马逊关键词分析系统 (Amazon Search Analysis) |
+| **项目名称** | KeywordIQ |
 | **项目类型** | 数据分析平台 (B2B SaaS) |
 | **核心价值** | 亚马逊卖家搜索词排名监控、趋势分析、竞品洞察 |
 | **技术栈** | FastAPI + PostgreSQL + Amis + Pandas |
@@ -170,7 +170,7 @@ admin / pwd123
 ## 📂 目录结构（精简版）
 
 ```
-amazon-search-analysis/
+keywordiq/
 ├── app/
 │   ├── auth/           # JWT认证、中间件
 │   ├── table/
