@@ -76,7 +76,7 @@ async def login_page():
         <div class="login-container">
             <div class="header">
                 <img src="/static/amazon_logo.png" alt="Logo" class="logo">
-                <h2>亚马逊数据分析系统</h2>
+                <h2>KeywordIQ</h2>
             </div>
             <form id="loginForm">
                 <div class="form-group">
