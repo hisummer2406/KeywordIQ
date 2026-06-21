@@ -146,16 +146,14 @@ server {
 ### 本地开发
 
 ```bash
-# 1. 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate
+# 1. 安装依赖（使用 uv，自动创建 .venv 并固定到 .python-version 指定的版本）
+uv sync
 
-# 2. 安装依赖
-pip install -r requirements.txt
-
-# 3. 启动应用
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# 2. 启动应用
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+> 项目使用 [uv](https://docs.astral.sh/uv/) 管理依赖。新增/更新依赖请用 `uv add <package>`（运行时依赖）或 `uv add --dev <package>`（仅测试/工具用），并提交 `uv.lock`。
 
 ### 项目结构
 

@@ -6,25 +6,32 @@ This is a FastAPI + PostgreSQL application for Amazon search term analysis and l
 
 ## Build, Test, and Development Commands
 
-Create and activate a virtual environment, then install dependencies:
+This project is managed with [uv](https://docs.astral.sh/uv/). Install dependencies (creates `.venv` automatically, pinned to the version in `.python-version`):
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 Run the development server:
 
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Run the test suite:
 
 ```bash
-python -m pytest test/
+uv run pytest test/
 ```
+
+Add or update a dependency:
+
+```bash
+uv add <package>          # runtime dependency
+uv add --dev <package>    # dev-only dependency (test/, tooling)
+```
+
+Always commit `uv.lock` alongside `pyproject.toml` changes.
 
 For production-style startup, use `./start.sh`. Use `./deploy.sh` only when provisioning/deploying the full environment.
 

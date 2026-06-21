@@ -14,12 +14,16 @@ KeywordIQ - A professional Amazon search term data analysis platform supporting 
 ## Development Commands
 
 ```bash
-# Local development
-source .venv/bin/activate
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# Local development (uv manages .venv per .python-version + uv.lock)
+uv sync
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Run tests
-python -m pytest test/
+uv run pytest test/
+
+# Add a dependency
+uv add <package>          # runtime
+uv add --dev <package>    # dev-only
 
 # Docker deployment
 docker-compose up -d
