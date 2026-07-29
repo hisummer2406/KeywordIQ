@@ -2,8 +2,8 @@ import type { RequestConfig, RunTimeLayoutConfig } from '@umijs/max';
 import { history } from '@umijs/max';
 import { message } from 'antd';
 import { getCurrentUser } from '@/services/auth';
+import { clearToken, getToken } from '@/utils/token';
 
-export const TOKEN_KEY = 'keywordiq_token';
 const LOGIN_PATH = '/login';
 
 /**
@@ -56,7 +56,7 @@ export const request: RequestConfig = {
   timeout: 300_000,
   requestInterceptors: [
     (config: any) => {
-      const token = localStorage.getItem(TOKEN_KEY);
+      const token = getToken();
       if (token) {
         config.headers = { ...config.headers, Authorization: `Bearer ${token}` };
       }
@@ -67,7 +67,7 @@ export const request: RequestConfig = {
     errorHandler(error: any) {
       const status = error?.response?.status;
       if (status === 401) {
-        localStorage.removeItem(TOKEN_KEY);
+        clearToken();
         if (history.location.pathname !== LOGIN_PATH) {
           message.warning('登录已过期，请重新登录');
           history.push(LOGIN_PATH);
