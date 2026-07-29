@@ -11,7 +11,6 @@ from app.api_router import api_router
 from config import settings
 from database import engine, async_engine
 from monitoring import SystemMonitor
-from app.auth.auth_middleware import AdminAuthMiddleware
 
 
 # 配置应用日志，每天自动生成新文件
@@ -120,10 +119,8 @@ app.add_middleware(
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# 登录验证（JWT 鉴权中间件，保护 /api/* 受保护路径）
-app.add_middleware(AdminAuthMiddleware)
-
 # 注册 API 路由（后台 UI 已迁至独立 AntD Pro SPA，见 frontend/；本服务只提供 JSON API）
+# 鉴权显式落在每个端点的 require_permission / get_current_user 依赖上（不再用全局中间件）。
 app.include_router(api_router)
 
 

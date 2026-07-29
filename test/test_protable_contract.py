@@ -73,6 +73,21 @@ def _build_app(monkeypatch, *, paginated=None, raises=False):
     return app
 
 
+def test_user_table_requires_auth():
+    """安全回归：无 Authorization 头访问受保护端点应被拒（鉴权落在端点依赖，不靠中间件）。
+
+    历史上曾有一个 exclude_paths 含 '/' 的中间件形同虚设，导致部分端点裸奔；阶段七删中间件、
+    鉴权全部显式落到端点依赖后，此用例守住"无 token 必拒"。
+    """
+    import app.user.user_api as user_api_mod
+
+    app = FastAPI()
+    app.include_router(user_api_mod.user_router, prefix="/api/user")
+    client = TestClient(app)
+    r = client.get("/api/user/table")  # 不带 Authorization 头
+    assert r.status_code in (401, 403)
+
+
 def test_user_table_endpoint_returns_protable_contract(monkeypatch):
     paginated = {"items": [_make_user_list_item(1), _make_user_list_item(2)], "total": 2,
                  "page": 1, "per_page": 20, "pages": 1}

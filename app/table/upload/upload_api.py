@@ -76,7 +76,9 @@ def _resolve_import_meta(filename: str, site: str, period: Optional[str]):
 
 
 @upload_router.get("/sites")
-async def list_sites() -> Dict[str, Any]:
+async def list_sites(
+    _user=Depends(simple_auth.get_current_user),
+) -> Dict[str, Any]:
     """站点下拉数据。唯一事实来源是 app/site_registry.py，前端不得硬编码站点列表。"""
     return {
         "sites": [
@@ -214,7 +216,10 @@ async def import_csv_file(
 
 
 @upload_router.get("/processing-status")
-async def get_processing_status(data_type: Optional[str] = None) -> Dict[str, Any]:
+async def get_processing_status(
+    data_type: Optional[str] = None,
+    _user=Depends(simple_auth.get_current_user),
+) -> Dict[str, Any]:
     """最近导入批次状态（读 V2 import_batch）。data_type 兼容前端旧写法 daily/weekly。"""
     async with database.AsyncSessionFactory() as db:
         try:

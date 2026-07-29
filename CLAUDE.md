@@ -167,9 +167,11 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   权限点 `analysis:view`/`analysis:export`/`upload:import`/`user:manage`/`role:manage`；内置角色
   admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
   is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。
-- **端点**：`POST /api/auth/token`（登录发令牌）、`GET /api/auth/me`、`POST /api/auth/logout`（干净 REST）。
-- Middleware：`AdminAuthMiddleware` 从 Authorization 头校验令牌（实际授权以各路由的
-  `require_permission` 依赖为准）。
+- **端点**：`POST /api/auth/token`（登录发令牌，免鉴权）、`GET /api/auth/me`、
+  `POST /api/auth/logout`（干净 REST）。
+- **鉴权显式落在每个端点的依赖上**（`Depends(require_permission(code))` 或 `get_current_user`），
+  没有全局鉴权中间件——旧的 `AdminAuthMiddleware` 因 `exclude_paths` 含 `"/"` 形同虚设，已删除。
+  新增受保护端点务必挂鉴权依赖（无全局兜底）。`test/test_protable_contract.py` 有"无 token 必拒"回归。
 - 初始管理员：`scripts/seed_admin.py`（默认 `admin / pwd123`；生产改 `ADMIN_SECRET_KEY`）。
 
 **后台 UI 是独立的 AntD Pro SPA**（`frontend/`，Umi Max + Ant Design + ProComponents），
