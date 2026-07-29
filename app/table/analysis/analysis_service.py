@@ -81,9 +81,18 @@ def search(db: Session, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
     else:
         total = crud.scope_row_count(db, site, view, on)
 
-    # 按视图构造行 DTO（日视图的 trend/week_change 在 B 期填充，此处为默认空）
+    # 按视图构造行 DTO。日视图附带只读的近 7 天走势与当周排名变化：先分页拿本页
+    # keyword_id，再批量补附加，避免在整切片上做相关子查询。附加信息不改变结果集构成。
     if view == "DAY":
-        data = [DayRowItem(**r).model_dump() for r in rows]
+        ids = [r["keyword_id"] for r in rows]
+        trends = crud.fetch_trends(db, site, ids, on)
+        week_changes = crud.fetch_week_changes(db, site, ids, on)
+        data = []
+        for r in rows:
+            item = DayRowItem(**r)
+            item.trend = trends.get(r["keyword_id"], [])
+            item.week_change = week_changes.get(r["keyword_id"])
+            data.append(item.model_dump())
     else:
         data = [WeekRowItem(**r).model_dump() for r in rows]
 

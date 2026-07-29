@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -163,6 +163,61 @@ def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSea
     stmt = _apply_filters(stmt, fact, req)
     capped = stmt.with_only_columns(fact.keyword_id).limit(FILTERED_COUNT_CAP).subquery()
     return db.execute(select(func.count()).select_from(capped)).scalar_one()
+
+
+def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, list[int]]:
+    """日视图近 7 天走势：对本页 keyword_id 回溯查 fact_daily（截至所选日期回溯 6 天）。
+
+    走 idx_fact_daily_keyword_history（site, keyword_id, report_date）；report_date 范围
+    条件保证分区裁剪。历史不足 7 天就少几个点，不补齐。返回 {keyword_id: [排名…]}（按日期升序）。
+    """
+    if not keyword_ids:
+        return {}
+    start = on - timedelta(days=6)
+    rows = db.execute(
+        select(FactDaily.keyword_id, FactDaily.current_ranking)
+        .where(
+            FactDaily.site == site,
+            FactDaily.keyword_id.in_(keyword_ids),
+            FactDaily.report_date >= start,
+            FactDaily.report_date <= on,
+        )
+        .order_by(FactDaily.keyword_id, FactDaily.report_date)
+    ).all()
+    out: dict[int, list[int]] = {}
+    for kid, rank in rows:
+        out.setdefault(kid, []).append(rank)
+    return out
+
+
+def fetch_week_changes(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, int]:
+    """当周排名变化：把所选日期映射到其所属 ISO 周的周报期次，取该期各 keyword 的 ranking_change。
+
+    映射口径（查询侧决定，导入侧只存文件名日期不定义周边界）：同 ISO 周
+    （date_trunc('week') 相等）。先在 site_data_stats 小表解析出周报期次 W，再等值查
+    fact_weekly（等值条件利于分区裁剪）。当周周报缺失 → 返回空 dict（该列全为空）。
+    """
+    if not keyword_ids:
+        return {}
+    week_date = db.execute(
+        text(
+            f"SELECT report_date FROM {_SCHEMA}.site_data_stats "
+            f"WHERE site = :site AND period_type = 'WEEK' "
+            f"AND date_trunc('week', report_date) = date_trunc('week', :on) "
+            f"ORDER BY report_date DESC LIMIT 1"
+        ),
+        {"site": site, "on": on},
+    ).scalar()
+    if week_date is None:
+        return {}
+    rows = db.execute(
+        select(FactWeekly.keyword_id, FactWeekly.ranking_change).where(
+            FactWeekly.site == site,
+            FactWeekly.report_date_week == week_date,
+            FactWeekly.keyword_id.in_(keyword_ids),
+        )
+    ).all()
+    return {kid: ch for kid, ch in rows}
 
 
 def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:
