@@ -1,18 +1,18 @@
 ## 1. 作用域解析与配置（贯穿）
 
-- [ ] 1.1 新增配置 `DEFAULT_SITE`（`config.py` + `.env.example`，默认值须属站点清单）
-- [ ] 1.2 作用域解析：`(site, view, date)` 三元组解析函数——site 未传取 `DEFAULT_SITE`、一律经 `site_registry.normalize_site_code` 校验（非法 422，不回退）；view ∈ {DAY,WEEK}；date 未传取该 (site,view) 在 `site_data_stats` 的最新日期，传了则校验确在 `site_data_stats` 内（否则明确报错，不静默回退）
-- [ ] 1.3 请求/响应 schema 重构（`app/table/search/search_schemas.py`）：请求含 site/view/date + 筛选 + 排序 + 分页；行 DTO 分 `DayRowItem`（含 trend、week_change）与 `WeekRowItem`；作用域回显 meta（生效 site/view/date + 可选日期集）
+- [x] 1.1 新增配置 `DEFAULT_SITE`（`config.py` + `.env.example`）：校验须属站点清单，`default_site` 属性留空时回退首个启用站点
+- [x] 1.2 作用域解析（`analysis_service._resolve_site`/`_resolve_date`）：site 未传取默认、经 `normalize_site_code` 校验（非法抛 `ScopeError`→ /search 返 success:false、/scope /categories 返 422，不回退）；date 未传取最新、传了校验在 `site_data_stats` 内否则明确报错
+- [x] 1.3 请求/响应 schema 重构（`search_schemas.py`）：`AnalysisSearchRequest`（site/view/date+筛选+排序+分页）、`DayRowItem`（含 trend/week_change）/`WeekRowItem`、`AnalysisSearchResponse`（ProTable 契约+回显）、`ScopeInfo`、`CategoryOption`。（避坑：字段名 `date` 遮蔽类型，日期类型统一用别名 `_Date`）
 
 ## 2. A 期：核心作用域查询（可用分析接口）
 
-- [ ] 2.1 CRUD 重写（`analysis_crud.py`）：base query = `FROM fact_<view> WHERE site=? AND <date_col>=?`，站点/日期边界恒定；JOIN `dim_keyword`（keyword 文本 + 子串搜索走 trgm）、LEFT JOIN `dim_product`（top1 → brand/category/title/asin 子串搜索）
-- [ ] 2.2 筛选叠加（AND，不突破边界）：关键词/品牌/类目/ASIN/标题子串、排名区间、排名变化区间、份额区间、is_new
-- [ ] 2.3 排序白名单（按视图）：允许 current_ranking/ranking_change/previous_ranking/top1_click_share/top1_conversion_share/is_new；非法字段回落 `current_ranking ASC`；日视图拒绝按走势/周变化排序
-- [ ] 2.4 分页总数：无筛选读 `site_data_stats.row_count`（O(1)）；有筛选用 `LIMIT 10000` 上限精确计数（上限可配置）
-- [ ] 2.5 日期选择器接口：读 `site_data_stats` 返回该 (site,view) 可选日期集（倒序）
-- [ ] 2.6 Service 层组织事务与调用（`analysis_service.py`），API（`analysis_api.py`）改瘦控制器，列表出口走阶段三 `ProTableResponse`；作用域回显随响应返回
-- [ ] 2.7 切换/翻页语义：切站点/视图/日期回第 1 页（前端配合，后端保证每页只含当前作用域）
+- [x] 2.1 CRUD 重写（`analysis_crud.py`）：`_base_query` = `FROM fact_<view> WHERE site=? AND <date_col>=?` 边界恒定；JOIN `dim_keyword`、LEFT JOIN `dim_product`（top1）
+- [x] 2.2 筛选叠加（`_apply_filters`，AND，不突破边界）：关键词/品牌/类目/ASIN/标题子串、category_exact、排名/变化/份额区间、is_new
+- [x] 2.3 排序白名单（`_apply_order` + `SORTABLE_FIELDS`）：非法字段回落 `current_ranking ASC` + keyword_id 兜底稳定分页；日视图的 trend/week_change 不在白名单故被拒
+- [x] 2.4 分页总数：无筛选读 `site_data_stats.row_count`（`scope_row_count`）；有筛选 `LIMIT 10000` 上限计数（`count_filtered`，`FILTERED_COUNT_CAP`）
+- [x] 2.5 日期选择器：`available_dates` 读 `site_data_stats` 倒序；`GET /api/analysis/scope` 出 ScopeInfo
+- [x] 2.6 Service（`analysis_service.py`）解析作用域+组装；API（`analysis_api.py`）瘦控制器：`POST /search`、`GET /scope`、`GET /categories`，均 `require_permission(analysis:view)`；回显随响应
+- [~] 2.7 切换/翻页语义：后端保证每页只含当前作用域（已验）；切换回第 1 页由前端阶段四配合
 
 ## 3. B 期：日视图附加信息（7 天走势 + 当周排名变化）
 
@@ -23,7 +23,7 @@
 
 ## 4. C 期：类目选项与打磨
 
-- [ ] 4.1 类目下拉：读 `category_stats` 物化视图，按 (site, period) 返回选项 + 计数；某站点无数据返回空列表
+- [x] 4.1 类目下拉：`category_options` 读 `category_stats` 物化视图（列 top_category/cnt），按 (site, period) 返回选项+计数；`GET /api/analysis/categories`（已验，US 日视图 20 个类目）
 - [ ] 4.2 黑名单类目默认过滤（Books/Grocery 等，沿用 V1 常量清单）
 - [ ] 4.3 字段命名与前端阶段四对齐定稿（写进 spec 的响应约定），确认无字段漂移
 

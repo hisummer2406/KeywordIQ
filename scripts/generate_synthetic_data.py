@@ -167,6 +167,42 @@ def seed_period(
     )
 
 
+def seed_stats(conn) -> None:
+    """从事实表回填 site_data_stats，并刷新 category_stats 物化视图。
+
+    生产环境由导入链路在每次导入末尾写这两者；本脚本为查询层验证补齐（否则日期选择器、
+    分页总数、类目下拉无数据可读）。site_data_stats 幂等 upsert；物化视图首刷从 WITH NO DATA
+    起不能 CONCURRENTLY，故用普通 REFRESH。
+    """
+    from config import settings
+
+    schema = settings.DATABASE_SCHEMA
+    logger.info("回填 site_data_stats + 刷新 category_stats")
+    conn.execute(
+        text(
+            f"""
+            INSERT INTO {schema}.site_data_stats (site, period_type, report_date, row_count)
+            SELECT site, 'DAY', report_date, count(*)
+              FROM {schema}.fact_daily GROUP BY site, report_date
+            ON CONFLICT (site, period_type, report_date)
+            DO UPDATE SET row_count = EXCLUDED.row_count, updated_at = now()
+            """
+        )
+    )
+    conn.execute(
+        text(
+            f"""
+            INSERT INTO {schema}.site_data_stats (site, period_type, report_date, row_count)
+            SELECT site, 'WEEK', report_date_week, count(*)
+              FROM {schema}.fact_weekly GROUP BY site, report_date_week
+            ON CONFLICT (site, period_type, report_date)
+            DO UPDATE SET row_count = EXCLUDED.row_count, updated_at = now()
+            """
+        )
+    )
+    conn.execute(text(f"REFRESH MATERIALIZED VIEW {schema}.category_stats"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--days", type=int, default=365, help="生成多少天的日报数据")
@@ -227,6 +263,9 @@ def main(argv: list[str] | None = None) -> int:
                             weekly_rows, kw_min, kw_pool, i * daily_shift * 7, products)
                 session.commit()
                 logger.info("fact_weekly[%s] %s 完成 (%s/%s)", site, report_date, i + 1, args.weeks)
+
+        seed_stats(session)
+        session.commit()
 
     logger.info("完成，耗时 %.1f 分钟", (time.monotonic() - started) / 60)
     logger.info("接下来：用 EXPLAIN 验证分区裁剪、维度关联是否发生在分页之后、7 天走势耗时")

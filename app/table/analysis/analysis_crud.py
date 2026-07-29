@@ -1,316 +1,177 @@
-import logging
+"""站点作用域查询的数据访问层（V2 星型模型）。
+
+只读 fact_daily / fact_weekly（单站点单日期切片）+ dim_keyword / dim_product，
+日期选择器与分页总数读 site_data_stats，类目下拉读 category_stats 物化视图。
+无业务逻辑（作用域解析、默认站点等在 service 层）。
+"""
+from __future__ import annotations
+
+from datetime import date
+from typing import Any
+
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_, asc, func, and_, text, select
-from typing import List, Tuple
-from datetime import datetime
 
-from app.table.analysis.analysis_model import AmazonOriginSearchData
-from app.table.search.search_schemas import AnalysisSearchRequest, ALLOWED_ANALYSIS_ORDER_FIELDS
+from config import settings
+from app.table.analysis.dimension_model import DimKeyword, DimProduct
+from app.table.analysis.fact_model import FactDaily, FactWeekly, SiteDataStats
+from app.table.search.search_schemas import AnalysisSearchRequest
 
-logger = logging.getLogger(__name__)
+_SCHEMA = settings.DATABASE_SCHEMA
 
-_ALLOWED_ORDER_COLUMNS = {
-    field_name: getattr(AmazonOriginSearchData, field_name)
-    for field_name in ALLOWED_ANALYSIS_ORDER_FIELDS
-}
+# 有筛选时的总数上限（沿用 V1 权衡：避免在整切片上精确计数）
+FILTERED_COUNT_CAP = 10000
+
+# 排序白名单（两视图字段名相同）。日视图的 7 天走势/当周变化不在此列——它们是附加信息、
+# 非结果集来源字段，收到就忽略、回落默认。
+SORTABLE_FIELDS = frozenset(
+    {
+        "current_ranking",
+        "ranking_change",
+        "previous_ranking",
+        "top1_click_share",
+        "top1_conversion_share",
+        "is_new",
+    }
+)
+_DEFAULT_ORDER = "current_ranking"
 
 
-class AnalysisCRUD:
-    """分析数据CRUD操作类"""
+def _fact_and_datecol(view: str):
+    """按视图返回 (事实表模型, 日期列)。"""
+    if view == "WEEK":
+        return FactWeekly, FactWeekly.report_date_week
+    return FactDaily, FactDaily.report_date
 
-    def __init__(self, db: Session):
-        self.db = db
 
-    def search_data_paginated(self, params: AnalysisSearchRequest) -> Tuple[List[AmazonOriginSearchData], int]:
-        """分页搜索数据"""
-        try:
-            # 计算偏移量
-            skip = (params.page - 1) * params.perPage
-
-            # 构建基础查询
-            base_stmt = self._build_search_query(params)
-
-            # 仅第一页或少量数据时精确统计
-            if self._has_user_filters(params) and params.page == 1:
-                count_stmt = self._build_exact_count_query(base_stmt)
-                total_count = self.db.execute(count_stmt).scalar() or 0
-            elif self._has_user_filters(params):
-                # 后续页使用limit估算（避免全表扫描）
-                count_stmt = self._build_limited_count_query(base_stmt)
-                total_count = self.db.execute(count_stmt).scalar() or 0
-            else:
-                total_count = self._get_table_estimate_count()
-
-            # 应用排序和分页到完整查询
-            result_stmt = base_stmt
-            order_column = self._get_order_column(params.orderBy)
-            if order_column is not None:
-                if (params.orderDir or "").lower() == "desc":
-                    result_stmt = result_stmt.order_by(desc(order_column))
-                else:
-                    result_stmt = result_stmt.order_by(asc(order_column))
-            else:
-                result_stmt = result_stmt.order_by(
-                    desc(AmazonOriginSearchData.report_date_day),
-                    asc(AmazonOriginSearchData.current_rangking_day)
-                )
-
-            result_stmt = result_stmt.offset(skip).limit(params.perPage)
-            results = list(self.db.execute(result_stmt).scalars().all())
-
-            return results, total_count
-
-        except Exception as e:
-            logger.error(f"分页搜索数据失败: {e}")
-            raise
-
-    def _build_exact_count_query(self, base_stmt):
-        """Build a narrow exact count query from the filtered statement."""
-        return base_stmt.with_only_columns(
-            func.count(AmazonOriginSearchData.id)
-        ).order_by(None)
-
-    def _build_limited_count_query(self, base_stmt, limit: int = 10000):
-        """Build a capped count query using only primary keys."""
-        limited_ids = base_stmt.with_only_columns(
-            AmazonOriginSearchData.id
-        ).order_by(None).limit(limit).subquery()
-        return select(func.count()).select_from(limited_ids)
-
-    def _get_order_column(self, order_by: str | None):
-        """返回允许排序的 ORM 列；非法字段走默认排序。"""
-        if not order_by:
-            return None
-
-        order_column = _ALLOWED_ORDER_COLUMNS.get(order_by)
-        if order_column is None:
-            logger.warning(f"忽略不支持的排序字段: {order_by}")
-        return order_column
-
-    def get_categories(self) -> List[dict]:
-        """获取类目列表 - 使用视图查询"""
-        try:
-            result = self.db.execute(
-                text("SELECT top_category, cnt FROM analysis.my_category_stats ORDER BY cnt DESC")
-            ).fetchall()
-
-            return [
-                {
-                    "label": f"{row.top_category} ({row.cnt})",
-                    "value": row.top_category
-                }
-                for row in result
-            ]
-        except Exception as e:
-            logger.error(f"获取类目列表失败: {e}")
-            return []
-
-    def _has_user_filters(self, params: AnalysisSearchRequest) -> bool:
-        """判断是否有用户搜索条件（排除默认过滤）"""
-        return any([
-            # 基础搜索
-            params.keyword, params.brand, params.category,
-            params.asin, params.product_title, params.report_date,
-            # 排名范围
-            params.daily_ranking_min is not None, params.daily_ranking_max is not None,
-            params.weekly_ranking_min is not None, params.weekly_ranking_max is not None,
-            # 变化范围
-            params.daily_change_min is not None, params.daily_change_max is not None,
-            params.weekly_change_min is not None, params.weekly_change_max is not None,
-            # 份额转化率
-            params.click_share_min is not None, params.click_share_max is not None,
-            params.conversion_share_min is not None, params.conversion_share_max is not None,
-            params.conversion_rate_min is not None, params.conversion_rate_max is not None,
-            # 布尔值
-            params.is_new_day is not None, params.is_new_week is not None
-        ])
-
-    def _get_table_estimate_count(self) -> int:
-        """使用PG统计信息快速估算总行数"""
-        try:
-            result = self.db.execute(
-                text("""
-                     SELECT reltuples::bigint AS estimate
-                     FROM pg_class
-                     WHERE relname = :table_name
-                       AND relnamespace = (SELECT oid
-                                           FROM pg_namespace
-                                           WHERE nspname = :schema_name)
-                     """),
-                {"table_name": "amazon_origin_search_data", "schema_name": "analysis"}
-            ).scalar()
-            return result or 0
-        except Exception as e:
-            logger.error(f"估算表行数失败: {e}")
-            return 0
-
-    def _build_search_query(self, params: AnalysisSearchRequest):
-        """构建搜索查询"""
-        stmt = select(AmazonOriginSearchData)
-
-        # 默认过滤条件：排除关键词中包含品牌词的条目
-        stmt = stmt.where(
-            and_(
-                AmazonOriginSearchData.top_brand.isnot(None),
-                AmazonOriginSearchData.top_brand != '',
-                ~func.lower(AmazonOriginSearchData.keyword).like(
-                    func.concat('%', func.lower(AmazonOriginSearchData.top_brand), '%')
-                )
-            )
+def request_has_filters(req: AnalysisSearchRequest) -> bool:
+    """请求是否带任何筛选（决定总数走 site_data_stats 还是上限计数）。"""
+    return any(
+        v is not None
+        for v in (
+            req.keyword, req.brand, req.category, req.asin, req.product_title,
+            req.category_exact, req.ranking_min, req.ranking_max, req.change_min,
+            req.change_max, req.click_share_min, req.click_share_max,
+            req.conversion_share_min, req.conversion_share_max, req.is_new,
         )
+    )
 
-        # 基础过滤：排除日排名为0的数据
-        stmt = stmt.where(AmazonOriginSearchData.current_rangking_day != 0)
 
-        # 新增：过滤黑名单类目
-        stmt = stmt.where(
-            ~AmazonOriginSearchData.top_category.in_([
-                'Books',
-                'Grocery',
-                'Video Games',
-                'Digital_Video_Download',
-                'Digital_Ebook_Purchase',
-                'Digital_Music_Purchase'
-            ])
+def available_dates(db: Session, site: str, view: str) -> list[date]:
+    """该 (站点, 视图) 有数据且在保留窗口内的日期，倒序。来源 site_data_stats。"""
+    stmt = (
+        select(SiteDataStats.report_date)
+        .where(SiteDataStats.site == site, SiteDataStats.period_type == view)
+        .order_by(SiteDataStats.report_date.desc())
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def scope_row_count(db: Session, site: str, view: str, on: date) -> int:
+    """作用域内无筛选总数：直接读 site_data_stats.row_count（O(1)）。"""
+    stmt = select(SiteDataStats.row_count).where(
+        SiteDataStats.site == site,
+        SiteDataStats.period_type == view,
+        SiteDataStats.report_date == on,
+    )
+    return db.execute(stmt).scalar_one_or_none() or 0
+
+
+def _base_query(site: str, view: str, on: date):
+    """作用域恒定的 base query：单站点单日期切片 JOIN 维度。"""
+    fact, date_col = _fact_and_datecol(view)
+    stmt = (
+        select(
+            fact.keyword_id.label("keyword_id"),
+            DimKeyword.keyword.label("keyword"),
+            fact.current_ranking.label("current_ranking"),
+            fact.previous_ranking.label("previous_ranking"),
+            fact.ranking_change.label("ranking_change"),
+            fact.is_new.label("is_new"),
+            DimProduct.asin.label("top1_asin"),
+            DimProduct.title.label("top1_title"),
+            DimProduct.brand.label("top1_brand"),
+            DimProduct.category.label("top1_category"),
+            fact.top1_click_share.label("top1_click_share"),
+            fact.top1_conversion_share.label("top1_conversion_share"),
         )
+        .select_from(fact)
+        .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
+        .join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
+        .where(fact.site == site, date_col == on)
+    )
+    return stmt, fact
 
-        # 基础搜索条件
-        stmt = self._apply_basic_filters(stmt, params)
-        # 排名范围筛选
-        stmt = self._apply_ranking_filters(stmt, params)
-        # 变化范围筛选
-        stmt = self._apply_change_filters(stmt, params)
-        # 份额和转化率筛选
-        stmt = self._apply_share_filters(stmt, params)
-        # 布尔值筛选
-        stmt = self._apply_boolean_filters(stmt, params)
 
-        return stmt
+def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
+    """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。"""
+    if req.keyword:
+        stmt = stmt.where(DimKeyword.keyword.ilike(f"%{req.keyword}%"))
+    if req.brand:
+        stmt = stmt.where(DimProduct.brand.ilike(f"%{req.brand}%"))
+    if req.category:
+        stmt = stmt.where(DimProduct.category.ilike(f"%{req.category}%"))
+    if req.category_exact:
+        stmt = stmt.where(DimProduct.category == req.category_exact)
+    if req.asin:
+        stmt = stmt.where(DimProduct.asin.ilike(f"%{req.asin}%"))
+    if req.product_title:
+        stmt = stmt.where(DimProduct.title.ilike(f"%{req.product_title}%"))
+    if req.ranking_min is not None:
+        stmt = stmt.where(fact.current_ranking >= req.ranking_min)
+    if req.ranking_max is not None:
+        stmt = stmt.where(fact.current_ranking <= req.ranking_max)
+    if req.change_min is not None:
+        stmt = stmt.where(fact.ranking_change >= req.change_min)
+    if req.change_max is not None:
+        stmt = stmt.where(fact.ranking_change <= req.change_max)
+    if req.click_share_min is not None:
+        stmt = stmt.where(fact.top1_click_share >= req.click_share_min)
+    if req.click_share_max is not None:
+        stmt = stmt.where(fact.top1_click_share <= req.click_share_max)
+    if req.conversion_share_min is not None:
+        stmt = stmt.where(fact.top1_conversion_share >= req.conversion_share_min)
+    if req.conversion_share_max is not None:
+        stmt = stmt.where(fact.top1_conversion_share <= req.conversion_share_max)
+    if req.is_new is not None:
+        stmt = stmt.where(fact.is_new == req.is_new)
+    return stmt
 
-    def _apply_basic_filters(self, stmt, params: AnalysisSearchRequest):
-        """应用基础搜索筛选条件"""
-        if params.keyword and params.keyword.strip():
-            stmt = stmt.where(AmazonOriginSearchData.keyword.ilike(f"%{params.keyword.strip()}%"))
 
-        if params.brand and params.brand.strip():
-            stmt = stmt.where(AmazonOriginSearchData.top_brand.ilike(f"%{params.brand.strip()}%"))
+def _apply_order(stmt, fact, req: AnalysisSearchRequest):
+    """排序白名单：非法字段回落默认（当期排名升序）。"""
+    field = req.orderBy if req.orderBy in SORTABLE_FIELDS else _DEFAULT_ORDER
+    col = getattr(fact, field)
+    direction = req.orderDir or ("asc" if field == _DEFAULT_ORDER else "desc")
+    col = col.asc() if direction == "asc" else col.desc()
+    # 加 keyword_id 兜底，保证分页稳定
+    return stmt.order_by(col, fact.keyword_id.asc())
 
-        if params.category and params.category.strip():
-            stmt = stmt.where(AmazonOriginSearchData.top_category.ilike(f"%{params.category.strip()}%"))
 
-        if params.asin and params.asin.strip():
-            stmt = stmt.where(AmazonOriginSearchData.top_product_asin.ilike(f"%{params.asin.strip()}%"))
+def search_rows(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> list[dict[str, Any]]:
+    """主查询：作用域内一页数据（含筛选/排序/分页）。"""
+    stmt, fact = _base_query(site, view, on)
+    stmt = _apply_filters(stmt, fact, req)
+    stmt = _apply_order(stmt, fact, req)
+    stmt = stmt.offset((req.page - 1) * req.perPage).limit(req.perPage)
+    return [dict(row._mapping) for row in db.execute(stmt).all()]
 
-        if params.product_title and params.product_title.strip():
-            stmt = stmt.where(AmazonOriginSearchData.top_product_title.ilike(f"%{params.product_title.strip()}%"))
 
-        # 报告日期筛选：同时检查标量列和 ranking_trend_day JSONB，历史日期也能命中
-        if params.report_date and params.report_date.strip():
-            try:
-                target_date = datetime.strptime(params.report_date.strip(), "%Y-%m-%d").date()
-                target_date_str = target_date.isoformat()
-                stmt = stmt.where(
-                    or_(
-                        AmazonOriginSearchData.report_date_day == target_date,
-                        AmazonOriginSearchData.report_date_week == target_date,
-                        AmazonOriginSearchData.ranking_trend_day.contains(
-                            [{"date": target_date_str}]
-                        ),
-                    )
-                )
-            except ValueError:
-                logger.warning(f"无效的日期格式: {params.report_date}")
+def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
+    """有筛选时的总数：上限内精确计数（超过上限返回上限值）。"""
+    stmt, fact = _base_query(site, view, on)
+    stmt = _apply_filters(stmt, fact, req)
+    capped = stmt.with_only_columns(fact.keyword_id).limit(FILTERED_COUNT_CAP).subquery()
+    return db.execute(select(func.count()).select_from(capped)).scalar_one()
 
-        return stmt
 
-    def _apply_ranking_filters(self, stmt, params: AnalysisSearchRequest):
-        """应用排名范围筛选"""
-        # 日排名范围
-        if params.daily_ranking_min is not None:
-            stmt = stmt.where(AmazonOriginSearchData.current_rangking_day >= params.daily_ranking_min)
-        if params.daily_ranking_max is not None:
-            stmt = stmt.where(AmazonOriginSearchData.current_rangking_day <= params.daily_ranking_max)
-
-        # 周排名范围
-        if params.weekly_ranking_min is not None:
-            stmt = stmt.where(AmazonOriginSearchData.current_rangking_week >= params.weekly_ranking_min)
-        if params.weekly_ranking_max is not None:
-            stmt = stmt.where(AmazonOriginSearchData.current_rangking_week <= params.weekly_ranking_max)
-
-        return stmt
-
-    def _apply_change_filters(self, stmt, params: AnalysisSearchRequest):
-        """应用变化范围筛选"""
-        # 日变化范围
-        if params.daily_change_min is not None:
-            stmt = stmt.where(AmazonOriginSearchData.ranking_change_day >= params.daily_change_min)
-        if params.daily_change_max is not None:
-            stmt = stmt.where(AmazonOriginSearchData.ranking_change_day <= params.daily_change_max)
-
-        # 周变化范围
-        if params.weekly_change_min is not None:
-            stmt = stmt.where(AmazonOriginSearchData.ranking_change_week >= params.weekly_change_min)
-        if params.weekly_change_max is not None:
-            stmt = stmt.where(AmazonOriginSearchData.ranking_change_week <= params.weekly_change_max)
-
-        return stmt
-
-    def _apply_share_filters(self, stmt, params: AnalysisSearchRequest):
-        """应用份额和转化率筛选"""
-        # 点击份额范围
-        if params.click_share_min is not None:
-            stmt = stmt.where(AmazonOriginSearchData.top_product_click_share >= params.click_share_min)
-        if params.click_share_max is not None:
-            stmt = stmt.where(AmazonOriginSearchData.top_product_click_share <= params.click_share_max)
-
-        # 转化份额范围
-        if params.conversion_share_min is not None:
-            stmt = stmt.where(AmazonOriginSearchData.top_product_conversion_share >= params.conversion_share_min)
-        if params.conversion_share_max is not None:
-            stmt = stmt.where(AmazonOriginSearchData.top_product_conversion_share <= params.conversion_share_max)
-
-        # 转化率筛选 (计算字段: 转化份额/点击份额)
-        if params.conversion_rate_min is not None or params.conversion_rate_max is not None:
-            # 避免除零错误
-            stmt = stmt.where(AmazonOriginSearchData.top_product_click_share > 0)
-
-            if params.conversion_rate_min is not None:
-                stmt = stmt.where(
-                    (AmazonOriginSearchData.top_product_conversion_share /
-                     AmazonOriginSearchData.top_product_click_share * 100) >= params.conversion_rate_min
-                )
-            if params.conversion_rate_max is not None:
-                stmt = stmt.where(
-                    (AmazonOriginSearchData.top_product_conversion_share /
-                     AmazonOriginSearchData.top_product_click_share * 100) <= params.conversion_rate_max
-                )
-
-        return stmt
-
-    def _apply_boolean_filters(self, stmt, params: AnalysisSearchRequest):
-        """应用布尔值筛选"""
-        if params.is_new_day is not None:
-            if params.report_date:
-                try:
-                    target_date_str = datetime.strptime(params.report_date.strip(), "%Y-%m-%d").date().isoformat()
-                    if params.is_new_day:
-                        stmt = stmt.where(
-                            AmazonOriginSearchData.ranking_trend_day.contains(
-                                [{"date": target_date_str, "is_new": True}]
-                            )
-                        )
-                    else:
-                        stmt = stmt.where(
-                            ~AmazonOriginSearchData.ranking_trend_day.contains(
-                                [{"date": target_date_str, "is_new": True}]
-                            )
-                        )
-                except (ValueError, AttributeError):
-                    stmt = stmt.where(AmazonOriginSearchData.is_new_day == params.is_new_day)
-            else:
-                stmt = stmt.where(AmazonOriginSearchData.is_new_day == params.is_new_day)
-
-        if params.is_new_week is not None:
-            stmt = stmt.where(AmazonOriginSearchData.is_new_week == params.is_new_week)
-
-        return stmt
+def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:
+    """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
+    rows = db.execute(
+        text(
+            f"SELECT top_category, cnt FROM {_SCHEMA}.category_stats "
+            f"WHERE site = :site AND period_type = :view ORDER BY cnt DESC"
+        ),
+        {"site": site, "view": view},
+    ).all()
+    return [{"category": r[0], "count": r[1]} for r in rows]

@@ -1,7 +1,7 @@
 from pydantic import ConfigDict, field_validator
 from pydantic_settings import BaseSettings
 
-from app.site_registry import UnknownSiteError, normalize_site_codes
+from app.site_registry import UnknownSiteError, normalize_site_code, normalize_site_codes
 
 
 class Settings(BaseSettings):
@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # 默认 3（当前月 + 前两个月）。清理逻辑读取本值计算保留下界，见
     # app.table.analysis.retention_service。
     HOT_WINDOW_MONTHS: int = 3
+
+    # 查询默认站点：分析查询未传站点参数时采用它（site-scoped-query）。
+    # 取值必须是已登记站点码；留空时 default_site 回退为 enabled_site_codes 的第一个。
+    # 绝不返回全站点混合数据。
+    DEFAULT_SITE: str = ""
 
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
@@ -97,6 +102,25 @@ class Settings(BaseSettings):
     def enabled_site_codes(self) -> list[str]:
         """解析后的启用站点列表。取值已在校验阶段规整并排序。"""
         return [code for code in self.ENABLED_SITES.split(",") if code]
+
+    @field_validator("DEFAULT_SITE")
+    @classmethod
+    def _validate_default_site(cls, value: str) -> str:
+        """默认站点若配置，必须是已登记站点码；留空合法（运行时回退到首个启用站点）。"""
+        if not value or not value.strip():
+            return ""
+        try:
+            return normalize_site_code(value)
+        except UnknownSiteError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @property
+    def default_site(self) -> str:
+        """查询默认站点：配置了且在启用列表内则用它，否则回退首个启用站点。"""
+        enabled = self.enabled_site_codes
+        if self.DEFAULT_SITE and self.DEFAULT_SITE in enabled:
+            return self.DEFAULT_SITE
+        return enabled[0]
 
     @field_validator("HOT_WINDOW_MONTHS")
     @classmethod
