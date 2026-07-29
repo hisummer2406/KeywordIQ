@@ -1,132 +1,118 @@
-from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date
+"""站点作用域查询（site-scoped-query）的请求/响应 DTO。
 
-ALLOWED_ANALYSIS_ORDER_FIELDS = frozenset({
-    "current_rangking_day",
-    "ranking_change_day",
-    "current_rangking_week",
-    "ranking_change_week",
-    "top_product_click_share",
-    "top_product_conversion_share",
-    "report_date_day",
-})
+作用域三元组 (site, view, date)：任一查询只落在单一站点、单一视图（日/周）、单一日期。
+行数据按视图区分：日视图含 7 天走势与当周排名变化，周视图不含。
+列表出口保持 ProTable 契约 {data, total, success}，并回显生效作用域。
+
+注意：日期类型统一用别名 ``_Date`` 引用。存在字段 ``date: Optional[_Date]``——若直接用
+``date`` 作类型，字段名 date 会在类命名空间遮蔽类型 date，pydantic v2 用 get_type_hints
+重解析注解时把 date 当成 FieldInfo，导致递归爆栈。别名规避了这一遮蔽。
+"""
+from datetime import date as _Date
+from typing import Any, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+View = Literal["DAY", "WEEK"]
 
 
 class AnalysisSearchRequest(BaseModel):
-    """分析搜索请求模型"""
-    # 分页参数
-    page: int = Field(default=1, ge=1, description="页码")
-    perPage: int = Field(default=50, ge=1, le=1501, description="每页数量")
+    """分析查询请求。site/view/date 缺省时由服务层解析（默认站点 / 最新日期）。"""
 
-    # 搜索条件
+    site: Optional[str] = Field(None, description="站点码，缺省用配置默认站点")
+    view: View = Field("DAY", description="视图：DAY 查日报，WEEK 查周报")
+    date: Optional[_Date] = Field(None, description="报告日期，缺省取该站点该视图最新可用日期")
+
+    # 分页
+    page: int = Field(1, ge=1, description="页码")
+    perPage: int = Field(50, ge=1, le=200, description="每页数量")
+
+    # 排序（字段按视图白名单校验，非法回落默认；见 crud.SORTABLE_FIELDS）
     orderBy: Optional[str] = Field(None, description="排序字段")
-    orderDir: Optional[str] = Field(None, description="排序规则")
+    orderDir: Optional[Literal["asc", "desc"]] = Field(None, description="排序方向")
 
-    # 基础搜索条件
-    keyword: Optional[str] = Field(None, description="关键词搜索")
-    brand: Optional[str] = Field(None, description="品牌搜索")
-    category: Optional[str] = Field(None, description="类目搜索")
-    asin: Optional[str] = Field(None, description="ASIN搜索")
-    product_title: Optional[str] = Field(None, description="商品标题搜索")
-    report_date: Optional[str] = Field(None, description="报告日期筛选")
+    # 子串筛选（走维度表 trgm 索引）
+    keyword: Optional[str] = Field(None, description="关键词子串")
+    brand: Optional[str] = Field(None, description="品牌子串（top1 商品）")
+    category: Optional[str] = Field(None, description="类目子串（top1 商品）")
+    asin: Optional[str] = Field(None, description="ASIN 子串（top1 商品）")
+    product_title: Optional[str] = Field(None, description="标题子串（top1 商品）")
 
-    # 高级搜索 - 排名范围
-    daily_ranking_min: Optional[int] = Field(None, description="日排名最小值")
-    daily_ranking_max: Optional[int] = Field(None, description="日排名最大值")
-    weekly_ranking_min: Optional[int] = Field(None, description="周排名最小值")
-    weekly_ranking_max: Optional[int] = Field(None, description="周排名最大值")
+    # 精确类目（下拉，走 category_stats）
+    category_exact: Optional[str] = Field(None, description="类目精确匹配")
 
-    # 高级搜索 - 变化范围
-    daily_change_min: Optional[int] = Field(None, description="日变化最小值")
-    daily_change_max: Optional[int] = Field(None, description="日变化最大值")
-    weekly_change_min: Optional[int] = Field(None, description="周变化最小值")
-    weekly_change_max: Optional[int] = Field(None, description="周变化最大值")
-
-    # 高级搜索 - 份额和转化率范围
+    # 区间筛选
+    ranking_min: Optional[int] = Field(None, description="当期排名最小值")
+    ranking_max: Optional[int] = Field(None, description="当期排名最大值")
+    change_min: Optional[int] = Field(None, description="排名变化最小值")
+    change_max: Optional[int] = Field(None, description="排名变化最大值")
     click_share_min: Optional[float] = Field(None, description="点击份额最小值")
     click_share_max: Optional[float] = Field(None, description="点击份额最大值")
     conversion_share_min: Optional[float] = Field(None, description="转化份额最小值")
     conversion_share_max: Optional[float] = Field(None, description="转化份额最大值")
-    conversion_rate_min: Optional[float] = Field(None, description="转化率最小值")
-    conversion_rate_max: Optional[float] = Field(None, description="转化率最大值")
 
-    # 高级搜索 - 布尔值筛选
-    is_new_day: Optional[bool] = Field(None, description="是否日新品")
-    is_new_week: Optional[bool] = Field(None, description="是否周新品")
-
-    @field_validator("orderBy")
-    @classmethod
-    def validate_order_by(cls, value: Optional[str]) -> Optional[str]:
-        if not value:
-            return None
-
-        value = value.strip()
-        if value in ALLOWED_ANALYSIS_ORDER_FIELDS:
-            return value
-        return None
-
-    @field_validator("orderDir")
-    @classmethod
-    def validate_order_dir(cls, value: Optional[str]) -> str:
-        if not value:
-            return "asc"
-
-        value = value.strip().lower()
-        if value in {"asc", "desc"}:
-            return value
-        return "asc"
+    # 布尔筛选
+    is_new: Optional[bool] = Field(None, description="是否本周期新词")
 
 
-class AnalysisDataItem(BaseModel):
-    """分析数据项模型"""
+class _FactRowBase(BaseModel):
+    """两视图共有的事实字段（来自 fact_daily / fact_weekly + top1 维度）。"""
+
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    keyword_id: int
     keyword: str
+    current_ranking: int
+    previous_ranking: int
+    ranking_change: int
+    is_new: bool
 
-    # 排名数据
-    current_rangking_day: int
-    previous_rangking_day: int
-    ranking_change_day: int
-    current_rangking_week: int
-    previous_rangking_week: int
-    ranking_change_week: int
+    top1_asin: Optional[str] = None
+    top1_title: Optional[str] = None
+    top1_brand: Optional[str] = None
+    top1_category: Optional[str] = None
+    top1_click_share: float = 0
+    top1_conversion_share: float = 0
 
-    # 趋势图数据
-    ranking_trend_day: List[Any] = Field(default_factory=list)
 
-    # 商品信息
-    top_brand: str
-    top_category: str
-    top_product_asin: str
-    top_product_title: str
+class DayRowItem(_FactRowBase):
+    """日视图行：额外含近 7 天走势与当周排名变化（B 期填充）。"""
 
-    # 数据指标
-    top_product_click_share: float
-    top_product_conversion_share: float
-    conversion_rate: float
+    trend: List[int] = Field(default_factory=list, description="截至所选日期的近 7 天排名走势")
+    week_change: Optional[int] = Field(None, description="当前日期所属周的周排名变化，缺失为空")
 
-    # 状态标识
-    is_new_day: bool
-    is_new_week: bool
 
-    # 日期信息
-    report_date_day: Optional[str] = None
-    report_date_week: Optional[str] = None
-    created_at: Optional[str] = None
+class WeekRowItem(_FactRowBase):
+    """周视图行：不含走势与当周变化。"""
 
 
 class AnalysisSearchResponse(BaseModel):
-    """分析搜索响应模型"""
-    status: int = 0
-    msg: str = "查询成功"
-    data: Dict[str, Any]
+    """列表响应：ProTable 契约 {data,total,success} + 作用域回显。
+
+    ProTable 只读 data/total/success；site/view/date 供前端回显与选择器默认。
+    """
+
+    success: bool = True
+    data: List[Any] = Field(default_factory=list)
+    total: int = 0
+    site: str
+    view: View
+    date: Optional[_Date] = None
+    message: Optional[str] = None
 
 
-class PaginationData(BaseModel):
-    """分页数据模型"""
-    items: List[AnalysisDataItem]
+class ScopeInfo(BaseModel):
+    """作用域元信息：日期选择器与默认解析用。"""
+
+    site: str
+    view: View
+    latest_date: Optional[_Date] = None
+    available_dates: List[_Date] = Field(default_factory=list)
+
+
+class CategoryOption(BaseModel):
+    """类目下拉项。"""
+
+    category: str
     count: int
-    page: int
-    perPage: int

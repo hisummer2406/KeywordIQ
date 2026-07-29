@@ -1,145 +1,98 @@
-import logging
-from sqlalchemy.orm import Session
-from typing import List
+"""站点作用域查询的业务逻辑层。
 
-from app.table.analysis.analysis_crud import AnalysisCRUD
-from app.table.analysis.analysis_model import AmazonOriginSearchData
+职责：解析作用域三元组 (site, view, date)——默认站点、站点校验、日期默认/校验，
+再调 crud 组装 ProTable 响应并回显作用域。事务边界在此，crud 不提交。
+"""
+from __future__ import annotations
+
+import logging
+from datetime import date
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from config import settings
+from app.site_registry import UnknownSiteError, normalize_site_code
+from app.table.analysis import analysis_crud as crud
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
     AnalysisSearchResponse,
-    AnalysisDataItem,
-    PaginationData
+    CategoryOption,
+    DayRowItem,
+    ScopeInfo,
+    WeekRowItem,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class AnalysisService:
-    """分析数据业务逻辑服务"""
+class ScopeError(ValueError):
+    """作用域参数非法（站点未登记、日期无数据/越界）。API 层映射为 422。"""
 
-    def __init__(self, db: Session):
-        self.db = db
-        self.crud = AnalysisCRUD(db)
 
-    def search_data(self, params: AnalysisSearchRequest) -> AnalysisSearchResponse:
-        """搜索分析数据"""
-        try:
-            # 调用CRUD层获取数据
-            items, total_count = self.crud.search_data_paginated(params)
+def _resolve_site(site: Optional[str]) -> str:
+    """未传取默认站点；一律校验合法，非法即报错，绝不静默回退到默认。"""
+    if site is None:
+        return settings.default_site
+    try:
+        return normalize_site_code(site)
+    except UnknownSiteError as exc:
+        raise ScopeError(str(exc)) from exc
 
-            # 格式化数据
-            formatted_items = [self._format_data_item(item) for item in items]
 
-            # 构建分页数据
-            pagination_data = PaginationData(
-                items=formatted_items,
-                count=total_count,
-                page=params.page,
-                perPage=params.perPage
-            )
+def _resolve_date(
+    given: Optional[date], available: list[date]
+) -> Optional[date]:
+    """日期解析：未传取最新可用；传了必须在可选集内，否则报错不回退。"""
+    if given is None:
+        return available[0] if available else None
+    if given not in available:
+        raise ScopeError(f"日期 {given} 无数据或已移出保留窗口")
+    return given
 
-            return AnalysisSearchResponse(
-                status=0,
-                msg="查询成功",
-                data=pagination_data.model_dump()
-            )
 
-        except Exception as e:
-            logger.error(f"搜索数据服务失败: {e}")
-            return AnalysisSearchResponse(
-                status=1,
-                msg=f"查询失败: {str(e)}",
-                data={
-                    "items": [],
-                    "count": 0,
-                    "page": params.page,
-                    "perPage": params.perPage
-                }
-            )
+def get_scope(db: Session, site: Optional[str], view: str) -> ScopeInfo:
+    """作用域元信息：可选日期集 + 最新日期（日期选择器用）。"""
+    resolved_site = _resolve_site(site)
+    dates = crud.available_dates(db, resolved_site, view)
+    return ScopeInfo(
+        site=resolved_site,
+        view=view,  # type: ignore[arg-type]
+        latest_date=dates[0] if dates else None,
+        available_dates=dates,
+    )
 
-    def get_categories(self) -> List[dict]:
-        """获取类目选项"""
-        return self.crud.get_categories()
 
-    @staticmethod
-    def _extract_is_new_from_trend(trend: list, date_str: str | None, fallback: bool) -> bool:
-        """从 ranking_trend_day JSONB 中取指定日期的 is_new；老数据无该字段时回退到标量列"""
-        if trend and date_str:
-            for entry in trend:
-                if entry.get('date') == date_str:
-                    return entry.get('is_new', fallback)
-        return fallback
+def search(db: Session, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
+    """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。"""
+    site = _resolve_site(req.site)
+    view = req.view
+    dates = crud.available_dates(db, site, view)
+    on = _resolve_date(req.date, dates)
 
-    def _format_data_item(self, item: AmazonOriginSearchData) -> AnalysisDataItem:
-        """格式化单个数据项"""
-        try:
-            # 计算转化率 (避免除零错误)
-            conversion_rate = 0.0
-            if item.top_product_click_share and item.top_product_click_share > 0:
-                conversion_rate = round(
-                    (item.top_product_conversion_share / item.top_product_click_share) * 100, 2
-                )
+    # 该站点该视图无任何数据：正常返回空结果（非报错）
+    if on is None:
+        return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
 
-            return AnalysisDataItem(
-                id=item.id,
-                keyword=item.keyword,
+    rows = crud.search_rows(db, site, view, on, req)
 
-                # 排名数据
-                current_rangking_day=item.current_rangking_day,
-                previous_rangking_day=item.previous_rangking_day,
-                ranking_change_day=item.ranking_change_day,
-                current_rangking_week=item.current_rangking_week,
-                previous_rangking_week=item.previous_rangking_week,
-                ranking_change_week=item.ranking_change_week,
+    if crud.request_has_filters(req):
+        total = crud.count_filtered(db, site, view, on, req)
+    else:
+        total = crud.scope_row_count(db, site, view, on)
 
-                # 趋势图数据
-                ranking_trend_day=item.ranking_trend_day or [],
+    # 按视图构造行 DTO（日视图的 trend/week_change 在 B 期填充，此处为默认空）
+    if view == "DAY":
+        data = [DayRowItem(**r).model_dump() for r in rows]
+    else:
+        data = [WeekRowItem(**r).model_dump() for r in rows]
 
-                # 商品信息
-                top_brand=item.top_brand,
-                top_category=item.top_category,
-                top_product_asin=item.top_product_asin,
-                top_product_title=item.top_product_title,
+    return AnalysisSearchResponse(
+        success=True, data=data, total=total, site=site, view=view, date=on
+    )
 
-                # 数据指标
-                top_product_click_share=float(item.top_product_click_share),
-                top_product_conversion_share=float(item.top_product_conversion_share),
-                conversion_rate=conversion_rate,
 
-                # 状态标识：优先从 ranking_trend_day JSONB 中取对应日期的 is_new，保证历史准确性
-                is_new_day=self._extract_is_new_from_trend(
-                    item.ranking_trend_day,
-                    item.report_date_day.isoformat() if item.report_date_day else None,
-                    item.is_new_day,
-                ),
-                is_new_week=item.is_new_week,
-
-                # 日期信息
-                report_date_day=item.report_date_day.isoformat() if item.report_date_day else None,
-                report_date_week=item.report_date_week.isoformat() if item.report_date_week else None,
-                created_at=item.created_at.isoformat() if item.created_at else None,
-            )
-
-        except Exception as e:
-            logger.error(f"格式化数据项失败: {e}")
-            # 返回基础数据项，避免整个请求失败
-            return AnalysisDataItem(
-                id=getattr(item, 'id', 0),
-                keyword=getattr(item, 'keyword', ''),
-                current_rangking_day=0,
-                previous_rangking_day=0,
-                ranking_change_day=0,
-                current_rangking_week=0,
-                previous_rangking_week=0,
-                ranking_change_week=0,
-                top_brand="",
-                top_category="",
-                top_product_asin="",
-                top_product_title="",
-                top_product_click_share=0.0,
-                top_product_conversion_share=0.0,
-                conversion_rate=0.0,
-                is_new_day=False,
-                is_new_week=False
-            )
-
+def get_categories(db: Session, site: Optional[str], view: str) -> list[CategoryOption]:
+    """类目下拉选项（按作用域）。"""
+    resolved_site = _resolve_site(site)
+    return [CategoryOption(**opt) for opt in crud.category_options(db, resolved_site, view)]
