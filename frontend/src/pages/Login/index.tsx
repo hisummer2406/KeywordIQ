@@ -3,7 +3,7 @@ import { LoginForm, ProConfigProvider, ProFormText } from '@ant-design/pro-compo
 import { history, useModel } from '@umijs/max';
 import { App } from 'antd';
 import { login } from '@/services/auth';
-import { TOKEN_KEY } from '@/app';
+import { setToken } from '@/utils/token';
 
 /**
  * 登录屏。登录并入 SPA 路由（替代 /admin/login）。
@@ -16,7 +16,7 @@ export default function LoginPage() {
   const handleSubmit = async (values: API.LoginParams) => {
     try {
       const res = await login(values);
-      localStorage.setItem(TOKEN_KEY, res.token);
+      setToken(res.token);
       await refresh();
       message.success('登录成功');
       const redirect = new URLSearchParams(history.location.search).get('redirect');
