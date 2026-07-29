@@ -4,9 +4,13 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from sqlalchemy import select
+
 from database import get_db
 from app.user.user_crud import UserCenterCRUD
-from app.user.user_schemas import (UserCenterCreate, UserCenterUpdate, UserCenterList)
+from app.user.user_model import UserCenter
+from app.user.rbac_model import Role
+from app.user.user_schemas import (UserCenterCreate, UserCenterUpdate, UserCenterList, RoleOut)
 from app.auth.simple_auth import simple_auth
 from app.auth.permissions import USER_MANAGE
 from app.common.responses import ProTableResponse, protable, protable_error
@@ -49,6 +53,16 @@ async def get_users_list(
     except Exception as e:
         logger.error(f"获取用户列表失败: {e}")
         raise HTTPException(status_code=500, detail="获取用户列表失败")
+
+
+@user_router.get("/roles", response_model=list[RoleOut])
+async def list_roles(
+        db: Session = Depends(get_db),
+        current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
+) -> list[RoleOut]:
+    """[SPA] 角色下拉数据，供用户管理屏分配角色。"""
+    roles = db.execute(select(Role).order_by(Role.id)).scalars().all()
+    return [RoleOut.model_validate(r) for r in roles]
 
 
 @user_router.get("/table", response_model=ProTableResponse[UserCenterList])

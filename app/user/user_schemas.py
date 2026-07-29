@@ -67,8 +67,19 @@ class UserCenterList(BaseModel):
     user_name: str
     is_active: bool
     is_super: bool
+    role_id: Optional[int] = None
+    role_code: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+
+class RoleOut(BaseModel):
+    """角色下拉项"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
 
 
 class UserCenterLogin(BaseModel):

@@ -39,7 +39,7 @@
 
 ## 6. 用户管理屏（阶段六）
 
-- [ ] 6.1 用 ProTable/ProForm 复刻用户增删改查与角色分配，接阶段二自建鉴权模型的后端
+- [x] 6.1 用 ProTable/ProForm 复刻用户增删改查与角色分配：前端 `pages/User`（ProTable 列表 + ModalForm 增改 + 角色下拉分配 + 启用/禁用）；后端补 `GET /api/user/roles`（角色下拉，user:manage）与 `/api/user/table` 列表带 `role_id/role_code`。端到端已验：创建/更新/改角色/禁用全通，operator 访问 `/api/user/table` 被 RBAC 拦为 403
 
 ## 7. 收尾与清理（阶段七）
 
