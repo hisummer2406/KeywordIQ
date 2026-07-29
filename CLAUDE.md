@@ -160,9 +160,20 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 
 ### Authentication & Authorization
 
-- JWT-based authentication via `fastapi-user-auth` + custom `simple_auth.py`
-- Middleware: `AdminAuthMiddleware` validates tokens from Cookie/Authorization header
-- Default admin: `admin / pwd123` (change `ADMIN_SECRET_KEY` in production)
+- **自建 JWT + RBAC**（`fastapi-user-auth`/`fastapi-amis-admin` 已随 amis 于阶段七移除）。
+  用户模型 `UserCenter`（`user_center` 表）、`passlib` bcrypt 密码、`AuthService`（PyJWT/HS256/
+  `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`）。
+- **RBAC**：`role`/`permission`/`role_permission`（M2M），`user_center.role_id`（每用户一角色）。
+  权限点 `analysis:view`/`analysis:export`/`upload:import`/`user:manage`/`role:manage`；内置角色
+  admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
+  is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。
+- **端点**：`POST /api/auth/token`（登录发令牌）、`GET /api/auth/me`、`POST /api/auth/logout`（干净 REST）。
+- Middleware：`AdminAuthMiddleware` 从 Authorization 头校验令牌（实际授权以各路由的
+  `require_permission` 依赖为准）。
+- 初始管理员：`scripts/seed_admin.py`（默认 `admin / pwd123`；生产改 `ADMIN_SECRET_KEY`）。
+
+**后台 UI 是独立的 AntD Pro SPA**（`frontend/`，Umi Max + Ant Design + ProComponents），
+本服务只提供 JSON API（amis 后台已删）。生产由 nginx 托管 SPA 产物 + 反代 `/api`。
 
 ### Database Design
 

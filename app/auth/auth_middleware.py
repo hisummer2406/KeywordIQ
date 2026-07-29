@@ -3,7 +3,7 @@ import asyncio
 import logging
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import RedirectResponse, JSONResponse
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,6 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             "/api/upload/"
         ]
         self.exclude_paths = [
-            "/admin/login",
-            "/api/auth/login",
-            "/api/auth/profile",
             "/static",
             "/docs",
             "/redoc",
@@ -81,10 +78,6 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
 
     def _needs_auth(self, path: str) -> bool:
         """判断路径是否需要认证"""
-        # /admin 后台页面不需要认证（由amis自己处理）
-        if path.startswith('/admin'):
-            return False
-
         # 先检查排除路径
         for exclude in self.exclude_paths:
             if path.startswith(exclude):
@@ -98,10 +91,8 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         return False
 
     def _handle_unauthorized(self, path: str):
-        if path.startswith('/api/'):
-            return JSONResponse(
-                status_code=401,
-                content={"status": 1, "msg": "未授权访问", "data": None}
-            )
-        else:
-            return RedirectResponse(url="/admin/login", status_code=302)
+        # 后台 UI 已迁至独立 SPA，未授权一律返回 401 JSON（不再跳 amis 登录页）。
+        return JSONResponse(
+            status_code=401,
+            content={"status": 1, "msg": "未授权访问", "data": None}
+        )
