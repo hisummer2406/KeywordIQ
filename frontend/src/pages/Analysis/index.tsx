@@ -11,6 +11,7 @@ import {
   type View,
 } from '@/services/analysis';
 import { getSites, type SiteOption } from '@/services/upload';
+import TrendSparkline from '@/components/TrendSparkline';
 
 /**
  * 分析查询屏（前端迁移阶段四）。作用域「站点→视图→日期」在表格之上，ProTable 消费
@@ -56,6 +57,14 @@ export default function AnalysisPage() {
     { title: '排名', dataIndex: 'current_ranking', width: 80, sorter: true, search: false },
     { title: '关键词', dataIndex: 'keyword', ellipsis: true, copyable: true },
     {
+      title: '7天走势',
+      dataIndex: 'trend',
+      width: 90,
+      search: false,
+      hideInTable: view !== 'DAY',
+      render: (_, r) => <TrendSparkline values={r.trend} />,
+    },
+    {
       title: '排名变化',
       dataIndex: 'ranking_change',
       width: 100,
@@ -67,6 +76,24 @@ export default function AnalysisPage() {
         return (
           <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
             {up ? '↑' : '↓'} {Math.abs(r.ranking_change)}
+          </span>
+        );
+      },
+    },
+    {
+      title: '周排名变化',
+      dataIndex: 'week_change',
+      width: 100,
+      search: false,
+      hideInTable: view !== 'DAY',
+      render: (_, r) => {
+        if (r.week_change === null || r.week_change === undefined)
+          return <span style={{ color: '#ccc' }}>—</span>;
+        if (r.week_change === 0) return <span style={{ color: '#999' }}>0</span>;
+        const up = r.week_change < 0;
+        return (
+          <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
+            {up ? '↑' : '↓'} {Math.abs(r.week_change)}
           </span>
         );
       },
