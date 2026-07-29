@@ -18,9 +18,9 @@
 
 ## 3. 后端响应适配层（阶段三）
 
-- [ ] 3.1 统一列表响应适配为 ProTable 契约 `{data,total,success}`（依赖/装饰器/统一 response model）
-- [ ] 3.2 失败响应统一形状（`success:false` + 错误信息）
-- [ ] 3.3 为受影响列表接口补契约测试（断言 `{data,total,success}` 形状），保护迁移不回归
+- [x] 3.1 统一列表响应适配为 ProTable 契约 `{data,total,success}`：新增 `app/common/responses.py`（`ProTableResponse[T]` 泛型模型 + `protable(items,total)` helper）；已落地到 `GET /api/user/table`（复用现成 `get_users_paginated`，`user:manage` 授权）。阶段四/六的 SPA 列表端点直接 `return protable(...)`，amis 旧端点留阶段七清理
+- [x] 3.2 失败响应统一形状：`protable_error(msg)` → `{success:false, data:[], total:0, message}`；已用于 `/api/user/table` 异常分支
+- [x] 3.3 契约测试：`test/test_protable_contract.py`（5 项，无需 DB）——适配层成功/失败形状 + 端点 TestClient 契约（断言 `{data,total,success}`、不残留 `items`/`status`）。为跑 TestClient 新增 dev 依赖 `httpx<0.28`（钉版本以兼容仓库内 starlette 0.27）
 
 ## 4. 分析查询屏（阶段四，核心先行）
 
