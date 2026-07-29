@@ -27,7 +27,18 @@ engine = create_engine(
     pool_pre_ping=True,  # 自动检测并重置失效连接
     echo=settings.DEBUG,
     connect_args={
-        "options": "-c timezone=Asia/Shanghai"
+        "options": "-c timezone=Asia/Shanghai",
+        # TCP keepalive：让内核在约 60 秒内识破被静默丢弃的连接（默认要等 2 小时）。
+        # 若不开，云上负载均衡/NAT 空闲超时或 RDS 过载时连接会被无声丢弃（不发 FIN），
+        # 内核仍认为 socket 存活，pool_pre_ping 的 SELECT 1 写进黑洞永久阻塞——连接池
+        # 被挂死的 checkout 占光，整个 worker 卡死到重启。这正是导入期偶发卡死的疑似机制。
+        # keepalives_idle*count + interval ≈ 30 + 3×10 = 60 秒后判定连接已死。
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 3,
+        # 建连本身也加超时，避免建连阶段无限等待。
+        "connect_timeout": 10,
     }
 )
 
@@ -49,6 +60,10 @@ async_engine = create_async_engine(
     pool_pre_ping=True,  # 自动检测并重置失效连接
     echo=settings.DEBUG,
     connect_args={
+        # asyncpg 不接受 psycopg2 的 keepalives 系列参数（那是 socket 层选项，
+        # 不是 PG 的 server_settings）。异步引擎只服务 API 读查询，不走导入路径，
+        # 而已知的导入期卡死发生在同步引擎——TCP keepalive 已在同步引擎补上。
+        # 若将来异步侧也出现半开连接问题，需用 asyncpg 的 socket 层配置单独处理。
         "server_settings": {
             "timezone": "Asia/Shanghai"
         }

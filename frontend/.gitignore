@@ -1,0 +1,18 @@
+# deps
+/node_modules
+
+# umi 生成物
+/src/.umi
+/src/.umi-production
+/src/.umi-test
+/.umirc.local.ts
+
+# 构建产物
+/dist
+
+# 本地环境覆盖
+.env.local
+
+# 杂项
+*.log
+.DS_Store

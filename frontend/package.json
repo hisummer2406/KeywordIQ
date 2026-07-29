@@ -1,0 +1,33 @@
+{
+  "name": "keywordiq-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KeywordIQ 后台 SPA（Umi Max + Ant Design Pro）",
+  "scripts": {
+    "dev": "max dev",
+    "build": "max build",
+    "format": "prettier --write \"src/**/*.{ts,tsx,less,md,json}\"",
+    "lint": "eslint src --ext .ts,.tsx",
+    "tsc": "tsc --noEmit",
+    "setup": "max setup",
+    "postinstall": "max setup"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^5.5.2",
+    "@ant-design/pro-components": "^2.8.2",
+    "@umijs/max": "^4.4.11",
+    "ali-oss": "^6.22.0",
+    "antd": "^5.22.7"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "^6.16.11",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "eslint": "^8.57.1",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

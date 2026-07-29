@@ -5,7 +5,9 @@ from datetime import datetime
 import logging
 from passlib.context import CryptContext
 from app.user.user_model import UserCenter
+from app.user.rbac_model import Role
 from app.user.user_schemas import UserCenterCreate, UserCenterUpdate, UserCenterList
+from app.auth.permissions import DEFAULT_ROLE_FOR_SUPER, DEFAULT_ROLE_FOR_NON_SUPER
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,11 @@ class UserCenterCRUD:
                 "per_page": per_page,
                 "pages": 0
             }
+
+    def _default_role_id(self, is_super: bool) -> Optional[int]:
+        """按 is_super 取默认角色 id（admin / operator），与迁移回填一致。"""
+        code = DEFAULT_ROLE_FOR_SUPER if is_super else DEFAULT_ROLE_FOR_NON_SUPER
+        return self.db.execute(select(Role.id).where(Role.code == code)).scalar_one_or_none()
 
     def get_user_by_id(self, user_id: int) -> Optional[UserCenter]:
         """根据ID获取用户"""
@@ -143,13 +150,17 @@ class UserCenterCRUD:
                 logger.warning(f"用户名 {user_data.user_name} 已存在")
                 return False, "用户名已存在", None
 
+            # 解析角色：显式指定优先，否则按 is_super 赋默认角色（避免无角色→无权限）
+            role_id = user_data.role_id or self._default_role_id(user_data.is_super)
+
             # 创建用户对象
             hashed_password = self.hash_password(user_data.password)
             db_user = UserCenter(
                 user_name=user_data.user_name,
                 hashed_pwd=hashed_password,
                 is_active=user_data.is_active,
-                is_super=user_data.is_super
+                is_super=user_data.is_super,
+                role_id=role_id,
             )
 
             self.db.add(db_user)

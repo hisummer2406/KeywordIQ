@@ -10,6 +10,9 @@ logs/*
 __pycache__/
 uploads/
 
+# 真实搜索词报告样本数据（禁止入库，见 CLAUDE.md guardrail）
+docs/table/
+
 # 忽略Python字节码文件（.pyc/.pyo/.pyd）
 *.py[cod]
 *$py.class

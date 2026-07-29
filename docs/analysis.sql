@@ -1,20 +1,67 @@
 /*
  Navicat Premium Data Transfer
 
- Source Server         : local-docker-postgresql
+ Source Server         : aliyun-amazonsearch
  Source Server Type    : PostgreSQL
- Source Server Version : 170005 (170005)
- Source Host           : localhost:5432
+ Source Server Version : 150014 (150014)
+ Source Host           : pgm-bp1pj6573n99v582po.pg.rds.aliyuncs.com:5432
  Source Catalog        : amazon_search
  Source Schema         : analysis
 
  Target Server Type    : PostgreSQL
- Target Server Version : 170005 (170005)
+ Target Server Version : 150014 (150014)
  File Encoding         : 65001
 
- Date: 25/08/2025 02:38:41
+ Date: 23/07/2026 11:29:03
 */
 
+
+-- ----------------------------
+-- Type structure for status_enum
+-- ----------------------------
+DROP TYPE IF EXISTS "analysis"."status_enum";
+CREATE TYPE "analysis"."status_enum" AS ENUM (
+  'PROCESSING',
+  'COMPLETED',
+  'FAILED'
+);
+ALTER TYPE "analysis"."status_enum" OWNER TO "postgres";
+
+-- ----------------------------
+-- Sequence structure for amazon_origin_search_data_id_seq
+-- ----------------------------
+DROP SEQUENCE IF EXISTS "analysis"."amazon_origin_search_data_id_seq";
+CREATE SEQUENCE "analysis"."amazon_origin_search_data_id_seq" 
+INCREMENT 1
+MINVALUE  1
+MAXVALUE 9223372036854775807
+START 1
+CACHE 1;
+ALTER SEQUENCE "analysis"."amazon_origin_search_data_id_seq" OWNER TO "postgres";
+
+-- ----------------------------
+-- Sequence structure for import_batch_records_id_seq
+-- ----------------------------
+DROP SEQUENCE IF EXISTS "analysis"."import_batch_records_id_seq";
+CREATE SEQUENCE "analysis"."import_batch_records_id_seq" 
+INCREMENT 1
+MINVALUE  1
+MAXVALUE 2147483647
+START 1
+CACHE 1;
+ALTER SEQUENCE "analysis"."import_batch_records_id_seq" OWNER TO "postgres";
+
+-- ----------------------------
+-- Sequence structure for user_center_id_seq
+-- ----------------------------
+DROP SEQUENCE IF EXISTS "analysis"."user_center_id_seq";
+CREATE SEQUENCE "analysis"."user_center_id_seq" 
+INCREMENT 1
+MINVALUE  1
+MAXVALUE 2147483647
+START 1
+CACHE 1;
+ALTER SEQUENCE "analysis"."user_center_id_seq" OWNER TO "postgres";
 
 -- ----------------------------
 -- Table structure for amazon_origin_search_data
@@ -137,7 +184,28 @@ CREATE TABLE "analysis"."user_center" (
 ALTER TABLE "analysis"."user_center" OWNER TO "postgres";
 
 -- ----------------------------
--- Indexes structure for analysis amazon_origin_search_data
+-- Alter sequences owned by
+-- ----------------------------
+ALTER SEQUENCE "analysis"."amazon_origin_search_data_id_seq"
+OWNED BY "analysis"."amazon_origin_search_data"."id";
+SELECT setval('"analysis"."amazon_origin_search_data_id_seq"', 274335369, true);
+
+-- ----------------------------
+-- Alter sequences owned by
+-- ----------------------------
+ALTER SEQUENCE "analysis"."import_batch_records_id_seq"
+OWNED BY "analysis"."import_batch_records"."id";
+SELECT setval('"analysis"."import_batch_records_id_seq"', 408, true);
+
+-- ----------------------------
+-- Alter sequences owned by
+-- ----------------------------
+ALTER SEQUENCE "analysis"."user_center_id_seq"
+OWNED BY "analysis"."user_center"."id";
+SELECT setval('"analysis"."user_center_id_seq"', 100, true);
+
+-- ----------------------------
+-- Indexes structure for table amazon_origin_search_data
 -- ----------------------------
 CREATE INDEX "idx_amazon_click_share_desc" ON "analysis"."amazon_origin_search_data" USING btree (
   "top_product_click_share" "pg_catalog"."numeric_ops" DESC NULLS FIRST
@@ -157,6 +225,9 @@ CREATE INDEX "idx_amazon_new_day" ON "analysis"."amazon_origin_search_data" USIN
 CREATE INDEX "idx_amazon_new_week" ON "analysis"."amazon_origin_search_data" USING btree (
   "is_new_week" "pg_catalog"."bool_ops" ASC NULLS LAST
 ) WHERE is_new_week = true;
+CREATE INDEX "idx_amazon_origin_ranking_day" ON "analysis"."amazon_origin_search_data" USING btree (
+  "current_rangking_day" "pg_catalog"."int4_ops" ASC NULLS LAST
+);
 CREATE INDEX "idx_amazon_product_asin" ON "analysis"."amazon_origin_search_data" USING btree (
   "top_product_asin" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
 );
@@ -181,20 +252,52 @@ CREATE INDEX "idx_amazon_top_brand_not_null" ON "analysis"."amazon_origin_search
 CREATE INDEX "idx_amazon_top_category" ON "analysis"."amazon_origin_search_data" USING btree (
   "top_category" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
 );
+CREATE INDEX "idx_brand_keyword_filter" ON "analysis"."amazon_origin_search_data" USING btree (
+  "top_brand" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST,
+  "keyword" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
+) WHERE top_brand IS NOT NULL AND top_brand::text <> ''::text;
+CREATE INDEX "idx_category_notnull" ON "analysis"."amazon_origin_search_data" USING btree (
+  "top_category" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
+) WHERE top_category IS NOT NULL AND top_category::text <> ''::text;
+CREATE INDEX "idx_date_ranking_nonzero" ON "analysis"."amazon_origin_search_data" USING btree (
+  "report_date_day" "pg_catalog"."date_ops" DESC NULLS FIRST,
+  "current_rangking_day" "pg_catalog"."int4_ops" ASC NULLS LAST
+) WHERE current_rangking_day <> 0;
+CREATE INDEX "idx_date_ranking_sort" ON "analysis"."amazon_origin_search_data" USING btree (
+  "report_date_day" "pg_catalog"."date_ops" DESC NULLS FIRST,
+  "current_rangking_day" "pg_catalog"."int4_ops" ASC NULLS LAST
+);
 CREATE INDEX "idx_keyword" ON "analysis"."amazon_origin_search_data" USING btree (
   "keyword" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
 );
 CREATE INDEX "idx_keyword_text" ON "analysis"."amazon_origin_search_data" USING gin (
   to_tsvector('english'::regconfig, keyword::text) "pg_catalog"."tsvector_ops"
 );
+CREATE INDEX "idx_optimized_count" ON "analysis"."amazon_origin_search_data" USING btree (
+  "top_brand" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST,
+  "keyword" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
+) WHERE top_brand IS NOT NULL AND top_brand::text <> ''::text;
+CREATE INDEX "idx_shares_range" ON "analysis"."amazon_origin_search_data" USING btree (
+  "top_product_click_share" "pg_catalog"."numeric_ops" ASC NULLS LAST,
+  "top_product_conversion_share" "pg_catalog"."numeric_ops" ASC NULLS LAST
+) WHERE top_product_click_share > 0::numeric;
+CREATE INDEX "idx_top_category_with_id" ON "analysis"."amazon_origin_search_data" USING btree (
+  "top_category" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST,
+  "id" "pg_catalog"."int8_ops" ASC NULLS LAST
+);
 
 -- ----------------------------
--- Primary Key structure for analysis amazon_origin_search_data
+-- Uniques structure for table amazon_origin_search_data
+-- ----------------------------
+ALTER TABLE "analysis"."amazon_origin_search_data" ADD CONSTRAINT "unique_keyword" UNIQUE ("keyword");
+
+-- ----------------------------
+-- Primary Key structure for table amazon_origin_search_data
 -- ----------------------------
 ALTER TABLE "analysis"."amazon_origin_search_data" ADD CONSTRAINT "amazon_origin_search_data_pkey" PRIMARY KEY ("id");
 
 -- ----------------------------
--- Indexes structure for analysis import_batch_records
+-- Indexes structure for table import_batch_records
 -- ----------------------------
 CREATE INDEX "idx_import_batch_records_created_at" ON "analysis"."import_batch_records" USING btree (
   "created_at" "pg_catalog"."timestamptz_ops" ASC NULLS LAST
@@ -207,12 +310,12 @@ CREATE INDEX "idx_import_batch_records_status" ON "analysis"."import_batch_recor
 );
 
 -- ----------------------------
--- Primary Key structure for analysis import_batch_records
+-- Primary Key structure for table import_batch_records
 -- ----------------------------
 ALTER TABLE "analysis"."import_batch_records" ADD CONSTRAINT "import_batch_records_pkey" PRIMARY KEY ("id");
 
 -- ----------------------------
--- Indexes structure for analysis user_center
+-- Indexes structure for table user_center
 -- ----------------------------
 CREATE UNIQUE INDEX "idx_user_unique" ON "analysis"."user_center" USING btree (
   "user_name" COLLATE "pg_catalog"."default" "pg_catalog"."text_ops" ASC NULLS LAST
@@ -220,11 +323,6 @@ CREATE UNIQUE INDEX "idx_user_unique" ON "analysis"."user_center" USING btree (
 COMMENT ON INDEX "analysis"."idx_user_unique" IS '唯一用户';
 
 -- ----------------------------
--- Primary Key structure for analysis user_center
+-- Primary Key structure for table user_center
 -- ----------------------------
 ALTER TABLE "analysis"."user_center" ADD CONSTRAINT "user_center_pkey" PRIMARY KEY ("id");
-
--- ----------------------------
--- Insert admin user
--- ----------------------------
-INSERT INTO "user_center" ("user_name", "hashed_pwd", "is_active", "is_super") VALUES ('admin', '$2b$12$HVZ6uO0GF3e8f.VLWkfosus6fxy1zCltqjhD7a7I1POwaTAhnTniC', 't', 't');

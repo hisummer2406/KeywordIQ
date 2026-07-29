@@ -8,6 +8,7 @@ from database import get_db
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_schemas import (UserCenterCreate, UserCenterUpdate)
 from app.auth.simple_auth import simple_auth
+from app.auth.permissions import USER_MANAGE
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def get_user_detail(
 async def register(
         user_data: UserCenterCreate,
         db: Session = Depends(get_db),
-        current_user: dict = Depends(simple_auth.get_super_user()),
+        current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> Dict[str, Any]:
     """用户注册"""
     try:
@@ -124,7 +125,7 @@ async def update_user(
         user_id: int,
         user_data: UserCenterUpdate,
         db: Session = Depends(get_db),
-        current_user: dict = Depends(simple_auth.get_super_user()),
+        current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> Dict[str, Any]:
     """更新用户信息"""
     try:
@@ -161,7 +162,7 @@ async def update_user(
 async def toggle_user_status(
         user_id: int,
         db: Session = Depends(get_db),
-        current_user: dict = Depends(simple_auth.get_super_user()),
+        current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> Dict[str, Any]:
     """切换用户状态（激活/禁用）"""
     try:
