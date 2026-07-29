@@ -31,11 +31,11 @@
 
 ## 5. 上传屏 + OSS 直传（阶段五）
 
-- [ ] 5.1 前置核对：bucket CORS（放行后台域名 PUT/POST、expose ETag）与 STS 角色就绪（OSS 控制台侧）
-- [ ] 5.2 上传界面（日报/周报）：AntD `Upload` + `customRequest`
-- [ ] 5.3 `customRequest` 流程：换 STS 凭证（`/oss/upload-credentials`）→ `ali-oss` 分片直传 → 回传 key（`/oss/import`）
-- [ ] 5.4 分片进度展示 + 导入状态轮询（复用 `/processing-status`）
-- [ ] 5.5 移除 amis 时期为直传注入的 JS 方案
+- [ ] 5.1 前置核对：bucket CORS（放行后台域名 PUT/POST、expose ETag）与 STS 角色就绪（OSS 控制台侧）—— **外部**：OSS 控制台侧配置，非代码，须上线前在阿里云侧核对（区域/region 形式、CORS、RAM 角色）
+- [x] 5.2 上传界面（日报/周报）：`frontend/src/pages/Upload`——站点下拉（接后端新增 `GET /api/upload/sites`，站点码源自 `site_registry`，不硬编码）+ 周期选择（按文件名推断/日报/周报）+ `Upload.Dragger` `customRequest`
+- [x] 5.3 `customRequest` 流程：`frontend/src/services/ossUpload.ts`——换 STS 凭证（`/oss/upload-credentials`）→ `ali-oss` `multipartUpload` 分片直传 → 回传 object key（`/oss/import`）；`services/upload.ts` 封装接口并解包 amis 信封
+- [x] 5.4 分片进度展示（`multipartUpload` progress → Upload 进度）+ 导入状态轮询（每 5s 拉 `/processing-status` 渲染最近批次表）
+- [x] 5.5 移除 amis 直传注入 JS：新 SPA 为全新工程，不携带 amis 时期注入的 JS 方案；amis 上传屏本身随 amis 于阶段七整体撤下
 
 ## 6. 用户管理屏（阶段六）
 

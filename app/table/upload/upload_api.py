@@ -26,7 +26,7 @@ from app.table.upload.importer import parse_report_filename
 from app.table.upload.import_service import run_import, ImportRejected
 from app.table.upload.import_source import LocalFileSource, OSSObjectSource
 from app.table.upload import oss_client
-from app.site_registry import UnknownSiteError, normalize_site_code
+from app.site_registry import UnknownSiteError, normalize_site_code, SITE_CATALOG
 from config import settings
 import database
 
@@ -343,6 +343,17 @@ def _resolve_import_meta(filename: str, site: str, period: Optional[str]):
     if resolved_period not in ("DAY", "WEEK"):
         return None, None, None, "period 只支持 DAY 或 WEEK"
     return site, resolved_period, report_date, None
+
+
+@upload_router.get("/sites")
+async def list_sites() -> Dict[str, Any]:
+    """站点下拉数据。唯一事实来源是 app/site_registry.py，前端不得硬编码站点列表。"""
+    return {
+        "sites": [
+            {"code": s.code, "name_zh": s.name_zh, "domain": s.domain}
+            for s in SITE_CATALOG.values()
+        ]
+    }
 
 
 @upload_router.post("/oss/upload-credentials")

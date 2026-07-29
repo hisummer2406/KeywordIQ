@@ -9,7 +9,10 @@ export default defineConfig({
   npmClient: 'pnpm',
 
   // Umi Max 内置插件
-  antd: {},
+  antd: {
+    // 用 antd <App> 包裹，提供 message/notification 的上下文（App.useApp）
+    appConfig: {},
+  },
   access: {},
   model: {},
   initialState: {},
