@@ -12,6 +12,7 @@ import {
 } from '@/services/analysis';
 import { getSites, type SiteOption } from '@/services/upload';
 import TrendSparkline from '@/components/TrendSparkline';
+import ShareBar from '@/components/ShareBar';
 
 /**
  * 分析查询屏（前端迁移阶段四）。作用域「站点→视图→日期」在表格之上，ProTable 消费
@@ -122,18 +123,18 @@ export default function AnalysisPage() {
     {
       title: '点击份额',
       dataIndex: 'top1_click_share',
-      width: 100,
+      width: 110,
       sorter: true,
       search: false,
-      render: (_, r) => `${r.top1_click_share}%`,
+      render: (_, r) => <ShareBar value={r.top1_click_share} />,
     },
     {
       title: '转化份额',
       dataIndex: 'top1_conversion_share',
-      width: 100,
+      width: 110,
       sorter: true,
       search: false,
-      render: (_, r) => `${r.top1_conversion_share}%`,
+      render: (_, r) => <ShareBar value={r.top1_conversion_share} />,
     },
   ];
 
