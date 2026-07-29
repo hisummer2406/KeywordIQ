@@ -1,0 +1,54 @@
+"""创建初始管理员用户（幂等）。
+
+V2 迁移只种角色/权限，不种用户；全新库跑完迁移后没有任何账号可登录。本脚本补齐这一步。
+is_super=True 的用户由 UserCenterCRUD 自动赋 admin 角色（见 app/auth/permissions.py）。
+
+用法：
+    uv run python scripts/seed_admin.py                # 默认 admin / pwd123
+    uv run python scripts/seed_admin.py --username boss --password s3cret
+    # 指定库（不改 .env）：
+    DATABASE_URL=postgresql://postgres:pwd123@localhost/keywordiq_v2_dev \\
+        uv run python scripts/seed_admin.py
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# 让脚本直接运行时也能 import 仓库根的模块
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from database import SessionFactory
+from app.user.user_crud import UserCenterCRUD
+from app.user.user_schemas import UserCenterCreate
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="创建初始管理员用户（幂等）")
+    parser.add_argument("--username", default="admin")
+    parser.add_argument("--password", default="pwd123")
+    args = parser.parse_args()
+
+    with SessionFactory() as db:
+        crud = UserCenterCRUD(db)
+        existing = crud.get_user_by_username(args.username)
+        if existing:
+            print(f"用户已存在，跳过：{args.username}（role={existing.role_code}）")
+            return 0
+
+        ok, msg, user = crud.create_user(
+            UserCenterCreate(
+                user_name=args.username,
+                password=args.password,
+                is_super=True,
+                is_active=True,
+            )
+        )
+        if not ok:
+            print(f"创建失败：{msg}", file=sys.stderr)
+            return 1
+        print(f"已创建管理员：{user.user_name}（id={user.id}, role={user.role_code}）")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
