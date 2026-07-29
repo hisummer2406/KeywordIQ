@@ -24,10 +24,10 @@
 
 ## 4. 分析查询屏（阶段四，核心先行）
 
-- [ ] 4.1 用 ProTable 复刻分析查询：筛选、分页、排序，接适配后的 `/api/analysis/search`
-- [ ] 4.2 类目统计下拉/筛选接 `/api/analysis/category-stats`
-- [ ] 4.3 导出下载：中小导出用带 token 的 `fetch` 取 blob → `createObjectURL` 触发下载；大导出后端签发短时一次性下载令牌走 URL（阈值实施期定）
-- [ ] 4.4 staging 用生产样本做等价性核对（行数/筛选/导出一致），通过后切换为线上前端
+- [x] 4.1 用 ProTable 复刻分析查询（`pages/Analysis`）：作用域「站点→视图→日期」选择器 + ProTable 筛选（关键词/品牌/ASIN/标题子串、新词）/排序（排名/变化/份额）/分页，接 A 期 `POST /api/analysis/search`（作用域用 ref 承载供 request 闭包读取，切换回第 1 页）
+- [x] 4.2 类目下拉/筛选：类目列 select 接 `GET /api/analysis/categories`（选项带计数），映射为 `category_exact` 精确筛选；日期选择器接 `GET /api/analysis/scope`
+- [ ] 4.3 导出下载：中小导出用带 token 的 `fetch` 取 blob → `createObjectURL` 触发下载；大导出后端签发短时一次性下载令牌走 URL（阈值实施期定）—— 待做（后端 export 端点也需重建）
+- [ ] 4.4 staging 用生产样本做等价性核对（行数/筛选/导出一致），通过后切换为线上前端 —— 待上线环境
 
 ## 5. 上传屏 + OSS 直传（阶段五）
 
