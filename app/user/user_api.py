@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from app.user.user_crud import UserCenterCRUD
-from app.user.user_schemas import (UserCenterCreate, UserCenterUpdate)
+from app.user.user_schemas import (UserCenterCreate, UserCenterUpdate, UserCenterList)
 from app.auth.simple_auth import simple_auth
 from app.auth.permissions import USER_MANAGE
+from app.common.responses import ProTableResponse, protable, protable_error
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,27 @@ async def get_users_list(
     except Exception as e:
         logger.error(f"获取用户列表失败: {e}")
         raise HTTPException(status_code=500, detail="获取用户列表失败")
+
+
+@user_router.get("/table", response_model=ProTableResponse[UserCenterList])
+async def get_users_table(
+        page: int = Query(1, ge=1, description="页码"),
+        per_page: int = Query(20, ge=1, le=100, description="每页数量"),
+        user_name: Optional[str] = Query(None, description="搜索关键词"),
+        is_active: Optional[bool] = Query(None, description="用户状态筛选"),
+        db: Session = Depends(get_db),
+        current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
+) -> ProTableResponse[UserCenterList]:
+    """[SPA] 用户列表，返回 ProTable 契约 {data, total, success}。"""
+    try:
+        crud = UserCenterCRUD(db)
+        result = crud.get_users_paginated(
+            page=page, per_page=per_page, user_name=user_name, is_active=is_active
+        )
+        return protable(result["items"], result["total"])
+    except Exception as e:
+        logger.error(f"获取用户表格失败: {e}")
+        return protable_error("获取用户列表失败")
 
 
 @user_router.get("/detail/{user_id}", response_model=Dict[str, Any])
