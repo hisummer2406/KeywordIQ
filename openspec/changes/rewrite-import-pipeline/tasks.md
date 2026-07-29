@@ -20,7 +20,7 @@
 - [x] 3.4 实现第三段：暂存表 JOIN 维度 + LEFT JOIN 上一期分区，集合式算出 previous/change/is_new，追加写目标事实表
 - [x] 3.5 "上一期"关联只取同站点同周期（日报取前一天、周报取前一周），确保不跨站点/跨周期继承
 - [x] 3.6 用一个 `period` 参数驱动日报/周报共用同一份代码，仅切换目标表与上一期定义
-- [ ] 3.7 **删除** V1 的两条 UPSERT SQL、`_fetch_existing_trends`、`ranking_trend_day` 相关代码 —— **推迟**：V1 `/upload-csv` 端点仍在用 csv_processor，删了会破坏运行中的 app。等 V1 端点退役后再清理（V2 `/import-csv` 已不依赖任何 V1 代码）
+- [x] 3.7 **删除** V1 代码：随前端迁移阶段七 amis 撤除 + V1 上传端点退役，已删 `csv_processor.py`、`upload_service.py`、`import_model.py`、`analysis_model.py`（含两条 UPSERT SQL、`_fetch_existing_trends`、`ranking_trend_day`）；upload_api 重写为 V2-only。真机验证 GB/DE 真实日报导入正常
 
 ## 4. 编排与安全
 
