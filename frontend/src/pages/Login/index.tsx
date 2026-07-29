@@ -4,6 +4,7 @@ import { history, useModel } from '@umijs/max';
 import { App } from 'antd';
 import { login } from '@/services/auth';
 import { setToken } from '@/utils/token';
+import logoIcon from '@/assets/logo-icon.png';
 
 /**
  * 登录屏。登录并入 SPA 路由（替代 /admin/login）。
@@ -29,7 +30,12 @@ export default function LoginPage() {
   return (
     <ProConfigProvider hashed={false}>
       <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center' }}>
-        <LoginForm title="KeywordIQ" subTitle="Amazon 搜索词数据分析平台" onFinish={handleSubmit as any}>
+        <LoginForm
+          logo={<img src={logoIcon} alt="海眸系统" style={{ height: 44 }} />}
+          title="海眸系统"
+          subTitle="Amazon 搜索词数据分析平台"
+          onFinish={handleSubmit as any}
+        >
           <ProFormText
             name="username"
             fieldProps={{ size: 'large', prefix: <UserOutlined /> }}
