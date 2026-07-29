@@ -3,6 +3,7 @@ import { history } from '@umijs/max';
 import { message } from 'antd';
 import { getCurrentUser } from '@/services/auth';
 import { clearToken, getToken } from '@/utils/token';
+import logoIcon from '@/assets/logo-icon.png';
 
 const LOGIN_PATH = '/login';
 
@@ -22,8 +23,9 @@ export async function getInitialState(): Promise<{
     }
   };
 
-  // 登录页不预取用户信息
-  if (history.location.pathname !== LOGIN_PATH) {
+  // 按 token 决定是否拉用户（不看路径）：这样登录成功后 refresh() 仍在 /login 也会拉到 user，
+  // 避免 currentUser 为空被 onPageChange 踢回登录页；无 token 时跳过，不触发 401。
+  if (getToken()) {
     const currentUser = await fetchUserInfo();
     return { currentUser, fetchUserInfo };
   }
@@ -32,8 +34,8 @@ export async function getInitialState(): Promise<{
 
 export const layout: RunTimeLayoutConfig = ({ initialState }) => {
   return {
-    title: 'KeywordIQ',
-    logo: false,
+    title: '海眸系统',
+    logo: logoIcon,
     menu: { locale: false },
     // 未登录访问受保护页 → 跳登录
     onPageChange: () => {
@@ -66,16 +68,19 @@ export const request: RequestConfig = {
   errorConfig: {
     errorHandler(error: any) {
       const status = error?.response?.status;
-      if (status === 401) {
+      // FastAPI 错误体是 {detail: ...}；兼容 message
+      const detail = error?.response?.data?.detail || error?.response?.data?.message;
+
+      // 非登录页的 401 才是"会话过期"→ 清 token 跳登录；登录页的 401 是凭证错误，走下方提示
+      if (status === 401 && history.location.pathname !== LOGIN_PATH) {
         clearToken();
-        if (history.location.pathname !== LOGIN_PATH) {
-          message.warning('登录已过期，请重新登录');
-          history.push(LOGIN_PATH);
-        }
+        message.warning('登录已过期，请重新登录');
+        history.push(LOGIN_PATH);
         return;
       }
+
       if (error?.response) {
-        message.error(error.response.data?.message || `请求失败（${status}）`);
+        message.error(detail || `请求失败（${status}）`);
       } else if (error?.request) {
         message.error('服务器无响应，请稍后重试');
       }

@@ -7,6 +7,7 @@ import { defineConfig } from '@umijs/max';
  */
 export default defineConfig({
   npmClient: 'pnpm',
+  title: '海眸系统',
 
   // Umi Max 内置插件
   antd: {
@@ -18,7 +19,7 @@ export default defineConfig({
   initialState: {},
   request: {},
   layout: {
-    title: 'KeywordIQ',
+    title: '海眸系统',
     locale: false,
   },
 
