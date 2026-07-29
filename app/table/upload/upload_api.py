@@ -549,34 +549,35 @@ async def get_processing_status(data_type: Optional[str] = None) -> Dict[str, An
     """获取处理状态"""
     async with database.AsyncSessionFactory() as db:
         try:
-            from app.table.upload.import_model import ImportBatchRecords
+            from app.table.upload.import_batch_model import ImportBatch
             from sqlalchemy import desc, select
 
-            stmt = select(ImportBatchRecords)
-            if data_type == 'daily':
-                stmt = stmt.where(ImportBatchRecords.is_day_data == True)
-            elif data_type == 'weekly':
-                stmt = stmt.where(ImportBatchRecords.is_week_data == True)
+            # data_type 兼容前端旧写法：daily→DAY、weekly→WEEK
+            period = {"daily": "DAY", "weekly": "WEEK"}.get(data_type)
 
-            stmt = stmt.order_by(desc(ImportBatchRecords.created_at)).limit(5)
+            stmt = select(ImportBatch)
+            if period:
+                stmt = stmt.where(ImportBatch.period_type == period)
+
+            stmt = stmt.order_by(desc(ImportBatch.created_at)).limit(5)
             result = await db.execute(stmt)
             records = list(result.scalars().all())
 
             items = []
             for r in records:
-                progress = round((r.processed_keywords / max(r.total_records, 1)) * 100, 1)
+                progress = round((r.written_rows / max(r.total_rows, 1)) * 100, 1)
                 items.append({
-                    "batch_name": r.batch_name,
+                    "batch_name": r.file_name or f"{r.site} {r.period_type} {r.report_date}",
                     "progress_percent": progress,
-                    "total_records": r.total_records,
-                    "status": "处理中" if r.status.value == 'PROCESSING' else r.status.value
+                    "total_records": r.total_rows,
+                    "status": "处理中" if r.status == "PROCESSING" else r.status,
                 })
 
             return {
                 "status": 0,
                 "data": {
                     "items": items,
-                    "active_sessions": len(chunk_sessions)
+                    "active_sessions": len(chunk_sessions),
                 }
             }
 
