@@ -9,12 +9,19 @@ class AuthService:
     """认证服务"""
 
     @staticmethod
-    def create_access_token(user_id: int, username: str, is_super: bool) -> str:
-        """生成访问令牌"""
+    def create_access_token(
+        user_id: int, username: str, is_super: bool, role: Optional[str] = None
+    ) -> str:
+        """生成访问令牌。
+
+        令牌承载 role（授权用）与 is_super（迁移期兼容 amis）。权限码不入令牌——避免
+        admin 改角色权限后令牌陈旧，权限在请求时由用户所属角色实时解析。
+        """
         payload = {
             "user_id": user_id,
             "username": username,
             "is_super": is_super,
+            "role": role,
             "exp": datetime.utcnow() + timedelta(hours=24),
             "iat": datetime.utcnow()
         }
@@ -28,7 +35,7 @@ class AuthService:
             return payload
         except jwt.ExpiredSignatureError:
             return None
-        except jwt.JWTError:
+        except jwt.PyJWTError:
             return None
 
 
