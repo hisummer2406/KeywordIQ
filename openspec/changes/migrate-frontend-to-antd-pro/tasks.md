@@ -43,10 +43,10 @@
 
 ## 7. 收尾与清理（阶段七）
 
-- [ ] 7.1 撤下 amis 页面挂载，删除 `app/admin_site.py`、各 `*_admin.py`、`upload_component.py`
-- [ ] 7.2 移除 `fastapi-amis-admin` 与 `fastapi-user-auth` 依赖（鉴权已自建）
-- [ ] 7.3 前端最小工程文档（本地开发、构建、nginx 部署、目录约定）
-- [ ] 7.4 更新 `CLAUDE.md`：前端为独立 AntD Pro SPA，nginx 托管 + 反代，后端只提供 JSON API，鉴权自建
+- [x] 7.1 撤下 amis 挂载（main.py 移除 site.mount_app / login_admin / 根跳转），删除 `admin_site.py`、`login_admin.py`、`analysis_admin.py`、`user_admin.py`、`table_component.py`、`upload_component.py`；移除 amis 信封 `/api/auth/login`+`/profile`；中间件清 amis 路径
+- [x] 7.2 `uv remove fastapi-amis-admin fastapi-user-auth`（连带 casbin/sqlmodel 等 8 个传递依赖）；app 导入 + 124 测试 + 真机启动全绿，旧 amis 端点 404
+- [x] 7.3 前端工程文档 `frontend/README.md`（本地开发、脚本、目录约定、环境变量、nginx 部署）
+- [x] 7.4 更新 `CLAUDE.md`：鉴权改自建 JWT+RBAC 描述、后台为独立 AntD Pro SPA、本服务只提供 JSON API
 
 ## 8. 前端测试与质量
 

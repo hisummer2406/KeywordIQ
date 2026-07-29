@@ -162,18 +162,6 @@ wheels = [
 ]
 
 [[package]]
-name = "casbin"
-version = "1.43.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "simpleeval" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ad/df/ff2aa55cf0d7c14622ce4f9252cdc34c828c81d4213965d73207ac5434ae/casbin-1.43.0.tar.gz", hash = "sha256:d2e90ce8e72f912877851e94d37999f32c558c6ba7aba0437d483275262e86e0", size = 425727, upload-time = "2025-05-10T06:57:18.902Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/08/07/facef6abd81378e6153b757dc1848621675d971fbc88ebb5d182ebc1c37f/casbin-1.43.0-py3-none-any.whl", hash = "sha256:63a3d1228870250e859ccd94133fe478821093f71dd37f05e0baa0c6fea26623", size = 475059, upload-time = "2025-05-10T06:57:16.89Z" },
-]
-
-[[package]]
 name = "celery"
 version = "5.3.4"
 source = { registry = "https://pypi.org/simple" }
@@ -529,28 +517,6 @@ dataframe = [
 ]
 
 [[package]]
-name = "dnspython"
-version = "2.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
-]
-
-[[package]]
-name = "email-validator"
-version = "2.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dnspython" },
-    { name = "idna" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.104.1"
 source = { registry = "https://pypi.org/simple" }
@@ -563,38 +529,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d9/d8/002e0ba7cf848a981b3ee92aaf5aa396c5700b0d7dec5d060031432a87d8/fastapi-0.104.1.tar.gz", hash = "sha256:e5e4540a7c5e1dcfbbcf5b903c234feddcdcd881f191977a1c5dfd917487e7ae", size = 11295150, upload-time = "2023-10-30T10:07:39.105Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/4f/0ce34195b63240b6693086496c9bab4ef23999112184399a3e88854c7674/fastapi-0.104.1-py3-none-any.whl", hash = "sha256:752dc31160cdbd0436bb93bad51560b57e525cbb1d4bbf6f4904ceee75548241", size = 92862, upload-time = "2023-10-30T10:07:35.636Z" },
-]
-
-[[package]]
-name = "fastapi-amis-admin"
-version = "0.7.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiofiles" },
-    { name = "fastapi" },
-    { name = "python-multipart" },
-    { name = "sqlalchemy-database" },
-    { name = "sqlmodel" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ed/93/a02e3d63afbb8530a4783306501b1b5641cab7de444705d3afe1d35921ea/fastapi_amis_admin-0.7.3.tar.gz", hash = "sha256:eb09c4db043e91e777eeca5c3fb3569b8cfa2b2836ed9ffe0655abf144210e35", size = 476094, upload-time = "2025-03-19T12:50:02.083Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/80/74/86cb9a1f0ae6d0335a036f188755df597bed2f89444758668af468bdf63a/fastapi_amis_admin-0.7.3-py3-none-any.whl", hash = "sha256:12768d95d73e759d6b275d7b8c3669bdf5a02e65d29ae0f100c56541e93e2f53", size = 115059, upload-time = "2025-03-19T12:50:00.84Z" },
-]
-
-[[package]]
-name = "fastapi-user-auth"
-version = "0.7.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "bcrypt" },
-    { name = "casbin" },
-    { name = "email-validator" },
-    { name = "fastapi-amis-admin" },
-    { name = "passlib" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fb/fd/376d6bf9b52e46be8f55df7a82d7c71de6296c6a6a17fa0b5f8364465689/fastapi_user_auth-0.7.3.tar.gz", hash = "sha256:7d6f35b4eaf469927d3bd1d39232fb0594c28d8296e838eb031325ddadc49c3c", size = 91091, upload-time = "2024-03-31T06:51:26.085Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/12/196e417c90503dcb3a0cd0778427e8ea71dbbc8b56072e7dbee01a98b9cf/fastapi_user_auth-0.7.3-py3-none-any.whl", hash = "sha256:4080462be01c069a5db767b75fbed7afca902c8af08d267c04598301a83b6f61", size = 47287, upload-time = "2024-03-31T06:51:23.867Z" },
 ]
 
 [[package]]
@@ -827,8 +761,6 @@ dependencies = [
     { name = "celery" },
     { name = "dask", extra = ["dataframe"] },
     { name = "fastapi" },
-    { name = "fastapi-amis-admin" },
-    { name = "fastapi-user-auth" },
     { name = "jinja2" },
     { name = "oss2" },
     { name = "pandas" },
@@ -862,8 +794,6 @@ requires-dist = [
     { name = "celery", specifier = "==5.3.4" },
     { name = "dask", extras = ["dataframe"], specifier = "==2023.12.1" },
     { name = "fastapi", specifier = "==0.104.1" },
-    { name = "fastapi-amis-admin", specifier = "==0.7.3" },
-    { name = "fastapi-user-auth", specifier = "==0.7.3" },
     { name = "jinja2", specifier = "==3.1.2" },
     { name = "oss2", specifier = ">=2.19.1" },
     { name = "pandas", specifier = "==2.1.4" },
@@ -1476,15 +1406,6 @@ wheels = [
 ]
 
 [[package]]
-name = "simpleeval"
-version = "1.0.7"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b4/9d/e7c9309940794dd3073cba2e5101df5874d84243595ce63b1e1c8f9b9c76/simpleeval-1.0.7.tar.gz", hash = "sha256:1e10e5f9fec597814444e20c0892ed15162fa214c8a88f434b5b077cf2fef85b", size = 30250, upload-time = "2026-03-16T10:53:03.464Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/2f/f32aa85591882378bb43caa09363f3ed97df399369a5144c7f19f2275bc0/simpleeval-1.0.7-py3-none-any.whl", hash = "sha256:97ac271bfd8f2af9e7b9a36ceea67617f26fa873f9d5ae1922f64d4c1442534b", size = 18792, upload-time = "2026-03-16T10:53:02.103Z" },
-]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1534,31 +1455,6 @@ wheels = [
 [package.optional-dependencies]
 asyncio = [
     { name = "greenlet" },
-]
-
-[[package]]
-name = "sqlalchemy-database"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "sqlalchemy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/62/aefbe690d926f32563d87c7a88fbd0e11ac2840d5d6c152f1e86827ccf7f/sqlalchemy_database-0.1.2.tar.gz", hash = "sha256:85720ed45b10e2c02fd02b82b770c735b2644cda38ddab9c0cb94348b6e8e839", size = 63512, upload-time = "2024-03-31T07:19:44.994Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/d2/a100111c6e0b36a2fb121dbd920a3312ae0559434eec8c9a796f10f89fa6/sqlalchemy_database-0.1.2-py3-none-any.whl", hash = "sha256:f9e5ff8cc607883673aedd9179c743e6550240bcca2084ff63771586cab8b3b4", size = 11156, upload-time = "2024-03-31T07:19:43.092Z" },
-]
-
-[[package]]
-name = "sqlmodel"
-version = "0.0.30"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pydantic" },
-    { name = "sqlalchemy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/bc/162873c9b2466bb6bda1531b6023b5d8ecda4daffaaae54e6fec53e2c0a7/sqlmodel-0.0.30.tar.gz", hash = "sha256:076076976aac683bae3e10c791d9e2ec5fead57ab25f7e476dea36cdfe9505e1", size = 97581, upload-time = "2025-12-26T11:45:55.002Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/35/f3/247bad31f13066a8186f2d4d1a43c75a441ed9f889d629d69d9820116dfc/sqlmodel-0.0.30-py3-none-any.whl", hash = "sha256:1b7f992170ff3145d98a72d41271335c8bb51d579c7254a1626f82bde4ec64ed", size = 29362, upload-time = "2025-12-26T11:45:53.298Z" },
 ]
 
 [[package]]
