@@ -16,10 +16,10 @@
 
 ## 3. B 期：日视图附加信息（7 天走势 + 当周排名变化）
 
-- [ ] 3.1 先分页拿本页 keyword_id，再批量补附加，避免整切片相关子查询
-- [ ] 3.2 近 7 天走势：`fact_daily WHERE site=? AND keyword_id=ANY(:ids) AND report_date BETWEEN :date-6 AND :date`（走 `idx_fact_daily_keyword_history`），服务层按 keyword_id 归并成走势数组；历史不足 7 天不补齐、不报错
-- [ ] 3.3 当周排名变化：先核对导入侧 `report_date_week` 的周日期口径，据此把所选日期映射到所属周；`fact_weekly WHERE site=? AND report_date_week=? AND keyword_id=ANY(:ids)` 取 ranking_change；当周周报缺失则该列为空
-- [ ] 3.4 附加信息只按 keyword_id 关联本页行，保证不改变结果集行数/构成；仅周报存在的关键词不进日视图
+- [x] 3.1 `service.search` 日视图分支：先分页拿本页 keyword_id，再批量补附加，避免整切片相关子查询
+- [x] 3.2 近 7 天走势（`crud.fetch_trends`）：`fact_daily WHERE site AND keyword_id IN ids AND report_date BETWEEN date-6 AND date`（走 `idx_fact_daily_keyword_history`），按 keyword_id 归并；历史不足不补齐（已测 `[5,3]`/`[9]`）
+- [x] 3.3 当周排名变化（`crud.fetch_week_changes`）：**核实导入侧只存文件名日期、不定义周边界** → 查询侧采同 ISO 周口径（`date_trunc('week')` 相等）；先在 `site_data_stats` 解析周报期次、再等值查 `fact_weekly`（利分区裁剪）；缺失则空（已测：映射得 7、仅日报关键词得 None）
+- [x] 3.4 附加信息只按 keyword_id 关联本页行，不改结果集构成（DayRowItem 逐行 set trend/week_change）
 
 ## 4. C 期：类目选项与打磨
 
@@ -29,13 +29,15 @@
 
 ## 5. 测试（集成，`TEST_DATABASE_URL` gate）
 
-- [ ] 5.1 作用域边界：任意筛选/排序/分页下，每行的 site 与 date 恒等于请求作用域
-- [ ] 5.2 日期选择器：只列有数据的日期；未传默认最新并回显；越界日期明确报错不回退
-- [ ] 5.3 日视图走势：按所选日期回溯 7 天；历史不足不补齐；当周周报缺失周变化为空；仅周报关键词不入日视图
-- [ ] 5.4 周视图：含该周全量（含无日报的关键词）；不受日报影响
-- [ ] 5.5 排序白名单：日视图拒绝走势/周变化排序回落默认；合法字段生效
-- [ ] 5.6 总数：无筛选等于 `site_data_stats`；周视图总数远大于日视图；带筛选按策略计算
-- [ ] 5.7 ProTable 契约形状 + 失败形状（`success:false`）
+> 集成测试见 `test/test_site_scoped_query_integration.py`（TEST_DATABASE_URL gate，受控小样本，7 项全绿）。
+
+- [~] 5.1 作用域边界：已测总数/默认排序在作用域内；逐行 site/date 断言待补
+- [x] 5.2 日期选择器：只列有数据的日期（倒序）、未传默认最新、越界日期报错不回退
+- [x] 5.3 日视图走势：按所选日期回溯（`[5,3,1]`/截至 D2 得 `[5,3]`）；历史不足不补齐；当周周报缺失/仅日报关键词 week_change 为 None
+- [x] 5.4 周视图：总数取该周、行不含 trend/week_change 字段（周报独有关键词可见待补断言）
+- [x] 5.5 排序白名单：非法字段 trend 回落默认 current_ranking 升序
+- [~] 5.6 总数：无筛选等于 `site_data_stats` 已测；带筛选/日周对比待补
+- [ ] 5.7 ProTable 契约形状 + 失败形状（`success:false`）—— API 层已实现，契约测试待补
 
 ## 6. V1 查询路径退役
 
