@@ -152,3 +152,48 @@ def test_week_view_excludes_trend_fields(db):
     resp = service.search(db, AnalysisSearchRequest(site=SITE, view="WEEK", date=WEEK))
     assert resp.total == 1
     assert resp.data and "trend" not in resp.data[0] and "week_change" not in resp.data[0]
+
+
+def test_scope_boundary_excludes_other_dates(db):
+    """作用域边界：查 D3 不返回只在 D1 出现的关键词（每行属当前日期）。"""
+    _seed(db)
+    # K3 只在 D1 出现
+    k3 = db.execute(
+        text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,'kw-d1only') RETURNING keyword_id"),
+        {"s": SITE},
+    ).scalar()
+    db.execute(
+        text("INSERT INTO analysis.fact_daily(site,report_date,keyword_id,current_ranking) VALUES (:s,:d,:k,7)"),
+        {"s": SITE, "d": D1, "k": k3},
+    )
+    db.flush()
+    resp = service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100))
+    assert k3 not in {r["keyword_id"] for r in resp.data}
+
+
+def test_filtered_total_reflects_filter(db):
+    """带筛选时总数按上限策略在作用域内计算，不用无筛选的 site_data_stats 值。"""
+    _seed(db)  # D3 有 K1(kw-one)、K2(kw-two)，site_data_stats=2
+    resp = service.search(
+        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, keyword="one")
+    )
+    assert resp.total == 1  # 只匹配 kw-one，不是无筛选的 2
+    assert all("one" in r["keyword"] for r in resp.data)
+
+
+def test_response_has_protable_contract(db):
+    """列表响应含 ProTable 契约字段 {success,data,total} + 作用域回显。"""
+    _seed(db)
+    resp = service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
+    dumped = resp.model_dump()
+    assert {"success", "data", "total"} <= dumped.keys()
+    assert dumped["success"] is True and isinstance(dumped["data"], list)
+    assert dumped["site"] == SITE and dumped["date"] == D3
+
+
+def test_default_site_when_omitted(db):
+    """未传站点用配置默认站点（不返回全站点混合）。"""
+    _seed(db)
+    resp = service.search(db, AnalysisSearchRequest(view="DAY", date=D3))
+    from config import settings
+    assert resp.site == settings.default_site

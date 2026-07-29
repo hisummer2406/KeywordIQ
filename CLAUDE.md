@@ -72,6 +72,22 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 事实表产成普通表并静默丢掉分区。涉及这两类对象的迁移必须手写，并用
 `alembic upgrade head --sql` 核对生成的 DDL 里确有 `PARTITION BY`。
 
+**V2 查询层（site-scoped-query，已落地）**：分析查询查 V2 星型模型，作用域是
+「站点 + 视图（DAY/WEEK）+ 日期」三元组——任一查询只落在单一站点、单一视图、单一日期的
+事实切片，筛选/排序/分页 MUST NOT 突破该边界。要点：
+
+- **日期选择器与分页总数走 `site_data_stats`**（不在 8 亿行上实时聚合）；类目下拉走
+  `category_stats` 物化视图。查询代码在 `app/table/analysis/analysis_crud.py`（纯 SQL 组装）
+  → `analysis_service.py`（作用域解析、`ScopeError`）→ `analysis_api.py`
+  （`POST /search`、`GET /scope`、`GET /categories`，均 `require_permission(analysis:view)`）。
+- **默认站点** `DEFAULT_SITE`（config，须属站点清单）；未传站点用它、非法站点报错**不回退**。
+- **日视图**附带只读的近 7 天走势与当周排名变化（`fetch_trends`/`fetch_week_changes`，
+  「先分页再批量补附加」）。当周映射口径是**同 ISO 周**（`date_trunc('week')`）——导入侧只存
+  文件名日期、不定义周边界，这是查询侧的约定。**排序白名单**按视图，日视图不许按走势/周变化排序。
+- 列表响应走 ProTable 契约 `{data,total,success}` + 作用域回显。集成测试
+  `test/test_site_scoped_query_integration.py`（`TEST_DATABASE_URL` gate）。
+- 演示数据：`scripts/seed_demo_data.py`（连续 7 天 + 对齐周报，让走势/周变化可见，仅本地）。
+
 **数据保留：只保留最近三个月。** 由 `HOT_WINDOW_MONTHS`（默认 3）定义热窗口，报告日期
 早于窗口下界的月度分区由保留清理**自动移出**——日报与周报统一适用同一窗口。移出是整
 分区 `DROP`（连带站点子分区），不逐行删除、不产生死元组、不影响窗口内其他月份。清理逻辑

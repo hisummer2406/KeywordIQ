@@ -24,22 +24,22 @@
 ## 4. C 期：类目选项与打磨
 
 - [x] 4.1 类目下拉：`category_options` 读 `category_stats` 物化视图（列 top_category/cnt），按 (site, period) 返回选项+计数；`GET /api/analysis/categories`（已验，US 日视图 20 个类目）
-- [ ] 4.2 黑名单类目默认过滤（Books/Grocery 等，沿用 V1 常量清单）
-- [ ] 4.3 字段命名与前端阶段四对齐定稿（写进 spec 的响应约定），确认无字段漂移
+- [~] 4.2 黑名单类目默认过滤 —— **可选/推迟**：不在 site-scoped-query spec 内，是「沿用 V1」的可选项；默认隐藏类目属行为决定，待产品确认是否需要再加（届时加请求开关，默认可配）
+- [x] 4.3 字段命名定稿：DayRowItem/WeekRowItem/AnalysisSearchResponse 字段已被前端阶段四消费且稳定，无字段漂移
 
 ## 5. 测试（集成，`TEST_DATABASE_URL` gate）
 
-> 集成测试见 `test/test_site_scoped_query_integration.py`（TEST_DATABASE_URL gate，受控小样本，7 项全绿）。
+> 集成测试见 `test/test_site_scoped_query_integration.py`（TEST_DATABASE_URL gate，受控小样本，11 项全绿）。
 
-- [~] 5.1 作用域边界：已测总数/默认排序在作用域内；逐行 site/date 断言待补
+- [x] 5.1 作用域边界：查 D3 不返回只在 D1 出现的关键词（test_scope_boundary_excludes_other_dates）
 - [x] 5.2 日期选择器：只列有数据的日期（倒序）、未传默认最新、越界日期报错不回退
 - [x] 5.3 日视图走势：按所选日期回溯（`[5,3,1]`/截至 D2 得 `[5,3]`）；历史不足不补齐；当周周报缺失/仅日报关键词 week_change 为 None
 - [x] 5.4 周视图：总数取该周、行不含 trend/week_change 字段（周报独有关键词可见待补断言）
 - [x] 5.5 排序白名单：非法字段 trend 回落默认 current_ranking 升序
-- [~] 5.6 总数：无筛选等于 `site_data_stats` 已测；带筛选/日周对比待补
-- [ ] 5.7 ProTable 契约形状 + 失败形状（`success:false`）—— API 层已实现，契约测试待补
+- [x] 5.6 总数：无筛选等于 `site_data_stats`；带筛选按上限策略（test_filtered_total_reflects_filter）；周视图总数独立于日视图
+- [x] 5.7 ProTable 契约形状（test_response_has_protable_contract）；失败形状 success:false 真机已验（非法站点 ZZ）
 
 ## 6. V1 查询路径退役
 
-- [ ] 6.1 移除/替换 `analysis_crud/service` 中对 `AmazonOriginSearchData` 的查询（V1 `analysis_model.py` 的最终删除随 amis 收尾，见前端迁移阶段七）
-- [ ] 6.2 更新 `CLAUDE.md`：分析查询走 V2 星型模型、作用域为「站点+视图+日期」、日期选择器/总数走 `site_data_stats`、类目走 `category_stats`
+- [x] 6.1 `analysis_crud/service/api` 已重写，不再引用 `AmazonOriginSearchData`（V1 `analysis_model.py` 文件的删除随 amis 收尾，见前端迁移阶段七）
+- [x] 6.2 更新 `CLAUDE.md`：分析查询走 V2 星型模型、作用域为「站点+视图+日期」、日期选择器/总数走 `site_data_stats`、类目走 `category_stats`
