@@ -39,11 +39,6 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
 
-    # 原始文件归档目录：导入成功后把原始 CSV 移到这里，不删除。
-    # 当前是本地目录（为将来接 OSS 预留可替换的 archive_raw_file 接口）。
-    # 注意：本地归档会累积占盘，接 OSS 前需要清理/转储策略。
-    IMPORT_ARCHIVE_DIR: str = "archive/raw"
-
     # 对象存储（OSS）配置：表格文件先前端直传 OSS，再由后端凭 object key 从 OSS 拉取导入。
     # 服务端凭证（AK/SK 或 RAM 角色）只在这里持有，前端只拿短时 STS 临时凭证。
     # OSS_ENABLED=False 时上传/导入走本地文件退路（本地开发与 CI 默认关闭）。
@@ -58,18 +53,9 @@ class Settings(BaseSettings):
     OSS_STS_ROLE_ARN: str = ""       # 前端直传所扮演的 RAM 角色
     OSS_STS_DURATION_SECONDS: int = 3600  # 临时凭证有效期（秒），保持短时
 
-    # 批处理配置
-    BATCH_SIZE: int
-    MINIBATCH_SIZE: int
-
     # Admin配置密钥：
     # python -c "import secrets; print(secrets.token_urlsafe(32))"
     ADMIN_SECRET_KEY: str
-
-    # 多核处理配置
-    MAX_WORKERS: int
-    MULTIPROCESSING_THRESHOLD_MB: float
-    FILE_SPLIT_LINES: int
 
     # 数据库连接优化配置
     DB_POOL_SIZE: int = 20  # 连接池大小

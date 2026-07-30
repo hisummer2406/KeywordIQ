@@ -33,7 +33,7 @@ uv add --dev <package>    # dev-only dependency (test/, tooling)
 
 Always commit `uv.lock` alongside `pyproject.toml` changes.
 
-For production-style startup, use `./start.sh`. Use `./deploy.sh` only when provisioning/deploying the full environment.
+For production-style startup, use `./start.sh` (host uvicorn, 4 workers). Use `./deploy.sh` to publish a release (uv sync → alembic migrate → build SPA → rsync to nginx root → reload nginx). Deployment is host-based nginx + uvicorn — nginx serves the built SPA from `frontend/dist/` and proxies `/api` to the local backend; see `etc/keywordiq-nginx.conf`. There is no container/compose deployment.
 
 ## Coding Style & Naming Conventions
 

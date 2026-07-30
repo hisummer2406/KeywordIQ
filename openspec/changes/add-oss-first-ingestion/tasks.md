@@ -35,10 +35,10 @@
 
 ## 6. 前端与文档
 
-- [ ] 6.1 前端直传流程（换凭证 → OSS 分片上传 → 回传 key）—— **外部**：仓库内无前端构建（仅 `static/`），需前端接入 OSS 浏览器 SDK，另行落地
+- [x] 6.1 前端直传流程（换凭证 → OSS 分片上传 → 回传 key）—— 已随前端迁移阶段五落地：`frontend/src/services/ossUpload.ts` + `ali-oss@6.22`，上传屏 `frontend/src/pages/Upload/index.tsx` 走 `customRequest`（原备注「仓库内无前端构建」写于 AntD Pro 迁移之前，已失效）
 - [x] 6.2 更新 `CLAUDE.md` 导入链路：直传 OSS、以 OSS 对象为源、OSS 对象即原始归档、本地退路
 - [x] 6.3 记录 object key 命名规则与 bucket 目录约定（写入 `CLAUDE.md` 导入链路段）
 
 ## 7. 与 rewrite-import-pipeline 的调和
 
-- [ ] 7.1 待 `rewrite-import-pipeline` 归档、`site-scoped-import` 进主 specs 后，把其「导入后原始文件本地归档」要求调和为「OSS 对象即归档」 —— **阻塞**：依赖该变更先归档
+- [x] 7.1 把 `site-scoped-import` 的「导入后原始文件本地归档」要求调和为「OSS 对象即归档」 —— 已直接改在 `rewrite-import-pipeline/specs/site-scoped-import/spec.md` 的「原始文件在导入后被保留」要求上（无需等归档，归档时随该 change 一并进主 specs）。配套清理：删除死代码 `_legacy_archive_raw_file` 与 `IMPORT_ARCHIVE_DIR` 配置（本地退路按设计不归档，该函数无任何调用者）

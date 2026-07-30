@@ -25,10 +25,11 @@ uv run pytest test/
 uv add <package>          # runtime
 uv add --dev <package>    # dev-only
 
-# Docker deployment
-docker-compose up -d
-docker-compose logs -f app | grep upload  # Monitor upload logs
-docker-compose restart app  # Restart app container
+# Production deployment (host nginx + uvicorn; no containers)
+./deploy.sh                            # Full release: uv sync → migrate → build SPA → publish → reload nginx
+./deploy.sh --skip-migrate             # Frontend-only release
+./start.sh                             # Start backend directly (4 uvicorn workers)
+tail -f logs/app.log | grep -i import  # Monitor import logs
 
 # Database operations
 # Uses PostgreSQL with schema "analysis"
@@ -106,16 +107,18 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 
 ```
 app/
-├── auth/              # JWT authentication + middleware (simple_auth.py for user validation)
+├── auth/              # 自建 JWT + RBAC（simple_auth.py: 登录/get_current_user/require_permission）
+├── site_registry.py   # 站点码唯一事实来源（英国是 GB 不是 UK）
 ├── table/
-│   ├── analysis/      # Core data analysis (model, crud, service, api layers)
-│   ├── search/        # Search schemas and components
-│   └── upload/        # CSV file upload and processing (csv_processor.py handles GB files)
-└── user/              # User management (model, crud, api, admin)
+│   ├── analysis/      # V2 查询层（model, crud, service, api + retention/partitioning）
+│   ├── search/        # 查询请求/响应 schemas
+│   └── upload/        # OSS 直传凭证 + 三段式导入（oss_client / import_source / importer / import_service）
+└── user/              # 用户与角色管理 (model, crud, api)
 
 main.py                # FastAPI app entry, lifespan management, health check
 config.py              # Pydantic settings (env-based config)
 database.py            # SQLAlchemy 2.0 sync + async engines, session factories
+frontend/              # AntD Pro SPA（Umi Max），独立构建，产物由 nginx 托管
 ```
 
 ### Layered Architecture Pattern
@@ -181,28 +184,28 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 
 **Schema**: `analysis`
 
-**Main Table**: `amazon_origin_search_data`
-- Unique constraint on `keyword`
-- Stores daily + weekly ranking data in same row
-- JSONB field `ranking_trend_day` for 7-day history
-- Indexed on: `report_date_day`, `current_rangking_day`, `top_brand`, `top_category`
+表结构见上文「V2 数据模型」一节（星型模型：`dim_keyword` / `dim_product` /
+`fact_daily` / `fact_weekly` / `site_data_stats` / `sites` / `import_batch`）。
+V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随 V1 退役删除。
 
-**View**: `my_category_stats` - Category statistics for dropdown options
+**物化视图**：`category_stats` — 按 (站点, 周期) 提供类目下拉选项与计数，导入后由
+`import_service._refresh_category_stats` 刷新。
 
 ### Performance Optimizations
 
-1. **Connection Pooling**: `DB_POOL_SIZE=8`, `DB_MAX_OVERFLOW=12` per worker (RDS max_connections=400 is the hard ceiling — total connections across all workers must stay well below it)
+1. **Connection Pooling**: `DB_POOL_SIZE=8`, `DB_MAX_OVERFLOW=12` per worker (RDS max_connections=400 is the hard ceiling — total connections across all workers must stay well below it). `start.sh` 起 4 个 uvicorn worker，故每 worker 的 `(POOL + OVERFLOW)` 乘以 4 必须远低于 400。
 2. **Query Optimization**:
-   - Uses PG statistics estimates (`pg_class.reltuples`) for total count on large tables
-   - `LIMIT 10000` count for filtered queries on pagination
-   - Default filter excludes keywords containing brand name and rank=0 records
-   - Blacklist categories filtered out (Books, Grocery, Video Games, etc.)
-3. **Batch Processing**: `BATCH_SIZE=10000` for pandas chunks, `MINIBATCH_SIZE=500` for DB commits
-4. **Multi-processing**: `MAX_WORKERS=2`, threshold `MULTIPROCESSING_THRESHOLD_MB=100MB`, `FILE_SPLIT_LINES=100000` lines per shard
-   - Daily (300K rows, ~150MB, ~3 shards): multiprocessing overhead may not be worthwhile
-   - Weekly (3M rows, ~1.5GB, ~30 shards): multiprocessing is essential but still takes 30–60 min on RDS 2C4G
+   - 无筛选的分页总数直接读 `site_data_stats.row_count`（O(1)，不在事实表上聚合）
+   - 带筛选的总数用 `FILTERED_COUNT_CAP = 10000` 封顶计数（`analysis_crud.count_filtered`）
+   - 每次查询都被约束在「站点 + 视图 + 日期」单一事实切片内，天然限制扫描范围
+   - 类目下拉读 `category_stats` 物化视图，不实时聚合
+3. **Import**: 走 `COPY` 流式装载到 UNLOGGED 暂存表，内存有界；不再有 pandas 分块或多进程分片
+   （V1 的 `BATCH_SIZE`/`MAX_WORKERS`/`FILE_SPLIT_LINES` 等配置已随 V1 一并删除）。
+   导入以 `pg_try_advisory_lock` 串行化，同一时刻只跑一个。
 
 ## Key Configuration (.env)
+
+完整项与说明见 `.env.example`（新增配置务必同步过去，含单位与安全的本地默认值）。
 
 ```bash
 # Database (sync + async URLs both required)
@@ -210,14 +213,18 @@ DATABASE_URL=postgresql://user:pass@host/db
 DATABASE_URL_ASYNC=postgresql+asyncpg://user:pass@host/db
 DATABASE_SCHEMA=analysis
 
-# Upload
-MAX_FILE_SIZE=3221225472  # 3GB
-BATCH_SIZE=6000
-MINIBATCH_SIZE=500
+# Sites / retention
+ENABLED_SITES=US,GB,DE   # 必须是 site_registry 已登记的站点码
+DEFAULT_SITE=US
+HOT_WINDOW_MONTHS=3
 
-# Performance
-DB_POOL_SIZE=100
-DB_MAX_OVERFLOW=50
+# Upload / OSS（OSS_ENABLED=false 时走本地文件退路，其余 OSS_* 可留空）
+MAX_FILE_SIZE=3221225472  # 3GB
+OSS_ENABLED=false
+
+# Connection pool（每 worker；× 4 workers 后须远低于 RDS 的 400）
+DB_POOL_SIZE=8
+DB_MAX_OVERFLOW=12
 ```
 
 ## Production Environment
@@ -228,9 +235,9 @@ DB_MAX_OVERFLOW=50
 | Database | Alibaba Cloud RDS PostgreSQL 15.0 · 2C4G · max_connections = 400 |
 
 **Capacity implications for code changes:**
-- RDS max 400 connections shared across all app processes; total `(DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers` must stay well under 400
-- 4 vCPU constrains `MAX_WORKERS` for multiprocessing CSV imports — use ≤ 3 to leave headroom for concurrent API traffic
-- 8 GiB RAM limits in-memory pandas chunks; keep `BATCH_SIZE` ≤ 6000 rows per chunk
+- RDS max 400 connections shared across all app processes; total `(DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers` must stay well under 400（`start.sh` 固定 4 workers）
+- 4 vCPU 上 nginx、4 个 uvicorn worker 与导入任务共享 CPU；导入已由咨询锁串行化，勿再引入并行分片而不实测
+- 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame
 
 ## Important Constraints
 
