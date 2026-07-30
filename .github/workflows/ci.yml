@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+    branches: [main, v2]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端（pytest + alembic）
+    runs-on: ubuntu-latest
+
+    # 生产是 RDS PostgreSQL 15，这里对齐大版本。
+    # 起真库的目的有二：让 test_database.py 的连通性用例有意义，
+    # 并解开 TEST_DATABASE_URL gate，把查询层集成测试也跑上。
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: keywordiq_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # config.Settings 的必填项。DATABASE_* 在 .env.example 里是注释掉的示例，
+      # 不能直接 cp 使用，故这里显式给出。
+      APP_NAME: KeywordIQ
+      VERSION: 1.0.0
+      DEBUG: "False"
+      ADMIN_SECRET_KEY: ci-dummy-secret-not-for-production
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/keywordiq_test
+      DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/keywordiq_test
+      DATABASE_SCHEMA: analysis
+      ENABLED_SITES: US,GB,DE
+      DEFAULT_SITE: US
+      # 解开集成测试的 skip gate（test/test_site_scoped_query_integration.py）
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/keywordiq_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 安装依赖（按 .python-version + uv.lock）
+        run: uv sync --locked
+
+      - name: 迁移测试库
+        run: uv run alembic upgrade head
+
+      - name: 迁移可回滚性（降一步再升回来）
+        run: |
+          uv run alembic downgrade -1
+          uv run alembic upgrade head
+
+      - name: pytest
+        run: uv run pytest test/ -q
+
+  frontend:
+    name: 前端（lint + tsc + build）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # frontend/pnpm-lock.yaml 是 lockfileVersion 9.0
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint
+        run: pnpm lint
+
+      - name: 类型检查
+        run: pnpm tsc
+
+      - name: 构建 SPA 产物
+        run: pnpm build

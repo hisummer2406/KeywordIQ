@@ -2,8 +2,8 @@
 
 - [x] 1.1 建 `frontend/` 工程：Umi Max + Ant Design Pro + TypeScript，pnpm 管理
 - [x] 1.2 约定式路由与基础布局（ProLayout），环境变量区分本地/生产 API base；本地 devServer proxy 到后端
-- [ ] 1.3 docker-compose 新增 nginx 服务：服务 SPA 产物（gzip/长缓存哈希文件名）+ 非资源路径回退 `index.html`（history）+ 反代 `/api` 到 uvicorn —— **部分**：SPA nginx 配置 `frontend/nginx.conf` 已产出（history 回退 + /api 反代 + 长缓存 + gzip）；compose 服务接线未做——仓库内无 `docker-compose.yml`（deploy.sh 引用但文件不在树里），且当前生产是宿主机 nginx（`etc/keywordiq-nginx.conf`）。待确认部署形态（容器化 compose vs 宿主 nginx）后接线
-- [ ] 1.4 docker 多阶段构建（node 阶段产出静态 → 由 nginx 镜像/卷承载）；CI 增前端构建阶段与产物缓存 —— **部分**：多阶段 `frontend/Dockerfile`（node 构建 → nginx 承载）已产出并本地验证构建通过；CI 阶段未做——仓库无 `.github/workflows` 等 CI 配置。待确认 CI 平台后加前端构建阶段
+- [x] 1.3 nginx 托管 SPA 产物（gzip/长缓存哈希文件名）+ 非资源路径回退 `index.html`（history）+ 反代 `/api` 到 uvicorn —— **部署形态已定为宿主机 nginx + uvicorn，不走容器**（`docker-compose.yml`/`Dockerfile` 早在 `9c0a31d` 即已删除）。落在 `etc/keywordiq-nginx.conf`：root 指向 SPA 产物目录、history 回退、`/api` 与 `/health` 反代 `127.0.0.1:8000`、哈希资源长缓存、gzip；`client_max_body_size` 由 3G 收到 100M（GB 级文件直传 OSS 不经 nginx）
+- [x] 1.4 CI 增前端构建阶段 —— `.github/workflows/ci.yml` 的 `frontend` job：pnpm 9 + Node 20 + lockfile 缓存，跑 `pnpm lint` / `pnpm tsc` / `pnpm build`，三项均已本地验证通过。**注**：容器多阶段构建（`frontend/Dockerfile`、`frontend/nginx.conf`）随宿主机路线定案后已删除，避免与 `etc/keywordiq-nginx.conf` 双份维护
 
 ## 2. 鉴权替换：后端模型 + 前端接管（阶段二）
 
@@ -51,7 +51,7 @@
 ## 8. 前端测试与质量
 
 - [ ] 8.1 前端关键流程测试（登录/鉴权跳转、分析查询表格、上传 `customRequest` 逻辑，OSS SDK 用桩）
-- [ ] 8.2 前端 lint/类型检查接入 CI
+- [x] 8.2 前端 lint/类型检查接入 CI —— `.github/workflows/ci.yml` `frontend` job 跑 `pnpm lint` + `pnpm tsc`（另有 `backend` job 跑 alembic 迁移/回滚 + pytest，起 postgres:15 service 并解开 `TEST_DATABASE_URL` gate）。**注**：backend job 的建库/迁移路径本地无 PG 客户端无法预验，待首次 CI 运行确认
 
 ## 9. 发布与回滚
 

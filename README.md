@@ -39,21 +39,53 @@
 - ECS Alibaba Cloud Linux 3.2104 LTS 64位 4 核（vCPU）8 GiB
 - RDS PostgreSQL15.0 2C4G默认连接数 400
 
-### 一键部署
+### 部署
+
+部署形态为**宿主机 nginx + uvicorn**（不使用容器）：nginx 托管前端 SPA 产物并反代
+`/api` 到本机 uvicorn。
 
 ```bash
 # 1. 克隆项目
 git clone <project-repo>
 cd keywordiq
 
-# 2. 执行部署
-chmod +x deploy.sh
-./deploy.sh
+# 2. 后端依赖与配置
+uv sync
+cp .env.example .env        # 按注释填写数据库、ADMIN_SECRET_KEY、OSS_* 等
 
-# 3. 访问系统
-浏览器访问: http://localhost:8000
-默认账号: admin / pwd123
+# 3. 构建前端产物并同步到 nginx root
+cd frontend && pnpm install && pnpm build && cd ..
+rsync -a --delete frontend/dist/ /var/www/keywordiq/
+
+# 4. 配置 nginx（改好 server_name 后启用站点）
+sudo cp etc/keywordiq-nginx.conf /etc/nginx/sites-available/keywordiq
+sudo ln -sf /etc/nginx/sites-available/keywordiq /etc/nginx/sites-enabled/keywordiq
+sudo nginx -t && sudo systemctl reload nginx
+
+# 5. 初始化管理员并启动后端
+uv run python scripts/seed_admin.py
+./start.sh
+
+# 6. 访问系统
+浏览器访问: http://your-domain.com
+默认账号: admin / pwd123（首次登录后请修改）
 ```
+
+首次部署完成后，**后续发布用 `./deploy.sh`**（同步依赖 → 迁移 → 构建前端 → 发布产物 →
+reload nginx）：
+
+```bash
+./deploy.sh                  # 全量发布
+./deploy.sh --skip-migrate   # 只发前端，不动数据库
+./deploy.sh --skip-frontend  # 只更新后端
+./deploy.sh --yes            # 不交互确认迁移（无人值守）
+```
+
+产物目录与服务名可用环境变量覆盖：`WEB_ROOT`（默认 `/var/www/keywordiq`，须与 nginx
+`root` 一致）、`SERVICE_NAME`（默认 `keywordiq`）。
+
+> **后端重启**：仓库暂未提供 systemd unit。`deploy.sh` 检测到 `${SERVICE_NAME}.service`
+> 才会重启后端，否则跳过并提示你手动重启（停掉旧 uvicorn 后跑 `./start.sh`）。
 
 ---
 
@@ -231,20 +263,20 @@ DB_POOL_SIZE=100         # 连接池大小
 
 ```bash
 
-uvicorn main:app --host 0.0.0.0 --port 8000
+# 本地开发
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
-# 重启应用容器（最常用） 
-docker-compose restart app
+# 生产启动 / 重启（宿主机 uvicorn，4 workers）
+./start.sh
 
-# 进入容器
-docker exec -it keywordiq-app-1 /bin/bash
+# 重新发布前端产物
+cd frontend && pnpm build && cd .. && rsync -a --delete frontend/dist/ /var/www/keywordiq/
 
-# 重启容器应用新配置 
-docker-compose down 
-docker-compose up -d
+# nginx 改配置后校验并热加载
+sudo nginx -t && sudo systemctl reload nginx
 
-# 监控日志
-docker-compose logs -f app | grep upload
+# 监控导入日志
+tail -f logs/app.log | grep -i import
 
 使用 du 命令查看目录占用空间
 du 命令可以查看文件或目录的磁盘使用情况。

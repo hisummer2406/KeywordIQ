@@ -14,16 +14,13 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import time
 from dataclasses import asdict
-from datetime import date, datetime
-from pathlib import Path
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from config import settings
 from database import SessionFactory
 from app.site_registry import normalize_site_code
 from app.table.upload.import_source import ImportSource
@@ -45,19 +42,6 @@ _IMPORT_LOCK_KEY = 0x4B49
 
 class ImportRejected(Exception):
     """导入被拒（另一个导入正在进行）。"""
-
-
-def _legacy_archive_raw_file(src_path: str, site: str, period: str, report_date: date) -> str:
-    """[已弃用] 导入后把本地原始文件移到 ``IMPORT_ARCHIVE_DIR``。
-
-    OSS-first 流程下原始文件在入口即持久化于 OSS，OSS 对象本身即归档，不再执行此步。
-    仅保留为本地文件退路（OSS_ENABLED=false）时的可选归档，不在主流程调用。
-    """
-    dest_dir = Path(settings.IMPORT_ARCHIVE_DIR) / site / period
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"{report_date}_{Path(src_path).name}"
-    shutil.move(src_path, str(dest))
-    return str(dest)
 
 
 def _update_site_data_stats(session: Session, result: ImportResult) -> None:
