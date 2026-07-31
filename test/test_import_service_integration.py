@@ -1,4 +1,7 @@
-"""导入编排层的集成测试：批次记录、统计、物化视图刷新、原始文件归档、串行锁。
+"""导入编排层的集成测试：批次记录、统计、物化视图刷新、原始文件留存、串行锁。
+
+OSS-first 之后不再有导入后本地归档（文件入口即持久化于 OSS），故这里断言的是
+"原始文件留在原处、不产生归档目录"。
 
 与 importer 的测试不同，本层会 **提交事务**（真实写库），因此不能用回滚隔离。
 每个测试用后 TRUNCATE 清理。只在 TEST_DATABASE_URL 时运行。
@@ -42,12 +45,9 @@ def _write_csv(tmp_path, name, rows):
 
 
 @pytest.fixture()
-def factory(tmp_path, monkeypatch):
+def factory():
     engine = create_engine(TEST_URL)
     sf = sessionmaker(bind=engine, expire_on_commit=False)
-    # 归档目录指到临时目录，避免污染项目
-    monkeypatch.setattr("app.table.upload.import_service.settings.IMPORT_ARCHIVE_DIR",
-                        str(tmp_path / "archive"), raising=False)
     yield sf
     # 清理：TRUNCATE 全部业务表 + 物化视图数据
     with engine.begin() as c:
