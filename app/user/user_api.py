@@ -13,11 +13,25 @@ from app.user.rbac_model import Role
 from app.user.user_schemas import (UserCenterCreate, UserCenterUpdate, UserCenterList, RoleOut)
 from app.auth.simple_auth import simple_auth
 from app.auth.permissions import USER_MANAGE
-from app.common.responses import ProTableResponse, protable, protable_error
+from app.common.errors import CODE_USER_DUPLICATE_NAME, ConflictError
+from app.common.responses import ProTableResponse, protable
+from app.user.user_errors import DuplicateUserNameError, UserNotFoundError
 
 logger = logging.getLogger(__name__)
 
 user_router = APIRouter()
+
+
+def _crud_failure(message: str):
+    """把 CRUD 的 ``(success, message, user)`` 元组式失败转成语义正确的异常。
+
+    CRUD 层保留元组签名（改造它不在本变更范围内），但**失败不允许越过 API 边界继续以
+    返回值形式存在**——那正是漏检即静默的来源。这里按 message 归类到具体状态码，
+    未识别的归 409（与当前状态冲突），而不是笼统的 500。
+    """
+    if "不存在" in message:
+        return UserNotFoundError(message)
+    return ConflictError(message, code=CODE_USER_DUPLICATE_NAME if "用户名" in message else None)
 
 
 @user_router.get("/roles", response_model=list[RoleOut])
@@ -39,16 +53,16 @@ async def get_users_table(
         db: Session = Depends(get_db),
         current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> ProTableResponse[UserCenterList]:
-    """[SPA] 用户列表，返回 ProTable 契约 {data, total, success}。"""
-    try:
-        crud = UserCenterCRUD(db)
-        result = crud.get_users_paginated(
-            page=page, per_page=per_page, user_name=user_name, is_active=is_active
-        )
-        return protable(result["items"], result["total"])
-    except Exception as e:
-        logger.error(f"获取用户表格失败: {e}")
-        return protable_error("获取用户列表失败")
+    """[SPA] 用户列表。**成功**时返回 ProTable 契约 {data, total, success}。
+
+    失败不再以 HTTP 200 + `success:false` 表达——那让"查询失败"和"没有用户"在前端
+    长得一模一样。异常交给全局处理器，ProTable 进入自身的错误态。
+    """
+    crud = UserCenterCRUD(db)
+    result = crud.get_users_paginated(
+        page=page, per_page=per_page, user_name=user_name, is_active=is_active
+    )
+    return protable(result["items"], result["total"])
 
 
 @user_router.post("/create", response_model=Dict[str, Any])
@@ -57,31 +71,25 @@ async def register(
         db: Session = Depends(get_db),
         current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> Dict[str, Any]:
-    """用户注册"""
-    try:
-        crud = UserCenterCRUD(db)
-        exist = crud.get_user_by_username(user_data.user_name)
-        if exist:
-            return {
-                "status": 1,
-                "msg": "用户名已存在"
-            }
+    """创建用户。用户名重复 → 409。
 
-        success, message, user = crud.create_user(user_data)
+    此前重复时返 HTTP 200 + `{"status":1}`，前端 `unwrap` 抛出的 Error 无人接管
+    （umi 的 errorConfig 只处理 HTTP 层错误），页面既不关弹窗也不提示。
+    """
+    crud = UserCenterCRUD(db)
+    if crud.get_user_by_username(user_data.user_name):
+        raise DuplicateUserNameError()
 
-        return {
-            "status": 0,
-            "msg": '创建成功',
-            "data": {
-                "id": user.id,
-                "user_name": user.user_name,
-                "is_active": user.is_active,
-                "created_at": user.created_at.isoformat()
-            }
-        }
-    except Exception as e:
-        logger.error(f"创建用户失败: {e}")
-        raise HTTPException(status_code=500, detail="创建用户失败")
+    success, message, user = crud.create_user(user_data)
+    if not success:
+        raise _crud_failure(message)
+
+    return {
+        "id": user.id,
+        "user_name": user.user_name,
+        "is_active": user.is_active,
+        "created_at": user.created_at.isoformat(),
+    }
 
 
 @user_router.put("/update/{user_id}", response_model=Dict[str, Any])
@@ -91,35 +99,19 @@ async def update_user(
         db: Session = Depends(get_db),
         current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> Dict[str, Any]:
-    """更新用户信息"""
-    try:
-        crud = UserCenterCRUD(db)
-        success, message, user = crud.update_user(user_id, user_data)
+    """更新用户信息。用户不存在 → 404，用户名与他人冲突 → 409。"""
+    crud = UserCenterCRUD(db)
+    success, message, user = crud.update_user(user_id, user_data)
+    if not success:
+        raise _crud_failure(message)
 
-        if not success:
-            return {
-                "status": 1,
-                "msg": message
-            }
-
-        return {
-            "status": 0,
-            "msg": message,
-            "data": {
-                "id": user.id,
-                "user_name": user.user_name,
-                "is_active": user.is_active,
-                "is_super": user.is_super,
-                "updated_at": user.updated_at.isoformat()
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"更新用户失败: {e}")
-        return {
-            "status": 1,
-            "msg": "更新用户失败"
-        }
+    return {
+        "id": user.id,
+        "user_name": user.user_name,
+        "is_active": user.is_active,
+        "is_super": user.is_super,
+        "updated_at": user.updated_at.isoformat(),
+    }
 
 
 @user_router.post("/toggle-status/{user_id}", response_model=Dict[str, Any])
@@ -128,26 +120,10 @@ async def toggle_user_status(
         db: Session = Depends(get_db),
         current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> Dict[str, Any]:
-    """切换用户状态（激活/禁用）"""
-    try:
-        crud = UserCenterCRUD(db)
-        success, message, user = crud.toggle_user_status(user_id)
+    """切换用户状态（激活/禁用）。用户不存在 → 404，禁用超管 → 409。"""
+    crud = UserCenterCRUD(db)
+    success, message, user = crud.toggle_user_status(user_id)
+    if not success:
+        raise _crud_failure(message)
 
-        if not success:
-            return {
-                "status": 1,
-                "msg": message
-            }
-
-        return {
-            "status": 0,
-            "msg": message,
-            "data": {
-                "id": user.id,
-                "is_active": user.is_active
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"切换用户状态失败: {e}")
-        raise HTTPException(status_code=500, detail="状态切换失败")
+    return {"id": user.id, "is_active": user.is_active}

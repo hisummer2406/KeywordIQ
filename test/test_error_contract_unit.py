@@ -273,3 +273,92 @@ def test_request_id_differs_across_requests(client):
 def test_request_id_on_success_response(client):
     r = client.get("/api/definitely-not-a-route")
     assert "X-Request-Id" in r.headers
+
+
+# ---------------- 逐端点契约一致性（任务 3.7） ----------------
+
+def _as_super():
+    class _Super:
+        is_super = True
+        permission_codes: set = set()
+    return _Super()
+
+
+@pytest.fixture()
+def su_client(client):
+    """以超管身份访问，用于触达鉴权之后的业务失败。"""
+    from app.auth.simple_auth import simple_auth
+    main.app.dependency_overrides[simple_auth.get_current_user] = _as_super
+    try:
+        yield client
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def test_all_failure_shapes_share_the_same_keys(client):
+    """四类失败（校验/鉴权/业务/未找到）的响应体字段名与层级完全一致。
+
+    这是本变更的核心目标：此前 detail 在业务错误里是字符串、在校验错误里是数组、
+    未捕获异常甚至返回 text/plain，前端无法用一套代码解析。
+    """
+    # 三类必须都用未覆盖鉴权的干净 client，否则"无 token"那条会被依赖覆盖放行
+    cases = [
+        client.post("/api/auth/token", json={"password": "x"}),   # 校验 422
+        client.get("/api/definitely-not-a-route"),                # 404
+        client.get("/api/user/table"),                            # 鉴权 403
+    ]
+
+    required = {"success", "code", "message", "request_id"}
+    for r in cases:
+        assert r.status_code >= 400
+        assert r.headers["content-type"].startswith("application/json")
+        body = r.json()
+        assert required <= set(body.keys()), (r.request.url, body)
+        assert body["success"] is False
+        assert "detail" not in body
+        assert "status" not in body and "msg" not in body   # amis 信封不得残留
+
+
+def test_upload_bad_filename_is_400_not_200(su_client):
+    """上传侧的业务失败不再是 HTTP 200 + status:1。"""
+    r = su_client.post(
+        "/api/upload/oss/upload-credentials",
+        json={"site": "US", "filename": "not-a-csv.txt"},
+    )
+    assert r.status_code == 400
+    body = r.json()
+    assert body["code"] == "upload.bad_file"
+    assert "status" not in body
+
+
+def test_upload_unparseable_date_is_400(su_client):
+    r = su_client.post(
+        "/api/upload/oss/upload-credentials",
+        json={"site": "US", "filename": "US_Day_no_date.csv"},
+    )
+    assert r.status_code == 400
+    assert r.json()["code"] == "upload.bad_file"
+
+
+def test_analysis_unknown_site_is_422_with_domain_code(su_client):
+    """作用域错误带域内错误码，不被路由层盖成通用码。"""
+    r = su_client.post("/api/analysis/search", json={"site": "UK", "view": "DAY"})
+    assert r.status_code == 422
+    assert r.json()["code"] == "analysis.scope_invalid"
+
+
+def test_missing_permission_is_403_with_auth_code(client):
+    """有 token 但缺权限 → 403 + auth.forbidden。"""
+    from app.auth.simple_auth import simple_auth
+
+    class _ViewOnly:
+        is_super = False
+        permission_codes = {"analysis:view"}
+
+    main.app.dependency_overrides[simple_auth.get_current_user] = lambda: _ViewOnly()
+    try:
+        r = client.post("/api/analysis/export", json={"site": "US", "view": "DAY"})
+        assert r.status_code == 403
+        assert r.json()["code"] == "auth.forbidden"
+    finally:
+        main.app.dependency_overrides.clear()
