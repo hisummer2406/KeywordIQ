@@ -63,9 +63,8 @@ export default function AnalysisPage() {
   };
 
   const onExport = async () => {
-    const query = lastQueryRef.current;
-    if (!query) return;
-    const { page, perPage, ...scopedFilters } = query;
+    const scopedFilters = lastQueryRef.current;
+    if (!scopedFilters) return;
     setExporting(true);
     try {
       await exportAnalysis(scopedFilters);
@@ -215,12 +214,11 @@ export default function AnalysisPage() {
             params.is_new === undefined
               ? undefined
               : params.is_new === 'true' || params.is_new === true;
-          const body: SearchBody = {
+          // 作用域 + 筛选 + 排序，不含分页——导出直接复用它，导的是整个作用域而非当前页
+          const scopedFilters: SearchBody = {
             site: scope.site,
             view: scope.view,
             date: scope.date,
-            page: params.current,
-            perPage: params.pageSize,
             orderBy: sortField,
             orderDir: sortDir === 'ascend' ? 'asc' : sortDir === 'descend' ? 'desc' : undefined,
             keyword: params.keyword,
@@ -230,8 +228,12 @@ export default function AnalysisPage() {
             category_exact: params.top1_category,
             is_new: isNew,
           };
-          lastQueryRef.current = body;
-          const res = await searchAnalysis(body);
+          lastQueryRef.current = scopedFilters;
+          const res = await searchAnalysis({
+            ...scopedFilters,
+            page: params.current,
+            perPage: params.pageSize,
+          });
           return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
         }}
         toolBarRender={() =>

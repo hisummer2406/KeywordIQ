@@ -9,6 +9,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,less,md,json}\"",
     "lint": "eslint src --ext .ts,.tsx",
     "tsc": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "setup": "max setup",
     "postinstall": "max setup"
   },
@@ -20,12 +22,19 @@
     "antd": "^5.22.7"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/ali-oss": "^6.16.11",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "eslint": "^8.57.1",
+    "jsdom": "^30.0.1",
     "prettier": "^3.4.2",
-    "typescript": "^5.7.3"
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=18"
