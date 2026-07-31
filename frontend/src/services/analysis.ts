@@ -1,4 +1,5 @@
-import { request } from '@umijs/max';
+import { history, request } from '@umijs/max';
+import { clearToken, getToken } from '@/utils/token';
 
 /** 站点作用域分析查询。列表 POST /search 返 ProTable 契约 + 作用域回显。 */
 
@@ -78,4 +79,57 @@ export async function getCategories(site: string | undefined, view: View) {
     method: 'GET',
     params: { view, ...(site ? { site } : {}) },
   });
+}
+
+/** Content-Disposition 里的文件名，取不到就交给调用方兜底。 */
+function filenameFrom(disposition: string | null): string | undefined {
+  return disposition?.match(/filename="?([^";]+)"?/)?.[1];
+}
+
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * 导出当前作用域与筛选下的 CSV（design 决策 7 的中小导出路径）。
+ *
+ * 用裸 fetch 而非 umi request：需要拿到 Blob 与响应头里的文件名，且要按 FastAPI 的
+ * {detail} 形状把 413（超出行数上限）原文透给用户。代价是绕过了 app.tsx 的 errorConfig，
+ * 故 401 的清 token / 跳登录在这里自行处理，保持与全局一致。
+ */
+export async function exportAnalysis(body: SearchBody): Promise<void> {
+  const base = process.env.UMI_APP_API_BASE || '';
+  const token = getToken();
+  const res = await fetch(`${base}/api/analysis/export`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearToken();
+      history.push('/login');
+      throw new Error('登录已过期，请重新登录');
+    }
+    let detail = `导出失败（${res.status}）`;
+    try {
+      detail = (await res.json())?.detail || detail;
+    } catch {
+      // 非 JSON 错误体（如网关返回的 HTML），用兜底文案
+    }
+    throw new Error(detail);
+  }
+
+  triggerDownload(await res.blob(), filenameFrom(res.headers.get('Content-Disposition')) ?? 'export.csv');
 }

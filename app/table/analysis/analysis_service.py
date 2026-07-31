@@ -5,13 +5,16 @@
 """
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import date
-from typing import Optional
+from typing import Iterator, Optional
 
 from sqlalchemy.orm import Session
 
 from config import settings
+from database import SessionFactory
 from app.site_registry import UnknownSiteError, normalize_site_code
 from app.table.analysis import analysis_crud as crud
 from app.table.search.search_schemas import (
@@ -28,6 +31,31 @@ logger = logging.getLogger(__name__)
 
 class ScopeError(ValueError):
     """作用域参数非法（站点未登记、日期无数据/越界）。API 层映射为 422。"""
+
+
+class ExportTooLargeError(ValueError):
+    """导出结果超出行数上限。API 层映射为 413。"""
+
+
+# 导出列：与列表屏保持一致的中文表头。日视图多两列附加信息（走势/当周变化），
+# 与 search 的视图差异同源。
+_EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
+    ("keyword", "关键词"),
+    ("current_ranking", "当期排名"),
+    ("previous_ranking", "上期排名"),
+    ("ranking_change", "排名变化"),
+    ("is_new", "是否新词"),
+    ("top1_asin", "ASIN"),
+    ("top1_title", "商品标题"),
+    ("top1_brand", "品牌"),
+    ("top1_category", "类目"),
+    ("top1_click_share", "点击份额"),
+    ("top1_conversion_share", "转化份额"),
+]
+_EXPORT_COLUMNS_DAY_EXTRA: list[tuple[str, str]] = [
+    ("trend", "近7天走势"),
+    ("week_change", "当周排名变化"),
+]
 
 
 def _resolve_site(site: Optional[str]) -> str:
@@ -99,6 +127,90 @@ def search(db: Session, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
     return AnalysisSearchResponse(
         success=True, data=data, total=total, site=site, view=view, date=on
     )
+
+
+def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, str, Optional[date]]:
+    """解析导出作用域并在开始流式输出前把上限检查做掉。
+
+    上限必须在响应头发出之前检查：一旦开始流，就只能给出 200 + 一个被截断的 CSV，
+    而截断的 CSV 会被当成完整数据使用。宁可 413 让用户加筛选。
+    """
+    site = _resolve_site(req.site)
+    dates = crud.available_dates(db, site, req.view)
+    on = _resolve_date(req.date, dates)
+    if on is None:
+        return site, req.view, None
+
+    cap = settings.EXPORT_ROW_CAP
+    if crud.request_has_filters(req):
+        count = crud.count_capped(db, site, req.view, on, req, cap + 1)
+    else:
+        count = crud.scope_row_count(db, site, req.view, on)
+    if count > cap:
+        raise ExportTooLargeError(
+            f"导出结果超过 {cap} 行上限，请补充筛选条件后再导出"
+        )
+    return site, req.view, on
+
+
+def iter_export_csv(
+    site: str, view: str, on: Optional[date], req: AnalysisSearchRequest
+) -> Iterator[str]:
+    """产出 CSV 文本块（首块带 UTF-8 BOM）。
+
+    自建会话而非复用请求会话：流式响应体是在依赖注入清理之后才被消费的，
+    沿用请求会话会踩到"会话已关闭"。会话在生成器结束时（含客户端断开导致的
+    GeneratorExit）于 finally 中关闭。
+
+    无数据的作用域产出只有表头的 CSV——空表格比一个报错更符合"导出当前视图"的语义。
+    """
+    columns = _EXPORT_COLUMNS_BASE + (_EXPORT_COLUMNS_DAY_EXTRA if view == "DAY" else [])
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+
+    def _flush() -> str:
+        chunk = buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+        return chunk
+
+    writer.writerow([label for _, label in columns])
+    yield "﻿" + _flush()
+
+    if on is None:
+        return
+
+    db = SessionFactory()
+    try:
+        for rows in crud.iter_export_rows(db, site, view, on, req, settings.EXPORT_ROW_CAP):
+            if view == "DAY":
+                ids = [r["keyword_id"] for r in rows]
+                trends = crud.fetch_trends(db, site, ids, on)
+                week_changes = crud.fetch_week_changes(db, site, ids, on)
+            for r in rows:
+                row = dict(r)
+                if view == "DAY":
+                    kid = r["keyword_id"]
+                    row["trend"] = " ".join(str(v) for v in trends.get(kid, []))
+                    row["week_change"] = week_changes.get(kid)
+                writer.writerow([_render_cell(row.get(key)) for key, _ in columns])
+            yield _flush()
+    finally:
+        db.close()
+
+
+def _render_cell(value) -> str:
+    """单元格取值：布尔转中文，None 留空（不补零——空与 0 在排名变化上含义不同）。"""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    return str(value)
+
+
+def export_filename(site: str, view: str, on: Optional[date]) -> str:
+    """导出文件名带作用域三元组，便于归档时一眼认出是哪个切片。"""
+    return f"{site}_{view}_{on or 'empty'}.csv"
 
 
 def get_categories(db: Session, site: Optional[str], view: str) -> list[CategoryOption]:

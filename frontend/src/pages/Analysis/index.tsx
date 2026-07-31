@@ -1,13 +1,17 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType, ProColumns } from '@ant-design/pro-components';
-import { Card, Radio, Select, Space, Tag, Typography } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
+import { useAccess } from '@umijs/max';
+import { Button, Card, Radio, Select, Space, Tag, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
+  exportAnalysis,
   getCategories,
   getScope,
   searchAnalysis,
   type AnalysisRow,
   type CategoryOption,
+  type SearchBody,
   type View,
 } from '@/services/analysis';
 import { getSites, type SiteOption } from '@/services/upload';
@@ -20,9 +24,13 @@ import ShareBar from '@/components/ShareBar';
  * 作用域用 ref 承载，供 request 闭包读取；切换任一维度 reload 回第 1 页。
  */
 export default function AnalysisPage() {
+  const access = useAccess();
   const actionRef = useRef<ActionType>();
   const scopeRef = useRef<{ site?: string; view: View; date?: string | null }>({ view: 'DAY' });
+  // 表格最近一次查询的请求体，导出按它复现「用户当下看到的这一份」。分页字段导出时剔除。
+  const lastQueryRef = useRef<SearchBody | null>(null);
 
+  const [exporting, setExporting] = useState(false);
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [site, setSite] = useState<string>();
   const [view, setView] = useState<View>('DAY');
@@ -52,6 +60,21 @@ export default function AnalysisPage() {
     setDate(d);
     scopeRef.current = { ...scopeRef.current, date: d };
     actionRef.current?.reload();
+  };
+
+  const onExport = async () => {
+    const query = lastQueryRef.current;
+    if (!query) return;
+    const { page, perPage, ...scopedFilters } = query;
+    setExporting(true);
+    try {
+      await exportAnalysis(scopedFilters);
+    } catch (e: any) {
+      // 413（超出行数上限）在这里以后端原文呈现，提示用户加筛选而不是给一份截断数据
+      message.error(e?.message || '导出失败');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const columns: ProColumns<AnalysisRow>[] = [
@@ -192,7 +215,7 @@ export default function AnalysisPage() {
             params.is_new === undefined
               ? undefined
               : params.is_new === 'true' || params.is_new === true;
-          const res = await searchAnalysis({
+          const body: SearchBody = {
             site: scope.site,
             view: scope.view,
             date: scope.date,
@@ -206,9 +229,26 @@ export default function AnalysisPage() {
             product_title: params.top1_title,
             category_exact: params.top1_category,
             is_new: isNew,
-          });
+          };
+          lastQueryRef.current = body;
+          const res = await searchAnalysis(body);
           return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
         }}
+        toolBarRender={() =>
+          access.canExport
+            ? [
+                <Button
+                  key="export"
+                  icon={<DownloadOutlined />}
+                  loading={exporting}
+                  disabled={!date}
+                  onClick={onExport}
+                >
+                  导出 CSV
+                </Button>,
+              ]
+            : []
+        }
       />
     </PageContainer>
   );
