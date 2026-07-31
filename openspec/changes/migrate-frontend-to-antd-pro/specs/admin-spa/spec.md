@@ -18,18 +18,29 @@
 
 ### Requirement: 列表接口遵循统一的表格响应契约
 
-供表格消费的列表类 API SHALL 返回统一契约 `{ data, total, success }`（Ant Design `ProTable`
-约定），MUST NOT 保留 amis 专用的响应形状。该契约 SHALL 由统一响应适配层产生，避免逐接口散改。
+供表格消费的列表类 API SHALL 在**成功**时返回统一契约 `{ data, total, success: true }`
+（Ant Design `ProTable` 约定），MUST NOT 保留 amis 专用的响应形状。该契约 SHALL 由统一响应
+适配层产生，避免逐接口散改。
+
+失败 SHALL 走 `api-error-contract` 定义的非 2xx 统一错误契约，MUST NOT 以 HTTP 200 携带
+`success: false` 表达。
+
+> **口径收窄记录（2026-08-01，unify-api-error-contract）**：本条原先允许失败以
+> `success: false` 混在 HTTP 200 里返回。实践中这让前端无法把「查询失败」与「没有数据」
+> 区分开——分析屏的作用域错误只表现为一个没有解释的空表格。失败路径已统一到异常，
+> `protable_error` 已移除。归档本变更时请勿把旧口径 sync 回主 specs。
 
 #### Scenario: 分页列表返回 ProTable 契约
 
-- **WHEN** 前端表格请求某分页列表接口
+- **WHEN** 前端表格请求某分页列表接口且请求合法
 - **THEN** 响应体为 `{ data: [...], total: <总数>, success: true }`，前端表格据此渲染与分页
 
-#### Scenario: 失败响应可被前端统一识别
+#### Scenario: 列表失败走非 2xx，不混在 200 里
 
 - **WHEN** 某列表接口处理失败
-- **THEN** 响应以统一形状标识失败（`success: false` 及错误信息），前端据此统一提示
+- **THEN** 响应状态码为非 2xx，响应体为统一错误契约
+  （`{success:false, code, message, request_id}`），前端由唯一出口统一提示
+- **AND** MUST NOT 返回 HTTP 200 + `success: false`
 
 ### Requirement: 前端统一鉴权与失效处理
 
