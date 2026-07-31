@@ -189,3 +189,58 @@ def test_export_rejects_unknown_site(monkeypatch):
     assert body["success"] is False
     assert body["code"] == "analysis.scope_invalid"
     assert "detail" not in body
+
+
+# ---------------- 流式端点契约（任务组 4） ----------------
+
+def test_over_cap_failure_emits_no_csv_bytes(monkeypatch):
+    """开流前失败必须返回统一错误体，且一个 CSV 字节都不产出。
+
+    一旦开流，状态码与响应头已发出，之后再失败只会得到一份被截断的 200 CSV，
+    而它会被当成完整数据使用。
+    """
+    from config import settings
+
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True),
+                     total=settings.EXPORT_ROW_CAP + 1)
+    r = _post(app)
+
+    assert r.status_code == 413
+    assert not r.content.startswith(b"\xef\xbb\xbf")   # 无 BOM
+    assert "关键词" not in r.text                       # 无表头
+    assert r.headers["content-type"].startswith("application/json")
+    assert "content-disposition" not in r.headers      # 未按附件下发
+
+
+def test_scope_failure_emits_no_csv_bytes(monkeypatch):
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True))
+    r = _post(app, {"site": "UK", "view": "DAY"})
+
+    assert r.status_code == 422
+    assert "关键词" not in r.text
+    assert "content-disposition" not in r.headers
+
+
+def test_stream_interruption_is_logged_with_stack(monkeypatch, caplog):
+    """开流后的异常无法转成错误响应，只能记日志断流——但必须带栈。"""
+    import logging
+
+    from app.table.analysis import analysis_service as svc
+
+    def _boom(db, s, v, on, req, limit):
+        yield [_row(1, "kettle", 1)]
+        raise RuntimeError("cursor died mid-stream")
+
+    # 必须在 _build_app 之后 patch —— 它内部也会设置 iter_export_rows
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True))
+    monkeypatch.setattr(svc.crud, "iter_export_rows", _boom)
+
+    with caplog.at_level(logging.ERROR, logger="app.table.analysis.analysis_service"):
+        try:
+            _post(app)
+        except RuntimeError:
+            pass  # 开流后抛出时 TestClient 的行为随传输层而异，这里只关心是否留下线索
+
+    record = next(r for r in caplog.records if "导出流中断" in r.getMessage())
+    assert record.exc_info is not None
+    assert record.levelno == logging.ERROR

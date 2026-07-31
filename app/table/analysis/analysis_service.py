@@ -210,6 +210,17 @@ def iter_export_csv(
                     row["week_change"] = week_changes.get(kid)
                 writer.writerow([_render_cell(row.get(key)) for key, _ in columns])
             yield _flush()
+    except GeneratorExit:
+        # 客户端主动断开（关页面、取消下载），不是错误
+        raise
+    except Exception:
+        # 开流之后无法再改状态码——响应头已发出，此时抛异常只会得到一份内容不完整的
+        # 200 CSV。只能记日志并断流；request_id 已由日志过滤器带上，供事后追查。
+        logger.exception(
+            "导出流中断（响应头已发出，客户端将收到不完整文件）site=%s view=%s date=%s",
+            site, view, on,
+        )
+        raise
     finally:
         db.close()
 
