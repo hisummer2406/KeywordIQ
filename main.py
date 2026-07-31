@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api_router import api_router
 from app.common.error_handlers import register_error_handlers
+from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
 from config import settings
 from database import engine, async_engine
 from monitoring import SystemMonitor
@@ -19,18 +20,23 @@ def configure_logging():
     import logging.handlers
     os.makedirs("logs", exist_ok=True)
 
+    # 每条日志带 request_id，使用户口述的"刚才报错了"能对回具体一次请求。
+    # 不在请求上下文中（后台任务、启动期）时填 "-"。
+    handlers = [
+        logging.handlers.TimedRotatingFileHandler(
+            "logs/app.log", when="midnight", backupCount=7, encoding="utf-8"
+        ),
+        logging.StreamHandler(),
+    ]
+    request_id_filter = RequestIdLogFilter()
+    for handler in handlers:
+        handler.addFilter(request_id_filter)
+
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.handlers.TimedRotatingFileHandler(
-                "logs/app.log", when="midnight", backupCount=7, encoding="utf-8"
-            ),
-            logging.StreamHandler(),
-        ],
+        format="%(asctime)s - %(name)s - [%(request_id)s] - %(levelname)s - %(message)s",
+        handlers=handlers,
     )
-    # 控制台输出
-    logging.StreamHandler()
 
 
 configure_logging()
@@ -112,6 +118,8 @@ app = FastAPI(
 # 全局异常处理器：所有失败响应的唯一出口（app/common/error_handlers.py）
 register_error_handlers(app)
 
+# request id 中间件必须在最外层（后添加的中间件在更外层），这样它建立的上下文对内层的
+# CORS、路由与异常处理器都可见，且响应头在任何路径下都能带上。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -119,6 +127,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestIdMiddleware)
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")

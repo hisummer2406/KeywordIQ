@@ -102,3 +102,174 @@ def test_nested_field_validation_error_keeps_path(client):
 
     # 该端点需要鉴权，若鉴权先行则不是 422；两种情况都不应泄漏提交内容
     assert "INVALID_VIEW" not in r.text or r.status_code == 422
+
+
+# ---------------- 五类处理器（任务组 1） ----------------
+
+
+@pytest.fixture()
+def probe_app(client):
+    """在真实 app 上临时挂几个专门抛异常的探针路由，用后即摘。"""
+    from fastapi import APIRouter
+    from sqlalchemy.exc import OperationalError, ProgrammingError
+
+    from app.common.errors import ConflictError, ServiceUnavailableError
+
+    router = APIRouter(prefix="/__probe")
+
+    @router.get("/api-error-4xx")
+    def _conflict():
+        raise ConflictError("用户名已存在", code="user.duplicate_name")
+
+    @router.get("/api-error-5xx")
+    def _unavailable():
+        raise ServiceUnavailableError()
+
+    @router.get("/db-operational")
+    def _db_conn():
+        raise OperationalError("SELECT 1 FROM analysis.dim_keyword", {}, Exception("conn refused"))
+
+    @router.get("/db-other")
+    def _db_other():
+        raise ProgrammingError("SELECT bad FROM analysis.dim_keyword", {}, Exception("boom"))
+
+    @router.get("/unhandled")
+    def _boom():
+        raise RuntimeError("SELECT * FROM analysis.dim_keyword; /etc/passwd; sk-secret")
+
+    main.app.include_router(router)
+    try:
+        yield client
+    finally:
+        main.app.router.routes = [
+            r for r in main.app.router.routes
+            if not getattr(r, "path", "").startswith("/__probe")
+        ]
+
+
+def _assert_unified(body: dict, *, code: str):
+    assert body["success"] is False
+    assert body["code"] == code
+    assert isinstance(body["message"], str) and body["message"]
+    assert "request_id" in body
+
+
+def test_api_error_maps_to_declared_status(probe_app):
+    r = probe_app.get("/__probe/api-error-4xx")
+    assert r.status_code == 409
+    _assert_unified(r.json(), code="user.duplicate_name")
+    assert r.json()["message"] == "用户名已存在"
+
+
+def test_service_unavailable_is_503(probe_app):
+    r = probe_app.get("/__probe/api-error-5xx")
+    assert r.status_code == 503
+    _assert_unified(r.json(), code="service.unavailable")
+
+
+def test_operational_error_is_503_not_500(probe_app):
+    """连接/超时类与业务 500 分开——否则告警策略无法分别设定。"""
+    r = probe_app.get("/__probe/db-operational")
+    assert r.status_code == 503
+    _assert_unified(r.json(), code="db.unavailable")
+
+
+def test_other_sqlalchemy_error_is_500(probe_app):
+    r = probe_app.get("/__probe/db-other")
+    assert r.status_code == 500
+    _assert_unified(r.json(), code="db.error")
+
+
+def test_db_errors_do_not_leak_sql(probe_app):
+    for path in ("/__probe/db-operational", "/__probe/db-other"):
+        r = probe_app.get(path)
+        assert "dim_keyword" not in r.text
+        assert "SELECT" not in r.text
+
+
+def test_unhandled_exception_is_json_not_plaintext(probe_app):
+    """此前未捕获异常返回的是 text/plain 'Internal Server Error'，连 JSON 都不是。"""
+    r = probe_app.get("/__probe/unhandled")
+    assert r.status_code == 500
+    assert r.headers["content-type"].startswith("application/json")
+    _assert_unified(r.json(), code="internal.unhandled")
+
+
+def test_unhandled_exception_does_not_leak_internals(probe_app):
+    r = probe_app.get("/__probe/unhandled")
+    for secret in ("dim_keyword", "/etc/passwd", "sk-secret", "Traceback", "RuntimeError"):
+        assert secret not in r.text
+
+
+def test_unhandled_exception_is_logged_with_stack(probe_app, caplog):
+    """未捕获异常必须进应用日志且带栈——此前只到 uvicorn 的 stderr。"""
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="app.common.error_handlers"):
+        probe_app.get("/__probe/unhandled")
+
+    record = next(r for r in caplog.records if r.levelno >= logging.ERROR)
+    assert record.exc_info is not None  # logger.exception 带栈
+
+
+def test_client_error_logged_as_warning_not_error(probe_app, caplog):
+    """4xx 不该产生告警噪音。"""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="app.common.error_handlers"):
+        probe_app.get("/__probe/api-error-4xx")
+
+    levels = {r.levelno for r in caplog.records}
+    assert logging.WARNING in levels
+    assert logging.ERROR not in levels
+
+
+def test_auth_http_exception_gets_unified_shape(client):
+    """simple_auth 依赖里抛的 HTTPException 也要统一形状（此前是 {"detail": ...}）。"""
+    r = client.get("/api/analysis/scope")
+    assert r.status_code in (401, 403)
+    body = r.json()
+    _assert_unified(body, code="auth.forbidden" if r.status_code == 403 else "auth.unauthorized")
+    assert "detail" not in body
+
+
+def test_404_gets_unified_shape(client):
+    r = client.get("/api/definitely-not-a-route")
+    assert r.status_code == 404
+    _assert_unified(r.json(), code="resource.not_found")
+
+
+# ---------------- request id ----------------
+
+
+def test_request_id_present_in_header_and_error_body(client):
+    r = client.post("/api/auth/token", json={"password": SECRET})
+    assert r.headers["X-Request-Id"]
+    assert r.json()["request_id"] == r.headers["X-Request-Id"]
+
+
+def test_request_id_reuses_inbound_header(client):
+    r = client.post(
+        "/api/auth/token", json={"password": SECRET}, headers={"X-Request-Id": "abc123"}
+    )
+    assert r.headers["X-Request-Id"] == "abc123"
+    assert r.json()["request_id"] == "abc123"
+
+
+def test_request_id_rejects_untrusted_inbound_value(client):
+    """上游注入超长/含控制字符的值时自行生成，不原样回写进响应头。"""
+    r = client.post(
+        "/api/auth/token", json={"password": SECRET}, headers={"X-Request-Id": "x" * 200}
+    )
+    assert r.headers["X-Request-Id"] != "x" * 200
+    assert len(r.headers["X-Request-Id"]) <= 64
+
+
+def test_request_id_differs_across_requests(client):
+    ids = {client.get("/health").headers.get("X-Request-Id") for _ in range(3)}
+    assert len(ids) == 3
+
+
+def test_request_id_on_success_response(client):
+    r = client.get("/api/definitely-not-a-route")
+    assert "X-Request-Id" in r.headers
