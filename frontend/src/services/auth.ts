@@ -11,9 +11,13 @@ export async function getCurrentUser() {
 
 export async function login(body: API.LoginParams) {
   // 干净 REST 端点（后端 auth_api：POST /api/auth/token → {token, user}）
+  //
+  // skipErrorHandler：凭证错误由登录表单自己呈现，不弹全局提示。这是**显式声明**的
+  // 静默，而不是页面层 catch 后不作为——后者会把真正的失败一起吞掉。
   return request<API.LoginResult>('/api/auth/token', {
     method: 'POST',
     data: body,
+    skipErrorHandler: true,
   });
 }
 

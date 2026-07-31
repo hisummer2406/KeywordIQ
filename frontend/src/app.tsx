@@ -47,11 +47,32 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
   };
 };
 
+/** 后端统一错误契约（app/common/error_handlers.py）。 */
+export interface ApiErrorBody {
+  success: false;
+  code: string;
+  message: string;
+  request_id: string | null;
+  /** 仅参数校验失败（code === 'request.invalid'）时出现 */
+  fields?: { field: string; msg: string }[];
+}
+
+/** 把统一错误体拼成一句可展示的话；校验错误附上首个出错字段。 */
+function describe(body: ApiErrorBody | undefined, status?: number): string {
+  if (!body?.message) return `请求失败（${status ?? '网络错误'}）`;
+  const first = body.fields?.[0];
+  return first ? `${body.message}：${first.field} ${first.msg}` : body.message;
+}
+
 /**
  * 统一请求配置：
  * - baseURL 走相对路径（生产 nginx 同源反代 /api；开发由 devServer proxy）。
  * - 请求拦截器注入 Bearer token。
- * - 401 清 token 并跳登录。
+ * - **errorHandler 是错误提示的唯一出口**：页面层不写 try/catch 也能让用户看见失败。
+ *
+ * 确需不提示的场景（如登录页的凭证错误由表单自己呈现），在发请求时显式声明
+ * `skipErrorHandler: true`——静默必须是显式声明的结果，而不是页面层捕获后不作为。
+ * 后者正是此前用户屏吞掉「用户名已存在」的机制。
  */
 export const request: RequestConfig = {
   baseURL: process.env.UMI_APP_API_BASE || '',
@@ -68,10 +89,9 @@ export const request: RequestConfig = {
   errorConfig: {
     errorHandler(error: any) {
       const status = error?.response?.status;
-      // FastAPI 错误体是 {detail: ...}；兼容 message
-      const detail = error?.response?.data?.detail || error?.response?.data?.message;
+      const body: ApiErrorBody | undefined = error?.response?.data;
 
-      // 非登录页的 401 才是"会话过期"→ 清 token 跳登录；登录页的 401 是凭证错误，走下方提示
+      // 非登录页的 401 才是"会话过期"→ 清 token 跳登录；登录页的 401 是凭证错误
       if (status === 401 && history.location.pathname !== LOGIN_PATH) {
         clearToken();
         message.warning('登录已过期，请重新登录');
@@ -79,8 +99,13 @@ export const request: RequestConfig = {
         return;
       }
 
+      // 显式声明跳过的请求不弹提示，但仍把错误抛给调用方自行处理
+      if (error?.config?.skipErrorHandler) {
+        throw error;
+      }
+
       if (error?.response) {
-        message.error(detail || `请求失败（${status}）`);
+        message.error(describe(body, status));
       } else if (error?.request) {
         message.error('服务器无响应，请稍后重试');
       }

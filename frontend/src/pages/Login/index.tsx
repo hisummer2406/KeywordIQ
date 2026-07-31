@@ -22,8 +22,10 @@ export default function LoginPage() {
       message.success('登录成功');
       const redirect = new URLSearchParams(history.location.search).get('redirect');
       history.push(redirect || '/analysis');
-    } catch {
-      // 错误提示由全局 errorHandler 统一处理
+    } catch (e: any) {
+      // login() 显式声明了 skipErrorHandler（凭证错误不该弹全局提示），因此这里必须
+      // 自己呈现——「显式跳过」与「必须自行呈现」是一对，缺一就回到了静默吞错误。
+      message.error(e?.response?.data?.message || '用户名或密码错误');
     }
   };
 

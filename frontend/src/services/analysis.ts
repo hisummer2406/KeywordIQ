@@ -124,7 +124,8 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
     }
     let detail = `导出失败（${res.status}）`;
     try {
-      detail = (await res.json())?.detail || detail;
+      // 统一错误契约 {success,code,message,request_id}；此前读的是 FastAPI 的 detail
+      detail = (await res.json())?.message || detail;
     } catch {
       // 非 JSON 错误体（如网关返回的 HTML），用兜底文案
     }
