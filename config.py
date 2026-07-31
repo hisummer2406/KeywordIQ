@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # 绝不返回全站点混合数据。
     DEFAULT_SITE: str = ""
 
+    # 导出行数上限：单次导出最多多少行。超出即拒绝（413），不静默截断——截断的 CSV 会被
+    # 当成完整数据使用。上限的存在是为了护住浏览器内存：导出走「fetch 取 blob 再触发下载」，
+    # 整个响应会先进浏览器内存（design 决策 7 的中小导出路径）。超阈值的大导出改走后端
+    # 一次性下载令牌，该路径尚未实现，故此处以拒绝代替。
+    EXPORT_ROW_CAP: int = 50000
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files

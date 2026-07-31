@@ -26,7 +26,8 @@
 
 - [x] 4.1 用 ProTable 复刻分析查询（`pages/Analysis`）：作用域「站点→视图→日期」选择器 + ProTable 筛选（关键词/品牌/ASIN/标题子串、新词）/排序（排名/变化/份额）/分页，接 A 期 `POST /api/analysis/search`（作用域用 ref 承载供 request 闭包读取，切换回第 1 页）
 - [x] 4.2 类目下拉/筛选：类目列 select 接 `GET /api/analysis/categories`（选项带计数），映射为 `category_exact` 精确筛选；日期选择器接 `GET /api/analysis/scope`
-- [ ] 4.3 导出下载：中小导出用带 token 的 `fetch` 取 blob → `createObjectURL` 触发下载；大导出后端签发短时一次性下载令牌走 URL（阈值实施期定）—— 待做（后端 export 端点也需重建）
+- [x] 4.3 导出下载（中小导出路径）：后端重建 `POST /api/analysis/export`（与 `/search` 同一请求体，故导出的就是用户当下看到的那份；`require_permission(analysis:export)`；服务端游标分块流式产出 CSV，内存与块大小同阶；生成器自建会话，不复用已被清理的请求会话）；前端带 token 的 `fetch` 取 blob → `createObjectURL` 触发下载，按钮由 `access.canExport` 显隐
+- [ ] 4.3a 大导出下载令牌 —— **未做**：阈值以 `EXPORT_ROW_CAP`（默认 5 万行）落在配置里，超限**拒绝**（413 + 提示加筛选）而非静默截断；截断的 CSV 会被当成完整数据使用，宁可拒绝。令牌路径待真实导出规模反馈后再定是否需要
 - [ ] 4.4 staging 用生产样本做等价性核对（行数/筛选/导出一致），通过后切换为线上前端 —— 待上线环境
 
 ## 5. 上传屏 + OSS 直传（阶段五）

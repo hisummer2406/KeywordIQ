@@ -1,0 +1,134 @@
+"""导出链路集成测试：验证单元测试打桩掉的那部分——真实 SQL。
+
+默认跳过，只在设置 TEST_DATABASE_URL 时运行（沿用 V2 集成测试的 gate 模式）。
+复用 site-scoped-query 集成测试的受控样本（K1 跨 D1/D2/D3 + 同周周报，K2 只在 D3）。
+
+    TEST_DATABASE_URL=postgresql://postgres:pwd123@localhost/keywordiq_test \\
+        uv run pytest test/test_analysis_export_integration.py -v
+"""
+import os
+
+import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
+
+from app.table.analysis import analysis_crud as crud
+from app.table.analysis import analysis_service as service
+from app.table.search.search_schemas import AnalysisSearchRequest
+from test.test_site_scoped_query_integration import D3, SITE, _seed
+
+TEST_URL = os.environ.get("TEST_DATABASE_URL")
+
+pytestmark = pytest.mark.skipif(
+    not TEST_URL, reason="设置 TEST_DATABASE_URL 指向一次性测试库以运行数据库集成测试"
+)
+
+
+@pytest.fixture()
+def db():
+    engine = create_engine(TEST_URL)
+    connection = engine.connect()
+    trans = connection.begin()
+    if connection.execute(text("SELECT to_regclass('analysis.fact_daily')")).scalar() is None:
+        trans.rollback()
+        connection.close()
+        engine.dispose()
+        pytest.skip("测试库未迁移，请先运行 alembic upgrade head")
+    session = Session(bind=connection)
+    try:
+        yield session
+    finally:
+        session.close()
+        trans.rollback()
+        connection.close()
+        engine.dispose()
+
+
+def _req(**kw) -> AnalysisSearchRequest:
+    return AnalysisSearchRequest(site=SITE, view="DAY", date=D3, **kw)
+
+
+def test_iter_export_rows_streams_scoped_rows(db):
+    """服务端游标分块产出：块内是 dict，作用域与排序与列表一致。"""
+    _seed(db)
+    chunks = list(crud.iter_export_rows(db, SITE, "DAY", D3, _req(), limit=100))
+
+    rows = [r for chunk in chunks for r in chunk]
+    assert [r["current_ranking"] for r in rows] == [1, 9]  # 默认按当期排名升序
+    assert {r["keyword"] for r in rows} == {"kw-one", "kw-two"}
+
+
+def test_iter_export_rows_respects_limit(db):
+    """limit 封顶：上限之外的行不会被取回。"""
+    _seed(db)
+    rows = [r for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, _req(), limit=1) for r in chunk]
+    assert len(rows) == 1
+
+
+def test_iter_export_rows_applies_filters(db):
+    """筛选与列表同源：只导出筛出来的那部分。"""
+    _seed(db)
+    rows = [
+        r
+        for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, _req(keyword="kw-two"), limit=100)
+        for r in chunk
+    ]
+    assert [r["keyword"] for r in rows] == ["kw-two"]
+
+
+def test_count_capped_stops_at_cap(db):
+    """上限计数数满即止，不给出真实总数。"""
+    _seed(db)
+    assert crud.count_capped(db, SITE, "DAY", D3, _req(), cap=1) == 1
+    assert crud.count_capped(db, SITE, "DAY", D3, _req(), cap=10) == 2
+
+
+def test_export_csv_contains_day_extras(db, monkeypatch):
+    """端到端 CSV：日视图带走势与当周变化，且走势是真实跨天回溯的结果。"""
+    _seed(db)
+    monkeypatch.setattr(service, "SessionFactory", lambda: db)
+
+    site, view, on = service.resolve_export_scope(db, _req())
+    body = "".join(service.iter_export_csv(site, view, on, _req()))
+    lines = body.lstrip("﻿").strip().splitlines()
+
+    assert "近7天走势" in lines[0] and "当周排名变化" in lines[0]
+    assert len(lines) == 3
+    kw_one = next(line for line in lines[1:] if "kw-one" in line)
+    assert "5 3 1" in kw_one  # D1→D2→D3 的排名回溯
+    assert kw_one.endswith("7")  # 同周周报的 ranking_change
+
+
+def test_export_week_view_has_no_day_extras(db, monkeypatch):
+    _seed(db)
+    monkeypatch.setattr(service, "SessionFactory", lambda: db)
+
+    req = AnalysisSearchRequest(site=SITE, view="WEEK")
+    site, view, on = service.resolve_export_scope(db, req)
+    header = "".join(service.iter_export_csv(site, view, on, req)).lstrip("﻿").splitlines()[0]
+
+    assert "近7天走势" not in header and "当周排名变化" not in header
+
+
+def test_export_scope_rejects_over_cap_unfiltered(db, monkeypatch):
+    """无筛选时上限检查读 site_data_stats（D3 共 2 行）。"""
+    _seed(db)
+    monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 1)
+
+    with pytest.raises(service.ExportTooLargeError):
+        service.resolve_export_scope(db, _req())
+
+
+def test_export_scope_rejects_over_cap_filtered(db, monkeypatch):
+    """有筛选时走上限计数，同样拒绝而非截断。"""
+    _seed(db)
+    monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 0)
+
+    with pytest.raises(service.ExportTooLargeError):
+        service.resolve_export_scope(db, _req(keyword="kw"))
+
+
+def test_export_scope_allows_within_cap(db, monkeypatch):
+    _seed(db)
+    monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 2)
+    assert service.resolve_export_scope(db, _req()) == (SITE, "DAY", D3)

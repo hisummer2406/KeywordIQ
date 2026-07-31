@@ -22,6 +22,10 @@ _SCHEMA = settings.DATABASE_SCHEMA
 # 有筛选时的总数上限（沿用 V1 权衡：避免在整切片上精确计数）
 FILTERED_COUNT_CAP = 10000
 
+# 导出时服务端游标每次取回的行数。块内驻留内存，故不宜大；日视图还要按块回查走势，
+# 太小则回查次数过多。
+EXPORT_CHUNK_SIZE = 2000
+
 # 排序白名单（两视图字段名相同）。日视图的 7 天走势/当周变化不在此列——它们是附加信息、
 # 非结果集来源字段，收到就忽略、回落默认。
 SORTABLE_FIELDS = frozenset(
@@ -157,12 +161,40 @@ def search_rows(db: Session, site: str, view: str, on: date, req: AnalysisSearch
     return [dict(row._mapping) for row in db.execute(stmt).all()]
 
 
-def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
-    """有筛选时的总数：上限内精确计数（超过上限返回上限值）。"""
+def count_capped(
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int
+) -> int:
+    """作用域内筛选后的行数，最多数到 ``cap``（数满即返回 cap，不再往下扫）。
+
+    列表分页与导出上限检查共用：两处都只需要"是否超过某个数"，不需要精确总数。
+    """
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
-    capped = stmt.with_only_columns(fact.keyword_id).limit(FILTERED_COUNT_CAP).subquery()
+    capped = stmt.with_only_columns(fact.keyword_id).limit(cap).subquery()
     return db.execute(select(func.count()).select_from(capped)).scalar_one()
+
+
+def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
+    """有筛选时的总数：上限内精确计数（超过上限返回上限值）。"""
+    return count_capped(db, site, view, on, req, FILTERED_COUNT_CAP)
+
+
+def iter_export_rows(
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int
+):
+    """导出用：按作用域与筛选流式取行，分块产出（每块一个 dict 列表）。
+
+    用服务端游标（``yield_per`` 触发 ``stream_results``）逐块拉取，内存与块大小同阶，
+    不随结果集增长——GB 级切片下整表 fetch 会撑爆 8 GiB 的应用服务器。
+    分块而非逐行产出，是为了让上层能按块批量补齐日视图的走势/当周变化。
+    """
+    stmt, fact = _base_query(site, view, on)
+    stmt = _apply_filters(stmt, fact, req)
+    stmt = _apply_order(stmt, fact, req)
+    stmt = stmt.limit(limit)
+    result = db.execute(stmt.execution_options(yield_per=EXPORT_CHUNK_SIZE))
+    for partition in result.partitions():
+        yield [dict(row._mapping) for row in partition]
 
 
 def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, list[int]]:

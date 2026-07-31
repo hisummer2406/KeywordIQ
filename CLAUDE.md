@@ -80,7 +80,13 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 - **日期选择器与分页总数走 `site_data_stats`**（不在 8 亿行上实时聚合）；类目下拉走
   `category_stats` 物化视图。查询代码在 `app/table/analysis/analysis_crud.py`（纯 SQL 组装）
   → `analysis_service.py`（作用域解析、`ScopeError`）→ `analysis_api.py`
-  （`POST /search`、`GET /scope`、`GET /categories`，均 `require_permission(analysis:view)`）。
+  （`POST /search`、`GET /scope`、`GET /categories`，均 `require_permission(analysis:view)`；
+  另有 `POST /export`，权限点是 `analysis:export`）。
+- **导出**（`POST /api/analysis/export`）与 `/search` 共用请求体，导出的就是用户当下看到的那份
+  数据（分页参数忽略）。CSV 经服务端游标（`crud.iter_export_rows` 的 `yield_per`）分块流式产出，
+  内存与块大小同阶；流式生成器**自建会话**（`SessionFactory`），因为响应体在依赖清理之后才被消费，
+  复用请求会话会踩「会话已关闭」。行数超 `EXPORT_ROW_CAP`（默认 5 万）**拒绝**（413），
+  不静默截断——截断的 CSV 会被当成完整数据用。上限检查必须在开始流式输出之前做完。
 - **默认站点** `DEFAULT_SITE`（config，须属站点清单）；未传站点用它、非法站点报错**不回退**。
 - **日视图**附带只读的近 7 天走势与当周排名变化（`fetch_trends`/`fetch_week_changes`，
   「先分页再批量补附加」）。当周映射口径是**同 ISO 周**（`date_trunc('week')`）——导入侧只存
