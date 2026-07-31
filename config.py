@@ -62,16 +62,14 @@ class Settings(BaseSettings):
     # python -c "import secrets; print(secrets.token_urlsafe(32))"
     ADMIN_SECRET_KEY: str
 
-    # 数据库连接优化配置
+    # 数据库连接优化配置（每 worker；× 4 workers 后须远低于 RDS 的 400）
     DB_POOL_SIZE: int = 20  # 连接池大小
     DB_MAX_OVERFLOW: int = 10  # 最大溢出连接
     DB_POOL_TIMEOUT: int = 30  # 连接超时时间（秒）
     DB_POOL_RECYCLE: int = 1800  # 连接回收时间
-    DB_POOL_PRE_PING: bool = True  # 启用连接预检
-
-    # 查询优化配置
-    DB_ECHO: bool = False  # 生产环境关闭SQL日志
-    DB_QUERY_TIMEOUT: int = 30  # 30秒查询超时
+    # 注：pool_pre_ping 在 database.py 里硬编码为 True，刻意不做成配置项——它与
+    # connect_args 的 TCP keepalive 是一对，用来识破被静默丢弃的半开连接，关掉会让
+    # worker 在导入期被挂死的 checkout 占光。同理 echo 跟随 DEBUG，不单独开关。
 
     @field_validator("ENABLED_SITES")
     @classmethod
