@@ -12,26 +12,26 @@
 
 ## 1. 错误基础设施（后端，无行为变更）
 
-- [ ] 1.1 新建 `app/common/errors.py`：`APIError` 基类（`code` / `message` / `http_status`）与子类
+- [x] 1.1 新建 `app/common/errors.py`：`APIError` 基类（`code` / `message` / `http_status`）与子类
   （`BadRequestError` 400、`UnauthorizedError` 401、`ForbiddenError` 403、`NotFoundError` 404、
   `ConflictError` 409、`PayloadTooLargeError` 413、`UnprocessableError` 422），错误码常量按
   `<域>.<原因>` 集中声明
-- [ ] 1.2 新建 request id 中间件：生成短 id（uuid4 前 8 位），沿用入站 `X-Request-Id`，
+- [x] 1.2 新建 request id 中间件：生成短 id（uuid4 前 8 位），沿用入站 `X-Request-Id`，
   写入响应头，并放进 `contextvars.ContextVar`
-- [ ] 1.3 日志格式接入 request id（从 contextvar 读取，缺省为 `-`），确认线程池执行的
+- [x] 1.3 日志格式接入 request id（从 contextvar 读取，缺省为 `-`），确认线程池执行的
   同步端点也能读到
-- [ ] 1.4 新建 `app/common/error_handlers.py`：注册 `APIError`、`RequestValidationError`（并入
+- [x] 1.4 新建 `app/common/error_handlers.py`：注册 `APIError`、`RequestValidationError`（并入
   0.1 的实现）、`StarletteHTTPException`（兜底框架与依赖里抛出的，如 `simple_auth` 的 401/403）、
   `SQLAlchemyError`、`Exception` 五类处理器，统一产出 `{success,code,message,request_id}`；
   `internal.unhandled` 用固定文案，原始异常只进日志
-- [ ] 1.5 日志分级落到 handler 分工：`APIError` handler 用 `logger.warning`（4xx，不告警），
+- [x] 1.5 日志分级落到 handler 分工：`APIError` handler 用 `logger.warning`（4xx，不告警），
   兜底 `Exception` handler 用 `logger.exception`（5xx，带完整栈进 `logs/app.log`）；
   不做集中的状态码判级逻辑
-- [ ] 1.6 数据库异常单独归类：`OperationalError` → `db.unavailable` + 503，
+- [x] 1.6 数据库异常单独归类：`OperationalError` → `db.unavailable` + 503，
   其余 `SQLAlchemyError` → `db.error` + 500，使连接超时/池耗尽可与业务 500 分开告警
-- [ ] 1.7 `main.py` 注册中间件与处理器；在 `FastAPI(...)` 构造处加注释**明确禁止**传
+- [x] 1.7 `main.py` 注册中间件与处理器；在 `FastAPI(...)` 构造处加注释**明确禁止**传
   `debug=settings.DEBUG`（该模式会把 traceback 写进 500 响应体）
-- [ ] 1.8 单元测试：五类处理器的状态码与响应体形状、request id 沿用与生成、
+- [x] 1.8 单元测试：五类处理器的状态码与响应体形状、request id 沿用与生成、
   兜底错误不透传异常文本、`OperationalError` 得到 503、未捕获异常在应用日志中留下带栈记录
   （`uv run pytest test/` 可验证）
 
