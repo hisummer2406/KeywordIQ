@@ -1,19 +1,23 @@
-"""站点作用域查询 API（V2）。瘦控制器：调 service，映射作用域错误。
+"""站点作用域查询 API（V2）。瘦控制器：调 service，异常交给全局处理器。
 
-- POST /api/analysis/search   分页查询，返回 ProTable 契约 + 作用域回显
+- POST /api/analysis/search   分页查询，成功返回 ProTable 契约 + 作用域回显
+- POST /api/analysis/export   作用域内流式导出 CSV
 - GET  /api/analysis/scope    作用域元信息（可选日期集 + 最新日期），日期选择器用
 - GET  /api/analysis/categories  类目下拉选项（按作用域）
+
+失败一律**抛**不**返**：`ScopeError`（422）与 `ExportTooLargeError`（413）都是 `APIError`
+子类，由 `app/common/error_handlers.py` 统一产出错误体。这里不再 try/except 转译——
+路由层做转译会把域内错误码（`analysis.scope_invalid`）盖成通用码。
 """
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
 from app.table.analysis import analysis_service as service
-from app.table.analysis.analysis_service import ScopeError
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
     AnalysisSearchResponse,
@@ -36,14 +40,12 @@ def search_data(
     db: Session = Depends(get_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> AnalysisSearchResponse:
-    """作用域内分页查询。失败以统一形状（success:false + message）返回。"""
-    try:
-        return service.search(db, req)
-    except ScopeError as exc:
-        return AnalysisSearchResponse(
-            success=False, data=[], total=0,
-            site=req.site or "", view=req.view, date=None, message=str(exc),
-        )
+    """作用域内分页查询。
+
+    作用域非法时抛 `ScopeError` → 422。此前是返 HTTP 200 + `success:false`，
+    前端只能表现为一个没有解释的空表格。
+    """
+    return service.search(db, req)
 
 
 @analysis_router.post("/export")
@@ -55,14 +57,12 @@ def export_data(
     """把当前作用域与筛选下的结果流式导出为 CSV。
 
     与 /search 同一个请求体，故导出的永远是用户当下看到的那一份数据（分页参数忽略）。
-    超出行数上限 → 413（不截断）；非法作用域 → 422。
+
+    `resolve_export_scope` 的全部校验（作用域、规模上限）都在返回 `StreamingResponse`
+    **之前**完成——一旦开流，状态码与响应头已发出，之后再抛异常只会得到一份被截断的
+    200 CSV，而它会被当成完整数据使用。
     """
-    try:
-        site, view, on = service.resolve_export_scope(db, req)
-    except ScopeError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except service.ExportTooLargeError as exc:
-        raise HTTPException(status_code=413, detail=str(exc))
+    site, view, on = service.resolve_export_scope(db, req)
 
     filename = service.export_filename(site, view, on)
     return StreamingResponse(
@@ -80,10 +80,7 @@ def get_scope(
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> ScopeInfo:
     """作用域元信息：可选日期集 + 最新日期。非法站点 → 422。"""
-    try:
-        return service.get_scope(db, site, view)
-    except ScopeError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    return service.get_scope(db, site, view)
 
 
 @analysis_router.get("/categories", response_model=list[CategoryOption])
@@ -94,7 +91,4 @@ def get_categories(
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> list[CategoryOption]:
     """类目下拉选项（按作用域）。"""
-    try:
-        return service.get_categories(db, site, view)
-    except ScopeError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    return service.get_categories(db, site, view)

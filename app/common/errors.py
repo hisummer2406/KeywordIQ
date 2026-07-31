@@ -24,9 +24,18 @@ class APIError(Exception):
     code: str = "internal.error"
     message: str = "服务器内部错误"
 
-    def __init__(self, message: Optional[str] = None, *, code: Optional[str] = None):
+    def __init__(
+        self,
+        message: Optional[str] = None,
+        *,
+        code: Optional[str] = None,
+        log_detail: Optional[str] = None,
+    ):
         self.message = message or type(self).message
         self.code = code or type(self).code
+        #: 诊断细节，**只进日志、永不序列化进响应**。配置项名、object key、内部路径这类
+        #: 排查时有用但不该给客户端看的信息放这里，而不是塞进 ``message``。
+        self.log_detail = log_detail
         super().__init__(self.message)
 
 

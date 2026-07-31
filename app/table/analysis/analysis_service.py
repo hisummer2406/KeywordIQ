@@ -15,6 +15,12 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from database import SessionFactory
+from app.common.errors import (
+    CODE_ANALYSIS_EXPORT_TOO_LARGE,
+    CODE_ANALYSIS_SCOPE_INVALID,
+    PayloadTooLargeError,
+    UnprocessableError,
+)
 from app.site_registry import UnknownSiteError, normalize_site_code
 from app.table.analysis import analysis_crud as crud
 from app.table.search.search_schemas import (
@@ -29,12 +35,21 @@ from app.table.search.search_schemas import (
 logger = logging.getLogger(__name__)
 
 
-class ScopeError(ValueError):
-    """作用域参数非法（站点未登记、日期无数据/越界）。API 层映射为 422。"""
+class ScopeError(UnprocessableError):
+    """作用域参数非法（站点未登记、日期无数据/越界）→ 422。
+
+    继承 `APIError` 后由全局处理器直接产出统一错误体，API 层不再需要 try/except 转译。
+    """
+
+    code = CODE_ANALYSIS_SCOPE_INVALID
+    message = "查询作用域不合法"
 
 
-class ExportTooLargeError(ValueError):
-    """导出结果超出行数上限。API 层映射为 413。"""
+class ExportTooLargeError(PayloadTooLargeError):
+    """导出结果超出行数上限 → 413。"""
+
+    code = CODE_ANALYSIS_EXPORT_TOO_LARGE
+    message = "导出结果超出上限"
 
 
 # 导出列：与列表屏保持一致的中文表头。日视图多两列附加信息（走势/当周变化），

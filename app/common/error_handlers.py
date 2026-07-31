@@ -75,12 +75,17 @@ async def api_error_handler(request, exc: APIError) -> JSONResponse:
 
     4xx 是客户端问题，WARNING 级、不带栈、不该触发告警；极少数 5xx 的 APIError 才带栈。
     """
+    detail = getattr(exc, "log_detail", None)
     if exc.http_status >= 500:
-        logger.exception("业务异常(5xx) %s %s: %s", request.method, request.url.path, exc.code)
+        logger.exception(
+            "业务异常(5xx) %s %s: %s %s", request.method, request.url.path, exc.code, detail or ""
+        )
     else:
         logger.warning(
-            "业务异常 %s %s: %s %s", request.method, request.url.path, exc.code, exc.message
+            "业务异常 %s %s: %s %s %s",
+            request.method, request.url.path, exc.code, exc.message, detail or "",
         )
+    # log_detail 刻意不进响应体
     return json_error(exc.http_status, exc.code, exc.message)
 
 

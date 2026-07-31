@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.common.error_handlers import register_error_handlers
 from app.table.analysis import analysis_api as api_mod
 from app.table.analysis import analysis_service as service
 
@@ -57,6 +58,8 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
     monkeypatch.setattr(service, "SessionFactory", lambda: _NullSession())
 
     app = FastAPI()
+    # 必须挂上全局处理器：否则测试断言的是 FastAPI 默认形状，与生产行为脱节
+    register_error_handlers(app)
     app.include_router(api_mod.analysis_router, prefix="/api/analysis")
     app.dependency_overrides[get_db] = lambda: None
     if user is not None:
@@ -151,7 +154,11 @@ def test_export_refuses_when_over_cap(monkeypatch):
     r = _post(app)
 
     assert r.status_code == 413
-    assert str(settings.EXPORT_ROW_CAP) in r.json()["detail"]
+    body = r.json()
+    assert body["success"] is False
+    assert body["code"] == "analysis.export_too_large"
+    assert str(settings.EXPORT_ROW_CAP) in body["message"]
+    assert "detail" not in body  # 统一契约，不再是 FastAPI 的 detail
 
 
 def test_export_at_cap_is_allowed(monkeypatch):
@@ -178,3 +185,7 @@ def test_export_rejects_unknown_site(monkeypatch):
     app = _build_app(monkeypatch, user=_StubUser(is_super=True))
     r = _post(app, {"site": "UK", "view": "DAY"})  # 英国是 GB 不是 UK
     assert r.status_code == 422
+    body = r.json()
+    assert body["success"] is False
+    assert body["code"] == "analysis.scope_invalid"
+    assert "detail" not in body
