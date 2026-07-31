@@ -2,13 +2,13 @@
 
 > 本组不依赖后续任何一组，约 15 行、无破坏性、前端无需同步改动。先做、先发。
 
-- [ ] 0.1 注册 `RequestValidationError` handler：把 Pydantic 错误**白名单重建**为
+- [x] 0.1 注册 `RequestValidationError` handler：把 Pydantic 错误**白名单重建**为
   `fields: [{field, msg}]`（`field` 取 `loc[1:]` 拼接），**丢弃 `input` 与 `url`**；
   不要用过滤 `exc.errors()` 键的黑名单写法（见 design 决策 9）
-- [ ] 0.2 回归测试：`POST /api/auth/token` 提交 `{"password": "..."}`（缺 `username`），
+- [x] 0.2 回归测试：`POST /api/auth/token` 提交 `{"password": "..."}`（缺 `username`），
   断言响应体中**不含**该密码字符串、状态码仍为 422、且指出 `username` 缺失
   （`uv run pytest test/` 可验证）
-- [ ] 0.3 顺带扫描其余端点的请求模型，确认没有别的凭证类字段会经同一路径回显
+- [x] 0.3 顺带扫描其余端点的请求模型，确认没有别的凭证类字段会经同一路径回显
 
 ## 1. 错误基础设施（后端，无行为变更）
 

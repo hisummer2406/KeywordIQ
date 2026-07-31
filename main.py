@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api_router import api_router
+from app.common.error_handlers import register_error_handlers
 from config import settings
 from database import engine, async_engine
 from monitoring import SystemMonitor
@@ -96,6 +97,9 @@ async def lifespan(app: FastAPI):
 
 
 # 创建FastAPI应用
+#
+# ⚠️ 不要传 debug=settings.DEBUG。该模式下 Starlette 会把完整 traceback 写进 500 响应体，
+# 生产若 DEBUG=True 即刻泄漏 SQL、文件路径与内部结构。DEBUG 只用来控制 docs 的可见性。
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
@@ -104,6 +108,9 @@ app = FastAPI(
     redoc_url="/redoc" if settings.DEBUG else None,
     lifespan=lifespan  # 使用新的生命周期管理
 )
+
+# 全局异常处理器：所有失败响应的唯一出口（app/common/error_handlers.py）
+register_error_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
