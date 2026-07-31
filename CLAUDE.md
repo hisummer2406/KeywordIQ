@@ -186,6 +186,41 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 **后台 UI 是独立的 AntD Pro SPA**（`frontend/`，Umi Max + Ant Design + ProComponents），
 本服务只提供 JSON API（amis 后台已删）。生产由 nginx 托管 SPA 产物 + 反代 `/api`。
 
+### 错误契约（统一,不可绕过）
+
+**所有失败响应只有一种形状**,由 `app/common/error_handlers.py` 的五类处理器统一产出:
+
+```json
+{"success": false, "code": "<域>.<原因>", "message": "<面向用户的中文>", "request_id": "0f3a1b2c"}
+```
+
+- **业务错误一律「抛」不「返」**。服务层抛 `app/common/errors.py` 的 `APIError` 子类,
+  API 层**不做 try/except 转译**——路由层转译会把域内错误码盖成通用码。返值式的失败要靠
+  每个调用点自觉检查,漏检即静默,这正是历史上「用户名已存在」被吞掉的机制。
+- **`message` 面向用户,可直接展示**。内部细节(异常栈、SQL、路径、OSS object key、配置项名)
+  放 `APIError(log_detail=...)`,**只进日志、永不序列化**。
+- **状态码按语义**:400 参数不合法 / 401 未认证 / 403 无权限 / 404 不存在 / 409 与状态冲突 /
+  413 超上限 / 422 业务不接受 / **503 基础设施不可用**(数据库连接超时、池耗尽,与业务 500 分开,
+  以便告警策略分别设定)/ 500 兜底。
+- **ProTable 契约 `{data,total,success}` 只表达成功**。列表失败走非 2xx,不再有 `protable_error`
+  ——失败混在 200 里,前端无法把「查询失败」和「没有数据」区分开。
+- **参数校验错误白名单重建**,只透 `fields:[{field,msg}]`。**绝不透传 Pydantic 的 `input`**:
+  它在 `missing` 错误下是整个请求体,曾把明文密码写进响应体与 nginx access log。
+- **request id 贯穿**请求头 `X-Request-Id` → 日志 → 错误体,入站已有则沿用。
+- **不要给 `FastAPI(...)` 传 `debug=`**,该模式会把 traceback 写进 500 响应体。
+
+两条容易踩的边界:
+
+1. **流式端点(如导出)的失败必须在开流前判定。** 一旦返回 `StreamingResponse`,状态码与响应头
+   已发出,之后抛异常只会得到一份**被截断的 200 CSV**,而它会被当成完整数据使用。
+2. **全局处理器不拦截 `BackgroundTasks`。** 后台任务必须自捕获,且用 `logger.exception`
+   （不是 `logger.error(..., exc)`）——栈是这条路径唯一的线索来源。
+
+前端侧:`src/app.tsx` 的 `errorConfig.errorHandler` 是**错误提示的唯一出口**,页面层不写
+try/catch 也能让用户看见失败。确需静默的场景在请求上显式声明 `skipErrorHandler: true`
+（如登录页凭证错误由表单自己呈现）——**静默必须是显式声明的结果,不能是忘记处理的副产品**;
+声明了跳过,就必须自行呈现。
+
 ### Database Design
 
 **Schema**: `analysis`
