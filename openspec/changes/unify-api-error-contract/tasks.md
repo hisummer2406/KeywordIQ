@@ -37,19 +37,19 @@
 
 ## 2. 服务层异常收编（后端）
 
-- [ ] 2.1 `analysis_service.ScopeError` → 继承 `UnprocessableError`，码 `analysis.scope_invalid`；
+- [x] 2.1 `analysis_service.ScopeError` → 继承 `UnprocessableError`，码 `analysis.scope_invalid`；
   `ExportTooLargeError` → `PayloadTooLargeError`，码 `analysis.export_too_large`
-- [ ] 2.2 `import_service.ImportRejected` → `ConflictError`，码 `upload.import_rejected`；
+- [x] 2.2 `import_service.ImportRejected` → `ConflictError`，码 `upload.import_rejected`；
   `oss_client.OSSNotConfigured` → `UnprocessableError`，码 `upload.oss_not_ready`；
   `OSSObjectNotFound` → `NotFoundError`，码 `upload.object_not_found`
-- [ ] 2.3 用户域新增业务异常：用户名重复 → `ConflictError`（`user.duplicate_name`）、
+- [x] 2.3 用户域新增业务异常：用户名重复 → `ConflictError`（`user.duplicate_name`）、
   用户不存在 → `NotFoundError`（`user.not_found`）
-- [ ] 2.4 回归测试：现有 `test/test_analysis_export_unit.py` 的 413/422 断言改为校验统一错误体，
+- [x] 2.4 回归测试：现有 `test/test_analysis_export_unit.py` 的 413/422 断言改为校验统一错误体，
   确认状态码语义不变
 
 ## 3. API 层去手工错误拼装（后端，BREAKING）
 
-- [ ] 3.1 `analysis_api.py`：移除三处 `raise HTTPException`，`/search` 的
+- [x] 3.1 `analysis_api.py`：移除三处 `raise HTTPException`，`/search` 的
   `except ScopeError → success:false` 分支删除（改为向上抛）
 - [ ] 3.2 `upload_api.py`：删除全部 `return {"status": 1, "msg": ...}`（约 12 处），
   成功路径去掉 `{"status": 0, "data": ...}` 信封直接返数据

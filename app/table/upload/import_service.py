@@ -22,6 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from database import SessionFactory
+from app.common.errors import CODE_UPLOAD_IMPORT_REJECTED, ConflictError
 from app.site_registry import normalize_site_code
 from app.table.upload.import_source import ImportSource
 from app.table.upload.importer import ImportResult, import_report
@@ -40,8 +41,15 @@ logger = logging.getLogger(__name__)
 _IMPORT_LOCK_KEY = 0x4B49
 
 
-class ImportRejected(Exception):
-    """导入被拒（另一个导入正在进行）。"""
+class ImportRejected(ConflictError):
+    """导入被拒（另一个导入正在进行）→ 409。
+
+    409 而非 503：这不是服务不可用，而是与当前状态冲突——同一时刻只允许一个导入
+    （2C4G 上两个 GB 级导入并发会争抢 WAL 与索引构建）。
+    """
+
+    code = CODE_UPLOAD_IMPORT_REJECTED
+    message = "已有导入正在进行，请稍后重试"
 
 
 def _update_site_data_stats(session: Session, result: ImportResult) -> None:

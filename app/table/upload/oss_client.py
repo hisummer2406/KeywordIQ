@@ -16,17 +16,33 @@ import uuid
 from dataclasses import dataclass
 from datetime import date
 
+from app.common.errors import (
+    CODE_UPLOAD_OBJECT_NOT_FOUND,
+    CODE_UPLOAD_OSS_NOT_READY,
+    NotFoundError,
+    UnprocessableError,
+)
 from app.site_registry import normalize_site_code
 from app.table.upload.import_source import basename
 from config import settings
 
 
-class OSSNotConfigured(RuntimeError):
-    """OSS 未启用或配置缺失时抛出。"""
+class OSSNotConfigured(UnprocessableError):
+    """OSS 未启用或配置缺失 → 422。
+
+    ``message`` 只说「对象存储未就绪」，具体缺哪个配置项进日志——配置项名与 bucket、
+    role ARN 属内部信息，不该出现在响应体里。
+    """
+
+    code = CODE_UPLOAD_OSS_NOT_READY
+    message = "对象存储未就绪，请联系管理员"
 
 
-class OSSObjectNotFound(FileNotFoundError):
-    """object key 指向的对象在 OSS 中不存在。"""
+class OSSObjectNotFound(NotFoundError):
+    """object key 指向的对象在 OSS 中不存在 → 404。"""
+
+    code = CODE_UPLOAD_OBJECT_NOT_FOUND
+    message = "上传的文件在对象存储中不存在，请重新上传"
 
 
 def _period_segment(period: str) -> str:
@@ -118,13 +134,13 @@ class UploadGrant:
 
 def _require_config() -> None:
     if not settings.OSS_ENABLED:
-        raise OSSNotConfigured("OSS 未启用（OSS_ENABLED=false）")
+        raise OSSNotConfigured(log_detail="OSS_ENABLED=false")
     missing = [
         name for name in ("OSS_ENDPOINT", "OSS_BUCKET", "OSS_ACCESS_KEY_ID", "OSS_ACCESS_KEY_SECRET")
         if not getattr(settings, name)
     ]
     if missing:
-        raise OSSNotConfigured(f"OSS 配置缺失: {', '.join(missing)}")
+        raise OSSNotConfigured(log_detail=f"配置缺失: {', '.join(missing)}")
 
 
 def _default_sts_assume_role(role_arn: str, session_name: str, policy: str, duration: int) -> dict:
@@ -182,7 +198,7 @@ def issue_upload_credentials(
     """
     _require_config()
     if not settings.OSS_STS_ROLE_ARN:
-        raise OSSNotConfigured("OSS 配置缺失: OSS_STS_ROLE_ARN")
+        raise OSSNotConfigured(log_detail="配置缺失: OSS_STS_ROLE_ARN")
 
     object_key = build_object_key(site, period, report_date, original_filename)
     prefix = key_prefix_for(site, period, report_date)
@@ -222,5 +238,5 @@ def object_stream(object_key: str, *, bucket=None):
     """
     b = bucket or _default_bucket()
     if not b.object_exists(object_key):
-        raise OSSObjectNotFound(f"OSS 对象不存在: {object_key}")
+        raise OSSObjectNotFound(log_detail=f"object key 不存在: {object_key}")
     return b.get_object(object_key)
