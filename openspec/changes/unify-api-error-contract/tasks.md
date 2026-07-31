@@ -64,14 +64,14 @@
 
 ## 4. 流式端点契约固化（后端）
 
-- [ ] 4.1 确认导出端点的全部可预见校验都在返回 `StreamingResponse` 之前完成（现状已满足，
+- [x] 4.1 确认导出端点的全部可预见校验都在返回 `StreamingResponse` 之前完成（现状已满足，
   本任务是加断言而非改实现）
-- [ ] 4.2 生成器内部异常补日志（含 request id），确保断流不被误认为正常结束
-- [ ] 4.3 测试：开流前失败返回统一错误体且未产出任何 CSV 字节
+- [x] 4.2 生成器内部异常补日志（含 request id），确保断流不被误认为正常结束
+- [x] 4.3 测试：开流前失败返回统一错误体且未产出任何 CSV 字节
 - [x] 4.4 后台任务补栈：`upload_api.py` 的 `_run_import_bg` 与 `_run_oss_import_bg` 两处
   `except Exception` 改为 `logger.exception(...)`（现状是 `logger.error(..., exc)`，
   丢失 traceback，而全局 handler 不拦截 BackgroundTasks，这是该路径唯一的线索来源）
-- [ ] 4.5 测试：后台任务抛出异常时日志含完整栈，且异常不逃逸出任务
+- [x] 4.5 测试：后台任务抛出异常时日志含完整栈，且异常不逃逸出任务
 
 ## 5. 前端契约对齐（BREAKING）
 

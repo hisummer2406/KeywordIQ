@@ -362,3 +362,31 @@ def test_missing_permission_is_403_with_auth_code(client):
         assert r.json()["code"] == "auth.forbidden"
     finally:
         main.app.dependency_overrides.clear()
+
+
+# ---------------- 后台任务的独立错误路径（任务 4.5） ----------------
+
+def test_background_import_task_logs_stack_and_does_not_escape(monkeypatch, caplog):
+    """全局处理器不拦截 BackgroundTasks，故后台任务必须自捕获且带栈记录。
+
+    此前写的是 logger.error(..., exc)，栈永久丢失——而 GB 级导入失败时栈往往是
+    唯一线索。
+    """
+    import logging
+
+    from datetime import date
+
+    import app.table.upload.upload_api as upload_api
+
+    def _boom(**kwargs):
+        raise RuntimeError("COPY failed at row 1234567")
+
+    monkeypatch.setattr(upload_api, "run_import", _boom)
+
+    with caplog.at_level(logging.ERROR, logger="app.table.upload.upload_api"):
+        # 不应抛出——异常必须止步于后台任务
+        upload_api._run_import_bg("/tmp/x.csv", "US_Day_2026_07_18.csv", "US", "DAY", date(2026, 7, 18))
+
+    record = next(r for r in caplog.records if "导入后台任务异常" in r.getMessage())
+    assert record.exc_info is not None          # logger.exception 带栈
+    assert record.levelno == logging.ERROR
