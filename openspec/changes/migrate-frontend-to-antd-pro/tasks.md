@@ -51,7 +51,7 @@
 
 ## 8. 前端测试与质量
 
-- [ ] 8.1 前端关键流程测试（登录/鉴权跳转、分析查询表格、上传 `customRequest` 逻辑，OSS SDK 用桩）
+- [x] 8.1 前端关键流程测试（登录/鉴权跳转、分析查询表格、上传 `customRequest` 逻辑，OSS SDK 用桩）：vitest + @testing-library/react + jsdom，26 条用例分 5 个文件（`access` 权限派生 / `exportAnalysis` 下载与 413/401 / `ossUpload` 直传三步 / 登录屏 / 分析屏）；已接入 CI 的前端 job（lint → tsc → test → build）
 - [x] 8.2 前端 lint/类型检查接入 CI —— `.github/workflows/ci.yml` `frontend` job 跑 `pnpm lint` + `pnpm tsc`（另有 `backend` job 跑 alembic 迁移/回滚 + pytest，起 postgres:15 service 并解开 `TEST_DATABASE_URL` gate）。**注**：backend job 的建库/迁移路径本地无 PG 客户端无法预验，待首次 CI 运行确认
 
 ## 9. 发布与回滚
