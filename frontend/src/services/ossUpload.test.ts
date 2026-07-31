@@ -52,9 +52,10 @@ describe('ossDirectUploadAndImport', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // 后端已去 amis 信封：成功直接返数据，失败是非 2xx（request 会 reject）
     requestMock.mockImplementation(async (url: string) => {
-      if (url.endsWith('/upload-credentials')) return { status: 0, data: CRED };
-      if (url.endsWith('/oss/import')) return { status: 0, data: { batch: 1 } };
+      if (url.endsWith('/upload-credentials')) return CRED;
+      if (url.endsWith('/oss/import')) return { object_key: CRED.object_key };
       throw new Error(`未预期的请求 ${url}`);
     });
   });
@@ -78,9 +79,7 @@ describe('ossDirectUploadAndImport', () => {
 
   it('region 已带前缀时不重复添加', async () => {
     requestMock.mockImplementation(async (url: string) =>
-      url.endsWith('/upload-credentials')
-        ? { status: 0, data: { ...CRED, region: 'oss-cn-hangzhou' } }
-        : { status: 0, data: {} },
+      url.endsWith('/upload-credentials') ? { ...CRED, region: 'oss-cn-hangzhou' } : {},
     );
     await ossDirectUploadAndImport(file, { site: 'US' });
     expect(ossCtor).toHaveBeenCalledWith(expect.objectContaining({ region: 'oss-cn-hangzhou' }));
@@ -109,8 +108,8 @@ describe('ossDirectUploadAndImport', () => {
     expect(onProgress).toHaveBeenCalledWith(42);
   });
 
-  it('凭证签发失败就不该上传（amis 信封 status≠0 视为失败）', async () => {
-    requestMock.mockImplementation(async () => ({ status: 1, msg: '站点未启用' }));
+  it('凭证签发失败就不该上传（失败是非 2xx，request 直接 reject）', async () => {
+    requestMock.mockRejectedValue(new Error('站点未启用'));
 
     await expect(ossDirectUploadAndImport(file, { site: 'XX' })).rejects.toThrow('站点未启用');
     expect(multipartUpload).not.toHaveBeenCalled();

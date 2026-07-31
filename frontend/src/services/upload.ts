@@ -1,6 +1,7 @@
 import { request } from '@umijs/max';
 
-/** OSS 直传相关接口。凭证/导入/状态沿用后端既有 amis 信封 {status,msg,data}，此处解包判 status。 */
+/** OSS 直传相关接口。后端已去 amis 信封，直接返数据；失败走统一错误契约的非 2xx，
+ * 由 app.tsx 的 errorHandler 唯一出口提示，这里不再解包判状态。 */
 
 export type Period = 'DAY' | 'WEEK';
 
@@ -27,25 +28,18 @@ export interface OssCredential {
   filename: string;
 }
 
+export interface ImportTriggered {
+  object_key: string;
+  site: string;
+  period: string;
+  report_date: string;
+}
+
 export interface ImportStatusItem {
   batch_name: string;
   progress_percent: number;
   total_records: number;
   status: string;
-}
-
-interface AmisEnvelope<T> {
-  status: number;
-  msg?: string;
-  data?: T;
-}
-
-/** 解包 amis 信封：status===0 取 data，否则抛出 msg。 */
-function unwrap<T>(resp: AmisEnvelope<T>): T {
-  if (resp.status !== 0) {
-    throw new Error(resp.msg || '请求失败');
-  }
-  return resp.data as T;
 }
 
 export async function getSites() {
@@ -58,11 +52,10 @@ export async function getUploadCredentials(body: {
   filename: string;
   period?: Period;
 }) {
-  const resp = await request<AmisEnvelope<OssCredential>>('/api/upload/oss/upload-credentials', {
+  return request<OssCredential>('/api/upload/oss/upload-credentials', {
     method: 'POST',
     data: body,
   });
-  return unwrap(resp);
 }
 
 export async function triggerImport(body: {
@@ -71,17 +64,15 @@ export async function triggerImport(body: {
   object_key: string;
   period?: Period;
 }) {
-  const resp = await request<AmisEnvelope<unknown>>('/api/upload/oss/import', {
+  return request<ImportTriggered>('/api/upload/oss/import', {
     method: 'POST',
     data: body,
   });
-  return unwrap(resp);
 }
 
 export async function getProcessingStatus(dataType?: 'daily' | 'weekly') {
-  const resp = await request<AmisEnvelope<{ items: ImportStatusItem[]; active_sessions?: number }>>(
-    '/api/upload/processing-status',
-    { method: 'GET', params: dataType ? { data_type: dataType } : {} },
-  );
-  return unwrap(resp);
+  return request<{ items: ImportStatusItem[] }>('/api/upload/processing-status', {
+    method: 'GET',
+    params: dataType ? { data_type: dataType } : {},
+  });
 }

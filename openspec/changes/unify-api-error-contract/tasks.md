@@ -75,16 +75,16 @@
 
 ## 5. 前端契约对齐（BREAKING）
 
-- [ ] 5.1 `src/app.tsx` 的 `errorConfig` 按新错误体取 `message` / `code`；保留 401 清 token
+- [x] 5.1 `src/app.tsx` 的 `errorConfig` 按新错误体取 `message` / `code`；保留 401 清 token
   跳登录；新增显式的 `skipErrorHandler` 选项支持
-- [ ] 5.2 删除 `services/user.ts` 与 `services/upload.ts` 中两份 `unwrap` 及 `AmisEnvelope` 类型，
+- [x] 5.2 删除 `services/user.ts` 与 `services/upload.ts` 中两份 `unwrap` 及 `AmisEnvelope` 类型，
   返回类型收紧为真实数据形状
-- [ ] 5.3 `services/analysis.ts` 的 `exportAnalysis` 改为解析统一错误体（当前是解析 `{detail}`），
+- [x] 5.3 `services/analysis.ts` 的 `exportAnalysis` 改为解析统一错误体（当前是解析 `{detail}`），
   401 分支与全局出口对齐
-- [ ] 5.4 登录页请求显式声明跳过统一提示（凭证错误由表单呈现），验证不回归到"静默吞掉"
-- [ ] 5.5 `pages/User/index.tsx`、`pages/Analysis/index.tsx` 移除对 `unwrap` 抛错的隐式依赖；
+- [x] 5.4 登录页请求显式声明跳过统一提示（凭证错误由表单呈现），验证不回归到"静默吞掉"
+- [x] 5.5 `pages/User/index.tsx`、`pages/Analysis/index.tsx` 移除对 `unwrap` 抛错的隐式依赖；
   分析屏的作用域错误不再表现为无解释的空表格
-- [ ] 5.6 前端测试：`pnpm test` 覆盖统一错误体的提示路径、`skipErrorHandler` 生效、
+- [x] 5.6 前端测试：`pnpm test` 覆盖统一错误体的提示路径、`skipErrorHandler` 生效、
   用户屏失败有可见反馈（补充现有 26 条用例）
 
 ## 6. 文档与收尾

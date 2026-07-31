@@ -71,7 +71,16 @@ describe('exportAnalysis', () => {
   });
 
   it('413 把后端原文透出来（提示加筛选，而不是给一份截断数据）', async () => {
-    mockFetch({ status: 413, body: { detail: '导出结果超过 50000 行上限，请补充筛选条件后再导出' } });
+    // 统一错误契约（此前是 FastAPI 的 {detail}）
+    mockFetch({
+      status: 413,
+      body: {
+        success: false,
+        code: 'analysis.export_too_large',
+        message: '导出结果超过 50000 行上限，请补充筛选条件后再导出',
+        request_id: 'abc123',
+      },
+    });
 
     await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow(/50000 行上限/);
     expect(createObjectURL).not.toHaveBeenCalled();

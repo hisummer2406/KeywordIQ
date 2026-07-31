@@ -1,6 +1,7 @@
 import { request } from '@umijs/max';
 
-/** 用户管理接口。列表走 ProTable 契约(/table);增改删走 amis 信封(迁移期后端未换),此处解包判 status。 */
+/** 用户管理接口。列表走 ProTable 契约(/table);增改删直接返数据。
+ * 失败一律是非 2xx 的统一错误契约，由 app.tsx 的 errorHandler 唯一出口提示。 */
 
 export interface UserRow {
   id: number;
@@ -33,17 +34,6 @@ export interface UserUpdateBody {
   is_active?: boolean;
 }
 
-interface AmisEnvelope<T = unknown> {
-  status: number;
-  msg?: string;
-  data?: T;
-}
-
-function unwrap<T>(resp: AmisEnvelope<T>): T {
-  if (resp.status !== 0) throw new Error(resp.msg || '操作失败');
-  return resp.data as T;
-}
-
 /** ProTable request：拉分页用户列表({data,total,success})。 */
 export async function fetchUsers(params: {
   current?: number;
@@ -69,16 +59,15 @@ export async function getRoles() {
 }
 
 export async function createUser(body: UserCreateBody) {
-  const resp = await request<AmisEnvelope>('/api/user/create', { method: 'POST', data: body });
-  return unwrap(resp);
+  return request<UserRow>('/api/user/create', { method: 'POST', data: body });
 }
 
 export async function updateUser(id: number, body: UserUpdateBody) {
-  const resp = await request<AmisEnvelope>(`/api/user/update/${id}`, { method: 'PUT', data: body });
-  return unwrap(resp);
+  return request<UserRow>(`/api/user/update/${id}`, { method: 'PUT', data: body });
 }
 
 export async function toggleUserStatus(id: number) {
-  const resp = await request<AmisEnvelope>(`/api/user/toggle-status/${id}`, { method: 'POST' });
-  return unwrap(resp);
+  return request<{ id: number; is_active: boolean }>(`/api/user/toggle-status/${id}`, {
+    method: 'POST',
+  });
 }
