@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     OSS_KEY_PREFIX: str = "imports"  # object key 前缀，凭证据此限权，防前端越权
     OSS_ACCESS_KEY_ID: str = ""      # 服务端凭证：用于签发 STS 与从 OSS 读对象
     OSS_ACCESS_KEY_SECRET: str = ""
-    OSS_STS_ENDPOINT: str = "https://sts.aliyuncs.com"
     OSS_STS_ROLE_ARN: str = ""       # 前端直传所扮演的 RAM 角色
     OSS_STS_DURATION_SECONDS: int = 3600  # 临时凭证有效期（秒），保持短时
 
