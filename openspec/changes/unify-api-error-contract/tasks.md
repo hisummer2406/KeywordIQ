@@ -51,15 +51,15 @@
 
 - [x] 3.1 `analysis_api.py`：移除三处 `raise HTTPException`，`/search` 的
   `except ScopeError → success:false` 分支删除（改为向上抛）
-- [ ] 3.2 `upload_api.py`：删除全部 `return {"status": 1, "msg": ...}`（约 12 处），
+- [x] 3.2 `upload_api.py`：删除全部 `return {"status": 1, "msg": ...}`（约 12 处），
   成功路径去掉 `{"status": 0, "data": ...}` 信封直接返数据
-- [ ] 3.3 `user_api.py`：`create` / `update` / `toggle-status` 去信封、去 `HTTPException`；
+- [x] 3.3 `user_api.py`：`create` / `update` / `toggle-status` 去信封、去 `HTTPException`；
   `table` 保留 `protable()` 成功路径，删除 `protable_error` 分支
-- [ ] 3.4 `auth_api.py`：确认裸 dict 返回符合新契约（成功形状不变，失败走异常）
-- [ ] 3.5 `app/common/responses.py` 移除 `protable_error`
-- [ ] 3.6 调整 `test/test_protable_contract.py`：失败形状用例改为断言非 2xx + 统一错误体，
+- [x] 3.4 `auth_api.py`：确认裸 dict 返回符合新契约（成功形状不变，失败走异常）
+- [x] 3.5 `app/common/responses.py` 移除 `protable_error`
+- [x] 3.6 调整 `test/test_protable_contract.py`：失败形状用例改为断言非 2xx + 统一错误体，
   保留「无 token 必拒」与成功契约断言
-- [ ] 3.7 新增后端契约测试：逐端点覆盖典型失败（重名用户 409、非法站点 422、
+- [x] 3.7 新增后端契约测试：逐端点覆盖典型失败（重名用户 409、非法站点 422、
   导出超限 413、无权限 403），断言响应体形状一致（`uv run pytest test/` 可验证）
 
 ## 4. 流式端点契约固化（后端）
@@ -68,7 +68,7 @@
   本任务是加断言而非改实现）
 - [ ] 4.2 生成器内部异常补日志（含 request id），确保断流不被误认为正常结束
 - [ ] 4.3 测试：开流前失败返回统一错误体且未产出任何 CSV 字节
-- [ ] 4.4 后台任务补栈：`upload_api.py` 的 `_run_import_bg` 与 `_run_oss_import_bg` 两处
+- [x] 4.4 后台任务补栈：`upload_api.py` 的 `_run_import_bg` 与 `_run_oss_import_bg` 两处
   `except Exception` 改为 `logger.exception(...)`（现状是 `logger.error(..., exc)`，
   丢失 traceback，而全局 handler 不拦截 BackgroundTasks，这是该路径唯一的线索来源）
 - [ ] 4.5 测试：后台任务抛出异常时日志含完整栈，且异常不逃逸出任务
