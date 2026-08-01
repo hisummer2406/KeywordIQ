@@ -42,9 +42,32 @@ export interface ImportStatusItem {
   status: string;
 }
 
+/** 文件名解析出的归属三元组。判定不出的项为 null，并列在 needs 里。 */
+export interface FilenameMeta {
+  filename: string;
+  site: string | null;
+  period: Period | null;
+  report_date: string | null;
+  needs: ('site' | 'period' | 'report_date')[];
+}
+
 export async function getSites() {
   const resp = await request<{ sites: SiteOption[] }>('/api/upload/sites', { method: 'GET' });
   return resp.sites;
+}
+
+/**
+ * 上传前解析文件名，取得站点/周期/报告日期。
+ *
+ * 走后端而不在前端写一份正则：解析规则（站点前缀、日期格式、周期关键词）的唯一实现在
+ * `app/table/upload/importer.py`，两处各写一份迟早各自演化，届时界面回显的归属与实际
+ * 写入的归属会不一致——而这个三元组决定数据落到哪张事实表的哪个分区。
+ */
+export async function inspectFilename(filename: string) {
+  return request<FilenameMeta>('/api/upload/inspect-filename', {
+    method: 'POST',
+    data: { filename },
+  });
 }
 
 export async function getUploadCredentials(body: {

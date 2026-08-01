@@ -210,3 +210,50 @@ class TestImportSource:
         # 两种来源都应无异常通过同一份内容。
         validate_structure(LocalFileSource(path))
         validate_structure(OSSObjectSource(lambda k: io.BytesIO(payload), "k"))
+
+
+class TestImportMetaResolution:
+    """`_resolve_import_meta`：一次导入的归属三元组由文件名判定，界面只做兜底。
+
+    三元组决定数据写进哪张事实表的哪个分区，错了就是数据落到查不到的归属下，所以这里的
+    每一条"判定不出就报错"都是刻意的——默认值在这个位置等同于静默写错。
+    """
+
+    @staticmethod
+    def _resolve(filename: str, site: str = "US", period=None):
+        from app.table.upload.upload_api import _resolve_import_meta
+
+        return _resolve_import_meta(filename, site, period)
+
+    def test_full_inference_from_filename(self):
+        site, period, rdate = self._resolve("DE_热门搜索词_简单_Day_2026_07_16.csv", site="DE")
+        assert (site, period, rdate) == ("DE", "DAY", date(2026, 7, 16))
+
+    def test_week_inferred(self):
+        _, period, _ = self._resolve("GB_weekly_2026_01_05.csv", site="GB")
+        assert period == "WEEK"
+
+    def test_undecidable_period_is_rejected_not_defaulted(self):
+        """关键回归：此前这种文件名会被静默当成周报写进 fact_weekly。"""
+        from app.common.errors import BadRequestError
+
+        with pytest.raises(BadRequestError) as exc:
+            self._resolve("US_热门搜索词_2026_07_18.csv")
+        assert "周期" in exc.value.message
+
+    def test_explicit_period_conflicting_with_filename_is_rejected(self):
+        from app.common.errors import BadRequestError
+
+        with pytest.raises(BadRequestError):
+            self._resolve("US_热门搜索词_简单_Day_2026_07_18.csv", period="WEEK")
+
+    def test_explicit_period_fills_the_undecidable_case(self):
+        _, period, _ = self._resolve("US_热门搜索词_2026_07_18.csv", period="WEEK")
+        assert period == "WEEK"
+
+    def test_site_conflict_still_rejected(self):
+        from app.common.errors import BadRequestError
+
+        with pytest.raises(BadRequestError) as exc:
+            self._resolve("DE_热门搜索词_简单_Day_2026_07_16.csv", site="US")
+        assert "DE" in exc.value.message
