@@ -1,42 +1,46 @@
 import { InboxOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-components';
-import { Alert, App, Card, Descriptions, Form, Radio, Select, Space, Table, Upload } from 'antd';
+import { Alert, App, Card, Descriptions, Space, Table, Upload } from 'antd';
 import type { UploadProps } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getProcessingStatus,
-  getSites,
   inspectFilename,
   type FilenameMeta,
   type ImportStatusItem,
-  type Period,
-  type SiteOption,
 } from '@/services/upload';
 import { ossDirectUploadAndImport } from '@/services/ossUpload';
 
 const { Dragger } = Upload;
 
-// 周期选择：AUTO=按文件名推断（后端从文件名解析 report_date 与 period）
-type PeriodChoice = 'AUTO' | Period;
-
 const PERIOD_LABEL: Record<string, string> = { DAY: '日报', WEEK: '周报' };
-const NEED_LABEL: Record<string, string> = { site: '站点', period: '周期', report_date: '报告日期' };
+
+/** 判定不出时告诉用户该怎么改文件名——界面不提供绕过文件名的途径，提示必须可操作。 */
+const NEED_HINT: Record<string, string> = {
+  site: '站点：文件名需以已登记的站点码开头，如 DE_…',
+  period: '周期：文件名需含日报或周报标识，如 …_Day_… / …_Week_…',
+  report_date: '报告日期：文件名需含日期，如 …_2026_07_18.csv',
+};
 
 /**
- * 数据上传屏（阶段五）。日报/周报同一入口：选站点 + 周期，拖入 CSV →
- * Upload customRequest 驱动 ali-oss STS 分片直传 → 触发导入 → 轮询 /processing-status。
+ * 数据上传屏。
+ *
+ * 归属三元组（站点 / 周期 / 报告日期）**完全由文件名判定**，界面不提供站点与周期的选择项：
+ * 报告日期本就只看文件名，站点在前缀里，周期在关键词里，用户再选一遍只是多一次选错的机会
+ * ——实测中确实出现过选 US 传 DE 文件、靠后端 400 拦下。判定不出就拒绝并提示怎么改文件名，
+ * 不猜、也不给绕过途径：绕过途径正是让界面所示与实际写入的归属产生分歧的来源。
  */
 export default function UploadPage() {
   const { message } = App.useApp();
-  const [sites, setSites] = useState<SiteOption[]>([]);
-  const [site, setSite] = useState<string>();
-  const [period, setPeriod] = useState<PeriodChoice>('AUTO');
   const [statusItems, setStatusItems] = useState<ImportStatusItem[]>([]);
+  /** 最近一次判定结果，只用于界面回显。 */
   const [inspected, setInspected] = useState<FilenameMeta>();
-
-  useEffect(() => {
-    getSites().then(setSites).catch(() => undefined);
-  }, []);
+  /**
+   * 按文件保存判定结果。Dragger 开了 multiple，一次拖入多个文件时 beforeUpload 会被逐个
+   * 调用——若只存一个 state，后一个文件的判定会覆盖前一个，customRequest 就可能拿着 B 的
+   * 归属去传 A，把数据写到错误的站点/期次下。用 WeakMap 按文件对象存，天然随文件回收。
+   */
+  const metaByFile = useRef(new WeakMap<File, FilenameMeta>());
 
   // 导入状态轮询（每 5s）
   useEffect(() => {
@@ -58,13 +62,7 @@ export default function UploadPage() {
     };
   }, []);
 
-  /**
-   * 选中文件后先解析文件名，把归属三元组摆到用户眼前，并挡住判定不出又没人指定的情况。
-   *
-   * 归属决定数据写进哪张事实表的哪个分区，从前它藏在"用户选的站点 + 后端的兜底推断"里，
-   * 上传前看不见：选错站点要等后端 400 才知道，而周期判定不出会被静默当成周报。现在改成
-   * 上传前就把结论显示出来，判定不出的项要求显式指定，绝不猜。
-   */
+  /** 选中文件后先解析文件名：判定得出就回显并放行，判定不出就拒绝并说明该怎么改。 */
   const beforeUpload: UploadProps['beforeUpload'] = async (file) => {
     let meta: FilenameMeta;
     try {
@@ -73,14 +71,13 @@ export default function UploadPage() {
       // 解析失败（如非 CSV）已由全局 errorHandler 提示，这里只负责不放行
       return Upload.LIST_IGNORE;
     }
+    metaByFile.current.set(file as unknown as File, meta);
     setInspected(meta);
 
-    if (meta.needs.includes('site') && !site) {
-      message.warning('文件名里没有站点前缀，请先选择站点');
-      return Upload.LIST_IGNORE;
-    }
-    if (meta.needs.includes('period') && period === 'AUTO') {
-      message.warning('文件名判断不出是日报还是周报，请先选择周期');
+    if (meta.needs.length) {
+      message.error(
+        `无法从文件名判定归属，请修正文件名后重试。${meta.needs.map((n) => NEED_HINT[n]).join('；')}`,
+      );
       return Upload.LIST_IGNORE;
     }
     return true;
@@ -88,17 +85,17 @@ export default function UploadPage() {
 
   const customRequest: UploadProps['customRequest'] = async (options) => {
     const { file, onProgress, onSuccess, onError } = options;
-    // 站点以文件名判定为准，判定不出才用界面选的
-    const effectiveSite = inspected?.site || site;
-    if (!effectiveSite) {
-      message.warning('请先选择站点');
-      onError?.(new Error('未选择站点'));
+    // 取这个文件自己的判定结果，而不是最近一次的——多文件同传时两者会不一致
+    const meta = metaByFile.current.get(file as File);
+    // beforeUpload 已保证三项齐备，这里只是不信任地兜一层
+    if (!meta?.site || !meta.period) {
+      onError?.(new Error('归属未判定'));
       return;
     }
     try {
       await ossDirectUploadAndImport(file as File, {
-        site: effectiveSite,
-        period: period === 'AUTO' ? undefined : period,
+        site: meta.site,
+        period: meta.period,
         onProgress: (percent) => onProgress?.({ percent }),
       });
       onSuccess?.({}, file as any);
@@ -113,55 +110,31 @@ export default function UploadPage() {
     <PageContainer title="数据上传">
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Card>
-          <Form layout="inline" style={{ marginBottom: 16 }}>
-            <Form.Item label="站点" tooltip="通常无需选择：站点按文件名前缀判定，判定不出时才需要指定">
-              <Select
-                allowClear
-                style={{ width: 220 }}
-                placeholder="按文件名判定"
-                value={site}
-                onChange={setSite}
-                options={sites.map((s) => ({ label: `${s.name_zh} (${s.code})`, value: s.code }))}
-              />
-            </Form.Item>
-            <Form.Item label="周期">
-              <Radio.Group
-                value={period}
-                onChange={(e) => setPeriod(e.target.value)}
-                optionType="button"
-              >
-                <Radio.Button value="AUTO">按文件名判定</Radio.Button>
-                <Radio.Button value="DAY">日报</Radio.Button>
-                <Radio.Button value="WEEK">周报</Radio.Button>
-              </Radio.Group>
-            </Form.Item>
-          </Form>
-
-          {/* 归属回显：上传前就让用户看见这份文件会落到哪一期 */}
+          {/* 归属回显：文件开始上传前就让用户看见它会落到哪一期 */}
           {inspected && (
             <Alert
-              type={inspected.needs.length ? 'warning' : 'info'}
+              type={inspected.needs.length ? 'error' : 'info'}
               showIcon
               style={{ marginBottom: 16 }}
               message={
-                inspected.needs.length
-                  ? `文件名判定不出：${inspected.needs
-                      .map((n) => NEED_LABEL[n])
-                      .join('、')}，请在上方指定`
-                  : '按文件名判定的归属'
+                inspected.needs.length ? '无法从文件名判定归属，已拒绝该文件' : '按文件名判定的归属'
               }
               description={
-                <Descriptions size="small" column={3} style={{ marginTop: 4 }}>
-                  <Descriptions.Item label="站点">
-                    {inspected.site ?? site ?? '待指定'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="周期">
-                    {PERIOD_LABEL[inspected.period ?? ''] ?? PERIOD_LABEL[period] ?? '待指定'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="报告日期">
-                    {inspected.report_date ?? '待指定'}
-                  </Descriptions.Item>
-                </Descriptions>
+                inspected.needs.length ? (
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {inspected.needs.map((n) => (
+                      <li key={n}>{NEED_HINT[n]}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Descriptions size="small" column={3} style={{ marginTop: 4 }}>
+                    <Descriptions.Item label="站点">{inspected.site}</Descriptions.Item>
+                    <Descriptions.Item label="周期">
+                      {PERIOD_LABEL[inspected.period ?? '']}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="报告日期">{inspected.report_date}</Descriptions.Item>
+                  </Descriptions>
+                )
               }
             />
           )}
@@ -172,7 +145,9 @@ export default function UploadPage() {
             </p>
             <p className="ant-upload-text">点击或拖拽 CSV 文件到此区域直传</p>
             <p className="ant-upload-hint">
-              GB 级文件经 STS 凭证直传 OSS，不经应用服务器；文件名须含报告日期（…_2026_07_18.csv）
+              站点、周期、报告日期均按文件名判定，无需选择；文件名形如
+              <code> DE_热门搜索词_简单_Day_2026_07_16.csv</code>。 GB
+              级文件经 STS 凭证直传 OSS，不经应用服务器
             </p>
           </Dragger>
         </Card>
