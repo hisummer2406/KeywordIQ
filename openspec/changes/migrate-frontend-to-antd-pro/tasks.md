@@ -32,7 +32,7 @@
 
 ## 5. 上传屏 + OSS 直传（阶段五）
 
-- [ ] 5.1 前置核对：bucket CORS（放行后台域名 PUT/POST、expose ETag）与 STS 角色就绪（OSS 控制台侧）—— **外部**：OSS 控制台侧配置，非代码，须上线前在阿里云侧核对（区域/region 形式、CORS、RAM 角色）
+- [x] 5.1 前置核对：bucket CORS（放行后台域名 PUT/POST、expose ETag）与 STS 角色就绪（OSS 控制台侧）—— **开发环境已核对通过**（2026-08-01）：bucket `keywordiq-dev` @ cn-beijing，CORS 方法含 PUT/POST、请求头 `*`、**暴露头含 ETag**（缺它 ali-oss 分片上传会在 CompleteMultipartUpload 失败，字节已传完却报错，极易误判成网络问题）；RAM 子账号 + 直传角色的 AssumeRole 通。核对不再靠肉眼——`scripts/check_oss.py` 把六段做成可复跑判据（配置齐备 → AssumeRole → 前缀内写入 → **越权写入必须被拒** → 服务端流式读回逐字节比对 → CORS 规则），退出码非 0 即未通过。**上线前仍需在生产 bucket 重跑一次**：开发环境 CORS 来源是 `*`，生产必须收窄到实际域名（该项脚本不报错，只能人工确认，已写入 `.env.example` 与 CLAUDE.md 的「上线前必改」）
 - [x] 5.2 上传界面（日报/周报）：`frontend/src/pages/Upload`——站点下拉（接后端新增 `GET /api/upload/sites`，站点码源自 `site_registry`，不硬编码）+ 周期选择（按文件名推断/日报/周报）+ `Upload.Dragger` `customRequest`
 - [x] 5.3 `customRequest` 流程：`frontend/src/services/ossUpload.ts`——换 STS 凭证（`/oss/upload-credentials`）→ `ali-oss` `multipartUpload` 分片直传 → 回传 object key（`/oss/import`）；`services/upload.ts` 封装接口并解包 amis 信封
 - [x] 5.4 分片进度展示（`multipartUpload` progress → Upload 进度）+ 导入状态轮询（每 5s 拉 `/processing-status` 渲染最近批次表）
