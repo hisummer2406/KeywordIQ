@@ -1,8 +1,8 @@
 """OSS 直传链路自检：把「配置填对了没」变成一条可执行的判据。
 
 填完 ``.env`` 的 ``OSS_*`` 后跑这个脚本。它按前端直传的真实顺序走一遍完整回路——
-签 STS 凭证 → 用临时凭证直传 → 验证越权被拒 → 服务端流式读回 → 检查 bucket CORS，
-每一步单独判定，失败时直接指出该去阿里云控制台改哪里。
+签 STS 凭证 → 用临时凭证直传 → 验证越权被拒 → 服务端流式读回 → 检查 bucket CORS
+→ 检查未完成分片的生命周期规则，每一步单独判定，失败时直接指出该去阿里云控制台改哪里。
 
 之所以要有它：直传链路的失败大多发生在**浏览器里**（CORS 预检被拒、临时凭证权限过窄），
 那里的报错信息既零散又滞后；而权限过**宽**（凭证能写到授权前缀之外）在浏览器里根本不会
@@ -92,7 +92,7 @@ def _check_config(report: Report) -> bool:
     """配置齐备性：缺哪项就说哪项（这是本地终端，配置项名可以直说）。"""
     from config import settings
 
-    print("[1/6] 配置齐备性")
+    print("[1/7] 配置齐备性")
     if not settings.OSS_ENABLED:
         report.fail(
             "OSS_ENABLED", "为 false，当前走的是本地文件退路",
@@ -118,7 +118,7 @@ def _check_sts(report: Report, site: str, period: str, report_date: date):
     """STS AssumeRole：拿不到凭证就是角色信任策略或子账号权限的问题。"""
     from app.table.upload import oss_client
 
-    print("[2/6] STS 签发临时凭证")
+    print("[2/7] STS 签发临时凭证")
     try:
         grant = oss_client.issue_upload_credentials(site, period, report_date, PROBE_FILENAME)
     except Exception as exc:  # noqa: BLE001 — 运维脚本要把云端原始报错原样摆出来
@@ -150,7 +150,7 @@ def _check_upload(report: Report, grant) -> bool:
     """
     import oss2
 
-    print("[3/6] 临时凭证写入授权前缀")
+    print("[3/7] 临时凭证写入授权前缀")
     try:
         _sts_bucket(grant).put_object(grant.object_key, PROBE_PAYLOAD)
     except oss2.exceptions.OssError as exc:
@@ -169,7 +169,7 @@ def _check_denied(report: Report, grant) -> None:
 
     from config import settings
 
-    print("[4/6] 临时凭证越权写入（预期被拒）")
+    print("[4/7] 临时凭证越权写入（预期被拒）")
     outside_key = f"{settings.OSS_KEY_PREFIX.strip('/')}/__selfcheck_denied__/{uuid.uuid4().hex}.txt"
     try:
         _sts_bucket(grant).put_object(outside_key, b"should-not-be-writable")
@@ -199,7 +199,7 @@ def _check_readback(report: Report, grant) -> None:
     """服务端读回：导入链路真正吃的就是这条流，内容必须逐字节一致。"""
     from app.table.upload import oss_client
 
-    print("[5/6] 服务端读回对象")
+    print("[5/7] 服务端读回对象")
     try:
         if not oss_client.object_exists(grant.object_key):
             report.fail("object_exists", "服务端认为对象不存在",
@@ -232,7 +232,7 @@ def _check_cors(report: Report, origin: str) -> None:
 
     from app.table.upload.oss_client import _default_bucket
 
-    print(f"[6/6] bucket CORS（origin={origin}）")
+    print(f"[6/7] bucket CORS（origin={origin}）")
     try:
         rules = _default_bucket().get_bucket_cors().rules
     except oss2.exceptions.NoSuchCors:
@@ -276,6 +276,46 @@ def _check_cors(report: Report, origin: str) -> None:
         report.ok("CORS 暴露头", "已暴露 ETag")
 
 
+def _check_lifecycle(report: Report) -> None:
+    """未完成分片的兜底清理规则。
+
+    分片上传中途放弃（关页面、断网、浏览器崩溃）会在 bucket 里留下已上传的分片：它们不
+    构成对象、在文件列表里看不见，却**持续计费**。前端在本次会话内放弃时会主动 abort，
+    但页面一关就没人来收了——只有 bucket 生命周期规则能兜住这种情况。
+
+    缺规则只告警不判失败：它是运维加固项，不影响直传链路本身能否跑通。
+    """
+    import oss2
+
+    from app.table.upload.oss_client import _default_bucket
+
+    print("[7/7] 未完成分片的生命周期规则")
+    try:
+        rules = _default_bucket().get_bucket_lifecycle().rules
+    except oss2.exceptions.NoSuchLifecycle:
+        report.warn(
+            "生命周期规则", "bucket 未配置任何生命周期规则",
+            "控制台 → bucket → 数据管理 → 生命周期，加一条：对整个 bucket，"
+            "「碎片」策略设为 7 天后删除未完成的分片上传",
+        )
+        return
+    except oss2.exceptions.OssError as exc:
+        report.warn("生命周期规则", f"读取失败：{exc.status} {exc.code}",
+                    "服务端 AK 缺 oss:GetBucketLifecycle 权限，跳过本项；请手工到控制台核对")
+        return
+
+    # oss2 把「碎片」策略映射为 rule.abort_multipart_upload
+    aborts = [r for r in rules if getattr(r, "abort_multipart_upload", None)]
+    if not aborts:
+        report.warn(
+            "生命周期规则", f"{len(rules)} 条规则里没有清理未完成分片的那条",
+            "补一条「碎片」策略（AbortMultipartUpload），否则放弃的分片会一直计费",
+        )
+        return
+    days = getattr(aborts[0].abort_multipart_upload, "days", None)
+    report.ok("生命周期规则", f"已配置未完成分片清理（{days or '按指定日期'} 天）")
+
+
 def _cleanup(report: Report, grant) -> None:
     from app.table.upload.oss_client import _default_bucket
 
@@ -309,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     if settings.OSS_STS_ROLE_ARN:
         grant = _check_sts(report, site, args.period, date.today())
     else:
-        print("[2/6] STS 签发临时凭证")
+        print("[2/7] STS 签发临时凭证")
         report.fail(
             "OSS_STS_ROLE_ARN", "未配置，跳过 STS 与直传三段检查",
             "填入前端直传所扮演的角色 ARN（acs:ram::<主账号ID>:role/<角色名>）",
@@ -322,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
         if uploaded:
             _check_readback(report, grant)
     _check_cors(report, args.origin)
+    _check_lifecycle(report)
 
     if uploaded and not args.keep:
         _cleanup(report, grant)
