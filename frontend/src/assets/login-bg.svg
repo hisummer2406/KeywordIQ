@@ -1,0 +1,78 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="base" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eef4ff" />
+      <stop offset="55%" stop-color="#f6f9ff" />
+      <stop offset="100%" stop-color="#ffffff" />
+    </linearGradient>
+    <radialGradient id="blobBlue" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1677ff" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#1677ff" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="blobCyan" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#36cfc9" stop-opacity="0.14" />
+      <stop offset="100%" stop-color="#36cfc9" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="barFade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1677ff" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#1677ff" stop-opacity="0.04" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#base)" />
+
+  <!-- soft ambient light blobs -->
+  <circle cx="1620" cy="180" r="420" fill="url(#blobBlue)" />
+  <circle cx="220" cy="860" r="380" fill="url(#blobCyan)" />
+  <circle cx="960" cy="1040" r="520" fill="url(#blobBlue)" />
+
+  <!-- faint dot grid, evokes tabular/keyword data -->
+  <g fill="#1677ff" opacity="0.10">
+    <g id="dotRow">
+      <circle cx="0" cy="0" r="2.5" />
+      <circle cx="48" cy="0" r="2.5" />
+      <circle cx="96" cy="0" r="2.5" />
+      <circle cx="144" cy="0" r="2.5" />
+      <circle cx="192" cy="0" r="2.5" />
+      <circle cx="240" cy="0" r="2.5" />
+      <circle cx="288" cy="0" r="2.5" />
+      <circle cx="336" cy="0" r="2.5" />
+      <circle cx="384" cy="0" r="2.5" />
+      <circle cx="432" cy="0" r="2.5" />
+      <circle cx="480" cy="0" r="2.5" />
+      <circle cx="528" cy="0" r="2.5" />
+    </g>
+    <use href="#dotRow" x="1320" y="60" />
+    <use href="#dotRow" x="1320" y="108" />
+    <use href="#dotRow" x="1320" y="156" />
+    <use href="#dotRow" x="1320" y="204" />
+    <use href="#dotRow" x="1320" y="252" />
+    <use href="#dotRow" x="1320" y="300" />
+    <use href="#dotRow" x="1320" y="348" />
+    <use href="#dotRow" x="1320" y="396" />
+  </g>
+
+  <!-- abstract bar-chart / search-rank silhouette along the bottom edge -->
+  <g transform="translate(0,1080)">
+    <rect x="80"  y="-90"  width="34" height="90" rx="6" fill="url(#barFade)" />
+    <rect x="128" y="-150" width="34" height="150" rx="6" fill="url(#barFade)" />
+    <rect x="176" y="-60"  width="34" height="60" rx="6" fill="url(#barFade)" />
+    <rect x="224" y="-190" width="34" height="190" rx="6" fill="url(#barFade)" />
+    <rect x="272" y="-120" width="34" height="120" rx="6" fill="url(#barFade)" />
+
+    <rect x="1614" y="-130" width="34" height="130" rx="6" fill="url(#barFade)" />
+    <rect x="1662" y="-70"  width="34" height="70"  rx="6" fill="url(#barFade)" />
+    <rect x="1710" y="-170" width="34" height="170" rx="6" fill="url(#barFade)" />
+    <rect x="1758" y="-100" width="34" height="100" rx="6" fill="url(#barFade)" />
+    <rect x="1806" y="-150" width="34" height="150" rx="6" fill="url(#barFade)" />
+  </g>
+
+  <!-- gentle upward trend line, ties back to "ranking" theme -->
+  <polyline points="60,780 340,700 620,760 900,600 1180,660 1460,480 1800,420"
+            fill="none" stroke="#1677ff" stroke-opacity="0.18" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+  <g fill="#1677ff" opacity="0.22">
+    <circle cx="900" cy="600" r="5" />
+    <circle cx="1460" cy="480" r="5" />
+    <circle cx="1800" cy="420" r="5" />
+  </g>
+</svg>

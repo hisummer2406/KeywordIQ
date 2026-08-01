@@ -1,0 +1,14 @@
+/**
+ * 登录页布局修正。
+ *
+ * LoginFormPage 内部把一行分成两列：`-notice`（活动位）与表单列，各 `flex: 1 1 0`。
+ * 没配 activityConfig 时 `-notice` 渲染成一个空 div，却照样占走左半屏，于是卡片被挤到
+ * 右半屏居中——看起来就是"贴着右边飘着"。组件没暴露关掉这一列的 prop（样式插槽
+ * containerStyle / mainStyle / otherStyle 都够不到它），只能从样式上摘掉。
+ *
+ * 选择器刻意写成两级：antd 的样式由 CSS-in-JS 运行时注入 <head>，注入顺序不由我们
+ * 控制，同级选择器可能被它盖掉；提高一级优先级就与顺序无关了。
+ */
+.login-page-wrapper .ant-pro-form-login-page-notice {
+  display: none;
+}
