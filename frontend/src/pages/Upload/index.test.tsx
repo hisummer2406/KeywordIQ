@@ -3,16 +3,15 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 
-const { getSites, getProcessingStatus, inspectFilename, ossDirectUploadAndImport } = vi.hoisted(
+const { getProcessingStatus, inspectFilename, ossDirectUploadAndImport } = vi.hoisted(
   () => ({
-    getSites: vi.fn(),
     getProcessingStatus: vi.fn(),
     inspectFilename: vi.fn(),
     ossDirectUploadAndImport: vi.fn(),
   }),
 );
 
-vi.mock('@/services/upload', () => ({ getSites, getProcessingStatus, inspectFilename }));
+vi.mock('@/services/upload', () => ({ getProcessingStatus, inspectFilename }));
 vi.mock('@/services/ossUpload', () => ({ ossDirectUploadAndImport }));
 
 import UploadPage from '@/pages/Upload';
@@ -44,7 +43,6 @@ async function pickFile(name: string) {
 describe('数据上传屏的归属判定', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getSites.mockResolvedValue([{ code: 'DE', name_zh: '德国', domain: 'amazon.de' }]);
     getProcessingStatus.mockResolvedValue({ items: [] });
     ossDirectUploadAndImport.mockResolvedValue({});
   });
@@ -66,12 +64,12 @@ describe('数据上传屏的归属判定', () => {
     expect(within(banner).getByText('日报')).toBeInTheDocument();
     expect(within(banner).getByText('2026-07-16')).toBeInTheDocument();
 
-    // 没在界面上选过任何站点，仍然按文件名判定的 DE 直传
+    // 界面上没有任何站点/周期选择项，归属全部来自文件名
     await waitFor(() => expect(ossDirectUploadAndImport).toHaveBeenCalled());
-    expect(ossDirectUploadAndImport.mock.calls[0][1]).toMatchObject({ site: 'DE' });
+    expect(ossDirectUploadAndImport.mock.calls[0][1]).toMatchObject({ site: 'DE', period: 'DAY' });
   });
 
-  it('周期判定不出且未指定时挡住上传，不猜成周报', async () => {
+  it('周期判定不出时拒绝该文件，不猜成周报', async () => {
     inspectFilename.mockResolvedValue({
       filename: 'DE_热门搜索词_2026_07_16.csv',
       site: 'DE',
@@ -82,11 +80,12 @@ describe('数据上传屏的归属判定', () => {
     await renderSettled();
     await pickFile('DE_热门搜索词_2026_07_16.csv');
 
-    await waitFor(() => expect(screen.getByText(/判定不出/)).toBeInTheDocument());
+    // 同一句话会同时出现在告警面板与全局提示里，故用 getAllByText
+    await waitFor(() => expect(screen.getAllByText(/无法从文件名判定归属/).length).toBeGreaterThan(0));
     expect(ossDirectUploadAndImport).not.toHaveBeenCalled();
   });
 
-  it('站点判定不出且未选站点时挡住上传', async () => {
+  it('站点判定不出时拒绝该文件', async () => {
     inspectFilename.mockResolvedValue({
       filename: '热门搜索词_简单_Day_2026_07_16.csv',
       site: null,
@@ -97,7 +96,8 @@ describe('数据上传屏的归属判定', () => {
     await renderSettled();
     await pickFile('热门搜索词_简单_Day_2026_07_16.csv');
 
-    await waitFor(() => expect(screen.getByText(/判定不出/)).toBeInTheDocument());
+    // 同一句话会同时出现在告警面板与全局提示里，故用 getAllByText
+    await waitFor(() => expect(screen.getAllByText(/无法从文件名判定归属/).length).toBeGreaterThan(0));
     expect(ossDirectUploadAndImport).not.toHaveBeenCalled();
   });
 
@@ -109,5 +109,29 @@ describe('数据上传屏的归属判定', () => {
 
     await waitFor(() => expect(inspectFilename).toHaveBeenCalled());
     expect(ossDirectUploadAndImport).not.toHaveBeenCalled();
+  });
+
+  it('同时拖入多个文件时各用各的归属（不被后一个覆盖）', async () => {
+    inspectFilename.mockImplementation(async (name: string) =>
+      name.startsWith('DE')
+        ? { filename: name, site: 'DE', period: 'DAY', report_date: '2026-07-16', needs: [] }
+        : { filename: name, site: 'GB', period: 'WEEK', report_date: '2026-07-20', needs: [] },
+    );
+    await renderSettled();
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      await userEvent.upload(input, [
+        new File(['a'], 'DE_热门搜索词_简单_Day_2026_07_16.csv', { type: 'text/csv' }),
+        new File(['a'], 'GB_热门搜索词_简单_Week_2026_07_20.csv', { type: 'text/csv' }),
+      ]);
+    });
+
+    await waitFor(() => expect(ossDirectUploadAndImport).toHaveBeenCalledTimes(2));
+    const byName = Object.fromEntries(
+      ossDirectUploadAndImport.mock.calls.map((c: any[]) => [c[0].name, c[1]]),
+    );
+    expect(byName['DE_热门搜索词_简单_Day_2026_07_16.csv']).toMatchObject({ site: 'DE', period: 'DAY' });
+    expect(byName['GB_热门搜索词_简单_Week_2026_07_20.csv']).toMatchObject({ site: 'GB', period: 'WEEK' });
   });
 });
