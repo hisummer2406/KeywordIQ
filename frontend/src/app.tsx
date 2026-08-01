@@ -19,6 +19,9 @@ export async function getInitialState(): Promise<{
     try {
       return await getCurrentUser();
     } catch {
+      // 拉不到用户说明这张 token 已经不作数了，就地清掉。留着它会让下面的路由守卫
+      // （判据是 token）继续放行，用户带着废令牌停在受保护页，既进不去也回不到登录页。
+      clearToken();
       return undefined;
     }
   };
@@ -37,7 +40,12 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
     title: '海眸系统',
     logo: logoIcon,
     menu: { locale: false },
-    // 未登录访问受保护页 → 跳登录
+    // 未登录访问受保护页 → 跳登录。
+    //
+    // 判据是 currentUser 而非 token：access.ts 里的权限判定读的也是 currentUser，
+    // 两者必须同源，否则会出现"守卫放行、权限判定不认"的错位——表现为登录后落到 403。
+    // 代价是这个回调读到的是上一次渲染的闭包值，所以**跳转方必须等 initialState 提交
+    // 之后再跳**（见 pages/Login/index.tsx 的 useEffect），不能刷新完就立即 push。
     onPageChange: () => {
       const { currentUser } = initialState ?? {};
       if (!currentUser && history.location.pathname !== LOGIN_PATH) {
