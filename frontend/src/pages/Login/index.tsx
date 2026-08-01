@@ -1,11 +1,13 @@
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { LoginForm, ProConfigProvider, ProFormText } from '@ant-design/pro-components';
+import { LoginFormPage, ProConfigProvider, ProFormText } from '@ant-design/pro-components';
 import { history, useModel } from '@umijs/max';
 import { App } from 'antd';
 import { useEffect, useState } from 'react';
 import { login } from '@/services/auth';
 import { setToken } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
+import loginBg from '@/assets/login-bg.svg';
+import './index.less';
 
 /**
  * 登录屏。登录并入 SPA 路由（替代 /admin/login）。
@@ -51,8 +53,16 @@ export default function LoginPage() {
 
   return (
     <ProConfigProvider hashed={false}>
-      <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center' }}>
-        <LoginForm
+      {/*
+        LoginFormPage 内部靠 height:100% 逐层撑开，所以**父级必须给出确定高度**。
+        原先把 minHeight:100vh 挂在它自己身上不成立：min-height 不构成子元素 height:100%
+        的参照，内层那行 flex 会退回内容高度（398px），卡片于是贴死在页面顶部。
+        外面套一层定高容器，组件自身再取满，垂直居中才成立。
+      */}
+      <div className="login-page-wrapper" style={{ height: '100vh' }}>
+        <LoginFormPage
+          style={{ height: '100%' }}
+          backgroundImageUrl={loginBg}
           logo={<img src={logoIcon} alt="海眸系统" style={{ height: 44 }} />}
           title="海眸系统"
           subTitle="Amazon 搜索词数据分析平台"
@@ -70,7 +80,7 @@ export default function LoginPage() {
             placeholder="密码"
             rules={[{ required: true, message: '请输入密码' }]}
           />
-        </LoginForm>
+        </LoginFormPage>
       </div>
     </ProConfigProvider>
   );
