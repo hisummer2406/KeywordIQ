@@ -159,7 +159,18 @@ frontend/              # AntD Pro SPA（Umi Max），独立构建，产物由 ng
 前端无法越权到其他站点/期次；`report_date` 只来自文件名（分区归属的权威来源）。
 
 **配置**：`OSS_*`（见 `.env.example`）；`OSS_ENABLED=false` 时走本地文件退路
-（`LocalFileSource` + `POST /import-csv`，不归档），供本地开发与 CI。
+（`LocalFileSource` + `POST /import-csv`，不归档），供本地开发与 CI。配好后用
+`uv run python scripts/check_oss.py` 验证整条链路——它按前端直传的真实顺序跑一遍
+（STS 签发 → 临时凭证直传 → **越权写入必须被拒** → 服务端流式读回 → bucket CORS），
+退出码非 0 即有项未通过。其中"越权被拒"与 CORS 两项无法靠 code review 确认，只能实测。
+
+**bucket 的 CORS 不在本仓库配置范围内，但直传依赖它**：来源需含前端域名、方法需含
+`PUT` 与 `POST`（分片上传的 Initiate/Complete 走 POST）、**暴露头必须含 `ETag`**——
+ali-oss 要读每片的 ETag 才能 `CompleteMultipartUpload`，缺它的表现是字节全传完了、最后
+一步失败，极易误判成网络问题。
+
+**上线前必改**（开发环境放宽处，清单与理由见 `.env.example` 的 OSS 段）：CORS 来源从 `*`
+收窄到实际域名、`OSS_ENDPOINT` 换内网地址、生产用独立 bucket 与独立 RAM 子账号。
 
 **导入串行**：`pg_try_advisory_lock` 保证同一时刻只有一个导入在跑（2C4G 上两个 GB 级导入并发会争抢
 WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
