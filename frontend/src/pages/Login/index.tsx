@@ -2,6 +2,7 @@ import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { LoginForm, ProConfigProvider, ProFormText } from '@ant-design/pro-components';
 import { history, useModel } from '@umijs/max';
 import { App } from 'antd';
+import { useEffect, useState } from 'react';
 import { login } from '@/services/auth';
 import { setToken } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
@@ -12,7 +13,26 @@ import logoIcon from '@/assets/logo-icon.png';
  */
 export default function LoginPage() {
   const { message } = App.useApp();
-  const { refresh } = useModel('@@initialState');
+  const { initialState, refresh } = useModel('@@initialState');
+  const [redirectTo, setRedirectTo] = useState<string | null>(null);
+  const currentUser = initialState?.currentUser;
+
+  /**
+   * 跳转要等到 initialState 真的带上 currentUser 之后才发生。
+   *
+   * `await refresh()` 返回，只说明刷新动作发起了，不代表 React 已经把新的 initialState
+   * 提交并重渲染。紧跟着 push 过去，ProLayout 的 onPageChange 与 access 判定读到的都还是
+   * 旧值：前者判成未登录、把人推回 /login（表现为"登录成功后闪回登录页"），后者判成无
+   * 权限、渲染 403。谁先谁后取决于渲染时机，所以时好时坏、慢机器更容易中。
+   *
+   * 用 effect 把"跳转"挂在 currentUser 到位这个事实上，竞态就不存在了——effect 在提交
+   * 之后才跑，此时守卫与权限判定读到的必然是同一份新状态。
+   */
+  useEffect(() => {
+    if (redirectTo && currentUser) {
+      history.push(redirectTo);
+    }
+  }, [redirectTo, currentUser]);
 
   const handleSubmit = async (values: API.LoginParams) => {
     try {
@@ -21,7 +41,7 @@ export default function LoginPage() {
       await refresh();
       message.success('登录成功');
       const redirect = new URLSearchParams(history.location.search).get('redirect');
-      history.push(redirect || '/analysis');
+      setRedirectTo(redirect || '/analysis');
     } catch (e: any) {
       // login() 显式声明了 skipErrorHandler（凭证错误不该弹全局提示），因此这里必须
       // 自己呈现——「显式跳过」与「必须自行呈现」是一对，缺一就回到了静默吞错误。

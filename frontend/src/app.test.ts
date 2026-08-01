@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { pushMock, messageError, messageWarning, locationRef } = vi.hoisted(() => ({
-  pushMock: vi.fn(),
-  messageError: vi.fn(),
-  messageWarning: vi.fn(),
-  locationRef: { pathname: '/analysis' },
-}));
+const { pushMock, messageError, messageWarning, locationRef, getCurrentUserMock } = vi.hoisted(
+  () => ({
+    pushMock: vi.fn(),
+    messageError: vi.fn(),
+    messageWarning: vi.fn(),
+    locationRef: { pathname: '/analysis' },
+    getCurrentUserMock: vi.fn(),
+  }),
+);
 
 vi.mock('@umijs/max', () => ({
   history: {
@@ -16,9 +19,10 @@ vi.mock('@umijs/max', () => ({
   },
 }));
 vi.mock('antd', () => ({ message: { error: messageError, warning: messageWarning } }));
+vi.mock('@/services/auth', () => ({ getCurrentUser: getCurrentUserMock }));
 
-import { request } from '@/app';
-import { setToken, getToken } from '@/utils/token';
+import { getInitialState, layout, request } from '@/app';
+import { clearToken, getToken, setToken } from '@/utils/token';
 
 /**
  * errorHandler 是错误提示的唯一出口——页面层不写 try/catch 也必须让用户看见失败。
@@ -88,5 +92,71 @@ describe('全局 errorHandler', () => {
   it('网络不通时提示服务器无响应', () => {
     expect(() => handler({ request: {} })).toThrow();
     expect(messageError).toHaveBeenCalledWith('服务器无响应，请稍后重试');
+  });
+});
+
+/**
+ * 守卫判据必须与 access.ts 的权限判定同源（都看 currentUser）。曾试过改看 token 来
+ * 绕开登录后的竞态，结果只是把"弹回登录页"换成了"落到 403"——守卫放行了，权限判定
+ * 仍读 currentUser 而判成无权限。竞态的正解在跳转方（见 pages/Login）。
+ */
+describe('layout 路由守卫', () => {
+  const onPageChangeWith = (initialState: unknown) =>
+    (layout({ initialState } as any) as any).onPageChange;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearToken();
+    locationRef.pathname = '/analysis';
+  });
+
+  it('未登录访问受保护页跳登录', () => {
+    onPageChangeWith({})();
+
+    expect(pushMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('已登录访问受保护页不跳转', () => {
+    onPageChangeWith({ currentUser: { user_name: 'admin' } })();
+
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('登录页自身不跳转，避免自跳循环', () => {
+    locationRef.pathname = '/login';
+    onPageChangeWith({})();
+
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 无效 token 必须就地清掉：留着它，每次进屏都会先拿它换一次 401，而用户既拿不到
+ * currentUser、也没有任何东西把这张废令牌收走。
+ */
+describe('getInitialState', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearToken();
+  });
+
+  it('token 无效导致拉取用户失败时清掉 token', async () => {
+    setToken('stale-token');
+    getCurrentUserMock.mockRejectedValueOnce(new Error('401'));
+
+    const state = await getInitialState();
+
+    expect(state.currentUser).toBeUndefined();
+    expect(getToken()).toBeNull();
+  });
+
+  it('token 有效时带回当前用户，且保留 token', async () => {
+    setToken('good-token');
+    getCurrentUserMock.mockResolvedValueOnce({ user_name: 'admin' });
+
+    const state = await getInitialState();
+
+    expect(state.currentUser).toEqual({ user_name: 'admin' });
+    expect(getToken()).toBe('good-token');
   });
 });
