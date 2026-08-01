@@ -117,6 +117,27 @@ def parse_report_filename(filename: str) -> tuple[str | None, date | None]:
     return site, report_date
 
 
+_FILENAME_DAY_RE = re.compile(r"(?<![a-z])(day|daily)(?![a-z])|日报", re.IGNORECASE)
+_FILENAME_WEEK_RE = re.compile(r"(?<![a-z])(week|weekly)(?![a-z])|周报", re.IGNORECASE)
+
+
+def infer_period(filename: str) -> str | None:
+    """从文件名推断周期，判定不出返回 ``None``（由调用方要求用户显式指定）。
+
+    判定是**双向显式**的：日报关键词命中才是 DAY，周报关键词命中才是 WEEK。此前的写法是
+    ``"day" in filename else "WEEK"``——关键词缺失的日报会被静默当成周报，写进 fact_weekly，
+    落错事实表且界面上无从察觉。宁可要求用户选一次，也不猜。
+
+    两侧同时命中同样返回 ``None``：文件名自相矛盾时任选一边都是在赌。
+    ``(?<![a-z])``/``(?![a-z])`` 只挡字母，故 ``Day_2026`` 能命中而 ``Weekday`` 两侧皆不命中。
+    """
+    is_day = bool(_FILENAME_DAY_RE.search(filename))
+    is_week = bool(_FILENAME_WEEK_RE.search(filename))
+    if is_day == is_week:  # 都不命中，或自相矛盾
+        return None
+    return "DAY" if is_day else "WEEK"
+
+
 def _num(col: str) -> str:
     """把一个 text 暂存列清洗成 numeric 的 SQL 片段。
 

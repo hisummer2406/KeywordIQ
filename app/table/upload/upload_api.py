@@ -15,8 +15,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 from app.auth.simple_auth import simple_auth
 from app.auth.permissions import UPLOAD_IMPORT
 from app.common.errors import CODE_UPLOAD_BAD_FILE, BadRequestError
-from app.table.upload.upload_schemas import OSSImportRequest, UploadCredentialRequest
-from app.table.upload.importer import parse_report_filename
+from app.table.upload.upload_schemas import (
+    FilenameInspectRequest,
+    OSSImportRequest,
+    UploadCredentialRequest,
+)
+from app.table.upload.importer import infer_period, parse_report_filename
 from app.table.upload.import_service import run_import, ImportRejected
 from app.table.upload.import_source import LocalFileSource, OSSObjectSource
 from app.table.upload import oss_client
@@ -76,9 +80,25 @@ def _resolve_import_meta(filename: str, site: str, period: Optional[str]):
         raise BadRequestError(
             "无法从文件名解析出报告日期（需形如 ..._2026_07_18.csv）", code=CODE_UPLOAD_BAD_FILE
         )
-    resolved_period = (period or ("DAY" if "day" in filename.lower() else "WEEK")).strip().upper()
-    if resolved_period not in ("DAY", "WEEK"):
-        raise BadRequestError("period 只支持 DAY 或 WEEK", code=CODE_UPLOAD_BAD_FILE)
+    inferred_period = infer_period(filename)
+    if period:
+        resolved_period = period.strip().upper()
+        if resolved_period not in ("DAY", "WEEK"):
+            raise BadRequestError("period 只支持 DAY 或 WEEK", code=CODE_UPLOAD_BAD_FILE)
+        # 与站点同理：显式指定和文件名打架时拒绝，不任选一方静默继续
+        if inferred_period and inferred_period != resolved_period:
+            raise BadRequestError(
+                f"指定周期为 {resolved_period}，但文件名表明是 {inferred_period}，请确认",
+                code=CODE_UPLOAD_BAD_FILE,
+            )
+    elif inferred_period:
+        resolved_period = inferred_period
+    else:
+        # 不兜底。此前是「非 day 即 week」，会把关键词缺失的日报静默写进周报事实表。
+        raise BadRequestError(
+            "无法从文件名判断这是日报还是周报，请在界面上指定周期",
+            code=CODE_UPLOAD_BAD_FILE,
+        )
     return site, resolved_period, report_date
 
 
@@ -92,6 +112,44 @@ async def list_sites(
             {"code": s.code, "name_zh": s.name_zh, "domain": s.domain}
             for s in SITE_CATALOG.values()
         ]
+    }
+
+
+@upload_router.post("/inspect-filename")
+async def inspect_filename(
+    req: FilenameInspectRequest,
+    _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
+) -> Dict[str, Any]:
+    """只读：把文件名解析成归属三元组（站点 / 周期 / 报告日期），供上传屏在上传前回显。
+
+    **解析规则只在后端实现一份**：站点前缀正则、日期正则、周期关键词都在 importer 里，
+    前端若自己再写一遍，两处迟早各自演化，用户看到的回显与实际写入的归属就会不一致。
+
+    与其他端点不同，这里**判定不出不算错误**——哪一项判定不出正是前端要拿来决定"该让用户
+    补选哪一项"的信息，故一律 200 返回，缺的项为 null 并列在 ``needs`` 里。
+    """
+    filename = req.filename
+    if not filename.lower().endswith(".csv"):
+        raise BadRequestError("只支持 CSV 文件", code=CODE_UPLOAD_BAD_FILE)
+
+    prefix_site, report_date = parse_report_filename(filename)
+    period = infer_period(filename)
+
+    site = None
+    if prefix_site:
+        # 文件名前缀可能是任意两个字母，未登记的站点码等同于判定不出，交给用户补选
+        try:
+            site = normalize_site_code(prefix_site)
+        except UnknownSiteError:
+            site = None
+
+    needs = [k for k, v in (("site", site), ("period", period), ("report_date", report_date)) if not v]
+    return {
+        "filename": filename,
+        "site": site,
+        "period": period,
+        "report_date": str(report_date) if report_date else None,
+        "needs": needs,
     }
 
 

@@ -56,3 +56,10 @@ class OSSImportRequest(BaseModel):
             raise ValueError(str(exc)) from exc
 
 
+class FilenameInspectRequest(BaseModel):
+    """上传前解析文件名，取得归属三元组供界面回显。
+
+    站点在这里**不是必填**——推断不出正是这个端点要告诉前端的结果之一。
+    """
+
+    filename: str = Field(..., description="待上传的原始文件名")
