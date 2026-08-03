@@ -38,8 +38,12 @@ class AnalysisSearchRequest(BaseModel):
     asin: str | None = Field(None, description="ASIN 子串（top1 商品）")
     product_title: str | None = Field(None, description="标题子串（top1 商品）")
 
-    # 精确类目（下拉，走 category_stats）
-    category_exact: str | None = Field(None, description="类目精确匹配")
+    # 精确类目多选（下拉，选项走 category_stats）。命中其一即可；空集合视同不筛。
+    # 上限 100：类目数可达数百，无上限的 IN 列表会让计划器在参数很长时放弃索引扫描，
+    # 而勾满上百个类目已等价于不筛。
+    categories: list[str] | None = Field(
+        None, max_length=100, description="类目精确匹配集合，命中其一即可；空集合视同不筛"
+    )
 
     # 区间筛选
     ranking_min: int | None = Field(None, description="当期排名最小值")
