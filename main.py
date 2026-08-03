@@ -49,8 +49,8 @@ def init_upload_dir():
         os.makedirs(f"{settings.UPLOAD_DIR}/daily", exist_ok=True)
         os.makedirs(f"{settings.UPLOAD_DIR}/weekly", exist_ok=True)
         logger.info("✅ 上传目录初始化成功")
-    except Exception as e:
-        logger.error(f"❌ 上传目录初始化失败: {e}")
+    except Exception:
+        logger.exception("❌ 上传目录初始化失败")
 
 
 @asynccontextmanager
@@ -69,15 +69,15 @@ async def lifespan(app: FastAPI):
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
             logger.info("✅ 同步数据库连接测试成功")
-    except Exception as e:
-        logger.error(f"❌ 同步数据库连接测试失败: {e}")
+    except Exception:
+        logger.exception("❌ 同步数据库连接测试失败")
 
     try:
         async with async_engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
         logger.info("✅ 异步数据库连接测试成功")
-    except Exception as e:
-        logger.error(f"❌ 异步数据库连接测试失败: {e}")
+    except Exception:
+        logger.exception("❌ 异步数据库连接测试失败")
 
     logger.info("🎉 应用启动完成，准备接收请求")
 
@@ -90,14 +90,14 @@ async def lifespan(app: FastAPI):
     try:
         engine.dispose()
         logger.info("✅ 同步数据库连接池关闭成功")
-    except Exception as e:
-        logger.error(f"❌ 同步数据库连接池关闭失败: {e}")
+    except Exception:
+        logger.exception("❌ 同步数据库连接池关闭失败")
 
     try:
         await async_engine.dispose()
         logger.info("✅ 异步数据库连接池关闭成功")
-    except Exception as e:
-        logger.error(f"❌ 异步数据库连接池关闭失败: {e}")
+    except Exception:
+        logger.exception("❌ 异步数据库连接池关闭失败")
 
     logger.info("👋 应用已安全关闭")
 
@@ -158,7 +158,7 @@ async def health_check():
             }
         }
     except Exception as e:
-        logger.error(f"❌ 健康检查失败: {e}")
+        logger.exception("❌ 健康检查失败")
         return {"status": "unhealthy", "error": str(e)}
 
 

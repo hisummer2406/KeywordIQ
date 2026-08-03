@@ -245,7 +245,18 @@ V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随
 
 ### Performance Optimizations
 
-1. **Connection Pooling**: `DB_POOL_SIZE=8`, `DB_MAX_OVERFLOW=12` per worker (RDS max_connections=400 is the hard ceiling — total connections across all workers must stay well below it). `start.sh` 起 4 个 uvicorn worker，故每 worker 的 `(POOL + OVERFLOW)` 乘以 4 必须远低于 400。
+1. **Connection Pooling**: 当前 `DB_POOL_SIZE=20`、`DB_MAX_OVERFLOW=10`。RDS 的
+   `max_connections=400` 是硬顶。**算全局上限时必须乘 2**——`database.py` 在模块级
+   建了**两个**引擎（同步 `engine` 走导入与写路径，异步 `async_engine` 走 API 读查询），
+   两者共用同一组配置：
+
+   ```
+   2 个引擎 × (DB_POOL_SIZE + DB_MAX_OVERFLOW) × 4 workers
+   = 2 × 30 × 4 = 240 条
+   ```
+
+   240/400 已占六成，还要给 RDS 管理连接与人工 psql 留余量。降到 8/12 可把上限压到
+   160，但降池会把「连接排队」变成 `pool_timeout` 报错，改之前须先有并发观测数据。
 2. **Query Optimization**:
    - 无筛选的分页总数直接读 `site_data_stats.row_count`（O(1)，不在事实表上聚合）
    - 带筛选的总数用 `FILTERED_COUNT_CAP = 10000` 封顶计数（`analysis_crud.count_filtered`）
@@ -274,9 +285,9 @@ HOT_WINDOW_MONTHS=3
 MAX_FILE_SIZE=3221225472  # 3GB
 OSS_ENABLED=false
 
-# Connection pool（每 worker；× 4 workers 后须远低于 RDS 的 400）
-DB_POOL_SIZE=8
-DB_MAX_OVERFLOW=12
+# Connection pool（每 worker 建了同步+异步两个引擎，全局上限是 ×2 ×4 workers）
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=10
 ```
 
 ## Production Environment
@@ -287,7 +298,9 @@ DB_MAX_OVERFLOW=12
 | Database | Alibaba Cloud RDS PostgreSQL 15.0 · 2C4G · max_connections = 400 |
 
 **Capacity implications for code changes:**
-- RDS max 400 connections shared across all app processes; total `(DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers` must stay well under 400（`start.sh` 固定 4 workers）
+- RDS max 400 connections shared across all app processes; 全局上限是
+  `2 × (DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers`——**别忘了同步与异步两个引擎各占一份池**
+  （`start.sh` 固定 4 workers，当前取值算下来是 240）
 - 4 vCPU 上 nginx、4 个 uvicorn worker 与导入任务共享 CPU；导入已由咨询锁串行化，勿再引入并行分片而不实测
 - 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame
 
@@ -349,14 +362,20 @@ DB_MAX_OVERFLOW=12
 今天就是绿的。规则同时保证两件事：**新增违规会失败**，且**基线项一旦修好、测试会
 要求你把它从基线删掉**（否则基线会腐烂成永久豁免）。
 
-当前基线里的三笔债，都是真问题，各自应单独开变更修，不要在别的改动里顺手动：
+**基线现在只剩一笔债**：`user_crud.py` 的 11 处 `except` 块用 `logger.error` 打异常、
+栈丢失。它们跟着「返值式错误」的写法走（`return False, "消息", None`），单改日志没有
+意义——应连同改成抛 `APIError`，与「业务错误一律抛不返」一并了结，独立开变更。
 
-- `MAX_FILE_SIZE` 是死配置——`.env.example` 与本文件都公示了 3GB 上传上限，
-  但没有任何代码读它，那个上限并不存在。
-- `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` 文档写 8/12，`config.py` 默认是 20/10。
-  `.env` 漏配时生效的是后者，4 worker 就是 120 连接而非 80。
-- 18 处 `except` 块用 `logger.error` 打异常、栈丢失（`main.py` 6 处在 lifespan 与
-  健康检查里，`import_service.py` 1 处在后台任务失败分支，`user_crud.py` 11 处）。
+已清偿的两笔（留作参照，说明这类问题长什么样）：
+
+- **`MAX_FILE_SIZE` 曾是死配置**——`.env.example` 与本文件都公示 3GB 上传上限，
+  却没有任何代码读它。现已补上执行点：OSS 路径在 `/oss/import` 触发前 `head_object`
+  称量（直传下字节不经应用服务器，那是服务端唯一能称量文件的时机），本地退路在落盘时
+  边写边计数、超限即中止并删掉半截文件。
+- **连接池的算式曾漏掉一半**——文档写 8/12 且公式是 `(POOL+OVERFLOW) × workers`，
+  但 `database.py` 建了同步与异步**两个**引擎共用同一组配置，真实上限要再乘 2。
+  三处已对齐到 20/10 并写明算式（当前 240）。是否降到 8/12（上限 160）是另一个决定，
+  需先有并发观测数据。
 
 ### 项目 skill
 

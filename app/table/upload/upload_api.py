@@ -15,7 +15,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 import database
 from app.auth.permissions import UPLOAD_IMPORT
 from app.auth.simple_auth import simple_auth
-from app.common.errors import CODE_UPLOAD_BAD_FILE, BadRequestError
+from app.common.errors import (
+    CODE_UPLOAD_BAD_FILE,
+    CODE_UPLOAD_FILE_TOO_LARGE,
+    BadRequestError,
+    PayloadTooLargeError,
+)
 from app.site_registry import SITE_CATALOG, UnknownSiteError, normalize_site_code
 from app.table.upload import oss_client
 from app.table.upload.import_service import ImportRejected, run_import
@@ -199,6 +204,17 @@ async def oss_import(
     if not oss_client.object_exists(req.object_key):
         raise oss_client.OSSObjectNotFound(log_detail=f"object key 不存在: {req.object_key}")
 
+    # 大小上限在这里执行。直传下字节不经应用服务器，这是服务端唯一能称量文件的时机；
+    # 拦在这里挡掉的是"导入一个超大文件"的代价，而非"上传"的代价。
+    size = oss_client.object_size(req.object_key)
+    if size > settings.MAX_FILE_SIZE:
+        raise PayloadTooLargeError(
+            f"文件超过上限（{size / 1024 ** 3:.2f} GB > "
+            f"{settings.MAX_FILE_SIZE / 1024 ** 3:.2f} GB），请拆分后再导入",
+            code=CODE_UPLOAD_FILE_TOO_LARGE,
+            log_detail=f"object key {req.object_key} 大小 {size} 超过 {settings.MAX_FILE_SIZE}",
+        )
+
     background_tasks.add_task(
         _run_oss_import_bg, req.object_key, req.filename, site, period, report_date
     )
@@ -239,9 +255,24 @@ async def import_csv_file(
     upload_dir = Path(settings.UPLOAD_DIR) / period.lower()
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / f"{timestamp}_{file.filename}"
-    async with aiofiles.open(file_path, "wb") as f:
-        while chunk := await file.read(8192):
-            await f.write(chunk)
+    # 边写边计数：超上限立刻中止并删掉半截文件。不能等写完再判——那样磁盘已经被占了，
+    # 而这条退路本就是给本地/CI 用的，没有 OSS 那样的空间冗余。
+    written = 0
+    try:
+        async with aiofiles.open(file_path, "wb") as f:
+            while chunk := await file.read(8192):
+                written += len(chunk)
+                if written > settings.MAX_FILE_SIZE:
+                    raise PayloadTooLargeError(
+                        f"文件超过上限（> {settings.MAX_FILE_SIZE / 1024 ** 3:.2f} GB），"
+                        "请拆分后再导入",
+                        code=CODE_UPLOAD_FILE_TOO_LARGE,
+                        log_detail=f"{file.filename} 写入 {written} 字节时超过 {settings.MAX_FILE_SIZE}",
+                    )
+                await f.write(chunk)
+    except PayloadTooLargeError:
+        file_path.unlink(missing_ok=True)
+        raise
 
     background_tasks.add_task(
         _run_import_bg, str(file_path), file.filename, site, period, report_date

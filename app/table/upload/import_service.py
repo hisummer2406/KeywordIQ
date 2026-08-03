@@ -171,7 +171,9 @@ def run_import(
     except ImportRejected:
         raise
     except Exception as exc:
-        logger.error("导入失败 %s: %s", original_filename, exc)
+        # 必须是 exception 不是 error：run_import 是后台任务，全局异常处理器不拦
+        # BackgroundTasks，栈是这条路径唯一的线索来源。
+        logger.exception("导入失败 %s", original_filename)
         session.rollback()
         try:
             batch.status = STATUS_FAILED
@@ -179,6 +181,7 @@ def run_import(
             batch.processing_seconds = int(time.monotonic() - started)
             session.commit()
         except Exception:
+            logger.exception("写入失败状态时再次出错，批次记录可能停留在 PROCESSING")
             session.rollback()
         # 失败无碍原始文件留存：OSS 对象仍在，可据 object key 重导排查。
         return batch

@@ -13,6 +13,7 @@ import io
 import json
 import tempfile
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -139,6 +140,9 @@ class _FakeBucket:
     def get_object(self, key: str):
         return io.BytesIO(self._objects[key])
 
+    def head_object(self, key: str):
+        return SimpleNamespace(content_length=len(self._objects[key]))
+
 
 class TestObjectAccess:
     def test_missing_object_raises(self):
@@ -155,6 +159,16 @@ class TestObjectAccess:
         bucket = _FakeBucket({"k": b""})
         assert oss_client.object_exists("k", bucket=bucket) is True
         assert oss_client.object_exists("missing", bucket=bucket) is False
+
+    def test_object_size_reports_content_length(self):
+        """MAX_FILE_SIZE 的执行依赖这个称量。
+
+        直传下字节不经应用服务器，导入触发前的 head_object 是服务端唯一能知道
+        文件多大的时机。此前 MAX_FILE_SIZE 是死配置——.env.example 与 CLAUDE.md
+        都公示 3GB 上限，却没有任何代码读它，那个上限并不存在。
+        """
+        bucket = _FakeBucket({"k": b"0123456789"})
+        assert oss_client.object_size("k", bucket=bucket) == 10
 
 
 # --------------------------------------------------------------------------
