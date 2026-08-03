@@ -10,7 +10,7 @@ describe('ScopeBar', () => {
         availableDates={['2026-07-18']}
         scope={{ site: 'US', view: 'DAY', date: '2026-07-18' }}
         q=""
-        dirty={false}
+        dirty
         onScopeChange={vi.fn()}
         onQChange={vi.fn()}
         onSubmit={vi.fn()}
@@ -23,5 +23,8 @@ describe('ScopeBar', () => {
     expect(
       screen.getByPlaceholderText('输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger'),
     ).toBeInTheDocument();
+    expect(container.querySelector('.scope-bar__dirty')).toHaveTextContent(
+      '条件已修改，点击立即查询生效',
+    );
   });
 });
