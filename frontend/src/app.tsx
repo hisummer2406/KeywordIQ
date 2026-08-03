@@ -83,6 +83,26 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
     contentWidth: 'Fluid',
     // 表格长、滚动多，顶栏固定住，切菜单不用滚回顶部。
     fixedHeader: true,
+
+    /**
+     * 顶栏菜单的选中态。
+     *
+     * ProLayout 的 `ant-pro-base-menu-horizontal-menu-item` 盖掉了 antd 横向菜单默认的
+     * 「主色 + 下边框」选中样式，只剩文字颜色从 rgba(0,0,0,.65) 变成 rgba(0,0,0,.95)
+     * ——同一个黑色的两档透明度，实测几乎看不出来（选中类本身是正常加上的，问题在样式）。
+     *
+     * 用 header token 而不是 CSS 覆盖：token 是 ProLayout 给的调节口，跟着组件版本走；
+     * 手写选择器要盯死 `ant-pro-base-*` 这类内部类名，升级即失效。
+     */
+    token: {
+      header: {
+        colorTextMenu: 'rgba(0, 0, 0, 0.65)',
+        colorTextMenuSelected: '#1677ff',
+        colorTextMenuActive: '#1677ff',
+        colorBgMenuItemSelected: 'rgba(22, 119, 255, 0.10)',
+        colorBgMenuItemHover: 'rgba(0, 0, 0, 0.04)',
+      },
+    },
     // 未登录访问受保护页 → 跳登录。
     //
     // 判据是 currentUser 而非 token：access.ts 里的权限判定读的也是 currentUser，

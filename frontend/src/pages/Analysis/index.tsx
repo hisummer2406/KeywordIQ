@@ -167,7 +167,7 @@ export default function AnalysisPage() {
   ];
 
   return (
-    <PageContainer title="分析查询">
+    <PageContainer title="ABA数据选品">
       <ProTable<AnalysisRow>
         /**
          * 作用域三元组（站点 / 视图 / 日期）放进表格工具栏，与导出、刷新同一行。

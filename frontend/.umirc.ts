@@ -33,7 +33,7 @@ export default defineConfig({
     { path: '/', redirect: '/analysis' },
     { name: '登录', path: '/login', component: './Login', layout: false },
     {
-      name: '分析查询',
+      name: 'ABA数据选品',
       path: '/analysis',
       component: './Analysis',
       icon: 'BarChart',
