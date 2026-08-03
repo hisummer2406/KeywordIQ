@@ -33,11 +33,18 @@ export interface SearchBody {
   keyword?: string;
   brand?: string;
   category?: string;
-  category_exact?: string;
+  /** 类目精确匹配集合，命中其一即可；空集合不传（视同不筛） */
+  categories?: string[];
   asin?: string;
   product_title?: string;
   ranking_min?: number;
   ranking_max?: number;
+  change_min?: number;
+  change_max?: number;
+  click_share_min?: number;
+  click_share_max?: number;
+  conversion_share_min?: number;
+  conversion_share_max?: number;
   is_new?: boolean;
 }
 

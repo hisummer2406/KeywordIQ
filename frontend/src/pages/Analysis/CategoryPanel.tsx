@@ -1,0 +1,80 @@
+import { Checkbox, Empty, Input, Typography } from 'antd';
+import { useMemo, useState } from 'react';
+import type { CategoryOption } from '@/services/analysis';
+
+/**
+ * 类目多选面板（过滤区左栏）。
+ *
+ * 类目数可达数百，逐个滚动查找不可行——所以有按名过滤的输入与限高滚动。
+ * 受控组件：类目清单由外部传入，自身不取数。
+ */
+
+export interface CategoryPanelProps {
+  options: CategoryOption[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}
+
+export default function CategoryPanel({ options, value, onChange }: CategoryPanelProps) {
+  const [q, setQ] = useState('');
+
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle ? options.filter((o) => o.category.toLowerCase().includes(needle)) : options;
+  }, [options, q]);
+
+  const allChecked = options.length > 0 && value.length === options.length;
+
+  return (
+    <div>
+      <Typography.Text strong>选择筛选类目</Typography.Text>
+      <Input.Search
+        size="small"
+        allowClear
+        placeholder="搜索类目"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        style={{ margin: '8px 0' }}
+      />
+      <Checkbox
+        checked={allChecked}
+        indeterminate={value.length > 0 && !allChecked}
+        onChange={(e) => onChange(e.target.checked ? options.map((o) => o.category) : [])}
+        disabled={!options.length}
+      >
+        全部类目
+      </Checkbox>
+      <div
+        style={{
+          maxHeight: 380,
+          overflowY: 'auto',
+          marginTop: 8,
+          paddingRight: 4,
+          borderTop: '1px solid #f0f0f0',
+        }}
+      >
+        {visible.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={options.length ? '无匹配类目' : '该站点该视图暂无类目'}
+          />
+        ) : (
+          <Checkbox.Group
+            value={value}
+            onChange={(next) => onChange(next as string[])}
+            style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 8 }}
+          >
+            {visible.map((o) => (
+              <Checkbox key={o.category} value={o.category}>
+                <span title={o.category}>{o.category}</span>{' '}
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  ({o.count})
+                </Typography.Text>
+              </Checkbox>
+            ))}
+          </Checkbox.Group>
+        )}
+      </div>
+    </div>
+  );
+}

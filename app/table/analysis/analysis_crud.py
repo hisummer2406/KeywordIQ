@@ -54,7 +54,7 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
         v is not None
         for v in (
             req.keyword, req.brand, req.category, req.asin, req.product_title,
-            req.category_exact, req.ranking_min, req.ranking_max, req.change_min,
+            req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
             req.conversion_share_min, req.conversion_share_max, req.is_new,
         )
@@ -113,8 +113,8 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
         stmt = stmt.where(DimProduct.brand.ilike(f"%{req.brand}%"))
     if req.category:
         stmt = stmt.where(DimProduct.category.ilike(f"%{req.category}%"))
-    if req.category_exact:
-        stmt = stmt.where(DimProduct.category == req.category_exact)
+    if req.categories:
+        stmt = stmt.where(DimProduct.category.in_(req.categories))
     if req.asin:
         stmt = stmt.where(DimProduct.asin.ilike(f"%{req.asin}%"))
     if req.product_title:

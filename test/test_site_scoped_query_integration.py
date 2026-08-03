@@ -231,3 +231,79 @@ async def test_default_site_when_omitted(db):
     resp = await service.search(db, AnalysisSearchRequest(view="DAY", date=D3))
     from config import settings
     assert resp.site == settings.default_site
+
+
+def _seed_categories(db):
+    """三个带类目的关键词落在 D3，另有一个 Electronics 行落在 D1 用于验作用域边界。
+
+    事实行**写入时就带 top1_product_id**，不事后 UPDATE——事实表只追加是这套数据模型的
+    前提，测试里用 UPDATE 会示范一个生产上不成立的写法。
+
+    返回 {类目名: keyword_id}。
+    """
+    kids = {}
+    for category in ("Electronics", "Pet Supplies", "Home"):
+        pid = (db.execute(
+            text("INSERT INTO analysis.dim_product(asin,title,brand,category) "
+                 "VALUES (:a,'T','ACME',:c) RETURNING product_id"),
+            {"a": f"B0{abs(hash(category)) % 10**8:08d}", "c": category},
+        )).scalar()
+        kid = (db.execute(
+            text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
+            {"s": SITE, "k": f"kw-{category}"},
+        )).scalar()
+        db.execute(
+            text("INSERT INTO analysis.fact_daily"
+                 "(site,report_date,keyword_id,current_ranking,top1_product_id) "
+                 "VALUES (:s,:d,:k,20,:p)"),
+            {"s": SITE, "d": D3, "k": kid, "p": pid},
+        )
+        if category == "Electronics":
+            # 同类目、同关键词，但落在 D1：查 D3 时不该出现
+            db.execute(
+                text("INSERT INTO analysis.fact_daily"
+                     "(site,report_date,keyword_id,current_ranking,top1_product_id) "
+                     "VALUES (:s,:d,:k,21,:p)"),
+                {"s": SITE, "d": D1, "k": kid, "p": pid},
+            )
+        kids[category] = kid
+    db.flush()
+    return kids
+
+
+async def test_multi_category_filter_matches_any_selected(db):
+    """多选类目：命中所选集合中任意一个，不含未选类目。"""
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_categories)
+    resp = await service.search(db, AnalysisSearchRequest(
+        site=SITE, view="DAY", date=D3, perPage=100,
+        categories=["Electronics", "Pet Supplies"],
+    ))
+    got = {r["keyword_id"] for r in resp.data}
+    assert got == {kids["Electronics"], kids["Pet Supplies"]}
+    assert kids["Home"] not in got
+    assert {r["top1_category"] for r in resp.data} == {"Electronics", "Pet Supplies"}
+    assert resp.total == 2  # 带筛选时总数按筛选后计算，不是 site_data_stats 的值
+
+
+async def test_multi_category_filter_stays_in_scope(db):
+    """多选类目不突破作用域：D1 上的同一关键词行不出现在 D3 的结果里。"""
+    await db.run_sync(_seed)
+    await db.run_sync(_seed_categories)
+    resp = await service.search(db, AnalysisSearchRequest(
+        site=SITE, view="DAY", date=D3, perPage=100, categories=["Electronics"],
+    ))
+    assert len(resp.data) == 1  # D1 那行同关键词同类目，被日期边界挡在外面
+    assert resp.data[0]["current_ranking"] == 20  # D3 的值，不是 D1 的 21
+
+
+async def test_empty_categories_behaves_as_no_filter(db):
+    """空集合视同不筛：结果与完全不传类目一致。"""
+    await db.run_sync(_seed)
+    await db.run_sync(_seed_categories)
+    base = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100))
+    empty = await service.search(db, AnalysisSearchRequest(
+        site=SITE, view="DAY", date=D3, perPage=100, categories=[],
+    ))
+    assert {r["keyword_id"] for r in empty.data} == {r["keyword_id"] for r in base.data}
+    assert empty.total == base.total
