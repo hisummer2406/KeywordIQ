@@ -1,0 +1,91 @@
+.scope-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.scope-bar__query {
+  display: flex;
+  width: min(100%, 990px);
+  border: 1px solid #ff8a1f;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+  transition: box-shadow 0.2s;
+}
+
+.scope-bar__query:focus-within {
+  box-shadow: 0 0 0 2px rgb(255 138 31 / 12%);
+}
+
+.scope-bar__query > * + * {
+  border-left: 1px solid #f0f0f0 !important;
+}
+
+.scope-bar__query .ant-select-selector,
+.scope-bar__query .ant-input-affix-wrapper {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.scope-bar__site {
+  width: 180px;
+}
+
+.scope-bar__view {
+  width: 100px;
+}
+
+.scope-bar__date {
+  width: 240px;
+}
+
+.scope-bar__search {
+  min-width: 260px;
+  flex: 1;
+}
+
+.scope-bar__submit {
+  width: 96px;
+  height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: #ff8a1f;
+  box-shadow: none;
+}
+
+.scope-bar__submit:hover,
+.scope-bar__submit:focus {
+  background: #ff9f43 !important;
+}
+
+@media (max-width: 768px) {
+  .scope-bar__query {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .scope-bar__site,
+  .scope-bar__view,
+  .scope-bar__date,
+  .scope-bar__search,
+  .scope-bar__submit {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .scope-bar__date,
+  .scope-bar__search,
+  .scope-bar__submit {
+    grid-column: 1 / -1;
+    border-top: 1px solid #f0f0f0 !important;
+  }
+
+  .scope-bar__submit {
+    height: 38px;
+  }
+}
