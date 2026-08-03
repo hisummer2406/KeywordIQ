@@ -189,9 +189,9 @@ describe('分析查询屏', () => {
     getCategories.mockClear();
     const user = userEvent.setup();
 
-    await user.click(screen.getByText('美国 (US)'));
+    await user.click(screen.getByText('🇺🇸 美国站（US）'));
     await act(async () => {
-      await user.click(await screen.findByTitle('德国 (DE)'));
+      await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
     });
 
     await waitFor(() => expect(getScope).toHaveBeenCalledWith('DE', 'DAY'));
@@ -211,9 +211,9 @@ describe('分析查询屏', () => {
     await user.click(electronics);
     expect(electronics).toBeChecked();
 
-    await user.click(screen.getByText('美国 (US)'));
+    await user.click(screen.getByText('🇺🇸 美国站（US）'));
     await act(async () => {
-      await user.click(await screen.findByTitle('德国 (DE)'));
+      await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
     });
 
     await waitFor(() =>
