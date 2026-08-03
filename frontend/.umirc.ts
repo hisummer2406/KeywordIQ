@@ -18,6 +18,11 @@ export default defineConfig({
   model: {},
   initialState: {},
   request: {},
+  // 注意：这里的 layout 配置**只有 title / locale / formatMessage 三个键会生效**。
+  // Umi Max 生成的 plugin-layout 只从这份 userConfig 里取这三个，其余键不会传给
+  // ProLayout（生成代码里 ProLayout 展开的是 src/app.tsx 导出的运行时配置）。
+  // 所以布局形态（layout / contentWidth / fixedHeader 等）必须写在 src/app.tsx，
+  // 写在这里是死配置、不报错也不生效。
   layout: {
     title: '海眸系统',
     locale: false,

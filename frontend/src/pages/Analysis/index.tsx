@@ -2,7 +2,7 @@ import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType, ProColumns } from '@ant-design/pro-components';
 import { DownloadOutlined } from '@ant-design/icons';
 import { useAccess } from '@umijs/max';
-import { Button, Card, Radio, Select, Space, Tag, Typography, message } from 'antd';
+import { Button, Radio, Select, Space, Tag, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   exportAnalysis,
@@ -78,7 +78,9 @@ export default function AnalysisPage() {
 
   const columns: ProColumns<AnalysisRow>[] = [
     { title: '排名', dataIndex: 'current_ranking', width: 80, sorter: true, search: false },
-    { title: '关键词', dataIndex: 'keyword', ellipsis: true, copyable: true },
+    // 关键词与商品标题是两列「要读内容」的列，其余自适应列给定宽，把剩余横向空间
+    // 让给这两列。此前四列自适应各分到约 200px，商品标题几乎必被截断。
+    { title: '关键词', dataIndex: 'keyword', width: 220, ellipsis: true, copyable: true },
     {
       title: '7天走势',
       dataIndex: 'trend',
@@ -129,10 +131,12 @@ export default function AnalysisPage() {
       valueEnum: { true: { text: '新词' }, false: { text: '非新词' } },
       render: (_, r) => (r.is_new ? <Tag color="gold">新词</Tag> : '—'),
     },
-    { title: '品牌', dataIndex: 'top1_brand', ellipsis: true },
+    { title: '品牌', dataIndex: 'top1_brand', width: 130, ellipsis: true },
     {
       title: '类目',
       dataIndex: 'top1_category',
+      width: 150,
+      ellipsis: true,
       valueType: 'select',
       fieldProps: {
         showSearch: true,
@@ -141,6 +145,8 @@ export default function AnalysisPage() {
       render: (_, r) => r.top1_category || '—',
     },
     { title: 'ASIN', dataIndex: 'top1_asin', width: 120, copyable: true },
+    // 不给 width：让它吃掉所有剩余横向空间。ellipsis 仍保留——再宽也有超长标题，
+    // 截断时 antd 会挂 title 属性，悬停可看全文。
     { title: '商品标题', dataIndex: 'top1_title', ellipsis: true },
     {
       title: '点击份额',
@@ -162,20 +168,28 @@ export default function AnalysisPage() {
 
   return (
     <PageContainer title="分析查询">
-      <Card size="small" style={{ marginBottom: 12 }}>
-        <Space size="large" wrap>
-          <Space>
-            <Typography.Text type="secondary">站点</Typography.Text>
-            <Select
-              style={{ width: 160 }}
-              value={site}
-              onChange={(v) => reloadScope(v, view)}
-              options={sites.map((s) => ({ label: `${s.name_zh} (${s.code})`, value: s.code }))}
-            />
-          </Space>
-          <Space>
-            <Typography.Text type="secondary">视图</Typography.Text>
+      <ProTable<AnalysisRow>
+        /**
+         * 作用域三元组（站点 / 视图 / 日期）放进表格工具栏，与导出、刷新同一行。
+         *
+         * 此前它们独占一张 Card，加上下边距约吃掉 90px 竖向空间。作用域与下面的筛选
+         * 条件性质不同——它决定「查哪一份数据切片」，不是「筛哪些行」——但对用户而言
+         * 都是"查询前要设的东西"，挤在一行反而更接近数据工具的习惯。
+         */
+        headerTitle={
+          <Space size="middle" wrap>
+            <Space size={6}>
+              <Typography.Text type="secondary">站点</Typography.Text>
+              <Select
+                size="small"
+                style={{ width: 150 }}
+                value={site}
+                onChange={(v) => reloadScope(v, view)}
+                options={sites.map((s) => ({ label: `${s.name_zh} (${s.code})`, value: s.code }))}
+              />
+            </Space>
             <Radio.Group
+              size="small"
               value={view}
               onChange={(e) => reloadScope(site, e.target.value)}
               optionType="button"
@@ -183,22 +197,20 @@ export default function AnalysisPage() {
               <Radio.Button value="DAY">日视图</Radio.Button>
               <Radio.Button value="WEEK">周视图</Radio.Button>
             </Radio.Group>
+            <Space size={6}>
+              <Typography.Text type="secondary">日期</Typography.Text>
+              <Select
+                size="small"
+                style={{ width: 140 }}
+                value={date ?? undefined}
+                placeholder="无可用日期"
+                onChange={onDateChange}
+                options={availableDates.map((d) => ({ label: d, value: d }))}
+                notFoundContent="该站点该视图暂无数据"
+              />
+            </Space>
           </Space>
-          <Space>
-            <Typography.Text type="secondary">日期</Typography.Text>
-            <Select
-              style={{ width: 160 }}
-              value={date ?? undefined}
-              placeholder="无可用日期"
-              onChange={onDateChange}
-              options={availableDates.map((d) => ({ label: d, value: d }))}
-              notFoundContent="该站点该视图暂无数据"
-            />
-          </Space>
-        </Space>
-      </Card>
-
-      <ProTable<AnalysisRow>
+        }
         actionRef={actionRef}
         rowKey="keyword_id"
         columns={columns}
