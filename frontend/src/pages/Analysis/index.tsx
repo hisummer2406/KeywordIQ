@@ -8,7 +8,7 @@ import {
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useAccess } from '@umijs/max';
-import { Button, Card, Col, Row, Typography, message } from 'antd';
+import { Button, Card, Col, Row, Select, Space, Typography, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportAnalysis,
@@ -59,6 +59,12 @@ export default function AnalysisPage() {
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [exporting, setExporting] = useState(false);
   const [filterOpen, setFilterOpen] = useState(true);
+  const [resultTotal, setResultTotal] = useState(0);
+  const [sortDraft, setSortDraft] = useState({
+    field: 'current_ranking',
+    dir: 'asc' as 'asc' | 'desc',
+  });
+  const appliedSortRef = useRef(sortDraft);
 
   const draftBody = useMemo(() => toSearchBody(scope, filters), [scope, filters]);
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
@@ -242,35 +248,79 @@ export default function AnalysisPage() {
         search={false}
         pagination={{ pageSize: 50, showSizeChanger: true }}
         dateFormatter="string"
-        options={{ reload: true, density: false, setting: true }}
+        options={false}
+        headerTitle={
+          <Space size="middle">
+            {access.canExport && (
+              <Button
+                icon={<DownloadOutlined />}
+                loading={exporting}
+                disabled={!appliedRef.current?.date}
+                onClick={onExport}
+              >
+                导出 CSV
+              </Button>
+            )}
+            <Typography.Text type="secondary">
+              搜索结果：<Typography.Text strong>{resultTotal.toLocaleString()}</Typography.Text>
+            </Typography.Text>
+          </Space>
+        }
         request={async (params, sort) => {
           const body = appliedRef.current;
           if (!body?.date) return { data: [], total: 0, success: true };
           const [sortField, sortDir] = Object.entries(sort ?? {})[0] ?? [];
           const res = await searchAnalysis({
             ...body,
-            orderBy: sortField,
-            orderDir: sortDir === 'ascend' ? 'asc' : sortDir === 'descend' ? 'desc' : undefined,
+            orderBy: sortField || appliedSortRef.current.field,
+            orderDir:
+              sortDir === 'ascend'
+                ? 'asc'
+                : sortDir === 'descend'
+                  ? 'desc'
+                  : appliedSortRef.current.dir,
             page: params.current,
             perPage: params.pageSize,
           });
+          setResultTotal(res.total ?? 0);
           return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
         }}
-        toolBarRender={() =>
-          access.canExport
-            ? [
-                <Button
-                  key="export"
-                  icon={<DownloadOutlined />}
-                  loading={exporting}
-                  disabled={!appliedRef.current?.date}
-                  onClick={onExport}
-                >
-                  导出 CSV
-                </Button>,
-              ]
-            : []
-        }
+        toolBarRender={() => [
+          <Select
+            key="sort-field"
+            style={{ width: 140 }}
+            value={sortDraft.field}
+            onChange={(field) => setSortDraft((current) => ({ ...current, field }))}
+            options={[
+              { label: '当前排名', value: 'current_ranking' },
+              { label: '排名变化', value: 'ranking_change' },
+              { label: '历史排名', value: 'previous_ranking' },
+              { label: '点击份额', value: 'top1_click_share' },
+              { label: '转化份额', value: 'top1_conversion_share' },
+              { label: '新词', value: 'is_new' },
+            ]}
+          />,
+          <Select
+            key="sort-direction"
+            style={{ width: 100 }}
+            value={sortDraft.dir}
+            onChange={(dir) => setSortDraft((current) => ({ ...current, dir }))}
+            options={[
+              { label: '升序', value: 'asc' },
+              { label: '降序', value: 'desc' },
+            ]}
+          />,
+          <Button
+            key="apply-sort"
+            type="primary"
+            onClick={() => {
+              appliedSortRef.current = sortDraft;
+              actionRef.current?.reload(true);
+            }}
+          >
+            确定
+          </Button>,
+        ]}
       />
     </PageContainer>
   );
