@@ -308,3 +308,59 @@ DB_MAX_OVERFLOW=12
 - **Data-heavy paths**: Design for bounded memory and bounded result sets. Do not load entire GB-scale CSV files into memory, do not return unpaginated table-sized query results, and consider indexes and query plans when adding filters or joins used by search/analysis screens.
 - **Tests**: Unit tests should not require a live PostgreSQL instance; database/import tests may require `.env` and should use small fixtures rather than real production CSV files. New tests must be collectable by `pytest` and must not reference deleted or experimental module paths. Bug fixes should include a focused regression test when behavior can be reproduced locally.
 - **Configuration and local data**: Keep `.env.example` in sync when adding new settings, including units and safe local defaults. Do not commit `uploads/`, `logs/`, temporary split files, or real customer/search-report CSV data.
+
+## 开发 harness（提交门禁）
+
+**开工先 `openspec list`。** 手上的活儿很可能正是某个在飞变更里没勾完的任务，
+先看一眼比做完才发现便宜得多。
+
+### 提交门禁
+
+`git commit` 之前会自动按改动范围跑验证，不通过就拒绝提交。挂在 `PreToolUse` 上
+（`.claude/settings.json` → `.claude/hooks/pre_commit.py`），**只卡提交、不卡收尾**——
+改到一半停下来问问题是正常节奏，不该被打断；提交则是「我认为这份改动可以了」的声明，
+在那里要求它是绿的没有歧义。
+
+| 改动范围 | 跑什么 | 耗时 |
+|---|---|---|
+| `app/` `scripts/` `test/` `alembic/` 及顶层 `.py` | `ruff check .` + `pytest test/ -q` | ~5s |
+| `frontend/` | `pnpm lint` + `pnpm tsc` + `pnpm test` | ~15s |
+| 只有文档 / `openspec/` | 放行 | — |
+
+本地 PostgreSQL 起着时会自动带上 `TEST_DATABASE_URL` 解开集成测试，没起就只跑单元
+部分（不因此拒绝提交，CI 有真库兜底）。
+
+### 铁律检查在哪
+
+分两处，**不重叠**：
+
+- **ruff**（`pyproject.toml` 的 `[tool.ruff.lint]`）——能靠「看一个文件」判定的：
+  事件循环上的阻塞调用（`ASYNC` 组）、未用导入、`banned-api` 拦下的 Pydantic v1 /
+  SQLAlchemy 1.x 导入。
+- **`test/test_conventions.py`**——ruff 表达不了的：配置项与文档的一致性、死配置、
+  `except` 块里丢栈的日志。跑 `uv run pytest -m conventions`，亚秒级、不连库。
+
+新增铁律前先问「ruff 能不能查」，能就别手写。手写的规则**必须自带正反 fixture**
+（违规样本要被抓到、干净样本不能误报）——检查器自己是没人测的检查器，这正是它烂掉的方式。
+
+### 基线棘轮
+
+规则建立之前就存在的违规登记在 `test/conventions_baseline.toml`，被放行，好让门禁
+今天就是绿的。规则同时保证两件事：**新增违规会失败**，且**基线项一旦修好、测试会
+要求你把它从基线删掉**（否则基线会腐烂成永久豁免）。
+
+当前基线里的三笔债，都是真问题，各自应单独开变更修，不要在别的改动里顺手动：
+
+- `MAX_FILE_SIZE` 是死配置——`.env.example` 与本文件都公示了 3GB 上传上限，
+  但没有任何代码读它，那个上限并不存在。
+- `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` 文档写 8/12，`config.py` 默认是 20/10。
+  `.env` 漏配时生效的是后者，4 worker 就是 120 连接而非 80。
+- 18 处 `except` 块用 `logger.error` 打异常、栈丢失（`main.py` 6 处在 lifespan 与
+  健康检查里，`import_service.py` 1 处在后台任务失败分支，`user_crud.py` 11 处）。
+
+### 项目 skill
+
+- **`local-db`** —— 起测试库、跑含集成测试的全量回归。注意 `225 passed` 与
+  `181 passed, 45 skipped` 长得很像，跳过的 45 个恰是唯一碰真实分区表与咨询锁的部分。
+- **`verify-import`** —— 用真实体量的报表 CSV 跑一遍端到端导入并逐项断言落库结果。
+  改过导入路径就跑一次。

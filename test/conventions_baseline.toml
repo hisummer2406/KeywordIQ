@@ -1,0 +1,41 @@
+# 铁律检查的已知违规基线（棘轮）
+#
+# 这里登记的是**规则建立之前就存在**的违规。它们被放行，好让提交门禁今天就是绿的；
+# 但 test_conventions.py 会同时保证两件事：
+#
+#   1. 出现基线之外的新违规 → 测试失败（回归被挡住）
+#   2. 基线里的某项已经修好 → 测试也失败，要求你把它从这里删掉
+#
+# 第 2 条是关键：没有它，基线会腐烂成永久豁免。
+#
+# 清偿这些债务不属于「搭 harness」的范围，应各自单独开变更修。
+
+[dead_settings]
+# config.py 里定义了、但全仓无人读取的配置项。
+# MAX_FILE_SIZE 在 .env.example 与 CLAUDE.md 里都作为「3GB 上传上限」公示，
+# 但没有任何代码读它 —— 也就是说那个上限根本不存在。修法是补上校验或删掉配置项，
+# 二选一，不能维持现状（现状是文档承诺了一个不存在的保护）。
+known = ["MAX_FILE_SIZE"]
+
+[settings_doc_drift]
+# config.py 默认值与 .env.example / CLAUDE.md 中公示值不一致的配置项。
+# 这两项是连接池尺寸：文档与 .env.example 都写 8/12，config.py 默认却是 20/10。
+# .env 一旦漏配，4 个 worker 就是 (20+10)×4=120 连接，而非文档承诺的 (8+12)×4=80。
+# 这正是「配置超标 3–10×」那类问题。修法是让三处对齐，取哪个值需要按 RDS 上限判断。
+known = ["DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
+
+# except 块里用 logger.error 把异常当参数打印，栈信息就此丢失。
+# CLAUDE.md 明文要求用 logger.exception —— 尤其后台任务，栈是唯一线索来源。
+# import_service.py 那处正是后台任务 run_import 的失败分支，最该有栈的地方。
+# user_crud.py 的 11 处伴随「返值式错误」写法，与 CLAUDE.md「业务错误一律抛不返」
+# 是同一笔债，宜一并重构而非逐行改日志。
+#
+# 按文件计数而非行号：行号会随上方任何增删漂移，计数不会。计数只许降不许升。
+#
+# main.py 的 6 处在 lifespan 启动/关闭与健康检查里——数据库连不上时最需要栈的地方，
+# 现在只有一行 f-string。与记忆中「导入期应用卡死（半开连接）根因未确认」直接相关：
+# 那次排查缺的正是这类栈。
+[lossy_exception_logging.known]
+"app/table/upload/import_service.py" = 1
+"app/user/user_crud.py" = 11
+"main.py" = 6

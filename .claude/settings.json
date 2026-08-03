@@ -64,5 +64,22 @@
       "mcp__claude_ai_Notion__notion-duplicate-page",
       "mcp__claude_ai_Notion__notion-move-pages"
     ]
+  },
+
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "uv run python ${CLAUDE_PROJECT_DIR}/.claude/hooks/pre_commit.py",
+            "timeout": 300,
+            "statusMessage": "提交门禁：按改动范围跑 ruff / pytest / 前端检查"
+          }
+        ]
+      }
+    ]
   }
 }

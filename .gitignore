@@ -3,6 +3,10 @@
 .vscode/
 .claude/*
 !.claude/settings.json
+# 提交门禁与项目 skill 是团队资产（规则、流程），不是个人配置，随代码走。
+# settings.local.json 仍然被忽略——那里放个人权限与本机路径。
+!.claude/hooks/
+!.claude/skills/
 .DS_Store
 .env
 logs/*
