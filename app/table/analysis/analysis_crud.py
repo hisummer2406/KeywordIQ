@@ -61,24 +61,22 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     )
 
 
-def available_dates(db: Session, site: str, view: str) -> list[date]:
+def available_dates_stmt(site: str, view: str):
     """该 (站点, 视图) 有数据且在保留窗口内的日期，倒序。来源 site_data_stats。"""
-    stmt = (
+    return (
         select(SiteDataStats.report_date)
         .where(SiteDataStats.site == site, SiteDataStats.period_type == view)
         .order_by(SiteDataStats.report_date.desc())
     )
-    return list(db.execute(stmt).scalars().all())
 
 
-def scope_row_count(db: Session, site: str, view: str, on: date) -> int:
+def scope_row_count_stmt(site: str, view: str, on: date):
     """作用域内无筛选总数：直接读 site_data_stats.row_count（O(1)）。"""
-    stmt = select(SiteDataStats.row_count).where(
+    return select(SiteDataStats.row_count).where(
         SiteDataStats.site == site,
         SiteDataStats.period_type == view,
         SiteDataStats.report_date == on,
     )
-    return db.execute(stmt).scalar_one_or_none() or 0
 
 
 def _base_query(site: str, view: str, on: date):
@@ -152,18 +150,15 @@ def _apply_order(stmt, fact, req: AnalysisSearchRequest):
     return stmt.order_by(col, fact.keyword_id.asc())
 
 
-def search_rows(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> list[dict[str, Any]]:
+def search_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest):
     """主查询：作用域内一页数据（含筛选/排序/分页）。"""
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
     stmt = _apply_order(stmt, fact, req)
-    stmt = stmt.offset((req.page - 1) * req.perPage).limit(req.perPage)
-    return [dict(row._mapping) for row in db.execute(stmt).all()]
+    return stmt.offset((req.page - 1) * req.perPage).limit(req.perPage)
 
 
-def count_capped(
-    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int
-) -> int:
+def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int):
     """作用域内筛选后的行数，最多数到 ``cap``（数满即返回 cap，不再往下扫）。
 
     列表分页与导出上限检查共用：两处都只需要"是否超过某个数"，不需要精确总数。
@@ -171,42 +166,35 @@ def count_capped(
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
     capped = stmt.with_only_columns(fact.keyword_id).limit(cap).subquery()
-    return db.execute(select(func.count()).select_from(capped)).scalar_one()
+    return select(func.count()).select_from(capped)
 
 
-def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
+def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest):
     """有筛选时的总数：上限内精确计数（超过上限返回上限值）。"""
-    return count_capped(db, site, view, on, req, FILTERED_COUNT_CAP)
+    return count_capped_stmt(site, view, on, req, FILTERED_COUNT_CAP)
 
 
-def iter_export_rows(
-    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int
-):
-    """导出用：按作用域与筛选流式取行，分块产出（每块一个 dict 列表）。
+def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int):
+    """导出用语句：按作用域与筛选取行，带服务端游标的执行选项。
 
-    用服务端游标（``yield_per`` 触发 ``stream_results``）逐块拉取，内存与块大小同阶，
-    不随结果集增长——GB 级切片下整表 fetch 会撑爆 8 GiB 的应用服务器。
-    分块而非逐行产出，是为了让上层能按块批量补齐日视图的走势/当周变化。
+    ``yield_per`` 触发 ``stream_results``，内存与块大小同阶、不随结果集增长——GB 级
+    切片下整表 fetch 会撑爆 8 GiB 的应用服务器。调用方按 partition 分块消费，
+    好让上层能按块批量补齐日视图的走势/当周变化。
     """
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
     stmt = _apply_order(stmt, fact, req)
-    stmt = stmt.limit(limit)
-    result = db.execute(stmt.execution_options(yield_per=EXPORT_CHUNK_SIZE))
-    for partition in result.partitions():
-        yield [dict(row._mapping) for row in partition]
+    return stmt.limit(limit).execution_options(yield_per=EXPORT_CHUNK_SIZE)
 
 
-def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, list[int]]:
-    """日视图近 7 天走势：对本页 keyword_id 回溯查 fact_daily（截至所选日期回溯 6 天）。
+def trends_stmt(site: str, keyword_ids: list[int], on: date):
+    """日视图近 7 天走势的语句：对本页 keyword_id 回溯查 fact_daily（回溯 6 天）。
 
     走 idx_fact_daily_keyword_history（site, keyword_id, report_date）；report_date 范围
-    条件保证分区裁剪。历史不足 7 天就少几个点，不补齐。返回 {keyword_id: [排名…]}（按日期升序）。
+    条件保证分区裁剪。历史不足 7 天就少几个点，不补齐。
     """
-    if not keyword_ids:
-        return {}
     start = on - timedelta(days=6)
-    rows = db.execute(
+    return (
         select(FactDaily.keyword_id, FactDaily.current_ranking)
         .where(
             FactDaily.site == site,
@@ -215,50 +203,124 @@ def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> di
             FactDaily.report_date <= on,
         )
         .order_by(FactDaily.keyword_id, FactDaily.report_date)
-    ).all()
+    )
+
+
+def week_date_stmt(site: str, on: date):
+    """把所选日期映射到其所属 ISO 周的周报期次。
+
+    映射口径（查询侧决定，导入侧只存文件名日期、不定义周边界）：同 ISO 周
+    （``date_trunc('week')`` 相等）。在 site_data_stats 小表上解析，避免碰事实表。
+    """
+    return text(
+        f"SELECT report_date FROM {_SCHEMA}.site_data_stats "
+        f"WHERE site = :site AND period_type = 'WEEK' "
+        f"AND date_trunc('week', report_date) = date_trunc('week', :on) "
+        f"ORDER BY report_date DESC LIMIT 1"
+    ).bindparams(site=site, on=on)
+
+
+def week_changes_stmt(site: str, week_date: date, keyword_ids: list[int]):
+    """取某周报期次下各 keyword 的 ranking_change。等值条件利于分区裁剪。"""
+    return select(FactWeekly.keyword_id, FactWeekly.ranking_change).where(
+        FactWeekly.site == site,
+        FactWeekly.report_date_week == week_date,
+        FactWeekly.keyword_id.in_(keyword_ids),
+    )
+
+
+def category_options_stmt(site: str, view: str):
+    """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
+    return text(
+        f"SELECT top_category, cnt FROM {_SCHEMA}.category_stats "
+        f"WHERE site = :site AND period_type = :view ORDER BY cnt DESC"
+    ).bindparams(site=site, view=view)
+
+
+# --------------------------------------------------------------------------
+# 整形：把结果行转成上层要的形状。纯函数，与执行模型无关。
+# --------------------------------------------------------------------------
+
+
+def shape_rows(rows) -> list[dict[str, Any]]:
+    """结果行 → dict 列表。"""
+    return [dict(row._mapping) for row in rows]
+
+
+def shape_trends(rows) -> dict[int, list[int]]:
+    """(keyword_id, ranking) 行 → {keyword_id: [排名…]}（按日期升序，依赖语句已排序）。"""
     out: dict[int, list[int]] = {}
     for kid, rank in rows:
         out.setdefault(kid, []).append(rank)
     return out
 
 
-def fetch_week_changes(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, int]:
-    """当周排名变化：把所选日期映射到其所属 ISO 周的周报期次，取该期各 keyword 的 ranking_change。
-
-    映射口径（查询侧决定，导入侧只存文件名日期不定义周边界）：同 ISO 周
-    （date_trunc('week') 相等）。先在 site_data_stats 小表解析出周报期次 W，再等值查
-    fact_weekly（等值条件利于分区裁剪）。当周周报缺失 → 返回空 dict（该列全为空）。
-    """
-    if not keyword_ids:
-        return {}
-    week_date = db.execute(
-        text(
-            f"SELECT report_date FROM {_SCHEMA}.site_data_stats "
-            f"WHERE site = :site AND period_type = 'WEEK' "
-            f"AND date_trunc('week', report_date) = date_trunc('week', :on) "
-            f"ORDER BY report_date DESC LIMIT 1"
-        ),
-        {"site": site, "on": on},
-    ).scalar()
-    if week_date is None:
-        return {}
-    rows = db.execute(
-        select(FactWeekly.keyword_id, FactWeekly.ranking_change).where(
-            FactWeekly.site == site,
-            FactWeekly.report_date_week == week_date,
-            FactWeekly.keyword_id.in_(keyword_ids),
-        )
-    ).all()
+def shape_week_changes(rows) -> dict[int, int]:
+    """(keyword_id, ranking_change) 行 → dict。"""
     return {kid: ch for kid, ch in rows}
 
 
-def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:
-    """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
-    rows = db.execute(
-        text(
-            f"SELECT top_category, cnt FROM {_SCHEMA}.category_stats "
-            f"WHERE site = :site AND period_type = :view ORDER BY cnt DESC"
-        ),
-        {"site": site, "view": view},
-    ).all()
+def shape_category_options(rows) -> list[dict[str, Any]]:
+    """(top_category, cnt) 行 → 下拉选项列表。"""
     return [{"category": r[0], "count": r[1]} for r in rows]
+
+
+# --------------------------------------------------------------------------
+# 同步执行器：导出路径与迁移/脚本用。
+#
+# 面向请求的查询路径走异步，直接用上面的构造函数 + ``await session.execute(...)``。
+# 两条路径共用同一批构造函数——SQL 只有一处定义，作用域边界、筛选、排序白名单、
+# 封顶计数不会漂移。差异被压缩到 ``await`` 与否这一行。
+# --------------------------------------------------------------------------
+
+
+def available_dates(db: Session, site: str, view: str) -> list[date]:
+    return list(db.execute(available_dates_stmt(site, view)).scalars().all())
+
+
+def scope_row_count(db: Session, site: str, view: str, on: date) -> int:
+    return db.execute(scope_row_count_stmt(site, view, on)).scalar_one_or_none() or 0
+
+
+def search_rows(
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest
+) -> list[dict[str, Any]]:
+    return shape_rows(db.execute(search_stmt(site, view, on, req)).all())
+
+
+def count_capped(
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int
+) -> int:
+    return db.execute(count_capped_stmt(site, view, on, req, cap)).scalar_one()
+
+
+def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
+    return count_capped(db, site, view, on, req, FILTERED_COUNT_CAP)
+
+
+def iter_export_rows(
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int
+):
+    """导出：分块产出（每块一个 dict 列表）。保持同步——服务端游标 + 自建会话。"""
+    result = db.execute(export_stmt(site, view, on, req, limit))
+    for partition in result.partitions():
+        yield shape_rows(partition)
+
+
+def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, list[int]]:
+    if not keyword_ids:
+        return {}
+    return shape_trends(db.execute(trends_stmt(site, keyword_ids, on)).all())
+
+
+def fetch_week_changes(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, int]:
+    if not keyword_ids:
+        return {}
+    week_date = db.execute(week_date_stmt(site, on)).scalar()
+    if week_date is None:
+        return {}
+    return shape_week_changes(db.execute(week_changes_stmt(site, week_date, keyword_ids)).all())
+
+
+def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:
+    return shape_category_options(db.execute(category_options_stmt(site, view)).all())
