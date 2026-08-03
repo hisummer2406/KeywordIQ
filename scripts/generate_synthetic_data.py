@@ -215,9 +215,9 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    from app.site_registry import normalize_site_codes
     from config import settings
     from database import SessionFactory
-    from app.site_registry import normalize_site_codes
 
     sites = normalize_site_codes(args.sites.split(",")) if args.sites else settings.enabled_site_codes
     end_date = date.fromisoformat(args.end_date) if args.end_date else date.today()

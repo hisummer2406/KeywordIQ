@@ -10,13 +10,14 @@
 路由层做转译会把域内错误码（`analysis.scope_invalid`）盖成通用码。
 """
 import logging
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from database import get_db
+from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW
+from app.auth.simple_auth import simple_auth
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
@@ -24,8 +25,7 @@ from app.table.search.search_schemas import (
     CategoryOption,
     ScopeInfo,
 )
-from app.auth.simple_auth import simple_auth
-from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW
+from database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def export_data(
 @analysis_router.get("/scope", response_model=ScopeInfo)
 def get_scope(
     view: _View = Query("DAY"),
-    site: Optional[str] = Query(None),
+    site: str | None = Query(None),
     db: Session = Depends(get_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> ScopeInfo:
@@ -86,7 +86,7 @@ def get_scope(
 @analysis_router.get("/categories", response_model=list[CategoryOption])
 def get_categories(
     view: _View = Query("DAY"),
-    site: Optional[str] = Query(None),
+    site: str | None = Query(None),
     db: Session = Depends(get_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> list[CategoryOption]:

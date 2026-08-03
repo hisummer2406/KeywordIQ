@@ -28,7 +28,61 @@ dev = [
     "httpx<0.28",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.1",
 ]
 
 [tool.uv]
 package = false
+
+# ------------------------------------------------------------------------
+# ruff：语法层铁律的执行者。
+#
+# 它负责能用「看一个文件就判定」的方式表达的约束——尤其是 ASYNC 那组，
+# 直接对应 CLAUDE.md 里「不要在事件循环上跑阻塞调用」这条（历史上真出过事）。
+# 表达不了的项目特有铁律在 test/test_conventions.py，两边不重叠。
+# ------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [".venv", "alembic/versions", "frontend"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes：未使用导入/变量、未定义名字
+    "E4", "E7", "E9",  # pycodestyle 里真会出错的那部分
+    "W",      # 尾随空白之类
+    "I",      # import 排序
+    "UP",     # pyupgrade：跟上 py311
+    "B",      # bugbear：可变默认参数、循环里的闭包等真坑
+    "ASYNC",  # 事件循环上的阻塞调用 —— 本项目的重点
+    "TID",    # 配合下面的 banned-api
+    "RUF",    # ruff 自有规则
+]
+ignore = [
+    "B008",   # FastAPI 的 Depends()/Query() 就是要在默认值里调用，与本项目写法冲突
+    # 本仓库注释与用户可见文案是中文，全角标点是正常内容不是「疑似歧义字符」。
+    # 开着会产生 1300+ 条纯噪声，把真问题淹掉。
+    "RUF001", "RUF002", "RUF003",
+    # SQLAlchemy 的 __table_args__ / model_config 就是类级 dict，是框架规定写法。
+    "RUF012",
+]
+
+# Pydantic v1 / SQLAlchemy 1.x 的遗留用法里，凡是「靠 import 就能认出来」的都在这里拦。
+# 方法调用形式的（.dict()、.parse_obj()、class Config、.query()）ruff 表达不了，
+# 由 test/test_conventions.py 接手。
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pydantic.validator".msg = "Pydantic v2 用 @field_validator（见 CLAUDE.md「Pydantic 2.0 Only」）"
+"pydantic.root_validator".msg = "Pydantic v2 用 @model_validator"
+"pydantic.parse_obj_as".msg = "Pydantic v2 用 TypeAdapter"
+"sqlalchemy.orm.declarative_base".msg = "SQLAlchemy 2.0 用 DeclarativeBase 子类（见 CLAUDE.md「SQLAlchemy 2.0 Only」）"
+"sqlalchemy.ext.declarative.declarative_base".msg = "SQLAlchemy 2.0 用 DeclarativeBase 子类"
+
+[tool.ruff.lint.per-file-ignores]
+# 测试里为了构造违规样本会故意写反面用例；
+# E702 是测试夹具惯用的紧凑写法（`trans.rollback(); conn.close()`），不是疏忽。
+"test/*" = ["B", "RUF", "E702"]
+
+[tool.pytest.ini_options]
+markers = [
+    "conventions: 项目铁律检查（不连库，亚秒级；提交门禁与 CI 都会跑）",
+]

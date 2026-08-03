@@ -1,6 +1,7 @@
-import jwt
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Any
+
+import jwt
 
 from config import settings
 
@@ -10,7 +11,7 @@ class AuthService:
 
     @staticmethod
     def create_access_token(
-        user_id: int, username: str, is_super: bool, role: Optional[str] = None
+        user_id: int, username: str, is_super: bool, role: str | None = None
     ) -> str:
         """生成访问令牌。
 
@@ -28,7 +29,7 @@ class AuthService:
         return jwt.encode(payload, settings.ADMIN_SECRET_KEY, algorithm="HS256")
 
     @staticmethod
-    def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
+    def decode_access_token(token: str) -> dict[str, Any] | None:
         """解码访问令牌"""
         try:
             payload = jwt.decode(token, settings.ADMIN_SECRET_KEY, algorithms=["HS256"])

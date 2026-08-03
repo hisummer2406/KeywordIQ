@@ -13,9 +13,8 @@ from __future__ import annotations
 import logging
 import uuid
 from contextvars import ContextVar
-from typing import Optional
 
-_request_id: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
+_request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 #: 入站请求携带该头时沿用其值，保证跨层（nginx → 应用）可串联
 REQUEST_ID_HEADER = "X-Request-Id"
@@ -35,7 +34,7 @@ def reset_request_id(token) -> None:
     _request_id.reset(token)
 
 
-def get_request_id() -> Optional[str]:
+def get_request_id() -> str | None:
     """当前请求的 id；不在请求上下文中（如后台任务、启动期）时为 None。"""
     return _request_id.get()
 
@@ -76,7 +75,7 @@ class RequestIdMiddleware:
             reset_request_id(token)
 
 
-def _header_value(headers, name: str) -> Optional[str]:
+def _header_value(headers, name: str) -> str | None:
     """从 ASGI 的 headers 列表里取一个头（大小写不敏感）。"""
     target = name.lower().encode("latin-1")
     for key, value in headers:

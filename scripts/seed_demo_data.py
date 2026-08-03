@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text
 
-from database import SessionFactory
 from config import settings
+from database import SessionFactory
 
 SCHEMA = settings.DATABASE_SCHEMA
 N_KEYWORDS = 40

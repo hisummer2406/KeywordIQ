@@ -1,8 +1,9 @@
 import logging
-from sqlalchemy import text
 import unittest
 
-from database import engine, async_engine
+from sqlalchemy import text
+
+from database import async_engine, engine
 
 
 class TestDatabase(unittest.TestCase):

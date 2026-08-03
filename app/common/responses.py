@@ -5,7 +5,8 @@
 只需 `return protable(items, total)`；**失败一律抛异常**，由全局处理器产出统一错误体——
 列表失败若混在 HTTP 200 里，前端无法把"查询失败"和"没有数据"区分开。
 """
-from typing import Generic, Optional, Sequence, TypeVar
+from collections.abc import Sequence
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -19,7 +20,7 @@ class ProTableResponse(BaseModel, Generic[T]):
     success: bool = True
     data: list[T] = []
     total: int = 0
-    message: Optional[str] = None
+    message: str | None = None
 
 
 def protable(items: Sequence[T], total: int) -> ProTableResponse[T]:

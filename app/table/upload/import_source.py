@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import io
 import os
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import IO, Callable, Iterator
+from typing import IO
 
 # CSV 统一按带 BOM 的 UTF-8 解析——真实报表首行含 BOM（见 docs/table 样本）。
 _ENCODING = "utf-8-sig"
@@ -39,7 +40,7 @@ class LocalFileSource(ImportSource):
 
     @contextmanager
     def open_text(self) -> Iterator[IO[str]]:
-        with open(self.path, "r", encoding=_ENCODING, newline="") as fh:
+        with open(self.path, encoding=_ENCODING, newline="") as fh:
             yield fh
 
 

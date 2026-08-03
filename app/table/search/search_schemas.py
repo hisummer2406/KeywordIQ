@@ -9,10 +9,9 @@
 重解析注解时把 date 当成 FieldInfo，导致递归爆栈。别名规避了这一遮蔽。
 """
 from datetime import date as _Date
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 View = Literal["DAY", "WEEK"]
 
@@ -20,40 +19,40 @@ View = Literal["DAY", "WEEK"]
 class AnalysisSearchRequest(BaseModel):
     """分析查询请求。site/view/date 缺省时由服务层解析（默认站点 / 最新日期）。"""
 
-    site: Optional[str] = Field(None, description="站点码，缺省用配置默认站点")
+    site: str | None = Field(None, description="站点码，缺省用配置默认站点")
     view: View = Field("DAY", description="视图：DAY 查日报，WEEK 查周报")
-    date: Optional[_Date] = Field(None, description="报告日期，缺省取该站点该视图最新可用日期")
+    date: _Date | None = Field(None, description="报告日期，缺省取该站点该视图最新可用日期")
 
     # 分页
     page: int = Field(1, ge=1, description="页码")
     perPage: int = Field(50, ge=1, le=200, description="每页数量")
 
     # 排序（字段按视图白名单校验，非法回落默认；见 crud.SORTABLE_FIELDS）
-    orderBy: Optional[str] = Field(None, description="排序字段")
-    orderDir: Optional[Literal["asc", "desc"]] = Field(None, description="排序方向")
+    orderBy: str | None = Field(None, description="排序字段")
+    orderDir: Literal["asc", "desc"] | None = Field(None, description="排序方向")
 
     # 子串筛选（走维度表 trgm 索引）
-    keyword: Optional[str] = Field(None, description="关键词子串")
-    brand: Optional[str] = Field(None, description="品牌子串（top1 商品）")
-    category: Optional[str] = Field(None, description="类目子串（top1 商品）")
-    asin: Optional[str] = Field(None, description="ASIN 子串（top1 商品）")
-    product_title: Optional[str] = Field(None, description="标题子串（top1 商品）")
+    keyword: str | None = Field(None, description="关键词子串")
+    brand: str | None = Field(None, description="品牌子串（top1 商品）")
+    category: str | None = Field(None, description="类目子串（top1 商品）")
+    asin: str | None = Field(None, description="ASIN 子串（top1 商品）")
+    product_title: str | None = Field(None, description="标题子串（top1 商品）")
 
     # 精确类目（下拉，走 category_stats）
-    category_exact: Optional[str] = Field(None, description="类目精确匹配")
+    category_exact: str | None = Field(None, description="类目精确匹配")
 
     # 区间筛选
-    ranking_min: Optional[int] = Field(None, description="当期排名最小值")
-    ranking_max: Optional[int] = Field(None, description="当期排名最大值")
-    change_min: Optional[int] = Field(None, description="排名变化最小值")
-    change_max: Optional[int] = Field(None, description="排名变化最大值")
-    click_share_min: Optional[float] = Field(None, description="点击份额最小值")
-    click_share_max: Optional[float] = Field(None, description="点击份额最大值")
-    conversion_share_min: Optional[float] = Field(None, description="转化份额最小值")
-    conversion_share_max: Optional[float] = Field(None, description="转化份额最大值")
+    ranking_min: int | None = Field(None, description="当期排名最小值")
+    ranking_max: int | None = Field(None, description="当期排名最大值")
+    change_min: int | None = Field(None, description="排名变化最小值")
+    change_max: int | None = Field(None, description="排名变化最大值")
+    click_share_min: float | None = Field(None, description="点击份额最小值")
+    click_share_max: float | None = Field(None, description="点击份额最大值")
+    conversion_share_min: float | None = Field(None, description="转化份额最小值")
+    conversion_share_max: float | None = Field(None, description="转化份额最大值")
 
     # 布尔筛选
-    is_new: Optional[bool] = Field(None, description="是否本周期新词")
+    is_new: bool | None = Field(None, description="是否本周期新词")
 
 
 class _FactRowBase(BaseModel):
@@ -68,10 +67,10 @@ class _FactRowBase(BaseModel):
     ranking_change: int
     is_new: bool
 
-    top1_asin: Optional[str] = None
-    top1_title: Optional[str] = None
-    top1_brand: Optional[str] = None
-    top1_category: Optional[str] = None
+    top1_asin: str | None = None
+    top1_title: str | None = None
+    top1_brand: str | None = None
+    top1_category: str | None = None
     top1_click_share: float = 0
     top1_conversion_share: float = 0
 
@@ -79,8 +78,8 @@ class _FactRowBase(BaseModel):
 class DayRowItem(_FactRowBase):
     """日视图行：额外含近 7 天走势与当周排名变化（B 期填充）。"""
 
-    trend: List[int] = Field(default_factory=list, description="截至所选日期的近 7 天排名走势")
-    week_change: Optional[int] = Field(None, description="当前日期所属周的周排名变化，缺失为空")
+    trend: list[int] = Field(default_factory=list, description="截至所选日期的近 7 天排名走势")
+    week_change: int | None = Field(None, description="当前日期所属周的周排名变化，缺失为空")
 
 
 class WeekRowItem(_FactRowBase):
@@ -94,12 +93,12 @@ class AnalysisSearchResponse(BaseModel):
     """
 
     success: bool = True
-    data: List[Any] = Field(default_factory=list)
+    data: list[Any] = Field(default_factory=list)
     total: int = 0
     site: str
     view: View
-    date: Optional[_Date] = None
-    message: Optional[str] = None
+    date: _Date | None = None
+    message: str | None = None
 
 
 class ScopeInfo(BaseModel):
@@ -107,8 +106,8 @@ class ScopeInfo(BaseModel):
 
     site: str
     view: View
-    latest_date: Optional[_Date] = None
-    available_dates: List[_Date] = Field(default_factory=list)
+    latest_date: _Date | None = None
+    available_dates: list[_Date] = Field(default_factory=list)
 
 
 class CategoryOption(BaseModel):

@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field, field_validator
 from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 from app.site_registry import UnknownSiteError, normalize_site_code
 

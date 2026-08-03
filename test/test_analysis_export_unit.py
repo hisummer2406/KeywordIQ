@@ -6,7 +6,6 @@
 """
 from datetime import date
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -42,8 +41,8 @@ def _row(kid: int, keyword: str, ranking: int) -> dict:
 
 def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(2026, 7, 18),
                trends=None, week_changes=None):
-    from database import get_db
     from app.auth.simple_auth import simple_auth
+    from database import get_db
 
     rows = rows if rows is not None else [_row(1, "coffee maker", 1), _row(2, "kettle", 2)]
 

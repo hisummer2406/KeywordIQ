@@ -6,11 +6,11 @@ JWT 承载 role 的签发/解码 roundtrip、畸形令牌解码返回 None（回
 import pytest
 from fastapi import HTTPException
 
-from app.user.rbac_model import Role, Permission
-from app.user.user_model import UserCenter
-from app.auth.simple_auth import simple_auth, serialize_user
-from app.auth.login_auth import auth_service
 from app.auth import permissions as P
+from app.auth.login_auth import auth_service
+from app.auth.simple_auth import serialize_user, simple_auth
+from app.user.rbac_model import Permission, Role
+from app.user.user_model import UserCenter
 
 
 def _make_user(role_code, perm_codes, *, is_super=False, is_active=True, uid=1):

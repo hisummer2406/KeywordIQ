@@ -1,13 +1,15 @@
-from sqlalchemy.orm import Session
-from sqlalchemy import desc, func, select
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
 import logging
+from datetime import datetime
+from typing import Any
+
 from passlib.context import CryptContext
-from app.user.user_model import UserCenter
+from sqlalchemy import desc, func, select
+from sqlalchemy.orm import Session
+
+from app.auth.permissions import DEFAULT_ROLE_FOR_NON_SUPER, DEFAULT_ROLE_FOR_SUPER
 from app.user.rbac_model import Role
-from app.user.user_schemas import UserCenterCreate, UserCenterUpdate, UserCenterList
-from app.auth.permissions import DEFAULT_ROLE_FOR_SUPER, DEFAULT_ROLE_FOR_NON_SUPER
+from app.user.user_model import UserCenter
+from app.user.user_schemas import UserCenterCreate, UserCenterList, UserCenterUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +27,9 @@ class UserCenterCRUD:
             self,
             page: int = 1,
             per_page: int = 20,
-            user_name: Optional[str] = None,
-            is_active: Optional[bool] = None
-    ) -> Dict[str, Any]:
+            user_name: str | None = None,
+            is_active: bool | None = None
+    ) -> dict[str, Any]:
         """分页获取用户列表"""
         try:
             # 计算偏移量
@@ -68,12 +70,12 @@ class UserCenterCRUD:
                 "pages": 0
             }
 
-    def _default_role_id(self, is_super: bool) -> Optional[int]:
+    def _default_role_id(self, is_super: bool) -> int | None:
         """按 is_super 取默认角色 id（admin / operator），与迁移回填一致。"""
         code = DEFAULT_ROLE_FOR_SUPER if is_super else DEFAULT_ROLE_FOR_NON_SUPER
         return self.db.execute(select(Role.id).where(Role.code == code)).scalar_one_or_none()
 
-    def get_user_by_id(self, user_id: int) -> Optional[UserCenter]:
+    def get_user_by_id(self, user_id: int) -> UserCenter | None:
         """根据ID获取用户"""
         try:
             stmt = select(UserCenter).where(UserCenter.id == user_id)
@@ -82,7 +84,7 @@ class UserCenterCRUD:
             logger.error(f"根据ID获取用户失败: {e}")
             return None
 
-    def get_user_by_username(self, username: str) -> Optional[UserCenter]:
+    def get_user_by_username(self, username: str) -> UserCenter | None:
         """根据用户名获取用户"""
         try:
             stmt = select(UserCenter).where(UserCenter.user_name == username)
@@ -95,9 +97,9 @@ class UserCenterCRUD:
             self,
             skip: int = 0,
             limit: int = 100,
-            user_name: Optional[str] = None,
-            is_active: Optional[bool] = None
-    ) -> List[UserCenter]:
+            user_name: str | None = None,
+            is_active: bool | None = None
+    ) -> list[UserCenter]:
         """获取用户列表"""
         try:
             stmt = select(UserCenter)
@@ -120,8 +122,8 @@ class UserCenterCRUD:
 
     def count_users(
             self,
-            search: Optional[str] = None,
-            is_active: Optional[bool] = None
+            search: str | None = None,
+            is_active: bool | None = None
     ) -> int:
         """统计用户总数"""
         try:
@@ -141,7 +143,7 @@ class UserCenterCRUD:
             logger.error(f"统计用户总数失败: {e}")
             return 0
 
-    def create_user(self, user_data: UserCenterCreate) -> Tuple[bool, str, Optional[UserCenter]]:
+    def create_user(self, user_data: UserCenterCreate) -> tuple[bool, str, UserCenter | None]:
         """创建用户 - 包含业务逻辑验证"""
         try:
             # 检查用户名是否已存在
@@ -173,13 +175,13 @@ class UserCenterCRUD:
         except Exception as e:
             self.db.rollback()
             logger.error(f"创建用户失败: {e}")
-            return False, f"创建用户失败: {str(e)}", None
+            return False, f"创建用户失败: {e!s}", None
 
     def update_user(
             self,
             user_id: int,
             user_data: UserCenterUpdate
-    ) -> Tuple[bool, str, Optional[UserCenter]]:
+    ) -> tuple[bool, str, UserCenter | None]:
         """更新用户 - 包含业务逻辑验证"""
         try:
             # 检查用户是否存在
@@ -216,7 +218,7 @@ class UserCenterCRUD:
         except Exception as e:
             self.db.rollback()
             logger.error(f"更新用户失败: {e}")
-            return False, f"更新用户失败: {str(e)}", None
+            return False, f"更新用户失败: {e!s}", None
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """验证密码"""
@@ -234,7 +236,7 @@ class UserCenterCRUD:
             logger.error(f"密码加密失败: {e}")
             raise
 
-    def authenticate_user(self, username: str, password: str) -> Optional[UserCenter]:
+    def authenticate_user(self, username: str, password: str) -> UserCenter | None:
         """用户认证"""
         try:
             user = self.get_user_by_username(username)
@@ -253,7 +255,7 @@ class UserCenterCRUD:
             logger.error(f"用户认证失败: {e}")
             return None
 
-    def toggle_user_status(self, user_id: int) -> Tuple[bool, str, Optional[UserCenter]]:
+    def toggle_user_status(self, user_id: int) -> tuple[bool, str, UserCenter | None]:
         """切换用户状态（激活/禁用）- 包含业务逻辑验证"""
         try:
             user = self.get_user_by_id(user_id)
@@ -266,7 +268,7 @@ class UserCenterCRUD:
 
             # 切换状态
             update_data = UserCenterUpdate(is_active=not user.is_active)
-            success, message, updated_user = self.update_user(user_id, update_data)
+            success, _message, updated_user = self.update_user(user_id, update_data)
 
             if not success:
                 return False, "状态切换失败", None
@@ -277,4 +279,4 @@ class UserCenterCRUD:
 
         except Exception as e:
             logger.error(f"切换用户状态失败: {e}")
-            return False, f"状态切换失败: {str(e)}", None
+            return False, f"状态切换失败: {e!s}", None

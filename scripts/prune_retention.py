@@ -44,8 +44,8 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    from database import SessionFactory
     from app.table.analysis import retention_service
+    from database import SessionFactory
 
     with SessionFactory() as session:
         # 先做一次 dry-run 枚举，把将移出的分区摆到用户面前再决定是否执行。
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("完成，共移出 %s 个分区", result.total_dropped)
     if result.exported:
-        for table_name, paths in result.exported.items():
+        for _table_name, paths in result.exported.items():
             for path in paths:
                 logger.info("已留档: %s", path)
     return 0

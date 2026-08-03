@@ -29,7 +29,6 @@ import re
 import tempfile
 from dataclasses import dataclass
 from datetime import date, timedelta
-from pathlib import Path
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -197,7 +196,7 @@ def _stage_csv(session: Session, source: ImportSource) -> tuple[int, int, int]:
 
         if staged:
             cur = _raw_cursor(session)
-            with open(clean.name, "r", encoding="utf-8-sig", newline="") as f:
+            with open(clean.name, encoding="utf-8-sig", newline="") as f:
                 cur.copy_expert(
                     f"COPY {_STAGING_TABLE} FROM STDIN WITH (FORMAT csv)", f
                 )

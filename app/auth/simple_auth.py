@@ -1,14 +1,15 @@
 # app/auth/simple_auth.py
 """简化版认证模块 - 后台登录验证、当前用户与 RBAC 权限判定"""
 import logging
-from fastapi import HTTPException, status, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from database import get_db, SessionFactory
+from app.auth.login_auth import auth_service
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_model import UserCenter
-from app.auth.login_auth import auth_service
+from database import SessionFactory, get_db
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer()

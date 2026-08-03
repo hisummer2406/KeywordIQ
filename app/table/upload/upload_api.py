@@ -7,26 +7,26 @@ csv_processor + import_batch_records V1 表）已随 V1 内核退役删除。V2 
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 
-from app.auth.simple_auth import simple_auth
+import database
 from app.auth.permissions import UPLOAD_IMPORT
+from app.auth.simple_auth import simple_auth
 from app.common.errors import CODE_UPLOAD_BAD_FILE, BadRequestError
+from app.site_registry import SITE_CATALOG, UnknownSiteError, normalize_site_code
+from app.table.upload import oss_client
+from app.table.upload.import_service import ImportRejected, run_import
+from app.table.upload.import_source import LocalFileSource, OSSObjectSource
+from app.table.upload.importer import infer_period, parse_report_filename
 from app.table.upload.upload_schemas import (
     FilenameInspectRequest,
     OSSImportRequest,
     UploadCredentialRequest,
 )
-from app.table.upload.importer import infer_period, parse_report_filename
-from app.table.upload.import_service import run_import, ImportRejected
-from app.table.upload.import_source import LocalFileSource, OSSObjectSource
-from app.table.upload import oss_client
-from app.site_registry import UnknownSiteError, normalize_site_code, SITE_CATALOG
 from config import settings
-import database
 
 logger = logging.getLogger(__name__)
 upload_router = APIRouter()
@@ -63,7 +63,7 @@ def _run_oss_import_bg(object_key: str, original_filename: str, site: str, perio
         logger.exception("OSS 导入后台任务异常 %s", object_key)
 
 
-def _resolve_import_meta(filename: str, site: str, period: Optional[str]):
+def _resolve_import_meta(filename: str, site: str, period: str | None):
     """从文件名 + 声明站点解析出 (site, period, report_date)。
 
     校验不通过直接抛 `BadRequestError`——此前是返回 ``(None, None, None, 错误消息)``，
@@ -105,7 +105,7 @@ def _resolve_import_meta(filename: str, site: str, period: Optional[str]):
 @upload_router.get("/sites")
 async def list_sites(
     _user=Depends(simple_auth.get_current_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """站点下拉数据。唯一事实来源是 app/site_registry.py，前端不得硬编码站点列表。"""
     return {
         "sites": [
@@ -119,7 +119,7 @@ async def list_sites(
 async def inspect_filename(
     req: FilenameInspectRequest,
     _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """只读：把文件名解析成归属三元组（站点 / 周期 / 报告日期），供上传屏在上传前回显。
 
     **解析规则只在后端实现一份**：站点前缀正则、日期正则、周期关键词都在 importer 里，
@@ -157,7 +157,7 @@ async def inspect_filename(
 async def oss_upload_credentials(
     req: UploadCredentialRequest,
     _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """签发前端直传 OSS 的受限临时凭证与目标 object key。
 
     权限被 RAM 策略限死到本次上传的 bucket 与 key 前缀、仅写操作、短有效期。
@@ -179,7 +179,7 @@ async def oss_import(
     req: OSSImportRequest,
     background_tasks: BackgroundTasks,
     _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """前端完成直传后，凭 object key 触发从 OSS 拉取导入。
 
     校验 object key 落在授权前缀内、对象确实存在，再交后台流式导入。
@@ -215,9 +215,9 @@ async def import_csv_file(
         background_tasks: BackgroundTasks,
         file: UploadFile = File(...),
         site: str = Form(...),
-        period: Optional[str] = Form(None),
+        period: str | None = Form(None),
         _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """V2 本地导入退路（OSS_ENABLED=false）：站点必填，周期从文件名推断，报告日期从文件名解析。
 
     HTTP 上传落盘后交后台三段式处理。GB 级生产场景走 OSS 直传（/oss/*），此路供本地/CI。
@@ -256,12 +256,13 @@ async def import_csv_file(
 
 @upload_router.get("/processing-status")
 async def get_processing_status(
-    data_type: Optional[str] = None,
+    data_type: str | None = None,
     _user=Depends(simple_auth.get_current_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """最近导入批次状态（读 V2 import_batch）。data_type 兼容前端旧写法 daily/weekly。"""
-    from app.table.upload.import_batch_model import ImportBatch
     from sqlalchemy import desc, select
+
+    from app.table.upload.import_batch_model import ImportBatch
 
     # 数据库异常不再吞成"空列表 + status:1"——那会让前端把"查询失败"显示成"没有批次"。
     # 交给全局的 SQLAlchemyError 处理器区分 503/500。

@@ -20,7 +20,6 @@ from app.table.upload import oss_client
 from app.table.upload.import_source import LocalFileSource, OSSObjectSource, basename
 from app.table.upload.importer import ImportError_, validate_structure
 
-
 # --------------------------------------------------------------------------
 # object key 生成与前缀限权
 # --------------------------------------------------------------------------

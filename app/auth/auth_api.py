@@ -6,7 +6,7 @@ amis 时期的信封端点（/login、/profile）已随 amis 于阶段七删除�
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.auth.simple_auth import simple_auth, serialize_user
+from app.auth.simple_auth import serialize_user, simple_auth
 from app.user.user_model import UserCenter
 
 auth_router = APIRouter()

@@ -121,7 +121,7 @@ def _check_sts(report: Report, site: str, period: str, report_date: date):
     print("[2/7] STS 签发临时凭证")
     try:
         grant = oss_client.issue_upload_credentials(site, period, report_date, PROBE_FILENAME)
-    except Exception as exc:  # noqa: BLE001 — 运维脚本要把云端原始报错原样摆出来
+    except Exception as exc:
         report.fail(
             "AssumeRole", f"{type(exc).__name__}: {exc}",
             "检查 ①子账号是否有 sts:AssumeRole 权限 ②角色信任策略是否把该子账号列为可信实体 "
@@ -191,7 +191,7 @@ def _check_denied(report: Report, grant) -> None:
         from app.table.upload.oss_client import _default_bucket
 
         _default_bucket().delete_object(outside_key)
-    except Exception:  # noqa: BLE001 — 清理失败不改变结论，对象路径已打印出来
+    except Exception:
         print(f"     ↳ 越权写入的对象未能自动删除，请手工清理：{outside_key}")
 
 
@@ -207,7 +207,7 @@ def _check_readback(report: Report, grant) -> None:
             return
         with oss_client.object_stream(grant.object_key) as stream:
             content = stream.read()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         report.fail("读回", f"{type(exc).__name__}: {exc}",
                     "服务端 AK 需要对该 bucket 的 oss:GetObject 权限")
         return
@@ -322,7 +322,7 @@ def _cleanup(report: Report, grant) -> None:
     try:
         _default_bucket().delete_object(grant.object_key)
         print(f"\n探针对象已清理：{grant.object_key}")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         report.warn("清理探针对象", f"{type(exc).__name__}: {exc}",
                     f"请手工删除 {grant.object_key}（服务端 AK 可能缺 oss:DeleteObject 权限）")
 
