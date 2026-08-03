@@ -62,12 +62,23 @@ class Settings(BaseSettings):
     # python -c "import secrets; print(secrets.token_urlsafe(32))"
     ADMIN_SECRET_KEY: str
 
-    # 数据库连接优化配置。
-    # 这两个值各被用了两次：database.py 在模块级建了同步 engine 与异步 async_engine，
-    # 二者共用同一组配置。全局上限 = 2 个引擎 × (POOL + OVERFLOW) × 4 workers，
-    # 当前取值算下来是 240，对 RDS 的 max_connections=400 而言已占六成。
+    # 数据库连接池配置。
+    #
+    # database.py 在模块级创建**两个**引擎，各自持有独立的池，故全局上限是：
+    #
+    #     (同步池 + 同步溢出) × workers + (异步池 + 异步溢出) × workers
+    #
+    # start.sh 固定 4 个 worker。两个引擎服务的负载性质完全不同，因此**分开配置**——
+    # 早先共用一组取值，使算式被系统性低估一半（文档长期写着 (池+溢出)×workers）。
+    #
+    # 同步引擎：导入的 COPY（psycopg2 原始游标，asyncpg 无等价接口）、导出的服务端
+    # 游标、Alembic 迁移。都是低并发长事务。
     DB_POOL_SIZE: int = 20  # 连接池大小
     DB_MAX_OVERFLOW: int = 10  # 最大溢出连接
+    # 异步引擎：面向请求的查询与鉴权路径。
+    DB_ASYNC_POOL_SIZE: int = 20
+    DB_ASYNC_MAX_OVERFLOW: int = 10
+    # 超时与回收两个引擎共用——它们与负载性质无关，只与网络和 RDS 空闲策略有关。
     DB_POOL_TIMEOUT: int = 30  # 连接超时时间（秒）
     DB_POOL_RECYCLE: int = 1800  # 连接回收时间
     # 注：pool_pre_ping 在 database.py 里硬编码为 True，刻意不做成配置项——它与
