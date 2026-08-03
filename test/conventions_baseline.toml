@@ -12,17 +12,22 @@
 
 [dead_settings]
 # config.py 里定义了、但全仓无人读取的配置项。
-# MAX_FILE_SIZE 在 .env.example 与 CLAUDE.md 里都作为「3GB 上传上限」公示，
-# 但没有任何代码读它 —— 也就是说那个上限根本不存在。修法是补上校验或删掉配置项，
-# 二选一，不能维持现状（现状是文档承诺了一个不存在的保护）。
-known = ["MAX_FILE_SIZE"]
+#
+# 曾有 MAX_FILE_SIZE：.env.example 与 CLAUDE.md 都公示「3GB 上传上限」，却没有
+# 任何代码读它，那个上限并不存在。现已补上执行点——OSS 路径在 /oss/import 触发前
+# head_object 称量（直传下字节不经应用服务器，那是服务端唯一能知道大小的时机），
+# 本地退路在落盘时边写边计数、超限即中止并删掉半截文件。
+known = []
 
 [settings_doc_drift]
 # config.py 默认值与 .env.example / CLAUDE.md 中公示值不一致的配置项。
-# 这两项是连接池尺寸：文档与 .env.example 都写 8/12，config.py 默认却是 20/10。
-# .env 一旦漏配，4 个 worker 就是 (20+10)×4=120 连接，而非文档承诺的 (8+12)×4=80。
-# 这正是「配置超标 3–10×」那类问题。修法是让三处对齐，取哪个值需要按 RDS 上限判断。
-known = ["DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
+#
+# 曾有 DB_POOL_SIZE / DB_MAX_OVERFLOW 两项：文档与 .env.example 写 8/12，
+# config.py 默认与实际 .env 都是 20/10。查下来更要紧的是算式本身错了——
+# database.py 建了同步与异步两个引擎、共用同一组配置，全局上限要再乘 2
+# （2 × 30 × 4 workers = 240，而非文档所写的 80）。三处已对齐到 20/10 并写明算式。
+# 是否把池降到 8/12（上限 160）是另一个决定，需先有并发观测数据。
+known = []
 
 # except 块里用 logger.error 把异常当参数打印，栈信息就此丢失。
 # CLAUDE.md 明文要求用 logger.exception —— 尤其后台任务，栈是唯一线索来源。
@@ -32,10 +37,9 @@ known = ["DB_POOL_SIZE", "DB_MAX_OVERFLOW"]
 #
 # 按文件计数而非行号：行号会随上方任何增删漂移，计数不会。计数只许降不许升。
 #
-# main.py 的 6 处在 lifespan 启动/关闭与健康检查里——数据库连不上时最需要栈的地方，
-# 现在只有一行 f-string。与记忆中「导入期应用卡死（半开连接）根因未确认」直接相关：
-# 那次排查缺的正是这类栈。
+# main.py 的 6 处（lifespan 启动/关闭与健康检查）与 import_service.py 的 1 处
+# （后台任务失败分支）已改为 logger.exception，故从基线移除。
+# 剩下的 11 处绑在「返值式错误」写法上（return False, "消息", None），单改日志没有
+# 意义——应连同改成抛 APIError，与 CLAUDE.md「业务错误一律抛不返」一并了结。
 [lossy_exception_logging.known]
-"app/table/upload/import_service.py" = 1
 "app/user/user_crud.py" = 11
-"main.py" = 6

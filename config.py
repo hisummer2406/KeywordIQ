@@ -62,7 +62,10 @@ class Settings(BaseSettings):
     # python -c "import secrets; print(secrets.token_urlsafe(32))"
     ADMIN_SECRET_KEY: str
 
-    # 数据库连接优化配置（每 worker；× 4 workers 后须远低于 RDS 的 400）
+    # 数据库连接优化配置。
+    # 这两个值各被用了两次：database.py 在模块级建了同步 engine 与异步 async_engine，
+    # 二者共用同一组配置。全局上限 = 2 个引擎 × (POOL + OVERFLOW) × 4 workers，
+    # 当前取值算下来是 240，对 RDS 的 max_connections=400 而言已占六成。
     DB_POOL_SIZE: int = 20  # 连接池大小
     DB_MAX_OVERFLOW: int = 10  # 最大溢出连接
     DB_POOL_TIMEOUT: int = 30  # 连接超时时间（秒）

@@ -231,6 +231,16 @@ def object_exists(object_key: str, *, bucket=None) -> bool:
     return bool(b.object_exists(object_key))
 
 
+def object_size(object_key: str, *, bucket=None) -> int:
+    """对象字节数。``bucket`` 可注入以便测试。
+
+    直传下字节不经过应用服务器，服务端唯一能称量文件的时机就是导入触发前的这次
+    ``head_object``——所以 MAX_FILE_SIZE 的执行点在这里，不在"上传"那一步。
+    """
+    b = bucket or _default_bucket()
+    return int(b.head_object(object_key).content_length)
+
+
 def object_stream(object_key: str, *, bucket=None):
     """打开 OSS 对象，返回支持 ``read(size)`` 的二进制流。``bucket`` 可注入。
 

@@ -131,6 +131,7 @@ CODE_UPLOAD_IMPORT_REJECTED: Final = "upload.import_rejected"
 CODE_UPLOAD_OSS_NOT_READY: Final = "upload.oss_not_ready"
 CODE_UPLOAD_OBJECT_NOT_FOUND: Final = "upload.object_not_found"
 CODE_UPLOAD_BAD_FILE: Final = "upload.bad_file"
+CODE_UPLOAD_FILE_TOO_LARGE: Final = "upload.file_too_large"
 
 # 用户管理
 CODE_USER_DUPLICATE_NAME: Final = "user.duplicate_name"
