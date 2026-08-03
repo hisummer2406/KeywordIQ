@@ -27,12 +27,12 @@ async def issue_token(login_data: LoginRequest):
 
 
 @auth_router.get("/me")
-def get_me(current_user: UserCenter = Depends(simple_auth.get_current_user)):
+async def get_me(current_user: UserCenter = Depends(simple_auth.get_current_user)):
     """当前登录用户（含角色与权限码）。"""
     return serialize_user(current_user)
 
 
 @auth_router.post("/logout")
-def logout(current_user: UserCenter = Depends(simple_auth.get_current_user)):
+async def logout(current_user: UserCenter = Depends(simple_auth.get_current_user)):
     """登出（JWT 无状态，前端清 token 即可；此处仅确认令牌有效）。"""
     return {"success": True}

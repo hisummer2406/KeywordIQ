@@ -47,7 +47,7 @@ class _FakeSession:
         self.rolled_back = False
         self.added = []
 
-    def execute(self, *_args, **_kwargs):
+    async def execute(self, *_args, **_kwargs):
         if self.execute_raises is not None:
             raise self.execute_raises
         return SimpleNamespace(
@@ -59,13 +59,13 @@ class _FakeSession:
     def add(self, obj):
         self.added.append(obj)
 
-    def commit(self):
+    async def commit(self):
         self.committed = True
 
-    def rollback(self):
+    async def rollback(self):
         self.rolled_back = True
 
-    def refresh(self, _obj):
+    async def refresh(self, _obj):
         pass
 
 
@@ -81,64 +81,64 @@ def _existing_user(**kwargs):
 
 
 class TestWritePathsRaise:
-    def test_create_user_duplicate_name_raises_409(self, monkeypatch):
+    async def test_create_user_duplicate_name_raises_409(self, monkeypatch):
         crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(crud, "get_user_by_username", lambda _n: _existing_user())
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(_existing_user()))
 
         with pytest.raises(DuplicateUserNameError) as exc:
-            crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
+            await crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
 
         assert exc.value.http_status == 409
         assert exc.value.code == CODE_USER_DUPLICATE_NAME
 
-    def test_update_user_missing_raises_404(self, monkeypatch):
+    async def test_update_user_missing_raises_404(self, monkeypatch):
         crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(crud, "get_user_by_id", lambda _i: None)
+        monkeypatch.setattr(crud, "get_user_by_id", _async_return(None))
 
         with pytest.raises(UserNotFoundError) as exc:
-            crud.update_user(99, UserCenterUpdate(is_active=False))
+            await crud.update_user(99, UserCenterUpdate(is_active=False))
 
         assert exc.value.http_status == 404
         assert exc.value.code == CODE_USER_NOT_FOUND
 
-    def test_update_user_name_conflict_raises_409(self, monkeypatch):
+    async def test_update_user_name_conflict_raises_409(self, monkeypatch):
         crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(crud, "get_user_by_id", lambda _i: _existing_user())
-        monkeypatch.setattr(crud, "get_user_by_username", lambda _n: _existing_user(id=2))
+        monkeypatch.setattr(crud, "get_user_by_id", _async_return(_existing_user()))
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(_existing_user(id=2)))
 
         with pytest.raises(DuplicateUserNameError):
-            crud.update_user(1, UserCenterUpdate(user_name="bob"))
+            await crud.update_user(1, UserCenterUpdate(user_name="bob"))
 
-    def test_toggle_missing_user_raises_404(self, monkeypatch):
+    async def test_toggle_missing_user_raises_404(self, monkeypatch):
         crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(crud, "get_user_by_id", lambda _i: None)
+        monkeypatch.setattr(crud, "get_user_by_id", _async_return(None))
 
         with pytest.raises(UserNotFoundError):
-            crud.toggle_user_status(99)
+            await crud.toggle_user_status(99)
 
-    def test_disabling_superuser_raises_409(self, monkeypatch):
+    async def test_disabling_superuser_raises_409(self, monkeypatch):
         """禁用超管是与当前状态冲突，不是参数错误，故 409 而非 400。"""
         crud = UserCenterCRUD(_FakeSession())
         monkeypatch.setattr(
-            crud, "get_user_by_id", lambda _i: _existing_user(is_super=True, is_active=True)
+            crud, "get_user_by_id", _async_return(_existing_user(is_super=True, is_active=True))
         )
 
         with pytest.raises(SuperUserDeactivationError) as exc:
-            crud.toggle_user_status(1)
+            await crud.toggle_user_status(1)
 
         assert exc.value.http_status == 409
 
-    def test_write_failure_rolls_back_and_propagates(self, monkeypatch):
+    async def test_write_failure_rolls_back_and_propagates(self, monkeypatch):
         """写失败必须回滚，且异常继续上抛交全局处理器——不吞、不转译成元组。"""
         boom = OperationalError("SELECT 1", {}, Exception("connection refused"))
         session = _FakeSession()
         crud = UserCenterCRUD(session)
-        monkeypatch.setattr(crud, "get_user_by_username", lambda _n: None)
-        monkeypatch.setattr(crud, "_default_role_id", lambda _s: 1)
-        monkeypatch.setattr(session, "commit", _raise(boom))
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
+        monkeypatch.setattr(crud, "_default_role_id", _async_return(1))
+        monkeypatch.setattr(session, "commit", _async_raise(boom))
 
         with pytest.raises(OperationalError):
-            crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
+            await crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
 
         assert session.rolled_back is True
 
@@ -146,6 +146,20 @@ class TestWritePathsRaise:
 def _raise(exc):
     def _fn(*_a, **_kw):
         raise exc
+    return _fn
+
+
+def _async_raise(exc):
+    """协程版的「一调用就抛」，用于替换 AsyncSession 的 commit 等协程方法。"""
+    async def _fn(*_a, **_kw):
+        raise exc
+    return _fn
+
+
+def _async_return(value):
+    """协程版的固定返回值，用于替换已异步化的 CRUD 方法。"""
+    async def _fn(*_a, **_kw):
+        return value
     return _fn
 
 
@@ -172,12 +186,12 @@ class TestReadPathsDoNotSwallow:
         ],
         ids=["paginated", "list", "count", "by_id", "by_username"],
     )
-    def test_database_failure_propagates(self, call):
+    async def test_database_failure_propagates(self, call):
         boom = OperationalError("SELECT 1", {}, Exception("connection refused"))
         crud = UserCenterCRUD(_FakeSession(execute_raises=boom))
 
         with pytest.raises(OperationalError):
-            call(crud)
+            await call(crud)
 
 
 # --------------------------------------------------------------------------
@@ -185,7 +199,7 @@ class TestReadPathsDoNotSwallow:
 # --------------------------------------------------------------------------
 
 
-def test_api_layer_has_no_message_sniffing_translator():
+async def test_api_layer_has_no_message_sniffing_translator():
     """``_crud_failure`` 按中文子串猜状态码，是元组签名的遗留补丁，应随之消失。
 
     它的存在意味着「用户不存在」这个事实先被压成字符串、再被 ``"不存在" in message``
@@ -198,7 +212,7 @@ def test_api_layer_has_no_message_sniffing_translator():
     )
 
 
-def test_user_errors_are_api_errors():
+async def test_user_errors_are_api_errors():
     """用户域异常必须是 APIError 子类，才会被全局处理器统一成错误契约。"""
     for cls in (DuplicateUserNameError, UserNotFoundError, SuperUserDeactivationError):
         assert issubclass(cls, APIError)
@@ -242,7 +256,7 @@ def _app_with_stubbed_crud(monkeypatch, method: str, raises: Exception):
     ],
     ids=["duplicate-name-409", "missing-user-404", "super-protected-409"],
 )
-def test_domain_errors_reach_client_with_correct_status_and_code(
+async def test_domain_errors_reach_client_with_correct_status_and_code(
     monkeypatch, method, exc, path, verb, status, code
 ):
     """状态码与错误码由异常类型决定，不再由中文文案猜出来。"""
