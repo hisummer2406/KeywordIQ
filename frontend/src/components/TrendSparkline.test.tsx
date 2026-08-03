@@ -18,13 +18,12 @@ describe('TrendSparkline', () => {
     expect(screen.getByText('20')).toBeInTheDocument();
   });
 
-  it('多个数据点绘制为平滑趋势曲线而不是折线段', () => {
+  it('多个数据点严格按原始值绘制折线，不做平滑插值', () => {
     const { container } = render(<TrendSparkline values={[30, 12, 26, 8]} />);
 
-    expect(container.querySelector('[data-testid="trend-line"]')).toHaveAttribute(
-      'd',
-      expect.stringContaining('C'),
-    );
-    expect(container.querySelector('polyline')).not.toBeInTheDocument();
+    const line = container.querySelector('[data-testid="trend-line"]');
+    expect(line?.tagName.toLowerCase()).toBe('polyline');
+    expect(line).toHaveAttribute('points', expect.stringContaining('5.0,47.0'));
+    expect(container.querySelector('path[data-testid="trend-line"]')).not.toBeInTheDocument();
   });
 });
