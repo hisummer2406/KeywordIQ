@@ -8,9 +8,9 @@
 
 ## 2. analysis_crud 拆分构造与执行
 
-- [ ] 2.1 把 `available_dates` / `scope_row_count` / `search_rows` / `count_capped` / `count_filtered` / `iter_export_rows` / `fetch_trends` / `fetch_week_changes` 各拆为「纯构造函数（返回 statement）」与「纯整形函数（接收 rows）」，执行留给调用方
-- [ ] 2.2 保持 `_base_query` / `_apply_filters` / `_apply_order` / `request_has_filters` 不变（已是纯函数）
-- [ ] 2.3 在同步路径上先接回拆分后的函数，跑 `test_site_scoped_query_integration.py` 与 `test_analysis_export_integration.py`，确认纯重构零行为变化
+- [x] 2.1 把 `available_dates` / `scope_row_count` / `search_rows` / `count_capped` / `count_filtered` / `iter_export_rows` / `fetch_trends` / `fetch_week_changes` 各拆为「纯构造函数（返回 statement）」与「纯整形函数（接收 rows）」，执行留给调用方
+- [x] 2.2 保持 `_base_query` / `_apply_filters` / `_apply_order` / `request_has_filters` 不变（已是纯函数）
+- [x] 2.3 在同步路径上先接回拆分后的函数，跑 `test_site_scoped_query_integration.py` 与 `test_analysis_export_integration.py`，确认纯重构零行为变化
 
 ## 3. 查询路径异步化
 
