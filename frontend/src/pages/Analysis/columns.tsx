@@ -32,7 +32,7 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
     {
       title: '7天走势',
       dataIndex: 'trend',
-      width: 90,
+      width: 190,
       hideInTable: view !== 'DAY',
       render: (_, r) => <TrendSparkline values={r.trend} dates={r.trend_dates} />,
     },

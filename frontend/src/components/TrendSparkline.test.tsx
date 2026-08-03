@@ -17,4 +17,14 @@ describe('TrendSparkline', () => {
     expect(await screen.findByText('2026-07-17')).toBeInTheDocument();
     expect(screen.getByText('20')).toBeInTheDocument();
   });
+
+  it('多个数据点绘制为平滑趋势曲线而不是折线段', () => {
+    const { container } = render(<TrendSparkline values={[30, 12, 26, 8]} />);
+
+    expect(container.querySelector('[data-testid="trend-line"]')).toHaveAttribute(
+      'd',
+      expect.stringContaining('C'),
+    );
+    expect(container.querySelector('polyline')).not.toBeInTheDocument();
+  });
 });
