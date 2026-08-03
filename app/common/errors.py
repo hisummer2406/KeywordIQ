@@ -136,6 +136,7 @@ CODE_UPLOAD_FILE_TOO_LARGE: Final = "upload.file_too_large"
 # 用户管理
 CODE_USER_DUPLICATE_NAME: Final = "user.duplicate_name"
 CODE_USER_NOT_FOUND: Final = "user.not_found"
+CODE_USER_SUPER_PROTECTED: Final = "user.super_protected"
 
 # 基础设施与兜底
 CODE_DB_UNAVAILABLE: Final = "db.unavailable"
