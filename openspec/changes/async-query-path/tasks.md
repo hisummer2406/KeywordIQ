@@ -14,11 +14,11 @@
 
 ## 3. 查询路径异步化
 
-- [ ] 3.1 `analysis_service` 的 `search` / `scope` / `categories` 三条路径改为异步，用 `AsyncSession` 执行第 2 步拆出的语句；作用域解析与 `ScopeError` 逻辑不变
-- [ ] 3.2 `analysis_api` 的 `POST /search`、`GET /scope`、`GET /categories` 改 `async def` + 异步会话依赖
-- [ ] 3.3 `POST /export` 保持 `def` 与同步会话；确认它依赖的异步鉴权依赖能正常解析
-- [ ] 3.4 确认日视图的走势与当周排名变化（`fetch_trends` / `fetch_week_changes`）在异步路径下结果与同步路径一致，尤其是同 ISO 周映射口径
-- [ ] 3.5 让既有集成测试的断言在异步路径下重跑（不新写宽松断言），补异步测试夹具
+- [x] 3.1 `analysis_service` 的 `search` / `scope` / `categories` 三条路径改为异步，用 `AsyncSession` 执行第 2 步拆出的语句；作用域解析与 `ScopeError` 逻辑不变
+- [x] 3.2 `analysis_api` 的 `POST /search`、`GET /scope`、`GET /categories` 改 `async def` + 异步会话依赖
+- [x] 3.3 `POST /export` 保持 `def` 与同步会话；确认它依赖的异步鉴权依赖能正常解析
+- [x] 3.4 确认日视图的走势与当周排名变化（`fetch_trends` / `fetch_week_changes`）在异步路径下结果与同步路径一致，尤其是同 ISO 周映射口径
+- [x] 3.5 让既有集成测试的断言在异步路径下重跑（不新写宽松断言），补异步测试夹具
 
 ## 4. 鉴权与用户管理异步化
 

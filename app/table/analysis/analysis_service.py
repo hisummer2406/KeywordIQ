@@ -2,6 +2,11 @@
 
 职责：解析作用域三元组 (site, view, date)——默认站点、站点校验、日期默认/校验，
 再调 crud 组装 ProTable 响应并回显作用域。事务边界在此，crud 不提交。
+
+**执行模型**：``get_scope`` 与 ``search`` 是异步的（面向 200 个运营的读路径，
+用 ``AsyncSession`` + asyncpg）；``resolve_export_scope`` 与 ``iter_export_csv``
+保持同步——导出走服务端游标，且流式生成器需自建会话（响应体在依赖清理之后才被消费）。
+两条路径共用 ``analysis_crud`` 的同一批语句构造函数，SQL 只有一处定义。
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ import logging
 from collections.abc import Iterator
 from datetime import date
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.common.errors import (
@@ -94,10 +100,34 @@ def _resolve_date(
     return given
 
 
-def get_scope(db: Session, site: str | None, view: str) -> ScopeInfo:
+async def _available_dates(db: AsyncSession, site: str, view: str) -> list[date]:
+    return list((await db.execute(crud.available_dates_stmt(site, view))).scalars().all())
+
+
+async def _fetch_trends(
+    db: AsyncSession, site: str, keyword_ids: list[int], on: date
+) -> dict[int, list[int]]:
+    if not keyword_ids:
+        return {}
+    return crud.shape_trends((await db.execute(crud.trends_stmt(site, keyword_ids, on))).all())
+
+
+async def _fetch_week_changes(
+    db: AsyncSession, site: str, keyword_ids: list[int], on: date
+) -> dict[int, int]:
+    if not keyword_ids:
+        return {}
+    week_date = (await db.execute(crud.week_date_stmt(site, on))).scalar()
+    if week_date is None:
+        return {}
+    rows = (await db.execute(crud.week_changes_stmt(site, week_date, keyword_ids))).all()
+    return crud.shape_week_changes(rows)
+
+
+async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
     """作用域元信息：可选日期集 + 最新日期（日期选择器用）。"""
     resolved_site = _resolve_site(site)
-    dates = crud.available_dates(db, resolved_site, view)
+    dates = await _available_dates(db, resolved_site, view)
     return ScopeInfo(
         site=resolved_site,
         view=view,  # type: ignore[arg-type]
@@ -106,30 +136,30 @@ def get_scope(db: Session, site: str | None, view: str) -> ScopeInfo:
     )
 
 
-def search(db: Session, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
+async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
     """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。"""
     site = _resolve_site(req.site)
     view = req.view
-    dates = crud.available_dates(db, site, view)
+    dates = await _available_dates(db, site, view)
     on = _resolve_date(req.date, dates)
 
     # 该站点该视图无任何数据：正常返回空结果（非报错）
     if on is None:
         return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
 
-    rows = crud.search_rows(db, site, view, on, req)
+    rows = crud.shape_rows((await db.execute(crud.search_stmt(site, view, on, req))).all())
 
     if crud.request_has_filters(req):
-        total = crud.count_filtered(db, site, view, on, req)
+        total = (await db.execute(crud.count_filtered_stmt(site, view, on, req))).scalar_one()
     else:
-        total = crud.scope_row_count(db, site, view, on)
+        total = (await db.execute(crud.scope_row_count_stmt(site, view, on))).scalar_one_or_none() or 0
 
     # 按视图构造行 DTO。日视图附带只读的近 7 天走势与当周排名变化：先分页拿本页
     # keyword_id，再批量补附加，避免在整切片上做相关子查询。附加信息不改变结果集构成。
     if view == "DAY":
         ids = [r["keyword_id"] for r in rows]
-        trends = crud.fetch_trends(db, site, ids, on)
-        week_changes = crud.fetch_week_changes(db, site, ids, on)
+        trends = await _fetch_trends(db, site, ids, on)
+        week_changes = await _fetch_week_changes(db, site, ids, on)
         data = []
         for r in rows:
             item = DayRowItem(**r)
@@ -239,7 +269,8 @@ def export_filename(site: str, view: str, on: date | None) -> str:
     return f"{site}_{view}_{on or 'empty'}.csv"
 
 
-def get_categories(db: Session, site: str | None, view: str) -> list[CategoryOption]:
+async def get_categories(db: AsyncSession, site: str | None, view: str) -> list[CategoryOption]:
     """类目下拉选项（按作用域）。"""
     resolved_site = _resolve_site(site)
-    return [CategoryOption(**opt) for opt in crud.category_options(db, resolved_site, view)]
+    rows = (await db.execute(crud.category_options_stmt(resolved_site, view))).all()
+    return [CategoryOption(**opt) for opt in crud.shape_category_options(rows)]

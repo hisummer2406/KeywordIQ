@@ -86,3 +86,6 @@ ignore = [
 markers = [
     "conventions: 项目铁律检查（不连库，亚秒级；提交门禁与 CI 都会跑）",
 ]
+# 查询与鉴权路径已异步化，其集成测试需要事件循环。auto 模式让 async def 测试与
+# async fixture 无需逐个标注 @pytest.mark.asyncio；同步测试不受影响。
+asyncio_mode = "auto"
