@@ -17,6 +17,7 @@ from pathlib import Path
 # 让脚本直接运行时也能 import 仓库根的模块
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.common.errors import APIError
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_schemas import UserCenterCreate
 from database import SessionFactory
@@ -35,16 +36,18 @@ def main() -> int:
             print(f"用户已存在，跳过：{args.username}（role={existing.role_code}）")
             return 0
 
-        ok, msg, user = crud.create_user(
-            UserCenterCreate(
-                user_name=args.username,
-                password=args.password,
-                is_super=True,
-                is_active=True,
+        try:
+            user = crud.create_user(
+                UserCenterCreate(
+                    user_name=args.username,
+                    password=args.password,
+                    is_super=True,
+                    is_active=True,
+                )
             )
-        )
-        if not ok:
-            print(f"创建失败：{msg}", file=sys.stderr)
+        except APIError as exc:
+            # 这是命令行入口，没有全局处理器接管，故在此收口成退出码与人读的提示。
+            print(f"创建失败：{exc.message}", file=sys.stderr)
             return 1
         print(f"已创建管理员：{user.user_name}（id={user.id}, role={user.role_code}）")
         return 0

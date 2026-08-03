@@ -37,9 +37,8 @@ known = []
 #
 # 按文件计数而非行号：行号会随上方任何增删漂移，计数不会。计数只许降不许升。
 #
-# main.py 的 6 处（lifespan 启动/关闭与健康检查）与 import_service.py 的 1 处
-# （后台任务失败分支）已改为 logger.exception，故从基线移除。
-# 剩下的 11 处绑在「返值式错误」写法上（return False, "消息", None），单改日志没有
-# 意义——应连同改成抛 APIError，与 CLAUDE.md「业务错误一律抛不返」一并了结。
+# 已全部清偿：main.py 6 处（lifespan 与健康检查）、import_service.py 1 处（后台任务
+# 失败分支）改为 logger.exception；user_crud.py 的 11 处随「返值式错误」一并消失——
+# 那些 except 块本身就是为了把异常压成 (False, "消息", None) 而存在的，改成抛
+# APIError 之后不再需要捕获，数据库异常直接上浮交全局处理器。
 [lossy_exception_logging.known]
-"app/user/user_crud.py" = 11
