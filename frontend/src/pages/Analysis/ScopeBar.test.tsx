@@ -1,9 +1,9 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ScopeBar from './ScopeBar';
 
 describe('ScopeBar', () => {
-  it('将整组作用域控件水平居中并保留自动换行', () => {
+  it('将作用域控件组合成连续查询条', () => {
     const { container } = render(
       <ScopeBar
         sites={[{ code: 'US', name_zh: '美国', domain: 'amazon.com' }]}
@@ -17,12 +17,11 @@ describe('ScopeBar', () => {
       />,
     );
 
-    const scopeBar = container.firstElementChild;
-    expect(scopeBar).toHaveStyle({
-      width: '100%',
-      justifyContent: 'center',
-      flexWrap: 'wrap',
-    });
+    expect(container.querySelector('.scope-bar__query')).toBeInTheDocument();
     expect(container).toHaveTextContent('🇺🇸 美国站（US）');
+    expect(container).toHaveTextContent('2026年07月18日');
+    expect(
+      screen.getByPlaceholderText('输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger'),
+    ).toBeInTheDocument();
   });
 });

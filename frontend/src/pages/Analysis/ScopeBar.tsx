@@ -1,8 +1,9 @@
-import { SearchOutlined } from '@ant-design/icons';
 import { Button, Input, Select, Space, Tag, Typography } from 'antd';
 import type { SiteOption } from '@/services/upload';
 import { detectSearchKind, type ScopeDraft } from './filters';
 import { formatSiteLabel } from './siteLabel';
+import { formatScopeDateLabel } from './scopeDateLabel';
+import './ScopeBar.less';
 
 /**
  * 作用域栏：站点 / 视图 / 日期 / 单一检索框 / 立即查询。
@@ -45,61 +46,59 @@ export default function ScopeBar({
   const kind = detectSearchKind(q);
 
   return (
-    <Space
-      size="middle"
-      wrap
-      style={{
-        width: '100%',
-        justifyContent: 'center',
-      }}
-    >
-      <Select
-        style={{ width: 160 }}
-        value={scope.site}
-        placeholder="站点"
-        onChange={(site) => onScopeChange({ ...scope, site })}
-        options={sites.map((site) => ({ label: formatSiteLabel(site), value: site.code }))}
-      />
-      <Select
-        style={{ width: 100 }}
-        value={scope.view}
-        onChange={(view) => onScopeChange({ ...scope, view })}
-        options={[
-          { label: '按天', value: 'DAY' },
-          { label: '按周', value: 'WEEK' },
-        ]}
-      />
-      <Select
-        style={{ width: 160 }}
-        value={scope.date ?? undefined}
-        placeholder="无可用日期"
-        onChange={(date) => onScopeChange({ ...scope, date })}
-        options={availableDates.map((d) => ({ label: d, value: d }))}
-        notFoundContent="该站点该视图暂无数据"
-      />
-      <Input
-        style={{ width: 320 }}
-        allowClear
-        value={q}
-        placeholder="输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger"
-        onChange={(e) => onQChange(e.target.value)}
-        onPressEnter={onSubmit}
-        // 判定是自动的，但不能是不可见的：搜不到东西时用户需要知道系统搜的是哪个字段
-        suffix={
-          kind === 'none' ? (
-            <span />
-          ) : (
-            <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-              {KIND_LABEL[kind]}
-            </Typography.Text>
-          )
-        }
-      />
-      <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={onSubmit}>
-        立即查询
-      </Button>
+    <div className="scope-bar">
+      <Space.Compact className="scope-bar__query">
+        <Select
+          className="scope-bar__site"
+          value={scope.site}
+          placeholder="站点"
+          onChange={(site) => onScopeChange({ ...scope, site })}
+          options={sites.map((site) => ({ label: formatSiteLabel(site), value: site.code }))}
+        />
+        <Select
+          className="scope-bar__view"
+          value={scope.view}
+          onChange={(view) => onScopeChange({ ...scope, view })}
+          options={[
+            { label: '按天', value: 'DAY' },
+            { label: '按周', value: 'WEEK' },
+          ]}
+        />
+        <Select
+          className="scope-bar__date"
+          value={scope.date ?? undefined}
+          placeholder="无可用日期"
+          onChange={(date) => onScopeChange({ ...scope, date })}
+          options={availableDates.map((date) => ({
+            label: formatScopeDateLabel(date, scope.view),
+            value: date,
+          }))}
+          notFoundContent="该站点该视图暂无数据"
+        />
+        <Input
+          className="scope-bar__search"
+          allowClear
+          value={q}
+          placeholder="输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger"
+          onChange={(e) => onQChange(e.target.value)}
+          onPressEnter={onSubmit}
+          // 判定是自动的，但不能是不可见的：搜不到东西时用户需要知道系统搜的是哪个字段
+          suffix={
+            kind === 'none' ? (
+              <span />
+            ) : (
+              <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                {KIND_LABEL[kind]}
+              </Typography.Text>
+            )
+          }
+        />
+        <Button className="scope-bar__submit" type="primary" loading={loading} onClick={onSubmit}>
+          立即查询
+        </Button>
+      </Space.Compact>
       {/* 显式触发的代价是可能对着新条件读旧数据，这个提示是那份代价的必要补偿 */}
       {dirty && <Tag color="orange">条件已修改，点击立即查询生效</Tag>}
-    </Space>
+    </div>
   );
 }
