@@ -373,7 +373,6 @@ def test_background_import_task_logs_stack_and_does_not_escape(monkeypatch, capl
     唯一线索。
     """
     import logging
-
     from datetime import date
 
     import app.table.upload.upload_api as upload_api

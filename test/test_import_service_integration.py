@@ -87,6 +87,7 @@ def test_full_import_from_local_source_records_batch_and_stats(factory, tmp_path
 
 def test_failed_import_preserves_file_and_marks_failed(factory, tmp_path):
     from app.table.upload.import_service import run_import
+
     # 结构不符（缺元数据行的关键字），触发失败
     from app.table.upload.import_source import LocalFileSource
     bad = tmp_path / "bad.csv"
@@ -102,7 +103,7 @@ def test_failed_import_preserves_file_and_marks_failed(factory, tmp_path):
 
 def test_second_concurrent_import_is_rejected(factory, tmp_path):
     """持有锁时，第二个导入被拒（串行）。"""
-    from app.table.upload.import_service import run_import, ImportRejected, _IMPORT_LOCK_KEY
+    from app.table.upload.import_service import _IMPORT_LOCK_KEY, ImportRejected, run_import
     from app.table.upload.import_source import LocalFileSource
     # 手动占住锁，模拟"已有导入在跑"
     engine = create_engine(TEST_URL)

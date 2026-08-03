@@ -3,15 +3,15 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from app.api_router import api_router
 from app.common.error_handlers import register_error_handlers
 from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
 from config import settings
-from database import engine, async_engine
+from database import async_engine, engine
 from monitoring import SystemMonitor
 
 

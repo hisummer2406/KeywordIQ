@@ -5,14 +5,12 @@
 """
 from datetime import datetime
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.common.error_handlers import register_error_handlers
-from app.common.responses import ProTableResponse, protable
+from app.common.responses import protable
 from app.user.user_schemas import UserCenterList
-
 
 # ---------------- 适配层单元 ----------------
 
@@ -57,9 +55,9 @@ def _super_user():
 
 
 def _build_app(monkeypatch, *, paginated=None, raises=False):
-    from database import get_db
-    from app.auth.simple_auth import simple_auth
     import app.user.user_api as user_api_mod
+    from app.auth.simple_auth import simple_auth
+    from database import get_db
 
     def fake_paginated(self, **kwargs):
         if raises:

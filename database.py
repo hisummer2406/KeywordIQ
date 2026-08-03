@@ -1,8 +1,8 @@
 import logging
 import time
 
-from sqlalchemy import create_engine, MetaData, event
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession, create_async_engine
+from sqlalchemy import MetaData, create_engine, event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from config import settings

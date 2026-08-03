@@ -59,6 +59,11 @@ jobs:
       - name: 安装依赖（按 .python-version + uv.lock）
         run: uv sync --locked
 
+      # 与本地提交门禁（.claude/hooks/pre_commit.py）跑的是同一条命令、同一份配置。
+      # 规则只有一份，本地和 CI 不会漂移。
+      - name: ruff
+        run: uv run ruff check .
+
       - name: 迁移测试库
         run: uv run alembic upgrade head
 

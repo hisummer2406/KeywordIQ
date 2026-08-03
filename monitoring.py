@@ -1,8 +1,6 @@
 # monitoring.py
-import asyncio
-import json
 from datetime import datetime
-from typing import Dict, List
+
 import psutil
 
 
@@ -13,7 +11,7 @@ class SystemMonitor:
         self.metrics_history = []
         self.alerts = []
 
-    async def collect_metrics(self) -> Dict:
+    async def collect_metrics(self) -> dict:
         """收集系统指标"""
         cpu_percent = psutil.cpu_percent(interval=1)
         cpu_per_core = psutil.cpu_percent(interval=1, percpu=True)
@@ -46,7 +44,7 @@ class SystemMonitor:
 
         return metrics
 
-    async def check_alerts(self, metrics: Dict):
+    async def check_alerts(self, metrics: dict):
         """检查告警条件"""
         alerts = []
 
@@ -77,7 +75,7 @@ class SystemMonitor:
             self.alerts.append(alert)
             print(f"🚨 [{alert['level'].upper()}] {alert['message']}")
 
-    def get_performance_summary(self) -> Dict:
+    def get_performance_summary(self) -> dict:
         """获取性能摘要"""
         if not self.metrics_history:
             return {}

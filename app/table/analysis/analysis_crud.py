@@ -12,10 +12,10 @@ from typing import Any
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from config import settings
 from app.table.analysis.dimension_model import DimKeyword, DimProduct
 from app.table.analysis.fact_model import FactDaily, FactWeekly, SiteDataStats
 from app.table.search.search_schemas import AnalysisSearchRequest
+from config import settings
 
 _SCHEMA = settings.DATABASE_SCHEMA
 

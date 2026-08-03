@@ -8,13 +8,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Iterator
 from datetime import date
-from typing import Iterator, Optional
 
 from sqlalchemy.orm import Session
 
-from config import settings
-from database import SessionFactory
 from app.common.errors import (
     CODE_ANALYSIS_EXPORT_TOO_LARGE,
     CODE_ANALYSIS_SCOPE_INVALID,
@@ -31,6 +29,8 @@ from app.table.search.search_schemas import (
     ScopeInfo,
     WeekRowItem,
 )
+from config import settings
+from database import SessionFactory
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ _EXPORT_COLUMNS_DAY_EXTRA: list[tuple[str, str]] = [
 ]
 
 
-def _resolve_site(site: Optional[str]) -> str:
+def _resolve_site(site: str | None) -> str:
     """未传取默认站点；一律校验合法，非法即报错，绝不静默回退到默认。"""
     if site is None:
         return settings.default_site
@@ -84,8 +84,8 @@ def _resolve_site(site: Optional[str]) -> str:
 
 
 def _resolve_date(
-    given: Optional[date], available: list[date]
-) -> Optional[date]:
+    given: date | None, available: list[date]
+) -> date | None:
     """日期解析：未传取最新可用；传了必须在可选集内，否则报错不回退。"""
     if given is None:
         return available[0] if available else None
@@ -94,7 +94,7 @@ def _resolve_date(
     return given
 
 
-def get_scope(db: Session, site: Optional[str], view: str) -> ScopeInfo:
+def get_scope(db: Session, site: str | None, view: str) -> ScopeInfo:
     """作用域元信息：可选日期集 + 最新日期（日期选择器用）。"""
     resolved_site = _resolve_site(site)
     dates = crud.available_dates(db, resolved_site, view)
@@ -144,7 +144,7 @@ def search(db: Session, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
     )
 
 
-def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, str, Optional[date]]:
+def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, str, date | None]:
     """解析导出作用域并在开始流式输出前把上限检查做掉。
 
     上限必须在响应头发出之前检查：一旦开始流，就只能给出 200 + 一个被截断的 CSV，
@@ -169,7 +169,7 @@ def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, 
 
 
 def iter_export_csv(
-    site: str, view: str, on: Optional[date], req: AnalysisSearchRequest
+    site: str, view: str, on: date | None, req: AnalysisSearchRequest
 ) -> Iterator[str]:
     """产出 CSV 文本块（首块带 UTF-8 BOM）。
 
@@ -234,12 +234,12 @@ def _render_cell(value) -> str:
     return str(value)
 
 
-def export_filename(site: str, view: str, on: Optional[date]) -> str:
+def export_filename(site: str, view: str, on: date | None) -> str:
     """导出文件名带作用域三元组，便于归档时一眼认出是哪个切片。"""
     return f"{site}_{view}_{on or 'empty'}.csv"
 
 
-def get_categories(db: Session, site: Optional[str], view: str) -> list[CategoryOption]:
+def get_categories(db: Session, site: str | None, view: str) -> list[CategoryOption]:
     """类目下拉选项（按作用域）。"""
     resolved_site = _resolve_site(site)
     return [CategoryOption(**opt) for opt in crud.category_options(db, resolved_site, view)]

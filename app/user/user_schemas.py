@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field, field_validator, ConfigDict
-from typing import Optional
 from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class UserCenterBase(BaseModel):
@@ -13,7 +13,7 @@ class UserCenterBase(BaseModel):
 class UserCenterCreate(UserCenterBase):
     """用户注册模型"""
     password: str = Field(..., min_length=6, max_length=128, description="密码")
-    role_id: Optional[int] = Field(None, description="角色 ID；缺省按 is_super 赋默认角色")
+    role_id: int | None = Field(None, description="角色 ID；缺省按 is_super 赋默认角色")
 
     @field_validator('user_name')
     @classmethod
@@ -31,10 +31,10 @@ class UserCenterCreate(UserCenterBase):
 
 
 class UserCenterUpdate(BaseModel):
-    user_name: Optional[str] = Field(None, min_length=3, max_length=50, description="用户名")
-    password: Optional[str] = Field(None, min_length=6, max_length=50, description="密码")
-    is_active: Optional[bool] = Field(None, description="是否激活")
-    role_id: Optional[int] = Field(None, description="角色 ID")
+    user_name: str | None = Field(None, min_length=3, max_length=50, description="用户名")
+    password: str | None = Field(None, min_length=6, max_length=50, description="密码")
+    is_active: bool | None = Field(None, description="是否激活")
+    role_id: int | None = Field(None, description="角色 ID")
 
     @field_validator('user_name')
     @classmethod
@@ -67,8 +67,8 @@ class UserCenterList(BaseModel):
     user_name: str
     is_active: bool
     is_super: bool
-    role_id: Optional[int] = None
-    role_code: Optional[str] = None
+    role_id: int | None = None
+    role_code: str | None = None
     created_at: datetime
     updated_at: datetime
 

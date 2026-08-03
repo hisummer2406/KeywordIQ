@@ -16,7 +16,6 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-from app.table.analysis import analysis_crud as crud
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import AnalysisSearchRequest
 

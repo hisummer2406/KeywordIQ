@@ -1,9 +1,9 @@
 from fastapi import APIRouter
 
+from app.auth.auth_api import auth_router
 from app.table.analysis.analysis_api import analysis_router
 from app.table.upload.upload_api import upload_router
 from app.user.user_api import user_router
-from app.auth.auth_api import auth_router
 
 api_router = APIRouter(prefix="/api" , tags=["API"])
 

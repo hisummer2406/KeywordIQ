@@ -36,7 +36,8 @@ def _row(rank, keyword, *, a1="", t1="", b1="", cat1="", cs1="", a2="", t2="", b
     cells = [str(rank), keyword, b1, b2, b3, cat1, cat2, cat3,
              a1, t1, cs1, "", a2, t2, "", "", a3, t3, "", "", date_str]
     # csv 转义：含逗号的标题加引号
-    import csv, io
+    import csv
+    import io
     buf = io.StringIO()
     csv.writer(buf).writerow(cells)
     return buf.getvalue().rstrip("\r\n")
@@ -67,8 +68,8 @@ def session():
 
 
 def _import(session, tmp_path, name, rows, *, site="US", period="DAY", d=date(2026, 7, 15)):
-    from app.table.upload.importer import import_report
     from app.table.upload.import_source import LocalFileSource
+    from app.table.upload.importer import import_report
     path = _write_csv(tmp_path, name, rows)
     return import_report(session, site=site, period=period, report_date=d, source=LocalFileSource(path))
 

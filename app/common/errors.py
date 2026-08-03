@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from typing import Final, Optional
+from typing import Final
 
 
 class APIError(Exception):
@@ -26,10 +26,10 @@ class APIError(Exception):
 
     def __init__(
         self,
-        message: Optional[str] = None,
+        message: str | None = None,
         *,
-        code: Optional[str] = None,
-        log_detail: Optional[str] = None,
+        code: str | None = None,
+        log_detail: str | None = None,
     ):
         self.message = message or type(self).message
         self.code = code or type(self).code

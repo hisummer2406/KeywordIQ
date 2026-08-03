@@ -17,9 +17,9 @@ from pathlib import Path
 # 让脚本直接运行时也能 import 仓库根的模块
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from database import SessionFactory
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_schemas import UserCenterCreate
+from database import SessionFactory
 
 
 def main() -> int:

@@ -17,13 +17,12 @@ from sqlalchemy import engine_from_config, pool, text
 
 from alembic import context
 
-from config import settings
-from database import Base
-
 # 导入模型模块，让它们注册到 Base.metadata。
 from app.table.analysis import dimension_model, fact_model  # noqa: F401
 from app.table.upload import import_batch_model  # noqa: F401
 from app.user import user_model  # noqa: F401
+from config import settings
+from database import Base
 
 config = context.config
 
