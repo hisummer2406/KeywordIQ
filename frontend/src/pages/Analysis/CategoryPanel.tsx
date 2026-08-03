@@ -27,14 +27,13 @@ export default function CategoryPanel({ options, value, onChange }: CategoryPane
 
   return (
     <div>
-      <Typography.Text strong>选择筛选类目</Typography.Text>
       <Input.Search
         size="small"
         allowClear
         placeholder="搜索类目"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        style={{ margin: '8px 0' }}
+        style={{ marginBottom: 8 }}
       />
       <Checkbox
         checked={allChecked}
