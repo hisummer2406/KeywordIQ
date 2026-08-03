@@ -31,16 +31,16 @@
 
 ## 5. 收口与一致性
 
-- [ ] 5.1 `/oss/processing-status` 已用异步会话，确认与新的会话依赖写法一致
-- [ ] 5.2 `main.py` 的 lifespan 探活与 `/health` 统一到新的引擎划分；顺带确认 `/health` 失败时不再把 `str(e)` 序列化进响应体
-- [ ] 5.3 全仓搜索确认面向请求的 `async def` 调用链中不再存在同步 `Session` / `SessionFactory`
-- [ ] 5.4 线程池上限对齐同步池容量（在应用启动处设置 AnyIO 限流器）
+- [x] 5.1 `/oss/processing-status` 已用异步会话，确认与新的会话依赖写法一致
+- [x] 5.2 `main.py` 的 lifespan 探活与 `/health` 统一到新的引擎划分；顺带确认 `/health` 失败时不再把 `str(e)` 序列化进响应体
+- [x] 5.3 全仓搜索确认面向请求的 `async def` 调用链中不再存在同步 `Session` / `SessionFactory`
+- [x] 5.4 线程池上限对齐同步池容量（在应用启动处设置 AnyIO 限流器）
 
 ## 6. 验证
 
 - [ ] 6.1 `uv run ruff check .` 全绿；提交门禁在每一步提交时均放行
 - [ ] 6.2 全量 `TEST_DATABASE_URL=... uv run pytest test/ -q` 通过，集成测试未被静默跳过（skip 数应为 1）
-- [ ] 6.3 实测登录延迟：确认 bcrypt 期间同一 worker 仍能处理其他请求（并发发起一次登录与若干查询，查询不被阻塞约 250 ms）
+- [x] 6.3 实测登录延迟：确认 bcrypt 期间同一 worker 仍能处理其他请求（并发发起一次登录与若干查询，查询不被阻塞约 250 ms）
 - [ ] 6.4 用真实体量数据核对查询结果与异步化前逐字段一致（走 `verify-import` skill 备好数据后对比）
 - [ ] 6.5 确认迁移可回滚性不受影响（`alembic downgrade -1 && upgrade head` 仍走同步引擎）
 

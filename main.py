@@ -2,7 +2,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+import anyio.to_thread
 from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -60,6 +62,16 @@ async def lifespan(app: FastAPI):
     logger.info(f"🚀 {settings.APP_NAME} v{settings.VERSION} 启动中...")
     logger.info(f"📊 数据库Schema: {settings.DATABASE_SCHEMA}")
     logger.info(f"📁 上传目录: {settings.UPLOAD_DIR}")
+
+    # 线程池上限对齐同步连接池的满载容量。
+    #
+    # 走线程池的只剩少数同步端点（导出、健康检查探活），它们每个都要占一条同步连接。
+    # AnyIO 默认 40 个线程，而同步池满载只有 (DB_POOL_SIZE + DB_MAX_OVERFLOW) 条——
+    # 线程数超过可用连接时，多出的线程会卡在连接池上直到 pool_timeout 超时报错。
+    # 把并发限制在应用侧：排队快、可观测，且不占数据库连接。
+    thread_limit = settings.DB_POOL_SIZE + settings.DB_MAX_OVERFLOW
+    anyio.to_thread.current_default_thread_limiter().total_tokens = thread_limit
+    logger.info("🧵 线程池上限对齐同步连接池: %d", thread_limit)
 
     # 初始化上传目录
     init_upload_dir()
@@ -142,11 +154,17 @@ async def root():
     return {"service": "KeywordIQ API", "docs": "/docs"}
 
 
+def _probe_sync_engine() -> None:
+    """同步引擎探活。在线程池里跑——它是阻塞调用，不能占事件循环。"""
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+
 @app.get("/health")
 async def health_check():
+    """两个引擎各探一次。健康检查会被轮询，故不能阻塞事件循环。"""
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+        await run_in_threadpool(_probe_sync_engine)
         async with async_engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
 
@@ -157,9 +175,11 @@ async def health_check():
                 "async": "healthy"
             }
         }
-    except Exception as e:
+    except Exception:
+        # 细节只进日志。此前把 str(e) 写进响应体，而数据库异常的字符串可能带出
+        # 连接串与内部路径——健康检查通常是不鉴权的，等于对外泄露。
         logger.exception("❌ 健康检查失败")
-        return {"status": "unhealthy", "error": str(e)}
+        return {"status": "unhealthy"}
 
 
 # 集成到FastAPI应用
@@ -179,25 +199,50 @@ async def get_system_metrics():
 
 @app.get("/health/pool")
 async def pool_status():
-    """获取数据库连接池状态 - 用于监控和诊断"""
-    from sqlalchemy import inspect
+    """两个连接池的实时状态 - 用于监控和诊断。
 
-    sync_inspect = inspect(engine)
+    **两个都要报。** 异步池承载全部面向请求的查询与鉴权，同步池只承载导入、导出与
+    迁移；只看其中一个会对全局连接上限得出错误结论——历史上文档里的算式正是因为
+    漏算了一个引擎而系统性低估了一半。
+    """
+    sync_pool = engine.pool
+    async_pool = async_engine.pool
+    per_worker_ceiling = (
+        settings.DB_POOL_SIZE + settings.DB_MAX_OVERFLOW
+        + settings.DB_ASYNC_POOL_SIZE + settings.DB_ASYNC_MAX_OVERFLOW
+    )
 
     return {
         "sync_engine": {
-            "pool_size": sync_inspect.pool.size(),
-            "checked_in": sync_inspect.pool.checkedin(),
-            "checked_out": sync_inspect.pool.checkedout(),
-            "overflow": sync_inspect.pool.overflow(),
+            "role": "导入 COPY / 导出游标 / 迁移",
+            "pool_size": sync_pool.size(),
+            "checked_in": sync_pool.checkedin(),
+            "checked_out": sync_pool.checkedout(),
+            "overflow": sync_pool.overflow(),
             "max_overflow": settings.DB_MAX_OVERFLOW,
         },
+        "async_engine": {
+            "role": "面向请求的查询与鉴权",
+            "pool_size": async_pool.size(),
+            "checked_in": async_pool.checkedin(),
+            "checked_out": async_pool.checkedout(),
+            "overflow": async_pool.overflow(),
+            "max_overflow": settings.DB_ASYNC_MAX_OVERFLOW,
+        },
         "config": {
-            "pool_size": settings.DB_POOL_SIZE,
-            "max_overflow": settings.DB_MAX_OVERFLOW,
+            "sync": {
+                "pool_size": settings.DB_POOL_SIZE,
+                "max_overflow": settings.DB_MAX_OVERFLOW,
+            },
+            "async": {
+                "pool_size": settings.DB_ASYNC_POOL_SIZE,
+                "max_overflow": settings.DB_ASYNC_MAX_OVERFLOW,
+            },
             "pool_timeout": settings.DB_POOL_TIMEOUT,
             "pool_recycle": settings.DB_POOL_RECYCLE,
-        }
+            # 单 worker 满载上限；乘 worker 数即全局上限，须远低于 RDS 的 max_connections
+            "per_worker_ceiling": per_worker_ceiling,
+        },
     }
 
 
