@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const { accessState, searchAnalysis, getScope, getCategories, getSites, exportAnalysis } =
@@ -19,10 +19,13 @@ vi.mock('@/services/upload', () => ({ getSites }));
 import AnalysisPage from '@/pages/Analysis';
 
 /** 渲染并把进屏时的异步 effect（作用域解析 → 表格首次请求）跑完，避免 act 警告淹没真实失败。 */
-async function renderSettled() {
+async function renderSettled(expandFilters = true) {
   await act(async () => {
     render(<AnalysisPage />);
   });
+  if (expandFilters) {
+    fireEvent.click(screen.getByRole('button', { name: /展开过滤条件/ }));
+  }
 }
 
 /** 给"之后没有再发请求"这类断言一个观察窗口。 */
@@ -90,6 +93,14 @@ describe('分析查询屏', () => {
       date: '2026-07-18',
     });
     exportAnalysis.mockResolvedValue(undefined);
+  });
+
+  it('过滤条件默认收起', async () => {
+    await renderSettled(false);
+
+    expect(screen.getByRole('button', { name: /展开过滤条件/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /开始筛选/ })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('搜索类目')).not.toBeInTheDocument();
   });
 
   it('进屏解析作用域并把三元组带进首次查询', async () => {

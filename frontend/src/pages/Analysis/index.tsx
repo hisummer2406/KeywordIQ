@@ -58,7 +58,7 @@ export default function AnalysisPage() {
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
   const [exporting, setExporting] = useState(false);
-  const [filterOpen, setFilterOpen] = useState(true);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [resultTotal, setResultTotal] = useState(0);
   const [sortDraft, setSortDraft] = useState({
     field: 'current_ranking',
