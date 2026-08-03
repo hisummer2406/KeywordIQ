@@ -28,7 +28,7 @@ export default function CategoryPanel({ options, value, onChange }: CategoryPane
   return (
     <div>
       <Input.Search
-        size="small"
+        size="middle"
         allowClear
         placeholder="搜索类目"
         value={q}

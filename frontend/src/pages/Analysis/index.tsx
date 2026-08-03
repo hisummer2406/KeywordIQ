@@ -1,4 +1,10 @@
-import { DownOutlined, DownloadOutlined, UpOutlined } from '@ant-design/icons';
+import {
+  DownOutlined,
+  DownloadOutlined,
+  FilterOutlined,
+  ReloadOutlined,
+  UpOutlined,
+} from '@ant-design/icons';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useAccess } from '@umijs/max';
@@ -66,7 +72,33 @@ export default function AnalysisPage() {
     actionRef.current?.reload(true);
   };
 
-  const submit = () => apply(draftBody, draftSig);
+  const submitScope = () => {
+    const scopeOnly = toSearchBody(scope, { ...emptyFilters(), q: filters.q });
+    const body: SearchBody = {
+      ...(appliedRef.current ?? scopeOnly),
+      site: scopeOnly.site,
+      view: scopeOnly.view,
+      date: scopeOnly.date,
+      keyword: scopeOnly.keyword,
+      asin: scopeOnly.asin,
+    };
+    apply(body, JSON.stringify(body));
+  };
+
+  const submitFilters = () => {
+    const current = appliedRef.current ?? draftBody;
+    const body: SearchBody = {
+      ...draftBody,
+      site: current.site,
+      view: current.view,
+      date: current.date,
+      keyword: current.keyword,
+      asin: current.asin,
+    };
+    apply(body, JSON.stringify(body));
+  };
+
+  const resetFilters = () => setFilters((current) => ({ ...emptyFilters(), q: current.q }));
 
   /**
    * 重拉作用域元数据。站点或视图变化时调用。
@@ -140,7 +172,7 @@ export default function AnalysisPage() {
           dirty={dirty}
           onScopeChange={onScopeChange}
           onQChange={(q) => setFilters((f) => ({ ...f, q }))}
-          onSubmit={submit}
+          onSubmit={submitScope}
         />
       </Card>
 
@@ -169,18 +201,35 @@ export default function AnalysisPage() {
         }
       >
         {filterOpen && (
-          <Row gutter={16}>
-            <Col flex="260px">
-              <CategoryPanel
-                options={categories}
-                value={filters.categories}
-                onChange={(categories) => setFilters((f) => ({ ...f, categories }))}
-              />
-            </Col>
-            <Col flex="auto" style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 16 }}>
-              <FilterPanel value={filters} onChange={setFilters} />
-            </Col>
-          </Row>
+          <>
+            <Row gutter={16}>
+              <Col flex="260px">
+                <CategoryPanel
+                  options={categories}
+                  value={filters.categories}
+                  onChange={(categories) => setFilters((f) => ({ ...f, categories }))}
+                />
+              </Col>
+              <Col flex="auto" style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 16 }}>
+                <FilterPanel value={filters} onChange={setFilters} />
+              </Col>
+            </Row>
+            <div
+              style={{
+                margin: '20px -12px -12px',
+                padding: '16px 0 4px',
+                borderTop: '1px solid #f0f0f0',
+                textAlign: 'center',
+              }}
+            >
+              <Button type="primary" icon={<FilterOutlined />} onClick={submitFilters}>
+                开始筛选
+              </Button>
+              <Button icon={<ReloadOutlined />} style={{ marginLeft: 12 }} onClick={resetFilters}>
+                重置条件
+              </Button>
+            </div>
+          </>
         )}
       </Card>
 
