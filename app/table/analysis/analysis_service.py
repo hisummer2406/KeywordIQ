@@ -106,10 +106,11 @@ async def _available_dates(db: AsyncSession, site: str, view: str) -> list[date]
 
 async def _fetch_trends(
     db: AsyncSession, site: str, keyword_ids: list[int], on: date
-) -> dict[int, list[int]]:
+) -> tuple[dict[int, list[int]], dict[int, list[date]]]:
     if not keyword_ids:
-        return {}
-    return crud.shape_trends((await db.execute(crud.trends_stmt(site, keyword_ids, on))).all())
+        return {}, {}
+    rows = (await db.execute(crud.trends_stmt(site, keyword_ids, on))).all()
+    return crud.shape_trends(rows), crud.shape_trend_dates(rows)
 
 
 async def _fetch_week_changes(
@@ -158,12 +159,13 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     # keyword_id，再批量补附加，避免在整切片上做相关子查询。附加信息不改变结果集构成。
     if view == "DAY":
         ids = [r["keyword_id"] for r in rows]
-        trends = await _fetch_trends(db, site, ids, on)
+        trends, trend_dates = await _fetch_trends(db, site, ids, on)
         week_changes = await _fetch_week_changes(db, site, ids, on)
         data = []
         for r in rows:
             item = DayRowItem(**r)
             item.trend = trends.get(r["keyword_id"], [])
+            item.trend_dates = trend_dates.get(r["keyword_id"], [])
             item.week_change = week_changes.get(r["keyword_id"])
             data.append(item.model_dump())
     else:

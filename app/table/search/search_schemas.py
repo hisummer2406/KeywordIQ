@@ -83,6 +83,7 @@ class DayRowItem(_FactRowBase):
     """日视图行：额外含近 7 天走势与当周排名变化（B 期填充）。"""
 
     trend: list[int] = Field(default_factory=list, description="截至所选日期的近 7 天排名走势")
+    trend_dates: list[_Date] = Field(default_factory=list, description="近 7 天走势各点对应日期")
     week_change: int | None = Field(None, description="当前日期所属周的周排名变化，缺失为空")
 
 

@@ -51,6 +51,7 @@ const ROW = {
   top1_click_share: 25,
   top1_conversion_share: 10,
   trend: [5, 4, 3, 2, 1],
+  trend_dates: ['2026-07-14', '2026-07-15', '2026-07-16', '2026-07-17', '2026-07-18'],
   week_change: -7,
 };
 

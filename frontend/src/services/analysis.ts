@@ -19,6 +19,7 @@ export interface AnalysisRow {
   top1_click_share: number;
   top1_conversion_share: number;
   trend?: number[];
+  trend_dates?: string[];
   week_change?: number | null;
 }
 
@@ -139,5 +140,8 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
     throw new Error(detail);
   }
 
-  triggerDownload(await res.blob(), filenameFrom(res.headers.get('Content-Disposition')) ?? 'export.csv');
+  triggerDownload(
+    await res.blob(),
+    filenameFrom(res.headers.get('Content-Disposition')) ?? 'export.csv',
+  );
 }
