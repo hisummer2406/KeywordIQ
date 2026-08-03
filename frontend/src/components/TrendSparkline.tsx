@@ -23,20 +23,8 @@ export default function TrendSparkline({
   const px = (i: number) => (n === 1 ? width / 2 : (i / (n - 1)) * (width - 10) + 5);
   const py = (v: number) => ((v - min) / range) * (height - 10) + 5;
   const points = values.map((value, index) => ({ x: px(index), y: py(value) }));
-  const curve = points.slice(0, -1).reduce(
-    (path, point, index) => {
-      const next = points[index + 1];
-      const before = points[index - 1] ?? point;
-      const after = points[index + 2] ?? next;
-      const cp1x = point.x + (next.x - before.x) / 6;
-      const cp1y = point.y + (next.y - before.y) / 6;
-      const cp2x = next.x - (after.x - point.x) / 6;
-      const cp2y = next.y - (after.y - point.y) / 6;
-      return `${path} C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${next.x.toFixed(1)},${next.y.toFixed(1)}`;
-    },
-    `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`,
-  );
-  const area = `${curve} L ${points[n - 1].x.toFixed(1)},${height - 4} L ${points[0].x.toFixed(1)},${height - 4} Z`;
+  const linePoints = points.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+  const areaPoints = `${points[0].x.toFixed(1)},${height - 4} ${linePoints} ${points[n - 1].x.toFixed(1)},${height - 4}`;
   const color =
     values[n - 1] < values[0] ? '#52c41a' : values[n - 1] > values[0] ? '#ff4d4f' : '#1677ff';
   const date = active === null ? undefined : dates?.[active];
@@ -74,10 +62,10 @@ export default function TrendSparkline({
             <stop offset="100%" stopColor={color} stopOpacity="0.02" />
           </linearGradient>
         </defs>
-        <path d={area} fill={`url(#${gradientId})`} stroke="none" />
-        <path
+        <polygon points={areaPoints} fill={`url(#${gradientId})`} stroke="none" />
+        <polyline
           data-testid="trend-line"
-          d={curve}
+          points={linePoints}
           fill="none"
           stroke={color}
           strokeWidth={2}
