@@ -92,7 +92,7 @@ def test_export_csv_contains_day_extras(db, monkeypatch):
     body = "".join(service.iter_export_csv(site, view, on, _req()))
     lines = body.lstrip("﻿").strip().splitlines()
 
-    assert "近7天走势" in lines[0] and "当周排名变化" in lines[0]
+    assert "近7天走势" in lines[0] and "当周排名变化" not in lines[0]
     assert len(lines) == 3
     kw_one = next(line for line in lines[1:] if "kw-one" in line)
     assert "5 3 1" in kw_one  # D1→D2→D3 的排名回溯

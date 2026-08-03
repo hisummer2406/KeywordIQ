@@ -40,7 +40,7 @@ def _row(kid: int, keyword: str, ranking: int) -> dict:
 
 
 def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(2026, 7, 18),
-               trends=None, week_changes=None):
+               trends=None):
     from app.auth.simple_auth import simple_auth
     from database import get_db
 
@@ -52,7 +52,6 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
     monkeypatch.setattr(service.crud, "iter_export_rows",
                         lambda db, s, v, on, req, limit: iter([rows]))
     monkeypatch.setattr(service.crud, "fetch_trends", lambda db, s, ids, on: trends or {})
-    monkeypatch.setattr(service.crud, "fetch_week_changes", lambda db, s, ids, on: week_changes or {})
     # 流式生成器自建会话：测试里换成请求内的桩会话，避免真连库
     monkeypatch.setattr(service, "SessionFactory", lambda: _NullSession())
 
@@ -108,22 +107,21 @@ def test_export_emits_bom_and_attachment_filename(monkeypatch):
 
 
 def test_export_day_view_columns_and_rows(monkeypatch):
-    """日视图列集含走势与当周变化；行数据按排序输出。"""
+    """日视图列集含走势，不混入周变化；行数据按排序输出。"""
     app = _build_app(
         monkeypatch, user=_StubUser(is_super=True),
-        trends={1: [5, 4, 3, 2, 1]}, week_changes={1: -7},
+        trends={1: [5, 4, 3, 2, 1]},
     )
     body = _post(app).content.decode("utf-8-sig")
     lines = body.strip().splitlines()
 
     assert lines[0].startswith("关键词,")
-    assert "近7天走势" in lines[0] and "当周排名变化" in lines[0]
+    assert "近7天走势" in lines[0] and "当周排名变化" not in lines[0]
     assert len(lines) == 3  # 表头 + 2 行
     assert "coffee maker" in lines[1]
     assert "5 4 3 2 1" in lines[1]
-    assert lines[1].endswith("-7")
-    # 缺走势/周变化的行留空，不补零
-    assert lines[2].endswith(",,")
+    # 缺走势的行留空，不补零
+    assert lines[2].endswith(",")
 
 
 def test_export_week_view_omits_day_only_columns(monkeypatch):

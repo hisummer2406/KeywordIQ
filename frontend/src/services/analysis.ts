@@ -20,7 +20,6 @@ export interface AnalysisRow {
   top1_conversion_share: number;
   trend?: number[];
   trend_dates?: string[];
-  week_change?: number | null;
 }
 
 export interface SearchBody {

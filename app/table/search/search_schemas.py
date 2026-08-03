@@ -1,7 +1,7 @@
 """站点作用域查询（site-scoped-query）的请求/响应 DTO。
 
 作用域三元组 (site, view, date)：任一查询只落在单一站点、单一视图（日/周）、单一日期。
-行数据按视图区分：日视图含 7 天走势与当周排名变化，周视图不含。
+行数据按视图区分：日视图含 7 天走势，周视图不含。
 列表出口保持 ProTable 契约 {data, total, success}，并回显生效作用域。
 
 注意：日期类型统一用别名 ``_Date`` 引用。存在字段 ``date: Optional[_Date]``——若直接用
@@ -80,11 +80,10 @@ class _FactRowBase(BaseModel):
 
 
 class DayRowItem(_FactRowBase):
-    """日视图行：额外含近 7 天走势与当周排名变化（B 期填充）。"""
+    """日视图行：额外含近 7 天走势。"""
 
     trend: list[int] = Field(default_factory=list, description="截至所选日期的近 7 天排名走势")
     trend_dates: list[_Date] = Field(default_factory=list, description="近 7 天走势各点对应日期")
-    week_change: int | None = Field(None, description="当前日期所属周的周排名变化，缺失为空")
 
 
 class WeekRowItem(_FactRowBase):
