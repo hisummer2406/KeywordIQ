@@ -2,6 +2,7 @@ import { SearchOutlined } from '@ant-design/icons';
 import { Button, Input, Select, Space, Tag, Typography } from 'antd';
 import type { SiteOption } from '@/services/upload';
 import { detectSearchKind, type ScopeDraft } from './filters';
+import { formatSiteLabel } from './siteLabel';
 
 /**
  * 作用域栏：站点 / 视图 / 日期 / 单一检索框 / 立即查询。
@@ -44,13 +45,20 @@ export default function ScopeBar({
   const kind = detectSearchKind(q);
 
   return (
-    <Space size="middle" wrap style={{ width: '100%' }}>
+    <Space
+      size="middle"
+      wrap
+      style={{
+        width: '100%',
+        justifyContent: 'center',
+      }}
+    >
       <Select
         style={{ width: 160 }}
         value={scope.site}
         placeholder="站点"
         onChange={(site) => onScopeChange({ ...scope, site })}
-        options={sites.map((s) => ({ label: `${s.name_zh} (${s.code})`, value: s.code }))}
+        options={sites.map((site) => ({ label: formatSiteLabel(site), value: site.code }))}
       />
       <Select
         style={{ width: 100 }}
