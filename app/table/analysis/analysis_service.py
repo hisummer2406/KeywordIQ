@@ -58,7 +58,7 @@ class ExportTooLargeError(PayloadTooLargeError):
     message = "导出结果超出上限"
 
 
-# 导出列：与列表屏保持一致的中文表头。日视图多两列附加信息（走势/当周变化），
+# 导出列：与列表屏保持一致的中文表头。日视图多一列走势附加信息，
 # 与 search 的视图差异同源。
 _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
     ("keyword", "关键词"),
@@ -75,7 +75,6 @@ _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
 ]
 _EXPORT_COLUMNS_DAY_EXTRA: list[tuple[str, str]] = [
     ("trend", "近7天走势"),
-    ("week_change", "当周排名变化"),
 ]
 
 
@@ -113,18 +112,6 @@ async def _fetch_trends(
     return crud.shape_trends(rows), crud.shape_trend_dates(rows)
 
 
-async def _fetch_week_changes(
-    db: AsyncSession, site: str, keyword_ids: list[int], on: date
-) -> dict[int, int]:
-    if not keyword_ids:
-        return {}
-    week_date = (await db.execute(crud.week_date_stmt(site, on))).scalar()
-    if week_date is None:
-        return {}
-    rows = (await db.execute(crud.week_changes_stmt(site, week_date, keyword_ids))).all()
-    return crud.shape_week_changes(rows)
-
-
 async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
     """作用域元信息：可选日期集 + 最新日期（日期选择器用）。"""
     resolved_site = _resolve_site(site)
@@ -155,18 +142,16 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     else:
         total = (await db.execute(crud.scope_row_count_stmt(site, view, on))).scalar_one_or_none() or 0
 
-    # 按视图构造行 DTO。日视图附带只读的近 7 天走势与当周排名变化：先分页拿本页
+    # 按视图构造行 DTO。日视图附带只读的近 7 天走势：先分页拿本页
     # keyword_id，再批量补附加，避免在整切片上做相关子查询。附加信息不改变结果集构成。
     if view == "DAY":
         ids = [r["keyword_id"] for r in rows]
         trends, trend_dates = await _fetch_trends(db, site, ids, on)
-        week_changes = await _fetch_week_changes(db, site, ids, on)
         data = []
         for r in rows:
             item = DayRowItem(**r)
             item.trend = trends.get(r["keyword_id"], [])
             item.trend_dates = trend_dates.get(r["keyword_id"], [])
-            item.week_change = week_changes.get(r["keyword_id"])
             data.append(item.model_dump())
     else:
         data = [WeekRowItem(**r).model_dump() for r in rows]
@@ -233,13 +218,11 @@ def iter_export_csv(
             if view == "DAY":
                 ids = [r["keyword_id"] for r in rows]
                 trends = crud.fetch_trends(db, site, ids, on)
-                week_changes = crud.fetch_week_changes(db, site, ids, on)
             for r in rows:
                 row = dict(r)
                 if view == "DAY":
                     kid = r["keyword_id"]
                     row["trend"] = " ".join(str(v) for v in trends.get(kid, []))
-                    row["week_change"] = week_changes.get(kid)
                 writer.writerow([_render_cell(row.get(key)) for key, _ in columns])
             yield _flush()
     except GeneratorExit:

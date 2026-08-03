@@ -206,29 +206,6 @@ def trends_stmt(site: str, keyword_ids: list[int], on: date):
     )
 
 
-def week_date_stmt(site: str, on: date):
-    """把所选日期映射到其所属 ISO 周的周报期次。
-
-    映射口径（查询侧决定，导入侧只存文件名日期、不定义周边界）：同 ISO 周
-    （``date_trunc('week')`` 相等）。在 site_data_stats 小表上解析，避免碰事实表。
-    """
-    return text(
-        f"SELECT report_date FROM {_SCHEMA}.site_data_stats "
-        f"WHERE site = :site AND period_type = 'WEEK' "
-        f"AND date_trunc('week', report_date) = date_trunc('week', :on) "
-        f"ORDER BY report_date DESC LIMIT 1"
-    ).bindparams(site=site, on=on)
-
-
-def week_changes_stmt(site: str, week_date: date, keyword_ids: list[int]):
-    """取某周报期次下各 keyword 的 ranking_change。等值条件利于分区裁剪。"""
-    return select(FactWeekly.keyword_id, FactWeekly.ranking_change).where(
-        FactWeekly.site == site,
-        FactWeekly.report_date_week == week_date,
-        FactWeekly.keyword_id.in_(keyword_ids),
-    )
-
-
 def category_options_stmt(site: str, view: str):
     """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
     return text(
@@ -262,11 +239,6 @@ def shape_trend_dates(rows) -> dict[int, list[date]]:
     for kid, report_date, _rank in rows:
         out.setdefault(kid, []).append(report_date)
     return out
-
-
-def shape_week_changes(rows) -> dict[int, int]:
-    """(keyword_id, ranking_change) 行 → dict。"""
-    return {kid: ch for kid, ch in rows}
 
 
 def shape_category_options(rows) -> list[dict[str, Any]]:
@@ -320,15 +292,6 @@ def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> di
     if not keyword_ids:
         return {}
     return shape_trends(db.execute(trends_stmt(site, keyword_ids, on)).all())
-
-
-def fetch_week_changes(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, int]:
-    if not keyword_ids:
-        return {}
-    week_date = db.execute(week_date_stmt(site, on)).scalar()
-    if week_date is None:
-        return {}
-    return shape_week_changes(db.execute(week_changes_stmt(site, week_date, keyword_ids)).all())
 
 
 def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:

@@ -3,7 +3,7 @@
 默认跳过，只在设置 TEST_DATABASE_URL 时运行（沿用 V2 集成测试的 gate 模式）。测试库必须
 已迁移（alembic upgrade head）。每个测试独占一个事务，结束即回滚，零残留。
 
-用受控小样本验证 A 期（作用域/筛选/排序/总数）与 B 期（7 天走势/当周排名变化）——合成数据
+用受控小样本验证 A 期（作用域/筛选/排序/总数）与 B 期（7 天走势）——合成数据
 在小规模下关键词跨天不重叠，无法测走势，故这里手工构造跨天数据。
 
     TEST_DATABASE_URL=postgresql://postgres:pwd123@localhost/keywordiq_test \\
@@ -149,14 +149,13 @@ async def test_search_scoped_total_and_rows(db):
     assert rankings == [1, 9]  # 默认按 current_ranking 升序
 
 
-async def test_day_view_trend_and_week_change(db):
+async def test_day_view_trend_without_week_change(db):
     k1, k2 = await db.run_sync(_seed)
     resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
     rows = {r["keyword_id"]: r for r in resp.data}
     assert rows[k1]["trend"] == [5, 3, 1]      # 按日期回溯
-    assert rows[k1]["week_change"] == 7        # 同 ISO 周周报映射
     assert rows[k2]["trend"] == [9]            # 只有 D3
-    assert rows[k2]["week_change"] is None     # 仅日报，无对应周报
+    assert all("week_change" not in row for row in rows.values())
 
 
 async def test_trend_is_as_of_selected_date(db):
