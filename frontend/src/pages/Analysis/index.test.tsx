@@ -269,6 +269,20 @@ describe('分析查询屏', () => {
     expect(screen.queryByRole('button', { name: /导出 CSV/ })).not.toBeInTheDocument();
   });
 
+  it('表格工具栏左侧放操作与结果数，右侧放排序控件', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+    const toolbar = screen.getByText(/搜索结果：/).closest('.ant-pro-table-list-toolbar');
+    const left = toolbar?.querySelector('.ant-pro-table-list-toolbar-left') as HTMLElement;
+    const right = toolbar?.querySelector('.ant-pro-table-list-toolbar-right') as HTMLElement;
+
+    expect(within(left).getByRole('button', { name: /导出 CSV/ })).toBeInTheDocument();
+    expect(within(left).getByText('1')).toBeInTheDocument();
+    expect(within(right).getByText('当前排名')).toBeInTheDocument();
+    expect(within(right).getByRole('button', { name: /确.*定/ })).toBeInTheDocument();
+  });
+
   it('导出用当下生效的条件，且不带分页参数', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
