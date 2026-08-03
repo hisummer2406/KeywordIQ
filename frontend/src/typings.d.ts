@@ -10,6 +10,8 @@ declare global {
       id: number;
       username: string;
       role: string | null;
+      /** 角色展示名（与后端 role 表同源，前端不自建 code → 中文名映射） */
+      role_name?: string | null;
       permissions: string[];
       is_active?: boolean;
       is_super?: boolean;

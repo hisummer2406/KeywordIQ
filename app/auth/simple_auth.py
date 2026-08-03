@@ -112,6 +112,8 @@ def serialize_user(user: UserCenter) -> dict:
         "id": user.id,
         "username": user.user_name,
         "role": user.role_code,
+        # 展示名与 role 表同源，前端不必自己维护 code → 中文名的映射
+        "role_name": user.role_name,
         "permissions": sorted(user.permission_codes),
         "is_active": user.is_active,
         "is_super": user.is_super,

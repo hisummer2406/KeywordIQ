@@ -76,6 +76,8 @@ def test_serialize_user_shape():
         "id": 1,
         "username": "tester",
         "role": "operator",
+        # 角色展示名与 role 表同源，前端据此显示身份，不自建 code → 中文名的映射
+        "role_name": "operator",
         "permissions": ["analysis:export", "analysis:view", "upload:import"],
         "is_active": True,
         "is_super": False,
