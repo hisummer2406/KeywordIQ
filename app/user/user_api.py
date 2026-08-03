@@ -3,7 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.permissions import USER_MANAGE
 from app.auth.simple_auth import simple_auth
@@ -11,7 +11,7 @@ from app.common.responses import ProTableResponse, protable
 from app.user.rbac_model import Role
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_schemas import RoleOut, UserCenterCreate, UserCenterList, UserCenterUpdate
-from database import get_db
+from database import get_async_db
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,11 @@ user_router = APIRouter()
 
 @user_router.get("/roles", response_model=list[RoleOut])
 async def list_roles(
-        db: Session = Depends(get_db),
+        db: AsyncSession = Depends(get_async_db),
         current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> list[RoleOut]:
     """[SPA] 角色下拉数据，供用户管理屏分配角色。"""
-    roles = db.execute(select(Role).order_by(Role.id)).scalars().all()
+    roles = (await db.execute(select(Role).order_by(Role.id))).scalars().all()
     return [RoleOut.model_validate(r) for r in roles]
 
 
@@ -34,7 +34,7 @@ async def get_users_table(
         per_page: int = Query(20, ge=1, le=100, description="每页数量"),
         user_name: str | None = Query(None, description="搜索关键词"),
         is_active: bool | None = Query(None, description="用户状态筛选"),
-        db: Session = Depends(get_db),
+        db: AsyncSession = Depends(get_async_db),
         current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> ProTableResponse[UserCenterList]:
     """[SPA] 用户列表。**成功**时返回 ProTable 契约 {data, total, success}。
@@ -43,7 +43,7 @@ async def get_users_table(
     长得一模一样。异常交给全局处理器，ProTable 进入自身的错误态。
     """
     crud = UserCenterCRUD(db)
-    result = crud.get_users_paginated(
+    result = await crud.get_users_paginated(
         page=page, per_page=per_page, user_name=user_name, is_active=is_active
     )
     return protable(result["items"], result["total"])
@@ -52,7 +52,7 @@ async def get_users_table(
 @user_router.post("/create", response_model=dict[str, Any])
 async def register(
         user_data: UserCenterCreate,
-        db: Session = Depends(get_db),
+        db: AsyncSession = Depends(get_async_db),
         current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> dict[str, Any]:
     """创建用户。用户名重复 → 409。
@@ -63,7 +63,7 @@ async def register(
     重名判定在 CRUD 内部完成，这里不再预检——预检与真正的插入之间存在竞态，
     且两处判定容易漂移。
     """
-    user = UserCenterCRUD(db).create_user(user_data)
+    user = await UserCenterCRUD(db).create_user(user_data)
 
     return {
         "id": user.id,
@@ -77,11 +77,11 @@ async def register(
 async def update_user(
         user_id: int,
         user_data: UserCenterUpdate,
-        db: Session = Depends(get_db),
+        db: AsyncSession = Depends(get_async_db),
         current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> dict[str, Any]:
     """更新用户信息。用户不存在 → 404，用户名与他人冲突 → 409。"""
-    user = UserCenterCRUD(db).update_user(user_id, user_data)
+    user = await UserCenterCRUD(db).update_user(user_id, user_data)
 
     return {
         "id": user.id,
@@ -95,9 +95,9 @@ async def update_user(
 @user_router.post("/toggle-status/{user_id}", response_model=dict[str, Any])
 async def toggle_user_status(
         user_id: int,
-        db: Session = Depends(get_db),
+        db: AsyncSession = Depends(get_async_db),
         current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
 ) -> dict[str, Any]:
     """切换用户状态（激活/禁用）。用户不存在 → 404，禁用超管 → 409。"""
-    user = UserCenterCRUD(db).toggle_user_status(user_id)
+    user = await UserCenterCRUD(db).toggle_user_status(user_id)
     return {"id": user.id, "is_active": user.is_active}

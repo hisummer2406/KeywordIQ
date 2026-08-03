@@ -57,9 +57,10 @@ def _super_user():
 def _build_app(monkeypatch, *, paginated=None, raises=False):
     import app.user.user_api as user_api_mod
     from app.auth.simple_auth import simple_auth
-    from database import get_db
+    from database import get_async_db
 
-    def fake_paginated(self, **kwargs):
+    # 用户列表路径已异步化（AsyncSession + asyncpg），替身必须是协程。
+    async def fake_paginated(self, **kwargs):
         if raises:
             raise RuntimeError("db down")
         return paginated
@@ -69,7 +70,7 @@ def _build_app(monkeypatch, *, paginated=None, raises=False):
     app = FastAPI()
     register_error_handlers(app)
     app.include_router(user_api_mod.user_router, prefix="/api/user")
-    app.dependency_overrides[get_db] = lambda: None
+    app.dependency_overrides[get_async_db] = lambda: None
     app.dependency_overrides[simple_auth.get_current_user] = _super_user
     return app
 

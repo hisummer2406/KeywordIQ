@@ -22,12 +22,12 @@
 
 ## 4. 鉴权与用户管理异步化
 
-- [ ] 4.1 `simple_auth` 的 `get_current_user` / `require_permission` / `login` 改用 `AsyncSession`
-- [ ] 4.2 bcrypt 的 `hash_password` / `verify_password` 经 `run_in_threadpool` 调用，确保不在事件循环上执行
-- [ ] 4.3 `user_crud` 改异步；保持上一变更确立的错误契约（失败抛 `APIError`，读路径不吞异常）
-- [ ] 4.4 `auth_api` / `user_api` 端点改用异步会话依赖
-- [ ] 4.5 排查 `AsyncSession` 下的隐式懒加载：确认所有 ORM 属性访问都在会话内或已预加载（`role_code` 等跨表属性重点检查）
-- [ ] 4.6 `test_rbac_auth_unit.py`、`test_user_error_contract_unit.py`、`test_protable_contract.py` 的夹具改异步，断言不放宽
+- [x] 4.1 `simple_auth` 的 `get_current_user` / `require_permission` / `login` 改用 `AsyncSession`
+- [x] 4.2 bcrypt 的 `hash_password` / `verify_password` 经 `run_in_threadpool` 调用，确保不在事件循环上执行
+- [x] 4.3 `user_crud` 改异步；保持上一变更确立的错误契约（失败抛 `APIError`，读路径不吞异常）
+- [x] 4.4 `auth_api` / `user_api` 端点改用异步会话依赖
+- [x] 4.5 排查 `AsyncSession` 下的隐式懒加载：确认所有 ORM 属性访问都在会话内或已预加载（`role_code` 等跨表属性重点检查）
+- [x] 4.6 `test_rbac_auth_unit.py`、`test_user_error_contract_unit.py`、`test_protable_contract.py` 的夹具改异步，断言不放宽
 
 ## 5. 收口与一致性
 

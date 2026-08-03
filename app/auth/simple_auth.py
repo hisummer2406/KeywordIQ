@@ -1,15 +1,23 @@
 # app/auth/simple_auth.py
-"""简化版认证模块 - 后台登录验证、当前用户与 RBAC 权限判定"""
+"""简化版认证模块 - 后台登录验证、当前用户与 RBAC 权限判定。
+
+全链路异步（AsyncSession + asyncpg）。bcrypt 是 CPU 密集，由 user_crud 经
+run_in_threadpool 移出事件循环——此前 login 在事件循环上直接跑 247 ms 的 bcrypt，
+每次登录都让该 worker 停摆同等时长。
+
+role 与 permissions 两个 relationship 都是 lazy="selectin"（预加载），故
+AsyncSession 下访问 role_code / permission_codes 不会触发禁止的隐式懒加载。
+"""
 import logging
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.login_auth import auth_service
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_model import UserCenter
-from database import SessionFactory, get_db
+from database import AsyncSessionFactory, get_async_db
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer()
@@ -21,9 +29,9 @@ class SimpleAuth:
     @staticmethod
     async def login(username: str, password: str) -> dict:
         """用户登录"""
-        with SessionFactory() as db:
+        async with AsyncSessionFactory() as db:
             crud = UserCenterCRUD(db)
-            user = crud.authenticate_user(username, password)
+            user = await crud.authenticate_user(username, password)
 
             if not user:
                 raise HTTPException(
@@ -43,9 +51,9 @@ class SimpleAuth:
             }
 
     @staticmethod
-    def get_current_user(
+    async def get_current_user(
             credentials: HTTPAuthorizationCredentials = Depends(security),
-            db: Session = Depends(get_db)
+            db: AsyncSession = Depends(get_async_db)
     ) -> UserCenter:
         """获取当前用户（含角色/权限，relationship selectin 一并载入）"""
         payload = auth_service.decode_access_token(credentials.credentials)
@@ -56,7 +64,7 @@ class SimpleAuth:
             )
 
         crud = UserCenterCRUD(db)
-        user = crud.get_user_by_username(payload["username"])
+        user = await crud.get_user_by_username(payload["username"])
         if not user or not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

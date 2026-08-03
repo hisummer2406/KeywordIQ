@@ -11,6 +11,7 @@ is_super=True 的用户由 UserCenterCRUD 自动赋 admin 角色（见 app/auth/
         uv run python scripts/seed_admin.py
 """
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 
@@ -20,27 +21,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.common.errors import APIError
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_schemas import UserCenterCreate
-from database import SessionFactory
+from database import AsyncSessionFactory
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="创建初始管理员用户（幂等）")
-    parser.add_argument("--username", default="admin")
-    parser.add_argument("--password", default="pwd123")
-    args = parser.parse_args()
-
-    with SessionFactory() as db:
+async def _run(username: str, password: str) -> int:
+    """UserCenterCRUD 随鉴权路径一并异步化，故脚本用 asyncio.run 驱动它。"""
+    async with AsyncSessionFactory() as db:
         crud = UserCenterCRUD(db)
-        existing = crud.get_user_by_username(args.username)
+        existing = await crud.get_user_by_username(username)
         if existing:
-            print(f"用户已存在，跳过：{args.username}（role={existing.role_code}）")
+            print(f"用户已存在，跳过：{username}（role={existing.role_code}）")
             return 0
 
         try:
-            user = crud.create_user(
+            user = await crud.create_user(
                 UserCenterCreate(
-                    user_name=args.username,
-                    password=args.password,
+                    user_name=username,
+                    password=password,
                     is_super=True,
                     is_active=True,
                 )
@@ -51,6 +48,14 @@ def main() -> int:
             return 1
         print(f"已创建管理员：{user.user_name}（id={user.id}, role={user.role_code}）")
         return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="创建初始管理员用户（幂等）")
+    parser.add_argument("--username", default="admin")
+    parser.add_argument("--password", default="pwd123")
+    args = parser.parse_args()
+    return asyncio.run(_run(args.username, args.password))
 
 
 if __name__ == "__main__":
