@@ -90,6 +90,12 @@ def ensure_fact_partitions(session: Session, table_name: str, site: str, report_
 
     站点码会经过 :func:`~app.site_registry.normalize_site_code` 校验，未登记的站点
     直接抛错——绝不为一个拼错的站点码创建分区。
+
+    **只能用同步会话（psycopg2）。** 下面的 ``CREATE TABLE ... PARTITION OF ...
+    FOR VALUES FROM (:start) TO (:end)`` 带绑定参数，而 PostgreSQL 的扩展查询协议
+    不允许在 DDL（utility statement）里用参数。psycopg2 在客户端做插值故可行；
+    asyncpg 直接走协议，会报「the server expects 0 arguments for this query」。
+    这与 ``COPY`` 一样，是导入路径必须保持同步的硬约束之一。
     """
     _validate_table(table_name)
     site_code = normalize_site_code(site)

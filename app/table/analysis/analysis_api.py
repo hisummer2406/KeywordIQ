@@ -8,12 +8,18 @@
 失败一律**抛**不**返**：`ScopeError`（422）与 `ExportTooLargeError`（413）都是 `APIError`
 子类，由 `app/common/error_handlers.py` 统一产出错误体。这里不再 try/except 转译——
 路由层做转译会把域内错误码（`analysis.scope_invalid`）盖成通用码。
+
+**执行模型**：search / scope / categories 是 `async def` + `AsyncSession`（asyncpg）——
+这是唯一随用户数增长的路径。export 保持 `def` + 同步会话：导出走服务端游标，且流式
+生成器需自建会话。`def` 端点依赖 `async` 鉴权依赖是允许的——依赖在事件循环上解析，
+端点本身仍进线程池。
 """
 import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW
@@ -25,7 +31,7 @@ from app.table.search.search_schemas import (
     CategoryOption,
     ScopeInfo,
 )
-from database import get_db
+from database import get_async_db, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +41,9 @@ _View = Literal["DAY", "WEEK"]
 
 
 @analysis_router.post("/search", response_model=AnalysisSearchResponse)
-def search_data(
+async def search_data(
     req: AnalysisSearchRequest,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> AnalysisSearchResponse:
     """作用域内分页查询。
@@ -45,7 +51,7 @@ def search_data(
     作用域非法时抛 `ScopeError` → 422。此前是返 HTTP 200 + `success:false`，
     前端只能表现为一个没有解释的空表格。
     """
-    return service.search(db, req)
+    return await service.search(db, req)
 
 
 @analysis_router.post("/export")
@@ -73,22 +79,22 @@ def export_data(
 
 
 @analysis_router.get("/scope", response_model=ScopeInfo)
-def get_scope(
+async def get_scope(
     view: _View = Query("DAY"),
     site: str | None = Query(None),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> ScopeInfo:
     """作用域元信息：可选日期集 + 最新日期。非法站点 → 422。"""
-    return service.get_scope(db, site, view)
+    return await service.get_scope(db, site, view)
 
 
 @analysis_router.get("/categories", response_model=list[CategoryOption])
-def get_categories(
+async def get_categories(
     view: _View = Query("DAY"),
     site: str | None = Query(None),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> list[CategoryOption]:
     """类目下拉选项（按作用域）。"""
-    return service.get_categories(db, site, view)
+    return await service.get_categories(db, site, view)
