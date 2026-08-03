@@ -27,6 +27,7 @@
 - Create: `frontend/src/pages/Analysis/siteLabel.ts` — 站点码转 Emoji 国旗以及站点统一文案的纯函数。
 - Create: `frontend/src/pages/Analysis/siteLabel.test.ts` — 覆盖三个现有站点、代码规范化和非法代码回退。
 - Modify: `frontend/src/pages/Analysis/ScopeBar.tsx` — 在现有根 `Space` 上增加主轴居中样式，并复用统一站点文案。
+- Modify: `frontend/src/pages/Analysis/index.test.tsx` — 将站点切换用例的可见文案更新为新的国旗站点格式，继续验证请求使用原始站点码。
 - Reference: `docs/superpowers/specs/2026-08-04-analysis-scope-bar-centering-design.md` — 已确认的设计和验收边界。
 
 ---
@@ -166,6 +167,7 @@ Expected: 居中改动只涉及 `ScopeBar.tsx` 和 `ScopeBar.test.tsx`；与 Tas
 - Create: `frontend/src/pages/Analysis/siteLabel.test.ts`
 - Modify: `frontend/src/pages/Analysis/ScopeBar.tsx:3,60`
 - Modify: `frontend/src/pages/Analysis/ScopeBar.test.tsx`
+- Modify: `frontend/src/pages/Analysis/index.test.tsx:192-216`
 
 **Interfaces:**
 - Consumes: `SiteOption`，字段为 `code: string`、`name_zh: string`、`domain: string`。
@@ -284,7 +286,23 @@ options={sites.map((site) => ({ label: formatSiteLabel(site), value: site.code }
 
 不要修改 `value`、`onChange` 或站点接口类型。
 
-- [ ] **Step 7: 运行新增测试和分析页回归测试**
+- [ ] **Step 7: 更新旧站点文案断言并运行完整相关回归测试**
+
+将 `index.test.tsx` 两个站点切换用例中的旧文案：
+
+```tsx
+美国 (US)
+德国 (DE)
+```
+
+更新为：
+
+```tsx
+🇺🇸 美国站（US）
+🇩🇪 德国站（DE）
+```
+
+用例后续仍然断言 `getScope('DE', 'DAY')` 和 `getCategories('DE', 'DAY')`，确保展示文案变化没有改变接口值。
 
 Run:
 
@@ -331,17 +349,19 @@ git status --short
 git diff -- \
   frontend/src/pages/Analysis/ScopeBar.tsx \
   frontend/src/pages/Analysis/ScopeBar.test.tsx \
+  frontend/src/pages/Analysis/index.test.tsx \
   frontend/src/pages/Analysis/siteLabel.ts \
   frontend/src/pages/Analysis/siteLabel.test.ts
 git add \
   frontend/src/pages/Analysis/ScopeBar.tsx \
   frontend/src/pages/Analysis/ScopeBar.test.tsx \
+  frontend/src/pages/Analysis/index.test.tsx \
   frontend/src/pages/Analysis/siteLabel.ts \
   frontend/src/pages/Analysis/siteLabel.test.ts
 git commit -m "style(frontend): center scope bar and label sites"
 ```
 
-Expected: 功能提交只包含上述四个前端文件。
+Expected: 功能提交只包含上述五个前端文件。
 
 ---
 
