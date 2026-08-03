@@ -38,11 +38,11 @@
 
 ## 6. 验证
 
-- [ ] 6.1 `uv run ruff check .` 全绿；提交门禁在每一步提交时均放行
-- [ ] 6.2 全量 `TEST_DATABASE_URL=... uv run pytest test/ -q` 通过，集成测试未被静默跳过（skip 数应为 1）
+- [x] 6.1 `uv run ruff check .` 全绿；提交门禁在每一步提交时均放行
+- [x] 6.2 全量 `TEST_DATABASE_URL=... uv run pytest test/ -q` 通过，集成测试未被静默跳过（skip 数应为 1）
 - [x] 6.3 实测登录延迟：确认 bcrypt 期间同一 worker 仍能处理其他请求（并发发起一次登录与若干查询，查询不被阻塞约 250 ms）
-- [ ] 6.4 用真实体量数据核对查询结果与异步化前逐字段一致（走 `verify-import` skill 备好数据后对比）
-- [ ] 6.5 确认迁移可回滚性不受影响（`alembic downgrade -1 && upgrade head` 仍走同步引擎）
+- [x] 6.4 用真实体量数据核对查询结果与异步化前逐字段一致（走 `verify-import` skill 备好数据后对比）
+- [x] 6.5 确认迁移可回滚性不受影响（`alembic downgrade -1 && upgrade head` 仍走同步引擎）
 
 ## 7. 上线与调参（配置值最后动）
 
