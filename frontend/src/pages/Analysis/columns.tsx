@@ -25,7 +25,7 @@ function renderChange(v: number | null | undefined) {
 
 export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
   return [
-    { title: '排名', dataIndex: 'current_ranking', width: 80, sorter: true },
+    { title: '排名', dataIndex: 'current_ranking', width: 80 },
     // 关键词与商品标题是两列「要读内容」的列，其余自适应列给定宽，把剩余横向空间
     // 让给这两列。
     { title: '关键词', dataIndex: 'keyword', width: 220, ellipsis: true, copyable: true },
@@ -40,7 +40,6 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       title: '排名变化',
       dataIndex: 'ranking_change',
       width: 100,
-      sorter: true,
       render: (_, r) => renderChange(r.ranking_change),
     },
     {
@@ -72,14 +71,12 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       title: '点击份额',
       dataIndex: 'top1_click_share',
       width: 110,
-      sorter: true,
       render: (_, r) => <ShareBar value={r.top1_click_share} />,
     },
     {
       title: '转化份额',
       dataIndex: 'top1_conversion_share',
       width: 110,
-      sorter: true,
       render: (_, r) => <ShareBar value={r.top1_conversion_share} />,
     },
   ];
