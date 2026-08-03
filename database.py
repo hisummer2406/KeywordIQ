@@ -17,7 +17,8 @@ class Base(DeclarativeBase):
 
 
 """数据库连接配置"""
-# 同步数据引擎
+# 同步数据引擎：服务导入的 COPY（psycopg2 原始游标，asyncpg 无等价接口）、导出的
+# 服务端游标、Alembic 迁移。都是低并发长事务，池可以开得小。
 engine = create_engine(
     settings.DATABASE_URL,
     pool_size=settings.DB_POOL_SIZE,
@@ -50,11 +51,12 @@ SessionFactory = sessionmaker(
     autocommit=False,
 )
 
-# 异步数据引擎
+# 异步数据引擎：服务面向请求的查询与鉴权路径——随用户数增长的就是这一条，
+# 故池配置与同步引擎分开（DB_ASYNC_*），不再共用一组取值。
 async_engine = create_async_engine(
     settings.DATABASE_URL_ASYNC,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
+    pool_size=settings.DB_ASYNC_POOL_SIZE,
+    max_overflow=settings.DB_ASYNC_MAX_OVERFLOW,
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_recycle=settings.DB_POOL_RECYCLE,
     pool_pre_ping=True,  # 自动检测并重置失效连接

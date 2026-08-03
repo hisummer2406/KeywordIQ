@@ -245,18 +245,19 @@ V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随
 
 ### Performance Optimizations
 
-1. **Connection Pooling**: 当前 `DB_POOL_SIZE=20`、`DB_MAX_OVERFLOW=10`。RDS 的
-   `max_connections=400` 是硬顶。**算全局上限时必须乘 2**——`database.py` 在模块级
-   建了**两个**引擎（同步 `engine` 走导入与写路径，异步 `async_engine` 走 API 读查询），
-   两者共用同一组配置：
+1. **Connection Pooling**: `database.py` 在模块级建了**两个**引擎，各自持有独立的池，
+   服务的负载性质不同，故**分开配置**（`DB_*` 与 `DB_ASYNC_*`）。RDS 的
+   `max_connections=400` 是硬顶，全局上限算式是：
 
    ```
-   2 个引擎 × (DB_POOL_SIZE + DB_MAX_OVERFLOW) × 4 workers
-   = 2 × 30 × 4 = 240 条
+   (DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers        # 同步：导入 COPY、导出游标、迁移
+   + (DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers   # 异步：查询与鉴权
    ```
 
-   240/400 已占六成，还要给 RDS 管理连接与人工 psql 留余量。降到 8/12 可把上限压到
-   160，但降池会把「连接排队」变成 `pool_timeout` 报错，改之前须先有并发观测数据。
+   `start.sh` 固定 4 workers。当前取值 (20+10)×4 + (20+10)×4 = 240，占硬顶六成。
+   **RDS 只有 2 vCPU**：PG 同时真正能执行的查询受核心数限制（约 4 个），池开大不提升
+   吞吐，只会把「快速可见的失败」换成「整体缓慢劣化」。目标取值是同步 2+3、异步 8+8
+   （上限 84），但降池是行为改变，须先观测 `pg_stat_activity` 的 `active` 峰值再落。
 2. **Query Optimization**:
    - 无筛选的分页总数直接读 `site_data_stats.row_count`（O(1)，不在事实表上聚合）
    - 带筛选的总数用 `FILTERED_COUNT_CAP = 10000` 封顶计数（`analysis_crud.count_filtered`）
@@ -285,9 +286,11 @@ HOT_WINDOW_MONTHS=3
 MAX_FILE_SIZE=3221225472  # 3GB
 OSS_ENABLED=false
 
-# Connection pool（每 worker 建了同步+异步两个引擎，全局上限是 ×2 ×4 workers）
-DB_POOL_SIZE=20
+# Connection pool（两个引擎各自独立配置，上限是两组相加再 × 4 workers）
+DB_POOL_SIZE=20            # 同步：导入 COPY / 导出游标 / 迁移
 DB_MAX_OVERFLOW=10
+DB_ASYNC_POOL_SIZE=20      # 异步：查询与鉴权
+DB_ASYNC_MAX_OVERFLOW=10
 ```
 
 ## Production Environment
@@ -298,9 +301,9 @@ DB_MAX_OVERFLOW=10
 | Database | Alibaba Cloud RDS PostgreSQL 15.0 · 2C4G · max_connections = 400 |
 
 **Capacity implications for code changes:**
-- RDS max 400 connections shared across all app processes; 全局上限是
-  `2 × (DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers`——**别忘了同步与异步两个引擎各占一份池**
-  （`start.sh` 固定 4 workers，当前取值算下来是 240）
+- RDS max 400 connections shared across all app processes; 全局上限是**两个引擎各自的池相加**
+  再乘 workers：`(DB_POOL_SIZE + DB_MAX_OVERFLOW + DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers`
+  （`start.sh` 固定 4 workers，当前取值算下来是 240）。改任一组前先核对这个算式
 - 4 vCPU 上 nginx、4 个 uvicorn worker 与导入任务共享 CPU；导入已由咨询锁串行化，勿再引入并行分片而不实测
 - 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame
 
