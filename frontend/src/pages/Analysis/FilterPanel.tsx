@@ -52,7 +52,7 @@ function RangeRow({ label, suffix, presets, value, onChange }: RangeRowProps) {
     <Row label={label}>
       <Space size={4}>
         <InputNumber
-          size="small"
+          size="middle"
           style={{ width: 100 }}
           placeholder="最小值"
           suffix={suffix}
@@ -61,7 +61,7 @@ function RangeRow({ label, suffix, presets, value, onChange }: RangeRowProps) {
         />
         <span style={{ color: '#bfbfbf' }}>~</span>
         <InputNumber
-          size="small"
+          size="middle"
           style={{ width: 100 }}
           placeholder="最大值"
           suffix={suffix}
@@ -73,7 +73,7 @@ function RangeRow({ label, suffix, presets, value, onChange }: RangeRowProps) {
         {presets.map((p) => (
           <Button
             key={p.label}
-            size="small"
+            size="middle"
             type={active === p.label ? 'primary' : 'default'}
             onClick={() => onChange({ ...p.value })}
           >
@@ -123,7 +123,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       />
       <Row label="新词">
         <Radio.Group
-          size="small"
+          size="middle"
           optionType="button"
           value={value.isNew === undefined ? 'all' : String(value.isNew)}
           onChange={(e) =>
@@ -138,7 +138,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       </Row>
       <Row label="品牌">
         <Input
-          size="small"
+          size="middle"
           allowClear
           style={{ width: 220 }}
           placeholder="品牌关键字"
@@ -148,7 +148,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       </Row>
       <Row label="商品标题">
         <Input
-          size="small"
+          size="middle"
           allowClear
           style={{ width: 320 }}
           placeholder="标题关键字"

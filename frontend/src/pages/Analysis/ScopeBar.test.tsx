@@ -24,7 +24,7 @@ describe('ScopeBar', () => {
       screen.getByPlaceholderText('输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger'),
     ).toBeInTheDocument();
     expect(container.querySelector('.scope-bar__dirty')).toHaveTextContent(
-      '条件已修改，点击立即查询生效',
+      '存在未生效条件，请点击对应的查询或筛选按钮',
     );
   });
 });

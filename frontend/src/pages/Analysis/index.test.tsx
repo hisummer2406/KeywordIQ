@@ -2,16 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const { accessState, searchAnalysis, getScope, getCategories, getSites, exportAnalysis } = vi.hoisted(
-  () => ({
+const { accessState, searchAnalysis, getScope, getCategories, getSites, exportAnalysis } =
+  vi.hoisted(() => ({
     accessState: { canExport: true },
     searchAnalysis: vi.fn(),
     getScope: vi.fn(),
     getCategories: vi.fn(),
     getSites: vi.fn(),
     exportAnalysis: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock('@umijs/max', () => ({ useAccess: () => accessState }));
 vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories, exportAnalysis }));
@@ -36,6 +35,7 @@ async function settle(ms = 60) {
 }
 
 const submit = () => screen.getByRole('button', { name: /立即查询/ });
+const applyFilters = () => screen.getByRole('button', { name: /开始筛选/ });
 
 const ROW = {
   keyword_id: 1,
@@ -127,18 +127,18 @@ describe('分析查询屏', () => {
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
 
-    expect(screen.queryByText(/条件已修改/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '1~100' }));
-    expect(screen.getByText(/条件已修改/)).toBeInTheDocument();
+    expect(screen.getByText(/未生效条件/)).toBeInTheDocument();
 
     await act(async () => {
-      await user.click(submit());
+      await user.click(applyFilters());
     });
-    await waitFor(() => expect(screen.queryByText(/条件已修改/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument());
   });
 
-  it('点立即查询发一次，且带上多选类目与区间条件', async () => {
+  it('点开始筛选发一次，且带上多选类目与区间条件', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
@@ -147,13 +147,34 @@ describe('分析查询屏', () => {
     await user.click(screen.getByRole('checkbox', { name: /Home/ }));
     await user.click(screen.getByRole('button', { name: '1~100' }));
     await act(async () => {
-      await user.click(submit());
+      await user.click(applyFilters());
     });
 
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
     const body = searchAnalysis.mock.calls[1][0];
     expect(body.categories).toEqual(expect.arrayContaining(['Electronics', 'Home']));
-    expect(body).toMatchObject({ ranking_min: 1, ranking_max: 100, site: 'US', date: '2026-07-18' });
+    expect(body).toMatchObject({
+      ranking_min: 1,
+      ranking_max: 100,
+      site: 'US',
+      date: '2026-07-18',
+    });
+  });
+
+  it('顶部立即查询不会偷带尚未应用的筛选条件', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: '1~100' }));
+    await user.click(screen.getByRole('checkbox', { name: /Electronics/ }));
+    await act(async () => {
+      await user.click(submit());
+    });
+
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+    expect(searchAnalysis.mock.calls[1][0].ranking_min).toBeUndefined();
+    expect(searchAnalysis.mock.calls[1][0].categories).toBeUndefined();
   });
 
   it('检索框按输入格式判定检索目标并回显', async () => {
@@ -199,7 +220,7 @@ describe('分析查询屏', () => {
     await settle();
     // 表格仍是上一份数据，查询要等用户点「立即查询」
     expect(searchAnalysis).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/条件已修改/)).toBeInTheDocument();
+    expect(screen.getByText(/未生效条件/)).toBeInTheDocument();
   });
 
   it('切站点清空已勾选的类目（旧站点的类目在新站点下可能不存在）', async () => {
@@ -255,7 +276,7 @@ describe('分析查询屏', () => {
 
     await user.click(screen.getByRole('checkbox', { name: /Electronics/ }));
     await act(async () => {
-      await user.click(submit());
+      await user.click(applyFilters());
     });
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
 

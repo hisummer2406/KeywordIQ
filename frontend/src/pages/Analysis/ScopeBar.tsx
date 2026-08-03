@@ -100,7 +100,7 @@ export default function ScopeBar({
       {/* 显式触发的代价是可能对着新条件读旧数据，这个提示是那份代价的必要补偿 */}
       {dirty && (
         <div className="scope-bar__dirty">
-          <Tag color="orange">条件已修改，点击立即查询生效</Tag>
+          <Tag color="orange">存在未生效条件，请点击对应的查询或筛选按钮</Tag>
         </div>
       )}
     </div>
