@@ -34,3 +34,12 @@ class UserCenter(Base):
     @property
     def role_code(self) -> str | None:
         return self.role.code if self.role else None
+
+    @property
+    def role_name(self) -> str | None:
+        """角色的展示名（如「超级管理员」）。
+
+        透出它是为了让前端不必维护一份 code → 中文名的映射：那份映射会随角色增删
+        静默漂移，而这里的名字与 role 表同源。
+        """
+        return self.role.name if self.role else None
