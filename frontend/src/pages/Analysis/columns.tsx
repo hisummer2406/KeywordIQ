@@ -43,13 +43,6 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       render: (_, r) => renderChange(r.ranking_change),
     },
     {
-      title: '周排名变化',
-      dataIndex: 'week_change',
-      width: 100,
-      hideInTable: view !== 'DAY',
-      render: (_, r) => renderChange(r.week_change),
-    },
-    {
       title: '新词',
       dataIndex: 'is_new',
       width: 80,
