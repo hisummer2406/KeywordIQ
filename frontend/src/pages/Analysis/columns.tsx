@@ -34,7 +34,7 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       dataIndex: 'trend',
       width: 90,
       hideInTable: view !== 'DAY',
-      render: (_, r) => <TrendSparkline values={r.trend} />,
+      render: (_, r) => <TrendSparkline values={r.trend} dates={r.trend_dates} />,
     },
     {
       title: '排名变化',

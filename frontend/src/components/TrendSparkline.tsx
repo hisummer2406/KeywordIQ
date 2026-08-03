@@ -1,56 +1,67 @@
-import { Tooltip } from 'antd';
+import { Tooltip, Typography } from 'antd';
+import { useState } from 'react';
 
-/**
- * 走势迷你图（自绘 SVG，不引图表库）。数组按日期升序（旧→新），从左到右绘制，
- * 右端为最新。排名越小越好，故 y 轴反向：最优排名在顶部。面积填充 + 首末对比着色
- * （末位排名更小=上升=绿，更大=红），右端标当前点；hover 显示排名序列（旧→新）。
- */
 export default function TrendSparkline({
   values,
-  width = 84,
-  height = 26,
+  dates,
+  width = 120,
+  height = 36,
 }: {
   values?: number[];
+  dates?: string[];
   width?: number;
   height?: number;
 }) {
-  if (!values || values.length === 0) {
-    return <span style={{ color: '#ccc' }}>—</span>;
-  }
-
-  const tip = `近 ${values.length} 天排名（旧 → 新）：${values.join(' → ')}`;
-
-  if (values.length === 1) {
-    return (
-      <Tooltip title={tip}>
-        <svg width={width} height={height} style={{ verticalAlign: 'middle' }}>
-          <circle cx={width / 2} cy={height / 2} r={2.5} fill="#1677ff" />
-        </svg>
-      </Tooltip>
-    );
-  }
+  const [active, setActive] = useState<number | null>(null);
+  if (!values?.length) return <span style={{ color: '#ccc' }}>—</span>;
 
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;
   const n = values.length;
-  const px = (i: number) => (i / (n - 1)) * (width - 6) + 3;
-  const py = (v: number) => ((v - min) / range) * (height - 6) + 3; // 排名 min(最优) → 顶部
-
+  const px = (i: number) => (n === 1 ? width / 2 : (i / (n - 1)) * (width - 10) + 5);
+  const py = (v: number) => ((v - min) / range) * (height - 10) + 5;
   const line = values.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(' ');
-  const area = `3,${height - 3} ${line} ${px(n - 1).toFixed(1)},${height - 3}`;
-  const first = values[0];
-  const last = values[n - 1];
-  const color = last < first ? '#3f8600' : last > first ? '#cf1322' : '#8c8c8c';
+  const area = `5,${height - 5} ${line} ${px(n - 1).toFixed(1)},${height - 5}`;
+  const color =
+    values[n - 1] < values[0] ? '#52c41a' : values[n - 1] > values[0] ? '#ff4d4f' : '#1677ff';
+  const date = active === null ? undefined : dates?.[active];
 
   return (
-    <Tooltip title={tip}>
-      <svg width={width} height={height} style={{ verticalAlign: 'middle' }}>
-        <polygon points={area} fill={`${color}1f`} stroke="none" />
+    <Tooltip
+      open={active !== null}
+      title={
+        active === null ? null : (
+          <div style={{ minWidth: 130 }}>
+            <div>{date ?? `第 ${active + 1} 天`}</div>
+            <div>
+              <span style={{ color: '#91caff' }}>●</span>{' '}
+              <Typography.Text style={{ color: '#fff' }}>ABA排名：</Typography.Text>
+              <strong>{values[active].toLocaleString()}</strong>
+            </div>
+          </div>
+        )
+      }
+    >
+      <svg
+        width={width}
+        height={height}
+        style={{ verticalAlign: 'middle', cursor: 'crosshair' }}
+        onMouseMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+          setActive(Math.round(ratio * (n - 1)));
+        }}
+        onMouseLeave={() => setActive(null)}
+      >
+        <polygon points={area} fill={`${color}14`} stroke="none" />
         <polyline points={line} fill="none" stroke={color} strokeWidth={1.5} />
-        {/* 起点（旧）淡标 + 终点（新）实心，强化左→右时间方向 */}
-        <circle cx={px(0)} cy={py(first)} r={1.5} fill={color} opacity={0.4} />
-        <circle cx={px(n - 1)} cy={py(last)} r={2.5} fill={color} />
+        {active !== null && (
+          <>
+            <line x1={px(active)} x2={px(active)} y1={2} y2={height - 2} stroke="#8c8c8c" />
+            <circle cx={px(active)} cy={py(values[active])} r={3} fill="#1677ff" stroke="#fff" />
+          </>
+        )}
       </svg>
     </Tooltip>
   );

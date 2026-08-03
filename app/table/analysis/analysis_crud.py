@@ -195,7 +195,7 @@ def trends_stmt(site: str, keyword_ids: list[int], on: date):
     """
     start = on - timedelta(days=6)
     return (
-        select(FactDaily.keyword_id, FactDaily.current_ranking)
+        select(FactDaily.keyword_id, FactDaily.report_date, FactDaily.current_ranking)
         .where(
             FactDaily.site == site,
             FactDaily.keyword_id.in_(keyword_ids),
@@ -248,10 +248,19 @@ def shape_rows(rows) -> list[dict[str, Any]]:
 
 
 def shape_trends(rows) -> dict[int, list[int]]:
-    """(keyword_id, ranking) 行 → {keyword_id: [排名…]}（按日期升序，依赖语句已排序）。"""
+    """趋势查询行 → {keyword_id: [排名…]}（按日期升序，依赖语句已排序）。"""
     out: dict[int, list[int]] = {}
-    for kid, rank in rows:
+    for row in rows:
+        kid, rank = row[0], row[-1]
         out.setdefault(kid, []).append(rank)
+    return out
+
+
+def shape_trend_dates(rows) -> dict[int, list[date]]:
+    """(keyword_id, report_date, ranking) 行 → {keyword_id: [日期…]}。"""
+    out: dict[int, list[date]] = {}
+    for kid, report_date, _rank in rows:
+        out.setdefault(kid, []).append(report_date)
     return out
 
 
