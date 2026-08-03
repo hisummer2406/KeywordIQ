@@ -1,9 +1,10 @@
 import type { RequestConfig, RunTimeLayoutConfig } from '@umijs/max';
 import { history } from '@umijs/max';
 import { message } from 'antd';
-import { getCurrentUser } from '@/services/auth';
+import { getCurrentUser, logout } from '@/services/auth';
 import { clearToken, getToken } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
+import RightContent from '@/components/RightContent';
 
 const LOGIN_PATH = '/login';
 
@@ -14,6 +15,9 @@ const LOGIN_PATH = '/login';
 export async function getInitialState(): Promise<{
   currentUser?: API.CurrentUser;
   fetchUserInfo?: () => Promise<API.CurrentUser | undefined>;
+  /** 右上角账号区读的是这两个键（plugin-layout 的 rightRender 约定），不读 currentUser。 */
+  name?: string;
+  avatar?: string | false;
 }> {
   const fetchUserInfo = async () => {
     try {
@@ -30,16 +34,55 @@ export async function getInitialState(): Promise<{
   // 避免 currentUser 为空被 onPageChange 踢回登录页；无 token 时跳过，不触发 401。
   if (getToken()) {
     const currentUser = await fetchUserInfo();
-    return { currentUser, fetchUserInfo };
+    // name 供右上角账号区显示；avatar: false 表示不渲染头像图片——plugin-layout 的默认
+    // 头像指向一个外部 CDN，内部系统不该为一张占位图依赖外网。
+    return { currentUser, fetchUserInfo, name: currentUser?.username, avatar: false };
   }
   return { fetchUserInfo };
 }
 
-export const layout: RunTimeLayoutConfig = ({ initialState }) => {
+export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) => {
+  /**
+   * 登出，与登录严格对称：登录是「发令牌 → 刷新 initialState」，登出就是
+   * 「清令牌 → 清 initialState → 回登录页」。三步缺一不可——
+   *
+   * - 只清 token 不清 initialState：currentUser 还在，onPageChange 与 access 判定
+   *   都认为已登录，人留在受保护页却带着一张作废的令牌，每个请求 401。
+   * - 只清 initialState 不清 token：下次刷新页面 getInitialState 又拿旧 token 去
+   *   换用户，等于没退。
+   *
+   * 后端登出失败也要把本地清干净：令牌在客户端，服务端那次调用失败不该让用户卡在
+   * 一个「以为退了其实没退」的中间态。故异常吞掉但记一笔。
+   */
+  const doLogout = async () => {
+    try {
+      await logout();
+    } catch (e) {
+      console.warn('服务端登出失败，仍继续清理本地会话', e);
+    }
+    clearToken();
+    await setInitialState((s) => ({ ...s, currentUser: undefined, name: undefined }));
+    history.push(LOGIN_PATH);
+  };
+
   return {
     title: '海眸系统',
     logo: logoIcon,
     menu: { locale: false },
+
+    // 顶部菜单而非侧边菜单：本系统是数据展示服务，主屏是一张宽表（分析查询有 8 列
+    // 定宽、合计约 790px，外加关键词与商品标题两列自适应）。常驻侧边栏吃掉约 208px
+    // 横向空间，直接换成表格的横向滚动条。
+    //
+    // 这三项必须写在**运行时配置**（本文件）而非 .umirc.ts：Umi Max 生成的
+    // plugin-layout 只从 .umirc.ts 的 layout 里取 title / locale / formatMessage，
+    // 其余键不会传给 ProLayout，写在那边是死配置——不报错，也不生效。
+    layout: 'top',
+    // 内容区铺满宽度。top 布局下若收成定宽居中，对宽表是反效果：菜单不占地方了，
+    // 表格却被夹在中间，横向空间反而更少。
+    contentWidth: 'Fluid',
+    // 表格长、滚动多，顶栏固定住，切菜单不用滚回顶部。
+    fixedHeader: true,
     // 未登录访问受保护页 → 跳登录。
     //
     // 判据是 currentUser 而非 token：access.ts 里的权限判定读的也是 currentUser，
@@ -52,7 +95,17 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
         history.push(LOGIN_PATH);
       }
     },
+
+    /**
+     * 右上角账号区。用自定义组件而非 plugin-layout 内置的 rightRender——内置的只有
+     * 「头像 + 用户名 + 退出登录」，不显示角色，而本系统是 RBAC，看不到自己的身份时
+     * 某个按钮灰着就分不清是没权限还是坏了。
+     */
+    rightContentRender: () => (
+      <RightContent currentUser={initialState?.currentUser} onLogout={doLogout} />
+    ),
   };
+
 };
 
 /** 后端统一错误契约（app/common/error_handlers.py）。 */
