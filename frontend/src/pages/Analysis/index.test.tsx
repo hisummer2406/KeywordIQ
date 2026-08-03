@@ -230,6 +230,16 @@ describe('分析查询屏', () => {
     expect(within(panel).queryByPlaceholderText(/关键词/)).not.toBeInTheDocument();
   });
 
+  it('过滤区标题分别对应左右两栏', async () => {
+    await renderSettled();
+
+    const categoryTitle = screen.getByText('选择筛选类目');
+    const resultTitle = screen.getByText('搜索结果过滤');
+
+    expect(categoryTitle.closest('.ant-col')).toHaveStyle({ flex: '0 0 260px' });
+    expect(resultTitle.closest('.ant-col')).toHaveStyle({ flex: '1 1 auto' });
+  });
+
   it('无 analysis:export 权限时不显示导出按钮', async () => {
     accessState.canExport = false;
     await renderSettled();

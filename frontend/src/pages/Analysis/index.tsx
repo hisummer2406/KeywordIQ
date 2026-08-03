@@ -2,7 +2,7 @@ import { DownOutlined, DownloadOutlined, UpOutlined } from '@ant-design/icons';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useAccess } from '@umijs/max';
-import { Button, Card, Col, Row, message } from 'antd';
+import { Button, Card, Col, Row, Typography, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportAnalysis,
@@ -147,7 +147,16 @@ export default function AnalysisPage() {
       <Card
         size="small"
         style={{ marginTop: 12 }}
-        title="搜索结果过滤"
+        title={
+          <Row gutter={16} wrap={false} style={{ width: '100%' }}>
+            <Col flex="260px">
+              <Typography.Text strong>选择筛选类目</Typography.Text>
+            </Col>
+            <Col flex="auto" style={{ paddingLeft: 16 }}>
+              <Typography.Text strong>搜索结果过滤</Typography.Text>
+            </Col>
+          </Row>
+        }
         extra={
           <Button
             type="link"
