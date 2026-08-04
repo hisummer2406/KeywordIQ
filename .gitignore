@@ -14,8 +14,12 @@ logs/*
 __pycache__/
 uploads/
 
-# 真实搜索词报告样本数据（禁止入库，见 CLAUDE.md guardrail）
-docs/table/
+# docs/ 整个不入库：里面是 PRD、报价单一类的业务文档，以及 docs/table/ 下的真实搜索词
+# 报告样本。前者是二进制、改一次就在历史里留一份全量副本，且从不参与构建或测试；
+# 后者是客户数据，CLAUDE.md 的 guardrail 明令禁止入库。
+#
+# 规格的唯一来源是 openspec/，不是这里——docs/ 只是本地放参考资料的地方。
+docs/
 
 # 忽略Python字节码文件（.pyc/.pyo/.pyd）
 *.py[cod]
