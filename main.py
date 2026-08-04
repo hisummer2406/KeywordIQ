@@ -3,13 +3,14 @@ import os
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.api_router import api_router
+from app.auth.simple_auth import simple_auth
 from app.common.error_handlers import register_error_handlers
 from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
 from config import settings
@@ -55,6 +56,21 @@ def init_upload_dir():
         logger.exception("❌ 上传目录初始化失败")
 
 
+def configure_thread_limiter() -> int:
+    """设置 anyio 默认线程限流器的上限，返回实际生效值。
+
+    走这个限流器的有三类工作，**只有第一类与数据库连接数相关**：同步 def 端点
+    （导出）与健康检查探活、bcrypt 哈希/校验、同步 BackgroundTask（导入，一条线程
+    占住整场）。所以它用独立的 THREAD_POOL_LIMIT，不从连接池推导——早先写成
+    `DB_POOL_SIZE + DB_MAX_OVERFLOW`，一旦按计划把同步池降到 2+3，限流器会跟着
+    塌到 5，一个导入在跑就只剩 4 条线程给全部登录。
+    """
+    limit = settings.THREAD_POOL_LIMIT
+    anyio.to_thread.current_default_thread_limiter().total_tokens = limit
+    logger.info("🧵 线程池上限: %d（导出/探活/bcrypt/同步后台任务共用）", limit)
+    return limit
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """异步上下文管理器"""
@@ -63,15 +79,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"📊 数据库Schema: {settings.DATABASE_SCHEMA}")
     logger.info(f"📁 上传目录: {settings.UPLOAD_DIR}")
 
-    # 线程池上限对齐同步连接池的满载容量。
-    #
-    # 走线程池的只剩少数同步端点（导出、健康检查探活），它们每个都要占一条同步连接。
-    # AnyIO 默认 40 个线程，而同步池满载只有 (DB_POOL_SIZE + DB_MAX_OVERFLOW) 条——
-    # 线程数超过可用连接时，多出的线程会卡在连接池上直到 pool_timeout 超时报错。
-    # 把并发限制在应用侧：排队快、可观测，且不占数据库连接。
-    thread_limit = settings.DB_POOL_SIZE + settings.DB_MAX_OVERFLOW
-    anyio.to_thread.current_default_thread_limiter().total_tokens = thread_limit
-    logger.info("🧵 线程池上限对齐同步连接池: %d", thread_limit)
+    configure_thread_limiter()
 
     # 初始化上传目录
     init_upload_dir()
@@ -182,13 +190,23 @@ async def health_check():
         return {"status": "unhealthy"}
 
 
-# 集成到FastAPI应用
+# 进程内长驻，摘要要跨请求才有意义（每请求新建的话"最近 10 次均值"只有一个样本）。
+# 历史长度在 SystemMonitor 内部封顶，不会随请求量增长。
+system_monitor = SystemMonitor()
+
+
 @app.get("/api/monitoring/metrics")
-async def get_system_metrics():
-    """获取系统监控指标"""
-    monitor = SystemMonitor()
-    metrics = await monitor.collect_metrics()
-    summary = monitor.get_performance_summary()
+async def get_system_metrics(_user=Depends(simple_auth.get_current_user)):
+    """获取系统监控指标。
+
+    **要鉴权**：它挂在 `/api` 下由 nginx 反代出去，返回的是宿主机的 CPU / 内存 /
+    磁盘 / 进程数。任何权限点都不贴切（这是运维数据不是业务数据），故只要求已登录。
+
+    **采样进线程池**：psutil 要阻塞一整个采样窗口，直接 await 会让该 worker 停摆
+    同等时长。这个端点会被轮询，4 个 worker 共享 4 vCPU，停摆是能被用户感知的。
+    """
+    metrics = await run_in_threadpool(system_monitor.collect_metrics)
+    summary = system_monitor.get_performance_summary()
 
     return {
         'current_metrics': metrics,
