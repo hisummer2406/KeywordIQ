@@ -90,12 +90,14 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 - **类目筛选是多选**：请求字段 `categories`（列表，命中其一即可，上限 100），空列表视同不筛。
   没有单值的 `category_exact`——它在 `redesign-analysis-filter-layout` 里被替换掉了。
 - **默认站点** `DEFAULT_SITE`（config，须属站点清单）；未传站点用它、非法站点报错**不回退**。
-- **日视图**附带只读的近 7 天走势与当周排名变化（`fetch_trends`/`fetch_week_changes`，
-  「先分页再批量补附加」）。当周映射口径是**同 ISO 周**（`date_trunc('week')`）——导入侧只存
-  文件名日期、不定义周边界，这是查询侧的约定。**排序白名单**按视图，日视图不许按走势/周变化排序。
+- **日视图**附带只读的近 7 天走势与各点日期（`fetch_trends`/`trends_stmt`，「先分页再批量
+  补附加」）。**排序白名单**按视图，日视图不许按走势排序。
+  **日视图不再附带「当周排名变化」**——它把周报数据混进日报视图，让「这一行属于哪份数据」
+  变得含糊，还要求查询侧自行定义周边界（`date_trunc('week')`），而导入侧只存文件名日期、
+  不定义周边界。要看周维度的变化就切到周视图。
 - 列表响应走 ProTable 契约 `{data,total,success}` + 作用域回显。集成测试
   `test/test_site_scoped_query_integration.py`（`TEST_DATABASE_URL` gate）。
-- 演示数据：`scripts/seed_demo_data.py`（连续 7 天 + 对齐周报，让走势/周变化可见，仅本地）。
+- 演示数据：`scripts/seed_demo_data.py`（连续 7 天 + 对齐周报，让走势可见，仅本地）。
 
 **数据保留：只保留最近三个月。** 由 `HOT_WINDOW_MONTHS`（默认 3）定义热窗口，报告日期
 早于窗口下界的月度分区由保留清理**自动移出**——日报与周报统一适用同一窗口。移出是整
@@ -276,6 +278,12 @@ V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随
    **RDS 只有 2 vCPU**：PG 同时真正能执行的查询受核心数限制（约 4 个），池开大不提升
    吞吐，只会把「快速可见的失败」换成「整体缓慢劣化」。目标取值是同步 2+3、异步 8+8
    （上限 84），但降池是行为改变，须先观测 `pg_stat_activity` 的 `active` 峰值再落。
+
+   **`THREAD_POOL_LIMIT`（默认 32）与连接池无关，调池时不要跟着一起动。** anyio 的默认
+   线程限流器被三类工作共用，只有第一类占连接：同步 `def` 端点（导出）与健康检查探活、
+   bcrypt 哈希/校验（每次登录 ~247 ms，不占连接）、同步 `BackgroundTask`（导入，一条线程
+   占住整场）。它曾按 `DB_POOL_SIZE + DB_MAX_OVERFLOW` 推导——那样把同步池降到 2+3 会让
+   它塌到 5，一个导入在跑就只剩 4 条线程给全部登录。
 2. **Query Optimization**:
    - 无筛选的分页总数直接读 `site_data_stats.row_count`（O(1)，不在事实表上聚合）
    - 带筛选的总数用 `FILTERED_COUNT_CAP = 10000` 封顶计数（`analysis_crud.count_filtered`）
@@ -309,6 +317,9 @@ DB_POOL_SIZE=20            # 同步：导入 COPY / 导出游标 / 迁移
 DB_MAX_OVERFLOW=10
 DB_ASYNC_POOL_SIZE=20      # 异步：查询与鉴权
 DB_ASYNC_MAX_OVERFLOW=10
+
+# 线程池上限（导出/探活/bcrypt/同步后台任务共用，与连接池无关）
+THREAD_POOL_LIMIT=32
 ```
 
 ## Production Environment
@@ -361,8 +372,13 @@ DB_ASYNC_MAX_OVERFLOW=10
 | `frontend/` | `pnpm lint` + `pnpm tsc` + `pnpm test` | ~15s |
 | 只有文档 / `openspec/` | 放行 | — |
 
-本地 PostgreSQL 起着时会自动带上 `TEST_DATABASE_URL` 解开集成测试，没起就只跑单元
-部分（不因此拒绝提交，CI 有真库兜底）。
+本地 `keywordiq_test` 连得上时会自动带上 `TEST_DATABASE_URL` 解开集成测试，连不上就
+只跑单元部分（不因此拒绝提交，CI 有真库兜底）。判据是**真连一次库**而不是探端口——
+本机跑着别的 PostgreSQL 时端口一样是通的，据此喂下去会让集成测试整片失败。
+
+每条检查有 300 秒超时，超时按失败处理。卡住的 pytest（抢咨询锁、半开连接）若没有
+上限，表现是「agent 不动了」而不是「检查没过」，比失败难诊断得多。门禁自身的回归在
+`test/test_pre_commit_hook_unit.py`。
 
 ### 铁律检查在哪
 
