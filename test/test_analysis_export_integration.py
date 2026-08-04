@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.table.analysis import analysis_crud as crud
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import AnalysisSearchRequest
-from test.test_site_scoped_query_integration import D3, SITE, _seed
+from test.test_site_scoped_query_integration import D3, SITE, _ensure_partitions_sync, _seed
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -26,14 +26,18 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture()
 def db():
+    # 分区必须自己确保，不能指望别的测试模块建过。
+    #
+    # 这里踩过一个只在**全新库**上才现形的坑：分区是提交的 DDL（刻意如此，见
+    # _ensure_partitions_sync 的说明），而本文件按字母序排在 site_scoped 之前。本文件
+    # 曾不建分区，于是全新库上第一次跑必挂 9 个；site_scoped 随后把分区建好并提交，
+    # 第二次起就再也复现不了——CI 上表现为「首次运行红、重跑绿」，最难归因的那种。
+    if not _ensure_partitions_sync():
+        pytest.skip("测试库未迁移，请先运行 alembic upgrade head")
+
     engine = create_engine(TEST_URL)
     connection = engine.connect()
     trans = connection.begin()
-    if connection.execute(text("SELECT to_regclass('analysis.fact_daily')")).scalar() is None:
-        trans.rollback()
-        connection.close()
-        engine.dispose()
-        pytest.skip("测试库未迁移，请先运行 alembic upgrade head")
     session = Session(bind=connection)
     try:
         yield session
