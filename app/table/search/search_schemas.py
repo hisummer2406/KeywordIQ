@@ -33,16 +33,22 @@ class AnalysisSearchRequest(BaseModel):
 
     # 子串筛选（走维度表 trgm 索引）
     keyword: str | None = Field(None, description="关键词子串")
-    brand: str | None = Field(None, description="品牌子串（top1 商品）")
-    category: str | None = Field(None, description="类目子串（top1 商品）")
     asin: str | None = Field(None, description="ASIN 子串（top1 商品）")
     product_title: str | None = Field(None, description="标题子串（top1 商品）")
 
-    # 精确类目多选（下拉，选项走 category_stats）。命中其一即可；空集合视同不筛。
-    # 上限 100：类目数可达数百，无上限的 IN 列表会让计划器在参数很长时放弃索引扫描，
-    # 而勾满上百个类目已等价于不筛。
+    # 品牌与类目：**精确多选，前三任一命中**。语义是「这个词的前三品牌里有 X」。
+    #
+    # 品牌此前是子串筛选（`brand ILIKE '%x%'`），随品牌维度化一并改为精确多选，与类目
+    # 对称——这是一次用户可感知的能力收窄（搜 anker 不再匹配 Anker Direct），补偿是下拉
+    # 带计数，让用户能在相近品牌名之间做判断。
+    #
+    # 上限 100：无上限的 IN 列表会让计划器在参数很长时放弃索引扫描，而勾满上百个已等价
+    # 于不筛。品牌基数（13.5 万）远高于类目（104），上限对品牌尤其必要。
+    brands: list[str] | None = Field(
+        None, max_length=100, description="品牌精确匹配集合，前三任一命中；空集合视同不筛"
+    )
     categories: list[str] | None = Field(
-        None, max_length=100, description="类目精确匹配集合，命中其一即可；空集合视同不筛"
+        None, max_length=100, description="类目精确匹配集合，前三任一命中；空集合视同不筛"
     )
 
     # 区间筛选
@@ -81,24 +87,27 @@ class _FactRowBase(BaseModel):
 
     top1_asin: str | None = None
     top1_title: str | None = None
-    top1_brand: str | None = None
-    top1_category: str | None = None
     top1_click_share: float = 0
     top1_conversion_share: float = 0
 
     top2_asin: str | None = None
     top2_title: str | None = None
-    top2_brand: str | None = None
-    top2_category: str | None = None
     top2_click_share: float = 0
     top2_conversion_share: float = 0
 
     top3_asin: str | None = None
     top3_title: str | None = None
-    top3_brand: str | None = None
-    top3_category: str | None = None
     top3_click_share: float = 0
     top3_conversion_share: float = 0
+
+    # 关键词级的前三品牌与前三类目。**不是商品属性**——源报表里它们是与商品榜单彼此
+    # 独立的排行，商品槽位不携带这两个字段。名次由字段位置承载。
+    top1_brand: str | None = None
+    top2_brand: str | None = None
+    top3_brand: str | None = None
+    top1_category: str | None = None
+    top2_category: str | None = None
+    top3_category: str | None = None
 
     # 搜索趋势：两个视图共有，故放基类。回溯窗口按视图取（日 7 天 / 周 7 期），
     # 但字段本身是同一个东西——在两个子类里各声明一遍会让描述与默认值各自漂移。
@@ -131,6 +140,9 @@ class AnalysisSearchResponse(BaseModel):
     view: View
     date: _Date | None = None
     message: str | None = None
+    # 该切片的品牌/类目尚未重建（历史数据需按批次从 OSS 重导才有这两个字段）。
+    # 前端据此明确提示，**不能静默返回空**——用户会以为是自己筛选条件写错了。
+    pending_rebuild: bool = False
 
 
 class ScopeInfo(BaseModel):
@@ -146,4 +158,15 @@ class CategoryOption(BaseModel):
     """类目下拉项。"""
 
     category: str
+    count: int
+
+
+class BrandOption(BaseModel):
+    """品牌下拉项。
+
+    ``count`` 不是装饰：品牌改为精确多选后，面对 Anker / Anker Direct / Ankermann
+    这类相近选项，计数是用户判断该选哪个的唯一依据。
+    """
+
+    brand: str
     count: int

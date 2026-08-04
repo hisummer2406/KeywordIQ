@@ -21,9 +21,12 @@ const LABEL_WIDTH = 88;
 /**
  * 商品维度条件的口径提示。
  *
- * 表格展示点击量前三，而这些条件只匹配第一名——不标注的后果是具体且可预期的：
- * 用户会拿卡牌里第二名的品牌回填筛选，得到空结果，并把它当成数据缺失而非口径差异。
- * 提示挂在填写的位置而不是表格列头，因为误用正发生在填写的那一刻。
+ * 表格展示点击量前三，而 ASIN 与商品标题这两个条件只匹配第一名——不标注的后果是具体且
+ * 可预期的：用户会拿卡牌里第二名的 ASIN 回填筛选，得到空结果，并把它当成数据缺失而非
+ * 口径差异。提示挂在填写的位置而不是表格列头，因为误用正发生在填写的那一刻。
+ *
+ * **只用于 ASIN 与商品标题。** 品牌与类目已改为前三任一命中，展示与筛选对齐，再标注就是
+ * 一句描述不存在差异的噪音——而噪音会让用户不再阅读界面提示，连带这两条真正有效的也失效。
  */
 export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里展示的是前三名';
 
@@ -162,16 +165,6 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
             { label: '新词', value: 'true' },
             { label: '非新词', value: 'false' },
           ]}
-        />
-      </Row>
-      <Row label="品牌" hint={TOP1_ONLY_HINT}>
-        <Input
-          size="middle"
-          allowClear
-          style={{ width: 220 }}
-          placeholder="品牌关键字"
-          value={value.brand}
-          onChange={(e) => patch({ brand: e.target.value })}
         />
       </Row>
       <Row label="商品标题" hint={TOP1_ONLY_HINT}>

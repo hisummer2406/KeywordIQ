@@ -35,10 +35,9 @@ describe('buildColumns', () => {
     expect(titles).toContain('类目');
   });
 
-  it('没有「点击前三品牌」列——品牌在报表里是关键词级排行，不是商品属性', () => {
-    // 同一 ASIN 在报表中携带互相冲突的品牌值（实测 28.5%），落库时任选其一胜出。
-    // 在数据模型修好之前展示它，等于把一个已知错误在每行显示三遍
-    const titles = buildColumns('DAY').map((column) => column.title);
-    expect(titles).not.toContain('点击前三品牌');
+  it('有「点击前三品牌」与「点击前三类目」两列——品牌类目已有自己的数据来源', () => {
+    const titles = buildColumns('DAY').map((c) => c.title);
+    expect(titles).toContain('点击前三品牌');
+    expect(titles).toContain('点击前三类目');
   });
 });

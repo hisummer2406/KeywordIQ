@@ -2,6 +2,7 @@ import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
 import TrendSparkline from '@/components/TrendSparkline';
+import RankedList from './RankedList';
 import TopProductCards from './TopProductCards';
 
 /**
@@ -43,6 +44,18 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       dataIndex: 'trend',
       width: 190,
       render: (_, r) => <TrendSparkline view={view} values={r.trend} dates={r.trend_dates} />,
+    },
+    {
+      title: '点击前三品牌',
+      dataIndex: 'top1_brand',
+      width: 150,
+      render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
+    },
+    {
+      title: '点击前三类目',
+      dataIndex: 'top1_category',
+      width: 150,
+      render: (_, r) => <RankedList values={[r.top1_category, r.top2_category, r.top3_category]} />,
     },
     {
       title: '排名变化',

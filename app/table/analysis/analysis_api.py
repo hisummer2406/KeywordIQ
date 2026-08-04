@@ -28,6 +28,7 @@ from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
     AnalysisSearchResponse,
+    BrandOption,
     CategoryOption,
     ScopeInfo,
 )
@@ -98,3 +99,14 @@ async def get_categories(
 ) -> list[CategoryOption]:
     """类目下拉选项（按作用域）。"""
     return await service.get_categories(db, site, view)
+
+
+@analysis_router.get("/brands", response_model=list[BrandOption])
+async def get_brands(
+    view: _View = Query("DAY"),
+    site: str | None = Query(None),
+    db: AsyncSession = Depends(get_async_db),
+    _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
+) -> list[BrandOption]:
+    """品牌下拉选项（按作用域）。与 /categories 同构，同一套权限点。"""
+    return await service.get_brands(db, site, view)
