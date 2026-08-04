@@ -222,27 +222,51 @@ def _upsert_dimensions(session: Session, site: str) -> None:
     )
     # dim_product：三个商品槽位合并去重。SCD Type 1 —— 冲突时更新为最新值。
     # DISTINCT ON (asin) 避免同一 asin 在一条 INSERT 里出现两次触发 ON CONFLICT 报错。
+    #
+    # **只写 asin 与 title。** 品牌与类目曾经也写在这里（品牌#N 配商品#N），那是本变更
+    # 修掉的缺陷：商品槽位在源报表里根本没有这两个字段，配对出来的值没有数据来源。
+    # 实测同一 ASIN 固定在槽位 1 时，title 冲突率 0%（真属性），brand 11.7%、
+    # category 3.4%——后两者的冲突正是"把别的东西当成商品属性"的直接证据。
     session.execute(
         text(
             """
-            INSERT INTO analysis.dim_product (asin, title, brand, category)
-            SELECT DISTINCT ON (asin) asin, title, brand, category
+            INSERT INTO analysis.dim_product (asin, title)
+            SELECT DISTINCT ON (asin) asin, title
               FROM (
-                    -- COPY CSV 把空字段当 NULL，但维度字段 NOT NULL，故 COALESCE 回空串
+                    -- COPY CSV 把空字段当 NULL，但 title NOT NULL，故 COALESCE 回空串
                     -- （沿用 V1 的 fillna('')）。asin 空则整槽位无商品，由 WHERE 过滤掉。
-                    SELECT NULLIF(c8,'')  AS asin, COALESCE(c9,'')  AS title, COALESCE(c2,'') AS brand, COALESCE(c5,'') AS category FROM analysis._import_staging
+                    SELECT NULLIF(c8,'')  AS asin, COALESCE(c9,'')  AS title FROM analysis._import_staging
                     UNION ALL
-                    SELECT NULLIF(c12,'') AS asin, COALESCE(c13,'') AS title, COALESCE(c3,'') AS brand, COALESCE(c6,'') AS category FROM analysis._import_staging
+                    SELECT NULLIF(c12,'') AS asin, COALESCE(c13,'') AS title FROM analysis._import_staging
                     UNION ALL
-                    SELECT NULLIF(c16,'') AS asin, COALESCE(c17,'') AS title, COALESCE(c4,'') AS brand, COALESCE(c7,'') AS category FROM analysis._import_staging
+                    SELECT NULLIF(c16,'') AS asin, COALESCE(c17,'') AS title FROM analysis._import_staging
                    ) slots
              WHERE asin IS NOT NULL
              ORDER BY asin
             ON CONFLICT (asin) DO UPDATE
-               SET title = EXCLUDED.title, brand = EXCLUDED.brand, category = EXCLUDED.category
+               SET title = EXCLUDED.title
             """
         )
     )
+    # dim_brand / dim_category：关键词级排行项，三个名次列合并去重。
+    #
+    # 与 dim_product 不同，这里**没有** ON CONFLICT DO UPDATE——维度只存名称，没有可更新
+    # 的属性，DO NOTHING 即可。空串在此被过滤掉（NULLIF）：让空串进维度会产生一个
+    # "名字是空的品牌"，然后堂而皇之出现在下拉选项里。
+    for table, cols in (("dim_brand", ("c2", "c3", "c4")), ("dim_category", ("c5", "c6", "c7"))):
+        union = " UNION ".join(
+            f"SELECT NULLIF({c}, '') AS name FROM analysis._import_staging" for c in cols
+        )
+        session.execute(
+            text(
+                f"""
+                INSERT INTO analysis.{table} (name)
+                SELECT name FROM ({union}) vals
+                 WHERE name IS NOT NULL
+                ON CONFLICT (name) DO NOTHING
+                """
+            )
+        )
 
 
 def _load_facts(session: Session, site: str, period: str, report_date: date) -> int:
@@ -270,7 +294,9 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
                 current_ranking, previous_ranking, ranking_change, is_new,
                 top1_product_id, top1_click_share, top1_conversion_share,
                 top2_product_id, top2_click_share, top2_conversion_share,
-                top3_product_id, top3_click_share, top3_conversion_share
+                top3_product_id, top3_click_share, top3_conversion_share,
+                top1_brand_id, top2_brand_id, top3_brand_id,
+                top1_category_id, top2_category_id, top3_category_id
             )
             SELECT DISTINCT ON (k.keyword_id)
                 :site, :rdate, k.keyword_id,
@@ -280,13 +306,23 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
                 prev.keyword_id IS NULL,
                 p1.product_id, {_num('s.c10')}, {_num('s.c11')},
                 p2.product_id, {_num('s.c14')}, {_num('s.c15')},
-                p3.product_id, {_num('s.c18')}, {_num('s.c19')}
+                p3.product_id, {_num('s.c18')}, {_num('s.c19')},
+                b1.brand_id, b2.brand_id, b3.brand_id,
+                g1.category_id, g2.category_id, g3.category_id
             FROM analysis._import_staging s
             JOIN analysis.dim_keyword k
               ON k.site = :site AND k.keyword = s.c1
             LEFT JOIN analysis.dim_product p1 ON p1.asin = NULLIF(s.c8, '')
             LEFT JOIN analysis.dim_product p2 ON p2.asin = NULLIF(s.c12, '')
             LEFT JOIN analysis.dim_product p3 ON p3.asin = NULLIF(s.c16, '')
+            -- 品牌/类目按名次各自关联，与商品槽位无关：某个名次缺失时该列为 NULL，
+            -- 不顺延、也不指向一个空串维度行。
+            LEFT JOIN analysis.dim_brand b1 ON b1.name = NULLIF(s.c2, '')
+            LEFT JOIN analysis.dim_brand b2 ON b2.name = NULLIF(s.c3, '')
+            LEFT JOIN analysis.dim_brand b3 ON b3.name = NULLIF(s.c4, '')
+            LEFT JOIN analysis.dim_category g1 ON g1.name = NULLIF(s.c5, '')
+            LEFT JOIN analysis.dim_category g2 ON g2.name = NULLIF(s.c6, '')
+            LEFT JOIN analysis.dim_category g3 ON g3.name = NULLIF(s.c7, '')
             LEFT JOIN analysis.{table} prev
               ON prev.site = :site AND prev.{date_col} = :prev_date AND prev.keyword_id = k.keyword_id
             WHERE NULLIF(s.c1, '') IS NOT NULL
