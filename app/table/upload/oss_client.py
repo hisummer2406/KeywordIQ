@@ -231,14 +231,28 @@ def object_exists(object_key: str, *, bucket=None) -> bool:
     return bool(b.object_exists(object_key))
 
 
-def object_size(object_key: str, *, bucket=None) -> int:
-    """对象字节数。``bucket`` 可注入以便测试。
+def stat_object(object_key: str, *, bucket=None) -> int:
+    """一次 ``head_object`` 同时回答「在不在」和「多大」，返回字节数。
 
     直传下字节不经过应用服务器，服务端唯一能称量文件的时机就是导入触发前的这次
     ``head_object``——所以 MAX_FILE_SIZE 的执行点在这里，不在"上传"那一步。
+
+    对象不存在抛 :class:`OSSObjectNotFound`（404）。
+
+    存在性与大小本就是同一次 head 的两个返回值。分成 ``object_exists`` +
+    ``object_size`` 两次问有两个代价：两次都是**阻塞的**网络往返，而 ``/oss/import``
+    是 async 端点；且两次之间对象可能被删，"存在"与"多大"来自两个时刻。
+
+    **只把 404 翻成"不存在"**，其余失败原样上抛——超时或权限错误若被当成
+    "对象不存在"，用户会被指引去重传一个明明还在的文件。
     """
     b = bucket or _default_bucket()
-    return int(b.head_object(object_key).content_length)
+    try:
+        return int(b.head_object(object_key).content_length)
+    except Exception as exc:
+        if getattr(exc, "status", None) == 404:
+            raise OSSObjectNotFound(log_detail=f"object key 不存在: {object_key}") from exc
+        raise
 
 
 def object_stream(object_key: str, *, bucket=None):
