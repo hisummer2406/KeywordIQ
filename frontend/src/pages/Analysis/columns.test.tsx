@@ -29,15 +29,19 @@ describe('buildColumns', () => {
     expect(titles).not.toContain('转化份额');
   });
 
-  it('前三卡牌列在，类目列保留', () => {
+  it('前三卡牌列在，类目列不展示', () => {
     const titles = buildColumns('DAY').map((column) => column.title);
     expect(titles).toContain('点击前三 ASIN');
-    expect(titles).toContain('类目');
+    // 类目暂不展示：接口仍返回 top1..3_category，需要时把列加回来即可
+    expect(titles).not.toContain('类目');
+    expect(titles).not.toContain('点击前三类目');
   });
 
-  it('有「点击前三品牌」与「点击前三类目」两列——品牌类目已有自己的数据来源', () => {
+  it('品牌是最后一列', () => {
     const titles = buildColumns('DAY').map((c) => c.title);
     expect(titles).toContain('点击前三品牌');
-    expect(titles).toContain('点击前三类目');
+    // 钉住位置而不只是存在性——列序是刻意的（品牌是回头才看的辅助信息），
+    // 只断言"包含"的话，以后有人在末尾加一列就会无声地把它挤走
+    expect(titles.at(-1)).toBe('点击前三品牌');
   });
 });

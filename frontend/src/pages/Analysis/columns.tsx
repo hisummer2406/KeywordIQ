@@ -46,18 +46,6 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       render: (_, r) => <TrendSparkline view={view} values={r.trend} dates={r.trend_dates} />,
     },
     {
-      title: '点击前三品牌',
-      dataIndex: 'top1_brand',
-      width: 150,
-      render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
-    },
-    {
-      title: '点击前三类目',
-      dataIndex: 'top1_category',
-      width: 150,
-      render: (_, r) => <RankedList values={[r.top1_category, r.top2_category, r.top3_category]} />,
-    },
-    {
       title: '排名变化',
       dataIndex: 'ranking_change',
       width: 100,
@@ -69,20 +57,19 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
       width: 80,
       render: (_, r) => (r.is_new ? <Tag color="gold">新词</Tag> : '—'),
     },
-    {
-      title: '类目',
-      dataIndex: 'top1_category',
-      width: 150,
-      ellipsis: true,
-      // 类目筛选只匹配第一名，故这一列展示的也是第一名的类目——展示口径与筛选口径一致，
-      // 否则用户会拿这里看到的值去筛却筛不出这一行。
-      render: (_, r) => r.top1_category || '—',
-    },
     // 不给 width：让它吃掉所有剩余横向空间。
     {
       title: '点击前三 ASIN',
       dataIndex: 'top1_asin',
       render: (_, r) => <TopProductCards row={r} />,
+    },
+    // 品牌放在最末列：它是辅助信息，读表时先看排名与商品，品牌是回头才需要的那一眼。
+    // 类目列暂不展示（数据仍在接口里，需要时把列加回来即可）。
+    {
+      title: '点击前三品牌',
+      dataIndex: 'top1_brand',
+      width: 150,
+      render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
     },
   ];
 }
