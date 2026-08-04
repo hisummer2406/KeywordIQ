@@ -39,6 +39,29 @@ cd ~/.claude-worktrees/$ID
 进去之后**全程不要 `cd` 回主仓**。跨仓提交（`cd 主仓 && git commit`）是门禁重点
 盯防的形态，也是历史上漏过一个未用 import 的原因。
 
+### 新 worktree 是空壳，三样东西不随分支走
+
+被 `.gitignore` 的东西不在 git 里，所以**不会**跟着 worktree 过来。不补齐的话，
+报错信息都指不到真正的原因：
+
+```bash
+cp /Users/stone/Developer/KeywordIQ/.env ~/.claude-worktrees/$ID/.env   # ① 配置
+cd ~/.claude-worktrees/$ID/frontend && pnpm install --prefer-offline    # ② 前端依赖
+docker exec pgbase createdb -U postgres keywordiq_$ID                   # ③ 本 worktree 的库
+```
+
+| 缺什么 | 报错长什么样 | 为什么难认 |
+|---|---|---|
+| `.env` | `ValidationError: 7 validation errors for Settings`（APP_NAME 等 required） | 像是配置类写坏了，其实只是没读到文件 |
+| `frontend/node_modules` | `sh: tsc: command not found` | 像是环境坏了，其实是依赖没装 |
+| 数据库 | 集成测试**静默全跳过** | 最危险的一个：测试报绿，而跳过的正是唯一碰真库的部分 |
+
+第三条尤其要当心：`317 passed` 与 `265 passed, 52 skipped` 长得很像。**worktree 里也要有
+一个能跑集成测试的库**，否则整个变更期间你都在拿单元测试的绿色自我安慰——本项目就发生过
+"模型改了、查询层没跟上，单元测试全绿"，接上真库后立刻红 21 个。
+
+库名带上变更 id（`keywordiq_<变更id>`），不要共用 `keywordiq_test`——见下一节。
+
 ## 3. 干活期间：三样共享资源要探活
 
 worktree 隔离的是索引与工作树，**这三样它管不着**：
@@ -92,7 +115,14 @@ tsc/eslint/vitest 全过。停掉再起即可，但不知道这条会排查很�
 ```bash
 git worktree remove ~/.claude-worktrees/$ID
 git branch -d "change/$ID"      # -d 不是 -D：没合并进去的会被拒绝，这是保护
+docker exec pgbase dropdb -U postgres --if-exists keywordiq_$ID   # 第 2 节建的专属库
 ```
+
+**`git worktree remove` 会拒绝有未跟踪文件的工作区，这是保护不是障碍。** 遇到时先看那是
+什么再决定——曾有一个 worktree 里躺着一份从未进过 git、主仓也没有副本的业务文档
+（报价单 xlsx），`--force` 会连它一起删掉。先挪出来，再 remove。
+
+专属库不删会一直攒着：每个变更留一个几 GB 的库，磁盘很快见底，而且没人记得它们是干嘛的。
 
 ## 反例（都真实发生过）
 
@@ -104,3 +134,6 @@ git branch -d "change/$ID"      # -d 不是 -D：没合并进去的会被拒绝�
 | worktree 建在 `.claude/worktrees/` | uvicorn 重载风暴，reloader 退出 |
 | 合并时开着前端 dev server | 冲突标记编进产物，页面白屏而测试全绿 |
 | 从 worktree `cd 主仓 && git commit` | 门禁查空暂存区后放行（现已由 `target_repo` 堵上） |
+| worktree 里不配数据库就开工 | 集成测试静默全跳过，"模型改了查询层没跟上"一路绿到接上真库才红 21 个 |
+| `git worktree remove --force` 图省事 | 删掉了工作区里唯一一份未进 git 的业务文档 |
+| 收工不删专属库 | 每个变更留一个几 GB 的库，攒到磁盘见底且无人知道来历 |
