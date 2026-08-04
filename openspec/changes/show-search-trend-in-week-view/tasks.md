@@ -25,7 +25,7 @@
 
 - [x] 4.1 `columns.tsx`：列名改「搜索趋势」，去掉 `hideInTable: view !== 'DAY'`，
       把 view 传给 `TrendSparkline`
-- [x] 4.2 `TrendSparkline`：悬浮提示按视图渲染（周视图加「当周」）
+- [x] 4.2 `TrendSparkline`：悬浮提示按视图渲染，复用 `formatScopeDateLabel`（周视图给出整周区间）
 - [x] 4.3 `columns.test.tsx` / `TrendSparkline.test.tsx` 覆盖两个视图
 
 ## 5. 数据
