@@ -11,13 +11,17 @@
 
 ## 1. 数据模型
 
-- [ ] 1.1 `dimension_model.py` 新增 `DimBrand`（`brand_id integer` PK、`name` 唯一）与
+- [x] 1.1 `dimension_model.py` 新增 `DimBrand`（`brand_id integer` PK、`name` 唯一）与
       `DimCategory`（`category_id smallint` PK、`name` 唯一）。类型按基数分：品牌 13.5 万/站/天，
       类目 104
-- [ ] 1.2 `fact_model.py` 两张事实表各加 6 列：`top1..3_brand_id integer NULL`、
+- [x] 1.2 `fact_model.py` 两张事实表各加 6 列：`top1..3_brand_id integer NULL`、
       `top1..3_category_id smallint NULL`。**先不加索引**（见第 4 组）
-- [ ] 1.3 `dim_product` 删 `brand` / `category` 两列，收敛为 ASIN + 标题；同时删
+- [x] 1.3 `dim_product` 删 `brand` / `category` 两列，收敛为 ASIN + 标题；同时删
       `idx_dim_product_brand_trgm` / `idx_dim_product_category_trgm`
+
+> **当前状态：模型层已改，调用方尚未跟上。** `analysis_crud` 有 5 处、`importer.py` 的
+> SQL 有 1 处仍引用已删除的 `DimProduct.brand/.category`。单元测试全绿**掩盖了这一点**
+> ——那些路径要连库才走得到。第 3、5 组做完之前，本分支不可合回 v2。
 
 ## 2. 迁移（手写，分区表 + 物化视图不在 autogenerate 范围）
 

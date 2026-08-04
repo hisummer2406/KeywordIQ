@@ -275,9 +275,14 @@ class TestDimensionStructure:
         assert constraints.get("uq_dim_product_asin") == ["asin"]
 
     def test_all_searchable_product_fields_have_trigram(self):
-        """title/brand/category/asin 四个可搜索字段都要有 trigram 索引，全在维度表。"""
+        """商品维度上可子串搜索的字段都要有 trigram 索引，全在维度表。
+
+        曾经是 title/brand/category/asin 四个。品牌与类目已移出商品维度——它们是关键词级
+        的排行项，在商品上没有数据来源——故这里只剩 title 与 asin 两个真属性。
+        品牌与类目改为精确多选，走各自的 stats 物化视图，不再需要 trgm。
+        """
         names = {idx.name for idx in DimProduct.__table__.indexes}
-        for field in ("title", "brand", "category", "asin"):
+        for field in ("title", "asin"):
             assert f"idx_dim_product_{field}_trgm" in names, f"缺少 {field} 的子串搜索索引"
 
     def test_site_ref_has_no_foreign_key_from_facts(self):
@@ -316,3 +321,80 @@ class TestSchemaQualification:
     def test_all_tables_are_schema_qualified(self, model):
         """连接串不保证 search_path 指向 analysis，schema 必须显式。"""
         assert model.__table__.schema, f"{model.__tablename__} 缺少 schema 限定"
+
+
+# --------------------------------------------------------------------------
+# 品牌与类目是关键词级维度，不是商品属性
+#
+# 源报表里「点击量第 1/2/3 的品牌」与「点击量最高/第二/第 3 的分类」是三份彼此独立的
+# 排行，商品槽位本身只有 ASIN / 标题 / 点击份额 / 转化贡献占比四个字段。
+# 把品牌#N 配给商品#N 会造出一个没有来源的属性：实测同一 ASIN 固定在槽位 1 时，
+# 标题冲突率 0%（真属性），品牌 11.7%、类目 3.4%（伪造的）。
+# --------------------------------------------------------------------------
+
+
+def test_dim_product_has_no_brand_or_category():
+    """商品维度收敛为 ASIN + 标题。
+
+    留着这两列会让后来者以为「商品有品牌」，然后基于一个任选值胜出的字段做筛选。
+    """
+    columns = set(DimProduct.__table__.columns.keys())
+
+    assert "brand" not in columns
+    assert "category" not in columns
+    assert {"asin", "title"} <= columns
+
+
+def test_dim_product_keeps_no_brand_or_category_index():
+    """两个 trgm 索引随列一起消失，否则迁移会在建索引时引用不存在的列。"""
+    index_names = {i.name for i in DimProduct.__table__.indexes}
+
+    assert "idx_dim_product_brand_trgm" not in index_names
+    assert "idx_dim_product_category_trgm" not in index_names
+    assert "idx_dim_product_title_trgm" in index_names  # 标题是真属性，保留
+
+
+def test_brand_and_category_dimensions_exist():
+    from app.table.analysis.dimension_model import DimBrand, DimCategory
+
+    assert "name" in DimBrand.__table__.columns
+    assert "name" in DimCategory.__table__.columns
+
+
+def test_dimension_key_types_follow_cardinality():
+    """按基数选类型：品牌 13.5 万/站/天用 integer，类目 104 用 smallint。
+
+    两者都用 integer 不会错，但事实表上共 6 列 × 2 亿行，类目那 3 列白占一半空间。
+    """
+    from sqlalchemy import Integer, SmallInteger
+
+    from app.table.analysis.dimension_model import DimBrand, DimCategory
+
+    assert isinstance(DimBrand.__table__.c.brand_id.type, Integer)
+    assert isinstance(DimCategory.__table__.c.category_id.type, SmallInteger)
+
+
+@pytest.mark.parametrize("fact", [FactDaily, FactWeekly])
+def test_fact_tables_carry_keyword_level_brand_and_category(fact):
+    """两张事实表各带前三品牌与前三类目的引用列，名次由列位置承载。"""
+    columns = set(fact.__table__.columns.keys())
+    expected = {f"top{n}_{kind}_id" for n in (1, 2, 3) for kind in ("brand", "category")}
+
+    assert expected <= columns, f"缺少 {sorted(expected - columns)}"
+
+
+@pytest.mark.parametrize("fact", [FactDaily, FactWeekly])
+def test_new_fact_columns_are_nullable_without_default(fact):
+    """必须可空且无默认值。
+
+    带 DEFAULT 的 ADD COLUMN 会让 PostgreSQL 重写整张表——2 亿行的分区表上这是灾难；
+    无默认值时它是纯元数据操作。可空也是历史分区的必然要求：那些数据没有这六个字段，
+    只能靠按批次重导补上。
+    """
+    for n in (1, 2, 3):
+        for kind in ("brand", "category"):
+            col = fact.__table__.c[f"top{n}_{kind}_id"]
+            assert col.nullable, f"{col.name} 必须可空"
+            assert col.default is None and col.server_default is None, (
+                f"{col.name} 不能有默认值，否则 ADD COLUMN 会重写整张分区表"
+            )
