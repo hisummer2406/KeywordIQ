@@ -38,5 +38,19 @@
 
 - [x] 6.1 顺手修正 `show-top3-products` 变更 delta 里残留的「当周排名变化」——那笔已并入
       v2 但未归档，归档时会把已删除的字段重新写回主 spec
-- [x] 6.2 全量回归（含 `TEST_DATABASE_URL` 集成）+ `openspec validate --all --strict`——**全新库上跑**才是有效验证：借上一轮残留分区的旧跑法会掩盖问题，本次即因此揪出导出集成测试不建分区的历史缺陷
-      （本地全量单元/前端/OpenSpec 已通过；当前机器未配置 `TEST_DATABASE_URL`，数据库集成待运行）
+- [x] 6.2 全量回归（含 `TEST_DATABASE_URL` 集成）+ `openspec validate --strict`
+
+      **必须在全新库上跑第一次**才算有效验证：借上一轮残留分区的旧跑法会掩盖问题，
+      21e37d5 那个「导出集成测试不建分区、首次红重跑绿」的历史缺陷正是这样揪出来的。
+      本次按 `dropdb && createdb && alembic upgrade head` 推倒重建后**只跑一次**：
+
+      | 检查 | 结果 |
+      |---|---|
+      | `pytest test/`（全新库首跑，已设 `TEST_DATABASE_URL`） | 291 passed, 1 skipped |
+      | `ruff check .` | All checks passed |
+      | `pnpm lint` / `pnpm tsc` / `pnpm test` | 干净 / 干净 / 116 passed |
+      | `openspec validate show-search-trend-in-week-view --strict` | valid |
+
+      `openspec validate --all --strict` 是 10 passed / 1 failed。失败项是
+      `keyword-level-brand-category`——298abe7 起草的未完成变更，**刻意只有 proposal**
+      而无 specs/design/tasks，该提交已写明这是预期状态。与本变更无关。
