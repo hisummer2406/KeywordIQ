@@ -248,9 +248,14 @@ def _seed_categories(db):
     kids = {}
     for category in ("Electronics", "Pet Supplies", "Home"):
         pid = (db.execute(
-            text("INSERT INTO analysis.dim_product(asin,title,brand,category) "
-                 "VALUES (:a,'T','ACME',:c) RETURNING product_id"),
-            {"a": f"B0{abs(hash(category)) % 10**8:08d}", "c": category},
+            text("INSERT INTO analysis.dim_product(asin,title) "
+                 "VALUES (:a,'T') RETURNING product_id"),
+            {"a": f"B0{abs(hash(category)) % 10**8:08d}"},
+        )).scalar()
+        cid = (db.execute(
+            text("INSERT INTO analysis.dim_category(name) VALUES (:c) "
+                 "ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING category_id"),
+            {"c": category},
         )).scalar()
         kid = (db.execute(
             text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
@@ -258,17 +263,17 @@ def _seed_categories(db):
         )).scalar()
         db.execute(
             text("INSERT INTO analysis.fact_daily"
-                 "(site,report_date,keyword_id,current_ranking,top1_product_id) "
-                 "VALUES (:s,:d,:k,20,:p)"),
-            {"s": SITE, "d": D3, "k": kid, "p": pid},
+                 "(site,report_date,keyword_id,current_ranking,top1_product_id,top1_category_id) "
+                 "VALUES (:s,:d,:k,20,:p,:c)"),
+            {"s": SITE, "d": D3, "k": kid, "p": pid, "c": cid},
         )
         if category == "Electronics":
             # 同类目、同关键词，但落在 D1：查 D3 时不该出现
             db.execute(
                 text("INSERT INTO analysis.fact_daily"
-                     "(site,report_date,keyword_id,current_ranking,top1_product_id) "
-                     "VALUES (:s,:d,:k,21,:p)"),
-                {"s": SITE, "d": D1, "k": kid, "p": pid},
+                     "(site,report_date,keyword_id,current_ranking,top1_product_id,top1_category_id) "
+                     "VALUES (:s,:d,:k,21,:p,:c)"),
+                {"s": SITE, "d": D1, "k": kid, "p": pid, "c": cid},
             )
         kids[category] = kid
     db.flush()
@@ -326,10 +331,20 @@ def _seed_top_slots(db):
     pids = []
     for slot in (1, 2, 3):
         pids.append((db.execute(
-            text("INSERT INTO analysis.dim_product(asin,title,brand,category) "
-                 "VALUES (:a,:t,:b,'Home') RETURNING product_id"),
-            {"a": f"B0SLOT{slot:05d}", "t": f"Title {slot}", "b": f"BRAND{slot}"},
+            text("INSERT INTO analysis.dim_product(asin,title) "
+                 "VALUES (:a,:t) RETURNING product_id"),
+            {"a": f"B0SLOT{slot:05d}", "t": f"Title {slot}"},
         )).scalar())
+    # 品牌是**关键词级**排行，与商品槽位无关：BRAND2 落在第 2 名次上，
+    # 用于证明「前三任一命中」真的生效——只测第 1 名次的话与旧行为无法区分。
+    bids = [
+        (db.execute(
+            text("INSERT INTO analysis.dim_brand(name) VALUES (:b) "
+                 "ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name RETURNING brand_id"),
+            {"b": f"BRAND{slot}"},
+        )).scalar()
+        for slot in (1, 2, 3)
+    ]
 
     kids = {}
     for keyword, slots in (("kw-full", 3), ("kw-partial", 2)):
@@ -338,14 +353,17 @@ def _seed_top_slots(db):
             {"s": SITE, "k": keyword},
         )).scalar()
         params = {"s": SITE, "d": D3, "k": kid, "p1": pids[0], "p2": pids[1],
-                  "p3": pids[2] if slots == 3 else None}
+                  "p3": pids[2] if slots == 3 else None,
+                  "b1": bids[0], "b2": bids[1], "b3": bids[2]}
         db.execute(
             text("INSERT INTO analysis.fact_daily"
                  "(site,report_date,keyword_id,current_ranking,"
                  " top1_product_id,top1_click_share,top1_conversion_share,"
                  " top2_product_id,top2_click_share,top2_conversion_share,"
-                 " top3_product_id,top3_click_share,top3_conversion_share) "
-                 "VALUES (:s,:d,:k,30,:p1,50.00,20.00,:p2,30.00,10.00,:p3,10.00,5.00)"),
+                 " top3_product_id,top3_click_share,top3_conversion_share,"
+                 " top1_brand_id,top2_brand_id,top3_brand_id) "
+                 "VALUES (:s,:d,:k,30,:p1,50.00,20.00,:p2,30.00,10.00,:p3,10.00,5.00,"
+                 " :b1,:b2,:b3)"),
             params,
         )
         kids[keyword] = kid
@@ -383,24 +401,31 @@ async def test_missing_slot_is_null_not_shifted(db):
     assert row["top1_asin"] == "B0SLOT00001"
     assert row["top2_asin"] == "B0SLOT00002"
     assert row["top3_asin"] is None
-    assert row["top3_brand"] is None
+    # 品牌名次**不随商品槽位缺失而缺失**——两者是彼此独立的排行。此前这里断言
+    # top3_brand is None，把"没有第三个商品"和"没有第三个品牌"当成了同一件事，
+    # 而那正是"品牌是商品属性"这个错误模型的残留。
+    assert row["top3_brand"] == "BRAND3"
 
 
-async def test_brand_filter_does_not_match_second_slot(db):
-    """口径回归：行里展示了第二名的品牌，但以该品牌筛选时这一行不出现。
+async def test_brand_filter_matches_any_of_top_three(db):
+    """**前三任一命中**：第 2、第 3 名次的品牌同样能筛到。
 
-    这是 show-top3-products 最容易被后续改动无声破坏的一条——`_apply_filters` 里任何
-    一处误引用 top2/top3 的 alias，都会让这个断言失败。
+    这是本变更与旧行为唯一能区分开的断言。旧口径是"只匹配点击量第一名"，只测第 1 名次
+    的话两套实现都会通过——必须测非第一名次才有意义。
+
+    展示口径与筛选口径由此一致：界面展示前三，筛选也匹配前三。
     """
     await db.run_sync(_seed)
     kids = await db.run_sync(_seed_top_slots)
 
-    hit, resp1 = await _row_for(db, kids["kw-full"], brand="BRAND1")
-    assert hit is not None  # 第一名的品牌能筛到
+    for brand in ("BRAND1", "BRAND2", "BRAND3"):
+        hit, resp = await _row_for(db, kids["kw-full"], brands=[brand])
+        assert hit is not None, f"{brand} 在前三名次里，应当命中"
+        assert resp.total >= 1
 
-    miss, resp2 = await _row_for(db, kids["kw-full"], brand="BRAND2")
-    assert miss is None     # 第二名的品牌筛不到
-    assert resp2.total == 0
+    miss, resp = await _row_for(db, kids["kw-full"], brands=["NOT-IN-TOP3"])
+    assert miss is None
+    assert resp.total == 0
 
 
 async def test_share_filter_only_considers_first_slot(db):
