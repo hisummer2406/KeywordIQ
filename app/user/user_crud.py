@@ -5,6 +5,7 @@ from typing import Any
 from fastapi.concurrency import run_in_threadpool
 from passlib.context import CryptContext
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.permissions import DEFAULT_ROLE_FOR_NON_SUPER, DEFAULT_ROLE_FOR_SUPER
@@ -21,6 +22,35 @@ logger = logging.getLogger(__name__)
 
 # 密码加密上下文
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# PostgreSQL 的唯一约束冲突
+_UNIQUE_VIOLATION = "23505"
+
+# 用户不存在时拿它跑一遍校验，把登录耗时拉平（见 authenticate_user）。
+# 是一个随机口令的真实 bcrypt 哈希，与任何账号都不关联，验不过是必然结果——
+# 要的只是那 ~250 ms 的计算量。写死而非启动时现算：现算会让每个进程的启动多花
+# 一次哈希时间，而这个值没有任何需要保密或轮换的理由。
+_DUMMY_PASSWORD_HASH = "$2b$12$5twyKQRPYjp.3gGB8BeVs.d6nksEpKBc09B0jnqg/d9.qVsIbsSCm"
+
+
+def _reraise_duplicate_name(exc: Exception, message: str | None = None) -> None:
+    """写入撞上唯一约束时改抛 409；其余异常原样交回调用方继续上抛。
+
+    先查后插挡不住并发——两个请求可以同时查到「没有同名用户」。真正的裁决者是库里
+    ``user_center.user_name`` 上的唯一约束，而约束冲突若原样上浮，全局的
+    ``SQLAlchemyError`` 处理器会把它判成 500。这是调用方能自己纠正的输入问题，
+    不是服务端故障。
+
+    只认 SQLSTATE 23505：别的完整性错误（如 role_id 外键失效）不能被冒充成
+    「用户名已存在」——那会把一个配置问题伪装成用户操作问题。错误码位置随驱动而异，
+    asyncpg 叫 ``sqlstate``，psycopg2 叫 ``pgcode``。
+    """
+    if not isinstance(exc, IntegrityError):
+        return
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if code == _UNIQUE_VIOLATION:
+        raise DuplicateUserNameError(message) if message else DuplicateUserNameError()
 
 
 class UserCenterCRUD:
@@ -139,9 +169,11 @@ class UserCenterCRUD:
             self.db.add(db_user)
             await self.db.commit()
             await self.db.refresh(db_user)
-        except Exception:
+        except Exception as exc:
             # 只回滚，不改变异常——数据库故障该由全局处理器判成 503 并留栈。
+            # 唯一例外是唯一约束冲突：那是调用方能自己纠正的输入问题，见下。
             await self.db.rollback()
+            _reraise_duplicate_name(exc)
             raise
 
         logger.info("用户创建成功: %s - %s", db_user.id, db_user.user_name)
@@ -173,8 +205,9 @@ class UserCenterCRUD:
         try:
             await self.db.commit()
             await self.db.refresh(db_user)
-        except Exception:
+        except Exception as exc:
             await self.db.rollback()
+            _reraise_duplicate_name(exc, "用户名已被其他用户使用")
             raise
 
         logger.info("用户更新成功: %s", user_id)
@@ -207,11 +240,17 @@ class UserCenterCRUD:
 
         此前查询异常也被压成 ``None``，与「密码错误」无从区分——数据库挂了会表现为
         全站密码错误，而不是 503。
+
+        **无论用户是否存在都跑一遍 bcrypt。** 早前的写法在查不到用户时直接返回，
+        那条路径是毫秒级，而正常路径要 247 ms——三个数量级的差距，不需要统计手段，
+        肉眼看响应时间就能把有效用户名逐个试出来。对不存在/已禁用的账号改用一个
+        固定的哑哈希跑校验，两条路径耗时同阶。
         """
         user = await self.get_user_by_username(username)
-        if not user or not user.is_active:
-            return None
-        if not await self.verify_password(password, user.hashed_pwd):
+        target_hash = user.hashed_pwd if user else _DUMMY_PASSWORD_HASH
+        password_ok = await self.verify_password(password, target_hash)
+
+        if not user or not user.is_active or not password_ok:
             return None
         return user
 

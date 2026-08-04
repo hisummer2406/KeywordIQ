@@ -18,7 +18,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.common.errors import (
     CODE_USER_DUPLICATE_NAME,
@@ -40,9 +40,10 @@ class _FakeSession:
     ``execute_raises`` 设为异常实例时，``execute`` 抛它——用来模拟数据库故障。
     """
 
-    def __init__(self, *, scalar_result=None, execute_raises=None):
+    def __init__(self, *, scalar_result=None, execute_raises=None, commit_raises=None):
         self.scalar_result = scalar_result
         self.execute_raises = execute_raises
+        self.commit_raises = commit_raises
         self.committed = False
         self.rolled_back = False
         self.added = []
@@ -60,6 +61,8 @@ class _FakeSession:
         self.added.append(obj)
 
     async def commit(self):
+        if self.commit_raises is not None:
+            raise self.commit_raises
         self.committed = True
 
     async def rollback(self):
@@ -67,6 +70,20 @@ class _FakeSession:
 
     async def refresh(self, _obj):
         pass
+
+
+def _integrity_error(sqlstate: str) -> IntegrityError:
+    """构造一个带 SQLSTATE 的完整性错误。
+
+    真实驱动把错误码放在 ``orig`` 上：asyncpg 叫 ``sqlstate``，psycopg2 叫 ``pgcode``。
+    这里用 asyncpg 的写法——用户表的写入走异步引擎。
+    """
+    orig = SimpleNamespace(sqlstate=sqlstate)
+    return IntegrityError("INSERT ...", {}, orig)
+
+
+def _unique_violation() -> IntegrityError:
+    return _integrity_error("23505")
 
 
 def _existing_user(**kwargs):
@@ -90,6 +107,93 @@ class TestWritePathsRaise:
 
         assert exc.value.http_status == 409
         assert exc.value.code == CODE_USER_DUPLICATE_NAME
+
+    async def test_create_user_unique_violation_raises_409(self, monkeypatch):
+        """两个请求同时创建同名用户：先查后插挡不住，最后一道是库里的唯一约束。
+
+        约束冲突若原样上浮，全局的 SQLAlchemyError 处理器会把它判成 500——
+        「用户名已存在」是调用方能自己纠正的输入问题，不是服务端故障。
+        """
+        session = _FakeSession(commit_raises=_unique_violation())
+        crud = UserCenterCRUD(session)
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
+        monkeypatch.setattr(crud, "_default_role_id", _async_return(1))
+
+        with pytest.raises(DuplicateUserNameError) as exc:
+            await crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
+
+        assert exc.value.http_status == 409
+        assert exc.value.code == CODE_USER_DUPLICATE_NAME
+        assert session.rolled_back
+
+    async def test_create_user_other_integrity_error_still_propagates(self, monkeypatch):
+        """只认唯一约束冲突。别的完整性错误（如外键）不能被冒充成「用户名已存在」。"""
+        session = _FakeSession(commit_raises=_integrity_error("23503"))
+        crud = UserCenterCRUD(session)
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
+        monkeypatch.setattr(crud, "_default_role_id", _async_return(1))
+
+        with pytest.raises(IntegrityError):
+            await crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
+
+    async def test_update_user_unique_violation_raises_409(self, monkeypatch):
+        """改名撞上并发同名，同样是 409。"""
+        session = _FakeSession(commit_raises=_unique_violation())
+        crud = UserCenterCRUD(session)
+        monkeypatch.setattr(crud, "get_user_by_id", _async_return(_existing_user()))
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
+
+        with pytest.raises(DuplicateUserNameError):
+            await crud.update_user(1, UserCenterUpdate(user_name="bob"))
+
+        assert session.rolled_back
+
+    async def test_authenticate_hashes_even_for_unknown_user(self, monkeypatch):
+        """用户不存在时也要走一遍 bcrypt，否则响应时间就是用户名枚举接口。
+
+        bcrypt 单次约 247 ms，跳过它的分支返回是毫秒级——两者差三个数量级，
+        不用统计手段、肉眼看响应时间就能把有效用户名一个个试出来。
+        """
+        calls: list[tuple[str, str]] = []
+
+        async def record(plain, hashed):
+            calls.append((plain, hashed))
+            return False
+
+        crud = UserCenterCRUD(_FakeSession())
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
+        monkeypatch.setattr(crud, "verify_password", record)
+
+        assert await crud.authenticate_user("ghost", "pwd12345") is None
+        assert len(calls) == 1, "用户不存在时跳过了密码校验，时间差可被观测"
+
+    async def test_authenticate_hashes_even_for_inactive_user(self, monkeypatch):
+        """被禁用的账号同理——「存在但禁用」也不该比「不存在」快。"""
+        calls: list[tuple[str, str]] = []
+
+        async def record(plain, hashed):
+            calls.append((plain, hashed))
+            return True
+
+        crud = UserCenterCRUD(_FakeSession())
+        monkeypatch.setattr(
+            crud, "get_user_by_username", _async_return(_existing_user(is_active=False))
+        )
+        monkeypatch.setattr(crud, "verify_password", record)
+
+        assert await crud.authenticate_user("alice", "pwd12345") is None
+        assert len(calls) == 1
+
+    async def test_dummy_hash_is_a_usable_bcrypt_hash(self):
+        """哑哈希必须是真能被 verify 处理的串。
+
+        写错一个字符不会有人发现：`verify_password` 会捕获异常返回 False，登录照样
+        失败，只是每次未知用户名都往日志里写一条异常栈，且耗时回到毫秒级——
+        时序防护静默失效。
+        """
+        from app.user import user_crud as mod
+
+        assert mod.pwd_context.verify("not-the-password", mod._DUMMY_PASSWORD_HASH) is False
 
     async def test_update_user_missing_raises_404(self, monkeypatch):
         crud = UserCenterCRUD(_FakeSession())
