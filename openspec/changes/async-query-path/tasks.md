@@ -34,7 +34,9 @@
 - [x] 5.1 `/oss/processing-status` 已用异步会话，确认与新的会话依赖写法一致
 - [x] 5.2 `main.py` 的 lifespan 探活与 `/health` 统一到新的引擎划分；顺带确认 `/health` 失败时不再把 `str(e)` 序列化进响应体
 - [x] 5.3 全仓搜索确认面向请求的 `async def` 调用链中不再存在同步 `Session` / `SessionFactory`
-- [x] 5.4 线程池上限对齐同步池容量（在应用启动处设置 AnyIO 限流器）
+- [x] 5.4 线程池上限设为独立配置 `THREAD_POOL_LIMIT`（在应用启动处设置 AnyIO 限流器）。
+      **不与同步池对齐**——bcrypt 与同步 BackgroundTask 也走这个限流器却不占连接，
+      按池推导会让 7.3 的降池把限流器一并塌掉（见 design 决策 5）。
 
 ## 6. 验证
 

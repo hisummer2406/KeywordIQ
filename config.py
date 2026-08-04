@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     # connect_args 的 TCP keepalive 是一对，用来识破被静默丢弃的半开连接，关掉会让
     # worker 在导入期被挂死的 checkout 占光。同理 echo 跟随 DEBUG，不单独开关。
 
+    # anyio 默认线程限流器的上限（每 worker）。main.py 在 lifespan 里应用它。
+    #
+    # **刻意不从连接池推导。** 走这个限流器的有三类工作，只有第一类与连接数相关：
+    #
+    #   1. 同步 def 端点（导出）与健康检查探活 —— 每条线程占一条同步连接
+    #   2. bcrypt 哈希/校验（每次登录 ~247 ms 纯 CPU）—— 不占任何连接
+    #   3. 同步 BackgroundTask（run_import）—— 一条线程占住整场导入，可达数十分钟
+    #
+    # 曾写成 DB_POOL_SIZE + DB_MAX_OVERFLOW。按 async-query-path 任务 7.3 把同步池
+    # 降到 2+3 之后，限流器会跟着变成 5：一个导入在跑就只剩 4 条线程给全部登录。
+    # 两者的正确取值毫无关系，故拆开。
+    #
+    # 取值 32：4 vCPU 上 bcrypt 是 CPU 密集，线程再多也只是排队；留出的余量是给
+    # 导入这类"占着线程但不烧 CPU"的长任务的。
+    THREAD_POOL_LIMIT: int = 32
+
     @field_validator("ENABLED_SITES")
     @classmethod
     def _validate_enabled_sites(cls, value: str) -> str:
