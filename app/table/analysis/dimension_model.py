@@ -15,7 +15,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -67,26 +76,64 @@ class DimProduct(Base):
     product_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     asin: Mapped[str] = mapped_column(String(16), nullable=False, comment="亚马逊商品编号，10 位")
     title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    brand: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    category: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     __table_args__ = (
         UniqueConstraint("asin", name="uq_dim_product_asin"),
-        # 界面对 title / brand / category / asin 四个字段都做子串 ILIKE 搜索（沿用 V1）。
-        # 全部落在这张几百万行的维度表上，事实表不背任何搜索索引。
-        # brand / category 另有精确匹配的下拉（走物化视图），与这里的子串搜索是两条路径。
+        # 界面对 title / asin 做子串 ILIKE 搜索（沿用 V1）。落在这张几百万行的维度表上，
+        # 事实表不背任何搜索索引。
         Index("idx_dim_product_title_trgm", "title", postgresql_using="gin",
               postgresql_ops={"title": _TRGM}),
-        Index("idx_dim_product_brand_trgm", "brand", postgresql_using="gin",
-              postgresql_ops={"brand": _TRGM}),
-        Index("idx_dim_product_category_trgm", "category", postgresql_using="gin",
-              postgresql_ops={"category": _TRGM}),
         Index("idx_dim_product_asin_trgm", "asin", postgresql_using="gin",
               postgresql_ops={"asin": _TRGM}),
-        {"comment": "商品维度（ASIN → 标题/品牌/类目）。SCD Type 1：变化时原地覆盖，不留历史版本。"},
+        {"comment": "商品维度（ASIN → 标题）。SCD Type 1：变化时原地覆盖，不留历史版本。"},
+    )
+
+
+class DimBrand(Base):
+    """品牌维度。
+
+    品牌是**关键词级**的排行项，不是商品属性——源报表的「点击量第 1/2/3 的品牌」回答的是
+    「搜这个词的人点击集中在哪几个品牌」，与「点击量第 N 的商品是谁」是两份独立的榜单。
+    名次记在事实表的列位置上，这里只存名称。
+
+    基数约 13.5 万/站/天，故主键用 ``integer``。
+    """
+
+    __tablename__ = "dim_brand"
+
+    brand_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_dim_brand_name"),
+        {"comment": "品牌维度（关键词级排行项，非商品属性）。"},
+    )
+
+
+class DimCategory(Base):
+    """类目维度。
+
+    与品牌同理，是关键词级的排行项。基数仅 104，故主键用 ``smallint``——事实表上类目占
+    3 列 × 2 亿行，用 integer 会白白多占一半空间。
+    """
+
+    __tablename__ = "dim_category"
+
+    category_id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_dim_category_name"),
+        {"comment": "类目维度（关键词级排行项，非商品属性）。"},
     )
 
 

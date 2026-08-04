@@ -22,7 +22,19 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Index, Integer, Numeric, String, func, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Index,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -95,6 +107,20 @@ class FactDaily(Base):
     top3_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
     top3_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
 
+    # 关键词级的前三品牌与前三类目。**不是商品属性**——源报表里它们是与商品榜单彼此
+    # 独立的两份排行，商品槽位本身不携带品牌与类目。名次由列位置承载。
+    #
+    # 全部可空且**无默认值**：带 DEFAULT 的 ADD COLUMN 会让 PostgreSQL 重写整张表，
+    # 2 亿行的分区表上是灾难；无默认值时是纯元数据操作。可空也是历史分区的必然要求
+    # ——那些数据没有这六个字段，只能靠按批次重导补上。
+    top1_brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="→ dim_brand")
+    top2_brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    top3_brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    top1_category_id: Mapped[int | None] = mapped_column(SmallInteger, nullable=True, comment="→ dim_category")
+    top2_category_id: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    top3_category_id: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -132,6 +158,20 @@ class FactWeekly(Base):
     top3_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     top3_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
     top3_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
+
+    # 关键词级的前三品牌与前三类目。**不是商品属性**——源报表里它们是与商品榜单彼此
+    # 独立的两份排行，商品槽位本身不携带品牌与类目。名次由列位置承载。
+    #
+    # 全部可空且**无默认值**：带 DEFAULT 的 ADD COLUMN 会让 PostgreSQL 重写整张表，
+    # 2 亿行的分区表上是灾难；无默认值时是纯元数据操作。可空也是历史分区的必然要求
+    # ——那些数据没有这六个字段，只能靠按批次重导补上。
+    top1_brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="→ dim_brand")
+    top2_brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    top3_brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    top1_category_id: Mapped[int | None] = mapped_column(SmallInteger, nullable=True, comment="→ dim_category")
+    top2_category_id: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    top3_category_id: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
