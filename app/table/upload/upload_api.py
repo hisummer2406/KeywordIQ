@@ -11,6 +11,7 @@ from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
+from fastapi.concurrency import run_in_threadpool
 
 import database
 from app.auth.permissions import UPLOAD_IMPORT
@@ -200,13 +201,12 @@ async def oss_import(
             log_detail=f"object_key 越权: {req.object_key}",
         )
 
-    # 对象必须存在，否则拒绝（不产生部分导入）。
-    if not oss_client.object_exists(req.object_key):
-        raise oss_client.OSSObjectNotFound(log_detail=f"object key 不存在: {req.object_key}")
-
+    # 一次 head 同时确认「对象存在」（不存在则拒绝，不产生部分导入）与「有多大」。
+    # 走线程池：oss2 是阻塞 SDK，直接在 async 端点里调会占住事件循环一整个网络往返。
+    #
     # 大小上限在这里执行。直传下字节不经应用服务器，这是服务端唯一能称量文件的时机；
     # 拦在这里挡掉的是"导入一个超大文件"的代价，而非"上传"的代价。
-    size = oss_client.object_size(req.object_key)
+    size = await run_in_threadpool(oss_client.stat_object, req.object_key)
     if size > settings.MAX_FILE_SIZE:
         raise PayloadTooLargeError(
             f"文件超过上限（{size / 1024 ** 3:.2f} GB > "

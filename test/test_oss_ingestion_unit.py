@@ -133,15 +133,30 @@ class TestIssueCredentials:
 class _FakeBucket:
     def __init__(self, objects: dict[str, bytes]):
         self._objects = objects
+        self.head_calls: list[str] = []
+        self.exists_calls: list[str] = []
 
     def object_exists(self, key: str) -> bool:
+        self.exists_calls.append(key)
         return key in self._objects
 
     def get_object(self, key: str):
         return io.BytesIO(self._objects[key])
 
     def head_object(self, key: str):
+        self.head_calls.append(key)
+        if key not in self._objects:
+            raise _FakeNoSuchKey(key)
         return SimpleNamespace(content_length=len(self._objects[key]))
+
+
+class _FakeNoSuchKey(Exception):
+    """替身：真实 oss2 在对象不存在时抛 NoSuchKey（status=404）。"""
+
+    status = 404
+
+    def __init__(self, key: str):
+        super().__init__(f"NoSuchKey: {key}")
 
 
 class TestObjectAccess:
@@ -160,15 +175,37 @@ class TestObjectAccess:
         assert oss_client.object_exists("k", bucket=bucket) is True
         assert oss_client.object_exists("missing", bucket=bucket) is False
 
-    def test_object_size_reports_content_length(self):
-        """MAX_FILE_SIZE 的执行依赖这个称量。
+    def test_stat_object_reports_size_in_a_single_head_call(self):
+        """MAX_FILE_SIZE 的执行依赖这个称量，而存在性与大小同属一次 head。
 
         直传下字节不经应用服务器，导入触发前的 head_object 是服务端唯一能知道
         文件多大的时机。此前 MAX_FILE_SIZE 是死配置——.env.example 与 CLAUDE.md
         都公示 3GB 上限，却没有任何代码读它，那个上限并不存在。
+
+        问两遍（object_exists + object_size）有两个代价：两次都是**阻塞的**网络往返，
+        而 /oss/import 是 async 端点；且两次之间对象可能被删，"存在"与"多大"
+        来自两个时刻。
         """
         bucket = _FakeBucket({"k": b"0123456789"})
-        assert oss_client.object_size("k", bucket=bucket) == 10
+
+        assert oss_client.stat_object("k", bucket=bucket) == 10
+        assert len(bucket.head_calls) == 1
+        assert bucket.exists_calls == []
+
+    def test_stat_object_missing_raises_not_found(self):
+        bucket = _FakeBucket({})
+        with pytest.raises(oss_client.OSSObjectNotFound):
+            oss_client.stat_object("missing", bucket=bucket)
+
+    def test_stat_object_propagates_other_failures(self):
+        """网络/权限故障不能被当成「对象不存在」——那会让用户去重传一个存在的文件。"""
+
+        class _Broken:
+            def head_object(self, key):
+                raise TimeoutError("connection reset")
+
+        with pytest.raises(TimeoutError):
+            oss_client.stat_object("k", bucket=_Broken())
 
 
 # --------------------------------------------------------------------------
