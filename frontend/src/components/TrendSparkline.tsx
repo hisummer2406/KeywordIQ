@@ -1,12 +1,15 @@
 import { Tooltip, Typography } from 'antd';
 import { useId, useState } from 'react';
+import { formatScopeDateLabel } from '@/pages/Analysis/scopeDateLabel';
 
 export default function TrendSparkline({
+  view = 'DAY',
   values,
   dates,
   width = 168,
   height = 52,
 }: {
+  view?: 'DAY' | 'WEEK';
   values?: number[];
   dates?: string[];
   width?: number;
@@ -28,6 +31,9 @@ export default function TrendSparkline({
   const color =
     values[n - 1] < values[0] ? '#52c41a' : values[n - 1] > values[0] ? '#ff4d4f' : '#1677ff';
   const date = active === null ? undefined : dates?.[active];
+  const dateLabel = date
+    ? formatScopeDateLabel(date, view)
+    : `第 ${active === null ? 1 : active + 1} ${view === 'WEEK' ? '周' : '天'}`;
 
   return (
     <Tooltip
@@ -35,7 +41,7 @@ export default function TrendSparkline({
       title={
         active === null ? null : (
           <div style={{ minWidth: 130 }}>
-            <div>{date ?? `第 ${active + 1} 天`}</div>
+            <div>{dateLabel}</div>
             <div>
               <span style={{ color: '#91caff' }}>●</span>{' '}
               <Typography.Text style={{ color: '#fff' }}>ABA排名：</Typography.Text>

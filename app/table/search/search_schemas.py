@@ -1,7 +1,7 @@
 """站点作用域查询（site-scoped-query）的请求/响应 DTO。
 
 作用域三元组 (site, view, date)：任一查询只落在单一站点、单一视图（日/周）、单一日期。
-行数据按视图区分：日视图含 7 天走势，周视图不含。
+行数据按视图区分；搜索趋势由日、周两视图共有，回溯单位不同。
 列表出口保持 ProTable 契约 {data, total, success}，并回显生效作用域。
 
 注意：日期类型统一用别名 ``_Date`` 引用。存在字段 ``date: Optional[_Date]``——若直接用
@@ -100,16 +100,22 @@ class _FactRowBase(BaseModel):
     top3_click_share: float = 0
     top3_conversion_share: float = 0
 
+    # 搜索趋势：两个视图共有，故放基类。回溯窗口按视图取（日 7 天 / 周 7 期），
+    # 但字段本身是同一个东西——在两个子类里各声明一遍会让描述与默认值各自漂移。
+    trend: list[int] = Field(
+        default_factory=list, description="截至所选日期的最近若干期排名，按期次升序"
+    )
+    trend_dates: list[_Date] = Field(
+        default_factory=list, description="搜索趋势各点对应的期次日期"
+    )
+
 
 class DayRowItem(_FactRowBase):
-    """日视图行：额外含近 7 天走势。"""
-
-    trend: list[int] = Field(default_factory=list, description="截至所选日期的近 7 天排名走势")
-    trend_dates: list[_Date] = Field(default_factory=list, description="近 7 天走势各点对应日期")
+    """日视图行。趋势回溯 7 天。"""
 
 
 class WeekRowItem(_FactRowBase):
-    """周视图行：不含走势与当周变化。"""
+    """周视图行。趋势回溯 7 期周报。"""
 
 
 class AnalysisSearchResponse(BaseModel):

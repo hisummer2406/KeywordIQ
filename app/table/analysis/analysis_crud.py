@@ -26,7 +26,7 @@ FILTERED_COUNT_CAP = 10000
 # 太小则回查次数过多。
 EXPORT_CHUNK_SIZE = 2000
 
-# 排序白名单（两视图字段名相同）。日视图的 7 天走势/当周变化不在此列——它们是附加信息、
+# 排序白名单（两视图字段名相同）。搜索趋势不在此列——它是附加信息、
 # 非结果集来源字段，收到就忽略、回落默认。
 SORTABLE_FIELDS = frozenset(
     {
@@ -228,7 +228,7 @@ def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limi
 
     ``yield_per`` 触发 ``stream_results``，内存与块大小同阶、不随结果集增长——GB 级
     切片下整表 fetch 会撑爆 8 GiB 的应用服务器。调用方按 partition 分块消费，
-    好让上层能按块批量补齐日视图的走势/当周变化。
+    好让上层能按块批量补齐当前视图的搜索趋势。
     """
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
@@ -236,22 +236,40 @@ def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limi
     return stmt.limit(limit).execution_options(yield_per=EXPORT_CHUNK_SIZE)
 
 
-def trends_stmt(site: str, keyword_ids: list[int], on: date):
-    """日视图近 7 天走势的语句：对本页 keyword_id 回溯查 fact_daily（回溯 6 天）。
+# 搜索趋势的回溯规格：视图 → (事实表, 日期列, 回溯天数)。
+#
+# 两个视图的差异恰好只有这三个值，其余 SQL 一字不差，故参数化而不是各写一条语句——
+# 并列的两条语句会让"回溯多远"存两份，改一处忘一处不报错，只是两个视图悄悄不一致。
+#
+# 回溯天数都对应"最多 7 个点"：日 6 天、周 42 天（6 周）。用日期范围而非"最近 7 期"，
+# 是因为范围条件能下推做分区裁剪，而按 keyword 分组取前 N 需要窗口函数且裁不了分区。
+_TREND_SPEC: dict[str, tuple[Any, Any, int]] = {
+    "DAY": (FactDaily, FactDaily.report_date, 6),
+    "WEEK": (FactWeekly, FactWeekly.report_date_week, 42),
+}
 
-    走 idx_fact_daily_keyword_history（site, keyword_id, report_date）；report_date 范围
-    条件保证分区裁剪。历史不足 7 天就少几个点，不补齐。
+
+def trends_stmt(site: str, keyword_ids: list[int], on: date, view: str):
+    """搜索趋势的语句：对本页 keyword_id 回溯查该视图的事实表。
+
+    走 idx_fact_{daily,weekly}_keyword_history（site, keyword_id, 日期列）——两张事实表
+    的索引由同一个 `_fact_indexes` 生成，故两个视图走的是同构的路径。日期范围条件保证
+    分区裁剪。历史不足就少几个点，不补齐。
+
+    未知视图码直接 KeyError：静默回落到日报会让周视图显示另一个周期的数据，
+    而那种错误在界面上完全看不出来。
     """
-    start = on - timedelta(days=6)
+    fact, date_col, lookback = _TREND_SPEC[view]
+    start = on - timedelta(days=lookback)
     return (
-        select(FactDaily.keyword_id, FactDaily.report_date, FactDaily.current_ranking)
+        select(fact.keyword_id, date_col, fact.current_ranking)
         .where(
-            FactDaily.site == site,
-            FactDaily.keyword_id.in_(keyword_ids),
-            FactDaily.report_date >= start,
-            FactDaily.report_date <= on,
+            fact.site == site,
+            fact.keyword_id.in_(keyword_ids),
+            date_col >= start,
+            date_col <= on,
         )
-        .order_by(FactDaily.keyword_id, FactDaily.report_date)
+        .order_by(fact.keyword_id, date_col)
     )
 
 
@@ -337,10 +355,12 @@ def iter_export_rows(
         yield shape_rows(partition)
 
 
-def fetch_trends(db: Session, site: str, keyword_ids: list[int], on: date) -> dict[int, list[int]]:
+def fetch_trends(
+    db: Session, site: str, keyword_ids: list[int], on: date, view: str
+) -> dict[int, list[int]]:
     if not keyword_ids:
         return {}
-    return shape_trends(db.execute(trends_stmt(site, keyword_ids, on)).all())
+    return shape_trends(db.execute(trends_stmt(site, keyword_ids, on, view)).all())
 
 
 def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:

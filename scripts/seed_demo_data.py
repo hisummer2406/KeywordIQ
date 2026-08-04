@@ -1,8 +1,8 @@
-"""演示/开发数据：一个站点连续 7 天日报 + 对齐周报，关键词跨天全重叠、排名线性漂移。
+"""演示/开发数据：一个站点连续 7 天日报 + 连续 7 期周报，关键词跨期全重叠、排名线性漂移。
 
 **仅用于本地演示**——让分析屏那几处「只有真实数据形状才看得见」的东西真正出现：
 
-- 7 天走势 sparkline 与周排名变化（合成压测数据在小规模下关键词跨天不重叠，看不到走势；
+- 日/周搜索趋势 sparkline（合成压测数据在小规模下关键词跨期不重叠，看不到走势；
   真实数据每站通常只导了一天）
 - 点击量前三的商品卡牌：三个槽位都填、且**故意留出只有两个 / 只有一个商品的行**，
   好验证空槽位不塌陷
@@ -28,6 +28,7 @@ from database import SessionFactory
 SCHEMA = settings.DATABASE_SCHEMA
 N_KEYWORDS = 40
 DAYS = 7  # 07-06..07-12（同一 ISO 周，Mon..Sun）
+WEEKS = 7
 
 # ASIN 用**真实存在**的商品，不是 DEMO000001 这种占位串。
 #
@@ -46,6 +47,11 @@ DEMO_PRODUCTS = [
     ("B08C1W5N87", "Stainless Steel Air Fryer 5.8QT", "Ninja", "Home & Kitchen"),
 ]
 DEMO_ASINS = [asin for asin, *_ in DEMO_PRODUCTS]
+
+
+def weekly_periods(end: date, count: int) -> list[date]:
+    """以 ``end`` 为最新周报期次，生成升序、连续的周报日期。"""
+    return [end - timedelta(weeks=count - 1 - i) for i in range(count)]
 
 
 def _clear_demo(db):
@@ -79,7 +85,7 @@ def main() -> int:
     site = args.site.upper()
     end = date.fromisoformat(args.end_date)
     days = [end - timedelta(days=DAYS - 1 - i) for i in range(DAYS)]  # 升序 7 天
-    week_date = end  # 周报期次落在同 ISO 周
+    week_dates = weekly_periods(end, WEEKS)
 
     from app.table.analysis.partitioning import ensure_fact_partitions
 
@@ -106,7 +112,8 @@ def main() -> int:
             kw_ids.append(kid)
 
         ensure_fact_partitions(db.connection(), "fact_daily", site, days[0])
-        ensure_fact_partitions(db.connection(), "fact_weekly", site, week_date)
+        for week_date in week_dates:
+            ensure_fact_partitions(db.connection(), "fact_weekly", site, week_date)
 
         def rank_of(i, d):
             # 线性漂移：trend_i ∈ [-2,2]，随天数移动，夹在 [1,60]
@@ -155,20 +162,21 @@ def main() -> int:
                     {"s": site, "d": day, "k": kid, "cur": cur, "prev": prev,
                      "ch": cur - prev, "new": (d == 0), **slot_params},
                 )
-            # 周报：同关键词，week_change 用一个可见的值
-            wk_cur = rank_of(i, DAYS - 1)
-            db.execute(
-                text(f"INSERT INTO {SCHEMA}.fact_weekly"
-                     f"(site,report_date_week,keyword_id,current_ranking,previous_ranking,ranking_change,is_new,"
-                     f" top1_product_id,top1_click_share,top1_conversion_share,"
-                     f" top2_product_id,top2_click_share,top2_conversion_share,"
-                     f" top3_product_id,top3_click_share,top3_conversion_share) "
-                     f"VALUES (:s,:w,:k,:cur,:prev,:ch,false,"
-                     f" :p1,:cs1,:vs1, :p2,:cs2,:vs2, :p3,:cs3,:vs3)"),
-                {"s": site, "w": week_date, "k": kid, "cur": wk_cur,
-                 "prev": wk_cur + ((i % 5) - 2) * 3, "ch": -((i % 5) - 2) * 3,
-                 **slot_params},
-            )
+            for week_index, week_date in enumerate(week_dates):
+                wk_cur = rank_of(i, week_index)
+                wk_prev = rank_of(i, week_index - 1) if week_index > 0 else wk_cur
+                db.execute(
+                    text(f"INSERT INTO {SCHEMA}.fact_weekly"
+                         f"(site,report_date_week,keyword_id,current_ranking,previous_ranking,ranking_change,is_new,"
+                         f" top1_product_id,top1_click_share,top1_conversion_share,"
+                         f" top2_product_id,top2_click_share,top2_conversion_share,"
+                         f" top3_product_id,top3_click_share,top3_conversion_share) "
+                         f"VALUES (:s,:w,:k,:cur,:prev,:ch,:new,"
+                         f" :p1,:cs1,:vs1, :p2,:cs2,:vs2, :p3,:cs3,:vs3)"),
+                    {"s": site, "w": week_date, "k": kid, "cur": wk_cur,
+                     "prev": wk_prev, "ch": wk_cur - wk_prev, "new": week_index == 0,
+                     **slot_params},
+                )
 
         # site_data_stats + category_stats
         for day in days:
@@ -178,17 +186,18 @@ def main() -> int:
                      f"ON CONFLICT (site,period_type,report_date) DO UPDATE SET row_count=EXCLUDED.row_count"),
                 {"s": site, "d": day, "n": N_KEYWORDS},
             )
-        db.execute(
-            text(f"INSERT INTO {SCHEMA}.site_data_stats(site,period_type,report_date,row_count) "
-                 f"VALUES (:s,'WEEK',:w,:n) "
-                 f"ON CONFLICT (site,period_type,report_date) DO UPDATE SET row_count=EXCLUDED.row_count"),
-            {"s": site, "w": week_date, "n": N_KEYWORDS},
-        )
+        for week_date in week_dates:
+            db.execute(
+                text(f"INSERT INTO {SCHEMA}.site_data_stats(site,period_type,report_date,row_count) "
+                     f"VALUES (:s,'WEEK',:w,:n) "
+                     f"ON CONFLICT (site,period_type,report_date) DO UPDATE SET row_count=EXCLUDED.row_count"),
+                {"s": site, "w": week_date, "n": N_KEYWORDS},
+            )
         db.execute(text(f"REFRESH MATERIALIZED VIEW {SCHEMA}.category_stats"))
         db.commit()
 
-    print(f"演示数据已写入：{site} 日报 {days[0]}..{days[-1]}（{DAYS}天）+ 周报 {week_date}，"
-          f"{N_KEYWORDS} 个跨天重叠关键词")
+    print(f"演示数据已写入：{site} 日报 {days[0]}..{days[-1]}（{DAYS}天）+ "
+          f"周报 {week_dates[0]}..{week_dates[-1]}（{WEEKS}期），{N_KEYWORDS} 个跨期重叠关键词")
     return 0
 
 

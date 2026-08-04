@@ -11,6 +11,14 @@ describe('buildColumns', () => {
     expect(buildColumns('DAY').map((column) => column.dataIndex)).not.toContain('week_change');
   });
 
+  it('日视图和周视图都显示同名的搜索趋势列', () => {
+    for (const view of ['DAY', 'WEEK'] as const) {
+      const trend = buildColumns(view).find((column) => column.dataIndex === 'trend');
+      expect(trend?.title).toBe('搜索趋势');
+      expect(trend?.hideInTable).not.toBe(true);
+    }
+  });
+
   it('不再单列 top1 的商品字段——它们已并入前三卡牌', () => {
     // 同一个数字在一行里出现两次，会让用户误以为是两个不同的量
     const titles = buildColumns('DAY').map((column) => column.title);

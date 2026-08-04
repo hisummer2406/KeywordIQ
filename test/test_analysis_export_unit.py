@@ -57,7 +57,7 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
     monkeypatch.setattr(service.crud, "count_capped", lambda db, s, v, on, req, cap: min(total, cap))
     monkeypatch.setattr(service.crud, "iter_export_rows",
                         lambda db, s, v, on, req, limit: iter([rows]))
-    monkeypatch.setattr(service.crud, "fetch_trends", lambda db, s, ids, on: trends or {})
+    monkeypatch.setattr(service.crud, "fetch_trends", lambda db, s, ids, on, view: trends or {})
     # 流式生成器自建会话：测试里换成请求内的桩会话，避免真连库
     monkeypatch.setattr(service, "SessionFactory", lambda: _NullSession())
 
@@ -122,7 +122,7 @@ def test_export_day_view_columns_and_rows(monkeypatch):
     lines = body.strip().splitlines()
 
     assert lines[0].startswith("关键词,")
-    assert "近7天走势" in lines[0] and "当周排名变化" not in lines[0]
+    assert "近 7 日趋势" in lines[0] and "当周排名变化" not in lines[0]
     assert len(lines) == 3  # 表头 + 2 行
     assert "coffee maker" in lines[1]
     assert "5 4 3 2 1" in lines[1]
@@ -130,13 +130,18 @@ def test_export_day_view_columns_and_rows(monkeypatch):
     assert lines[2].endswith(",")
 
 
-def test_export_week_view_omits_day_only_columns(monkeypatch):
-    """周视图没有走势/当周变化这两列——它们是日视图的附加信息。"""
-    app = _build_app(monkeypatch, user=_StubUser(is_super=True))
+def test_export_week_view_contains_week_trend(monkeypatch):
+    """周视图导出按周回溯，表头和行值都不能冒充日趋势。"""
+    app = _build_app(
+        monkeypatch,
+        user=_StubUser(is_super=True),
+        trends={1: [30, 20, 10]},
+    )
     r = _post(app, {"site": "US", "view": "WEEK"})
-    header = r.content.decode("utf-8-sig").splitlines()[0]
+    lines = r.content.decode("utf-8-sig").splitlines()
 
-    assert "近7天走势" not in header and "当周排名变化" not in header
+    assert "近 7 周趋势" in lines[0] and "近 7 日趋势" not in lines[0]
+    assert lines[1].endswith("30 20 10")
     assert "US_WEEK_2026-07-18.csv" in r.headers["content-disposition"]
 
 
@@ -177,7 +182,7 @@ def test_export_day_extra_column_stays_last(monkeypatch):
     app = _build_app(monkeypatch, user=_StubUser(is_super=True))
     header = _post(app).content.decode("utf-8-sig").splitlines()[0].split(",")
 
-    assert header[-1] == "近7天走势"
+    assert header[-1] == "近 7 日趋势"
 
 
 def test_export_missing_slot_is_blank_not_shifted(monkeypatch):

@@ -39,11 +39,10 @@ export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
     // 让给这两列。
     { title: '关键词', dataIndex: 'keyword', width: 220, ellipsis: true, copyable: true },
     {
-      title: '7天走势',
+      title: '搜索趋势',
       dataIndex: 'trend',
       width: 190,
-      hideInTable: view !== 'DAY',
-      render: (_, r) => <TrendSparkline values={r.trend} dates={r.trend_dates} />,
+      render: (_, r) => <TrendSparkline view={view} values={r.trend} dates={r.trend_dates} />,
     },
     {
       title: '排名变化',

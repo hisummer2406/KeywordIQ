@@ -99,21 +99,22 @@ def test_export_csv_contains_day_extras(db, monkeypatch):
     body = "".join(service.iter_export_csv(site, view, on, _req()))
     lines = body.lstrip("﻿").strip().splitlines()
 
-    assert "近7天走势" in lines[0] and "当周排名变化" not in lines[0]
+    assert "近 7 日趋势" in lines[0] and "当周排名变化" not in lines[0]
     assert len(lines) == 3
     kw_one = next(line for line in lines[1:] if "kw-one" in line)
     assert kw_one.endswith("5 3 1")  # D1→D2→D3 的排名回溯，且走势就是最后一列
 
 
-def test_export_week_view_has_no_day_extras(db, monkeypatch):
+def test_export_week_view_contains_real_week_trend(db, monkeypatch):
     _seed(db)
     monkeypatch.setattr(service, "SessionFactory", lambda: db)
 
     req = AnalysisSearchRequest(site=SITE, view="WEEK")
     site, view, on = service.resolve_export_scope(db, req)
-    header = "".join(service.iter_export_csv(site, view, on, req)).lstrip("﻿").splitlines()[0]
+    lines = "".join(service.iter_export_csv(site, view, on, req)).lstrip("﻿").splitlines()
 
-    assert "近7天走势" not in header and "当周排名变化" not in header
+    assert "近 7 周趋势" in lines[0] and "近 7 日趋势" not in lines[0]
+    assert lines[1].endswith("9 5 1")
 
 
 def test_export_scope_rejects_over_cap_unfiltered(db, monkeypatch):

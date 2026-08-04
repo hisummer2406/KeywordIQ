@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(
 
 SITE = "US"
 D1, D2, D3 = date(2026, 7, 8), date(2026, 7, 9), date(2026, 7, 10)  # 同 ISO 周
-WEEK = date(2026, 7, 10)  # 与 D1..D3 同 ISO 周
+W1, W2, WEEK = date(2026, 6, 26), date(2026, 7, 3), date(2026, 7, 10)
 
 
 def _async_url(url: str) -> str:
@@ -61,6 +61,7 @@ def _ensure_partitions_sync() -> bool:
             if conn.execute(text("SELECT to_regclass('analysis.fact_daily')")).scalar() is None:
                 return False
             ensure_fact_partitions(conn, "fact_daily", SITE, D1)
+            ensure_fact_partitions(conn, "fact_weekly", SITE, W1)
             ensure_fact_partitions(conn, "fact_weekly", SITE, WEEK)
         return True
     finally:
@@ -112,11 +113,12 @@ def _seed(db):
              "VALUES (:s,:d,:k,9)"),
         {"s": SITE, "d": D3, "k": k2},
     )
-    db.execute(
-        text("INSERT INTO analysis.fact_weekly(site,report_date_week,keyword_id,current_ranking,ranking_change) "
-             "VALUES (:s,:w,:k,1,7)"),
-        {"s": SITE, "w": WEEK, "k": k1},
-    )
+    for week_date, ranking in ((W1, 9), (W2, 5), (WEEK, 1)):
+        db.execute(
+            text("INSERT INTO analysis.fact_weekly(site,report_date_week,keyword_id,current_ranking,ranking_change) "
+                 "VALUES (:s,:w,:k,:r,4)"),
+            {"s": SITE, "w": week_date, "k": k1, "r": ranking},
+        )
     # site_data_stats：日期选择器与总数来源
     for d, n in [(D1, 1), (D2, 1), (D3, 2)]:
         db.execute(
@@ -124,11 +126,12 @@ def _seed(db):
                  "VALUES (:s,'DAY',:d,:n)"),
             {"s": SITE, "d": d, "n": n},
         )
-    db.execute(
-        text("INSERT INTO analysis.site_data_stats(site,period_type,report_date,row_count) "
-             "VALUES (:s,'WEEK',:w,1)"),
-        {"s": SITE, "w": WEEK},
-    )
+    for week_date in (W1, W2, WEEK):
+        db.execute(
+            text("INSERT INTO analysis.site_data_stats(site,period_type,report_date,row_count) "
+                 "VALUES (:s,'WEEK',:w,1)"),
+            {"s": SITE, "w": week_date},
+        )
     db.flush()
     return k1, k2
 
@@ -180,11 +183,13 @@ async def test_invalid_date_raises_scope_error(db):
         await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=date(2020, 1, 1)))
 
 
-async def test_week_view_excludes_trend_fields(db):
+async def test_week_view_trend_reaches_across_report_periods(db):
     await db.run_sync(_seed)
     resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="WEEK", date=WEEK))
     assert resp.total == 1
-    assert resp.data and "trend" not in resp.data[0] and "week_change" not in resp.data[0]
+    assert resp.data[0]["trend"] == [9, 5, 1]
+    assert resp.data[0]["trend_dates"] == [W1, W2, WEEK]
+    assert "week_change" not in resp.data[0]
 
 
 async def test_scope_boundary_excludes_other_dates(db):
