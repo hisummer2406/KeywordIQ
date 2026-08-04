@@ -25,16 +25,20 @@
 
 ## 2. 迁移（手写，分区表 + 物化视图不在 autogenerate 范围）
 
-- [ ] 2.1 建两张维度表
-- [ ] 2.2 事实表父表 `ADD COLUMN <type> NULL`——**不给 DEFAULT**，否则 PG 会重写 2 亿行；
+- [x] 2.1 建两张维度表
+- [x] 2.2 事实表父表 `ADD COLUMN <type> NULL`——**不给 DEFAULT**，否则 PG 会重写 2 亿行；
       无默认值时是纯元数据操作，且自动传播到全部子分区
-- [ ] 2.3 `DROP MATERIALIZED VIEW category_stats` 并按关键词级类目重建；新增 `brand_stats`
+- [x] 2.3 `DROP MATERIALIZED VIEW category_stats` 并按关键词级类目重建；新增 `brand_stats`
       （结构与 `category_stats` 同构，供品牌下拉）
-- [ ] 2.4 删 `dim_product` 两列与两个 GIN 索引
-- [ ] 2.5 **`downgrade` 必须能把两列与两个 GIN 索引全部恢复**——数据回不来（本就是错的），
+- [x] 2.4 删 `dim_product` 两列与两个 GIN 索引
+- [x] 2.5 **`downgrade` 必须能把两列与两个 GIN 索引全部恢复**——数据回不来（本就是错的），
       但 schema 要回到旧代码可运行的形状
-- [ ] 2.6 `alembic upgrade head --sql` 离线核对：确认事实表 DDL 里 `PARTITION BY` 未被破坏
-- [ ] 2.7 本地 `downgrade -1 && upgrade head` 跑通
+- [x] 2.6 `alembic upgrade head --sql` 离线核对：确认事实表 DDL 里 `PARTITION BY` 未被破坏
+- [x] 2.7 本地 `downgrade -1 && upgrade head` 跑通（在**本 worktree 专属库**
+      `keywordiq_brandcat` 上，没碰共享的 `keywordiq_test`——drop 前先查了
+      `pg_stat_activity`）。真库核对：`fact_daily` relkind 仍是 `p`、12 个新列、
+      **无一带默认值**、`dim_product` 残留 0 列、两个物化视图齐备；downgrade 后两列与
+      两个 GIN 索引均恢复
 
 ## 3. 导入链路
 
