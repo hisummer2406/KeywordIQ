@@ -62,9 +62,14 @@ describe('toSearchBody', () => {
   });
 
   it('文本条件裁掉纯空白', () => {
-    const body = toSearchBody(scope, { ...emptyFilters(), brand: '  ', productTitle: ' ACME ' });
-    expect(body.brand).toBeUndefined();
+    const body = toSearchBody(scope, { ...emptyFilters(), productTitle: ' ACME ' });
     expect(body.product_title).toBe('ACME');
+  });
+
+  it('品牌是多选集合，空集合不传（与类目对称）', () => {
+    expect(toSearchBody(scope, emptyFilters()).brands).toBeUndefined();
+    const body = toSearchBody(scope, { ...emptyFilters(), brands: ['Anker', 'Sony'] });
+    expect(body.brands).toEqual(['Anker', 'Sony']);
   });
 
   it('区间只填一端时另一端不传', () => {

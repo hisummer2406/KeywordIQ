@@ -2,18 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const { accessState, searchAnalysis, getScope, getCategories, getSites, exportAnalysis } =
+const { accessState, searchAnalysis, getScope, getCategories, getBrands, getSites, exportAnalysis } =
   vi.hoisted(() => ({
     accessState: { canExport: true },
     searchAnalysis: vi.fn(),
     getScope: vi.fn(),
     getCategories: vi.fn(),
+    getBrands: vi.fn(),
     getSites: vi.fn(),
     exportAnalysis: vi.fn(),
   }));
 
 vi.mock('@umijs/max', () => ({ useAccess: () => accessState }));
-vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories, exportAnalysis }));
+vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories, getBrands, exportAnalysis }));
 vi.mock('@/services/upload', () => ({ getSites }));
 
 import AnalysisPage from '@/pages/Analysis';
@@ -79,6 +80,10 @@ describe('分析查询屏', () => {
             available_dates: ['2026-07-18', '2026-07-17'],
           },
     );
+    getBrands.mockResolvedValue([
+      { brand: 'ACME', count: 9 },
+      { brand: 'Anker', count: 4 },
+    ]);
     getCategories.mockResolvedValue([
       { category: 'Home', count: 12 },
       { category: 'Electronics', count: 7 },

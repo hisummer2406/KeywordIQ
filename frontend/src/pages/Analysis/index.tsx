@@ -12,15 +12,18 @@ import { Button, Card, Col, Row, Select, Space, Typography, message } from 'antd
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportAnalysis,
+  getBrands,
   getCategories,
   getScope,
   searchAnalysis,
   type AnalysisRow,
+  type BrandOption,
   type CategoryOption,
   type SearchBody,
   type View,
 } from '@/services/analysis';
 import { getSites, type SiteOption } from '@/services/upload';
+import BrandPanel from './BrandPanel';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel from './FilterPanel';
 import ScopeBar from './ScopeBar';
@@ -57,6 +60,7 @@ export default function AnalysisPage() {
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [categories, setCategories] = useState<CategoryOption[]>([]);
+  const [brands, setBrands] = useState<BrandOption[]>([]);
   const [exporting, setExporting] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [resultTotal, setResultTotal] = useState(0);
@@ -122,13 +126,16 @@ export default function AnalysisPage() {
     const s = await getScope(nextSite, nextView);
     setAvailableDates(s.available_dates);
     setScope({ site: s.site, view: nextView, date: s.latest_date });
-    setFilters((f) => ({ ...f, categories: [] }));
+    setFilters((f) => ({ ...f, categories: [], brands: [] }));
     if (appliedRef.current) {
-      appliedRef.current = { ...appliedRef.current, categories: undefined };
+      appliedRef.current = { ...appliedRef.current, categories: undefined, brands: undefined };
     }
     getCategories(s.site, nextView)
       .then(setCategories)
       .catch(() => setCategories([]));
+    getBrands(s.site, nextView)
+      .then(setBrands)
+      .catch(() => setBrands([]));
     return s;
   };
 
@@ -228,6 +235,14 @@ export default function AnalysisPage() {
                   value={filters.categories}
                   onChange={(categories) => setFilters((f) => ({ ...f, categories }))}
                 />
+                <div style={{ marginTop: 16 }}>
+                  <Typography.Text strong>选择筛选品牌</Typography.Text>
+                  <BrandPanel
+                    options={brands}
+                    value={filters.brands}
+                    onChange={(brands) => setFilters((f) => ({ ...f, brands }))}
+                  />
+                </div>
               </Col>
               <Col flex="auto" style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 16 }}>
                 <FilterPanel value={filters} onChange={setFilters} />
