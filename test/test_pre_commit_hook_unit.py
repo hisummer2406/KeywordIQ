@@ -74,3 +74,68 @@ def test_postgres_up_true_when_test_database_answers(hook, monkeypatch):
     monkeypatch.setattr(hook, "_test_db_reachable", lambda: True)
 
     assert hook.postgres_up() is True
+
+
+# ---------------- 提交落地的仓库（target_repo） ----------------
+#
+# 这一组守的是一个真实发生过的绕过：会话开在 worktree 里、命令 `cd 主仓 && git commit`，
+# 门禁却拿 cwd（= worktree）去查暂存区，那里空空如也 → files 为空 → 直接放行。
+# 一个未用 import 就是这样进的主干，而且悄无声息——门禁没报错，只是没查。
+
+def test_cd_prefix_wins_over_session_cwd(hook, tmp_path):
+    """`cd <repo> && git commit` 要按 cd 的目标查，不是按会话 cwd。"""
+    target = tmp_path / "main-repo"
+    target.mkdir()
+    session_cwd = tmp_path / "worktree"
+    session_cwd.mkdir()
+
+    got = hook.target_repo(f"cd {target} && git add -A && git commit -m x", session_cwd)
+    assert got == target
+
+
+def test_git_dash_c_wins_over_session_cwd(hook, tmp_path):
+    """`git -C <repo> commit` 同理。"""
+    target = tmp_path / "main-repo"
+    target.mkdir()
+    session_cwd = tmp_path / "worktree"
+    session_cwd.mkdir()
+
+    got = hook.target_repo(f"git -C {target} commit -m x", session_cwd)
+    assert got == target
+
+
+def test_plain_commit_uses_session_cwd(hook, tmp_path):
+    """没有切目录的命令仍按会话 cwd——反向 fixture，防止误改成总去猜路径。"""
+    session_cwd = tmp_path / "repo"
+    session_cwd.mkdir()
+
+    assert hook.target_repo("git commit -m x", session_cwd) == session_cwd
+
+
+def test_commit_message_mentioning_cd_is_not_a_path(hook, tmp_path):
+    """提交信息里出现 'cd /somewhere' 不该被当成切目录。
+
+    消息是一个整体 token，不会被拆成 ['cd', '/somewhere']——这条钉住该行为，
+    免得有人把解析改成按空格粗切。
+    """
+    session_cwd = tmp_path / "repo"
+    session_cwd.mkdir()
+
+    assert hook.target_repo('git commit -m "cd /tmp 之后再提交"', session_cwd) == session_cwd
+
+
+def test_nonexistent_path_falls_back_to_cwd(hook, tmp_path):
+    """cd 的目标不存在时退回 cwd：宁可多查一遍，也不要静默不查。"""
+    session_cwd = tmp_path / "repo"
+    session_cwd.mkdir()
+
+    got = hook.target_repo(f"cd {tmp_path / 'nope'} && git commit -m x", session_cwd)
+    assert got == session_cwd
+
+
+def test_unparsable_command_falls_back_to_cwd(hook, tmp_path):
+    """引号不配对时不抛异常——门禁自己崩掉，连「该拦的没拦」都看不出来。"""
+    session_cwd = tmp_path / "repo"
+    session_cwd.mkdir()
+
+    assert hook.target_repo('git commit -m "未闭合', session_cwd) == session_cwd

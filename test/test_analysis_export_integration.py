@@ -9,7 +9,7 @@
 import os
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.table.analysis import analysis_crud as crud

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -68,6 +69,41 @@ def staged_files(repo: Path, command: str) -> list[str]:
         files.extend(line for line in unstaged.splitlines() if line)
 
     return sorted(set(files))
+
+
+def target_repo(command: str, cwd: Path) -> Path:
+    """提交实际落地的仓库。**不能只信 ``cwd``。**
+
+    钩子拿到的 ``cwd`` 是 Bash 会话的工作目录，而命令常常先切到别处再提交：
+
+        cd /path/to/repo && git add -A && git commit -m "..."
+        git -C /path/to/repo commit -m "..."
+
+    基于 worktree 的会话天天是这个形态（会话开在 worktree 里、往主仓提交）。若照
+    ``cwd`` 去查暂存区，那里空空如也，``files`` 为空 → 直接放行——**门禁被完整绕过，
+    且悄无声息**。本仓库真发生过：一个未用 import 就是这样进的主干。
+
+    故按 ``git -C <path>`` → 开头的 ``cd <path>`` → ``cwd`` 的顺序取。取到的路径不存在
+    就退回 ``cwd``，宁可多查一遍也不要静默不查。
+    """
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        # 引号不配对等无法解析的命令：退回 cwd 而不是抛异常。门禁自己崩掉会连
+        # "该拦的没拦"都看不出来，比多查一遍糟得多。
+        return cwd
+
+    for i, token in enumerate(tokens):
+        if token == "-C" and i + 1 < len(tokens):
+            candidate = Path(tokens[i + 1]).expanduser()
+            if candidate.is_dir():
+                return candidate
+        if token == "cd" and i + 1 < len(tokens):
+            candidate = Path(tokens[i + 1]).expanduser()
+            if candidate.is_dir():
+                return candidate
+
+    return cwd
 
 
 def _commits_all(command: str) -> bool:
@@ -138,12 +174,14 @@ def main() -> None:
         sys.exit(0)  # 读不懂就别挡路
 
     command = payload.get("tool_input", {}).get("command", "")
-    repo = Path(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR", "."))
+    cwd = Path(payload.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR", "."))
 
     # 兜底：settings.json 的 `if` 已经缩过范围，这里再确认一次，避免配置改动后误伤。
     if "git commit" not in command:
         sys.exit(0)
 
+    # 提交可能落在别的目录（worktree 会话里 `cd 主仓 && git commit` 是常态）
+    repo = target_repo(command, cwd)
     files = staged_files(repo, command)
     if not files:
         sys.exit(0)  # 没东西可验（如空 amend）
