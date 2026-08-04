@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: 关键词与商品信息按维度存储，避免重复`
+- TO: `### Requirement: 关键词、商品、品牌与类目按维度存储，避免重复`
+
 ## MODIFIED Requirements
 
 ### Requirement: 关键词、商品、品牌与类目按维度存储，避免重复
