@@ -1,6 +1,7 @@
-import { Checkbox, Empty, Input, Typography } from 'antd';
+import { Checkbox, Empty, Input, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import type { CategoryOption } from '@/services/analysis';
+import { TOP1_ONLY_HINT } from './FilterPanel';
 
 /**
  * 类目多选面板（过滤区左栏）。
@@ -43,6 +44,21 @@ export default function CategoryPanel({ options, value, onChange }: CategoryPane
       >
         全部类目
       </Checkbox>
+      {/* 表格展示前三名商品，类目筛选只认第一名——不标注的话，用户会拿卡牌里第二名的
+          类目回填条件，得到空结果并误以为是数据缺失 */}
+      <Tooltip title={TOP1_ONLY_HINT}>
+        <Typography.Text
+          type="secondary"
+          style={{
+            display: 'block',
+            fontSize: 12,
+            marginTop: 2,
+            cursor: 'help',
+          }}
+        >
+          仅按点击量第一名的类目筛选
+        </Typography.Text>
+      </Tooltip>
       <div
         style={{
           maxHeight: 380,
