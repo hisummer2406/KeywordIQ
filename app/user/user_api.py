@@ -60,8 +60,9 @@ async def register(
     此前重复时返 HTTP 200 + `{"status":1}`，前端 `unwrap` 抛出的 Error 无人接管
     （umi 的 errorConfig 只处理 HTTP 层错误），页面既不关弹窗也不提示。
 
-    重名判定在 CRUD 内部完成，这里不再预检——预检与真正的插入之间存在竞态，
-    且两处判定容易漂移。
+    重名判定在 CRUD 内部完成，这里不再预检——两处判定容易漂移。CRUD 里的预检也只是
+    快路径：它与插入之间存在竞态，真正兜底的是 `user_center.user_name` 上的唯一约束，
+    冲突会被翻成同一个 409（见 `user_crud._reraise_duplicate_name`）。
     """
     user = await UserCenterCRUD(db).create_user(user_data)
 
