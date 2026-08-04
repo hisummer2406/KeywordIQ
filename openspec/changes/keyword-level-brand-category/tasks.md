@@ -3,9 +3,11 @@
 
 ## 0. 前置：归档顺序
 
-- [ ] 0.1 **`show-top3-products` 与 `show-search-trend-in-week-view` 必须先归档。**
-      三个变更都 MODIFIED 同一条「日视图与周视图的行字段各自明确」，而 MODIFIED 是整条
-      替换——本变更的 delta 写在那两者之上，先归档本变更会把它们的内容覆盖掉
+- [x] 0.1 **`show-top3-products` 与 `show-search-trend-in-week-view` 已归档**（v2 上的
+      00445e6），本分支已合入 v2，delta 标题与 Scenario 名均已重对齐归档后的主 spec。
+      归档时连吃五次拦截，全因 MODIFIED 是**整条替换**、块里没写的 Scenario 会被丢掉。
+      本变更的 delta 已按同样标准自查：三处标题改名走 RENAMED，各条 Scenario 取主 spec
+      的超集。那条「行字段」在主 spec 里现已更名为「两视图的行字段各自明确」
 
 ## 1. 数据模型
 
