@@ -181,7 +181,16 @@ export default function AnalysisPage() {
     }
   };
 
-  const columns = useMemo(() => buildColumns(appliedView), [appliedView]);
+  // 站点域名按**生效作用域**解析：切了站点没点查询时，表格数据仍属上一个站点，
+  // 链接必须跟着数据走，否则用户点进去搜的是另一个站点。
+  const appliedDomain = useMemo(
+    () => sites.find((s) => s.code === appliedRef.current?.site)?.domain,
+    [sites, appliedSig],
+  );
+  const columns = useMemo(
+    () => buildColumns(appliedView, appliedDomain),
+    [appliedView, appliedDomain],
+  );
 
   return (
     <PageContainer title="ABA数据选品">
