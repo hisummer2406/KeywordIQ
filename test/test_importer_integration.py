@@ -166,3 +166,118 @@ def test_weekly_uses_separate_table_and_prev_week(session, tmp_path):
         SELECT current_ranking, previous_ranking, ranking_change
         FROM analysis.fact_weekly WHERE report_date_week='2026-07-15'""")).one()
     assert row == (30, 50, -20)  # 上一"周"= 7/8
+
+
+# --------------------------------------------------------------------------
+# 品牌与类目是关键词级排行，不是商品属性
+# --------------------------------------------------------------------------
+
+
+def test_brands_and_categories_land_as_keyword_level_facts(session, tmp_path):
+    """三个品牌 / 三个类目按名次写进事实表，各自关联到独立维度。
+
+    这是本变更的核心：源报表里「点击量第 1/2/3 的品牌」与商品槽位无关，
+    第 2 品牌可以属于一个根本没进前三商品的卖家。
+    """
+    _import(session, tmp_path, "kw_level.csv", [
+        _row(1, "paper towels",
+             b1="Bounty", b2="Charmin", b3="Sparkle",
+             cat1="Health", cat2="Grocery", cat3="Home",
+             a1="B001", t1="Bounty Rolls"),
+    ])
+
+    row = session.execute(text("""
+        SELECT b1.name, b2.name, b3.name, c1.name, c2.name, c3.name
+          FROM analysis.fact_daily f
+          LEFT JOIN analysis.dim_brand b1 ON b1.brand_id = f.top1_brand_id
+          LEFT JOIN analysis.dim_brand b2 ON b2.brand_id = f.top2_brand_id
+          LEFT JOIN analysis.dim_brand b3 ON b3.brand_id = f.top3_brand_id
+          LEFT JOIN analysis.dim_category c1 ON c1.category_id = f.top1_category_id
+          LEFT JOIN analysis.dim_category c2 ON c2.category_id = f.top2_category_id
+          LEFT JOIN analysis.dim_category c3 ON c3.category_id = f.top3_category_id
+    """)).one()
+
+    assert row == ("Bounty", "Charmin", "Sparkle", "Health", "Grocery", "Home")
+
+
+def test_brand_ranks_are_independent_of_product_slots(session, tmp_path):
+    """只有一个商品、却有三个品牌——旧模型下第 2/3 品牌无处安放，会被整个丢掉。
+
+    这是「品牌不是商品属性」最直接的证据：品牌名次与商品名次的**数量都可以不一致**。
+    """
+    _import(session, tmp_path, "mismatch.csv", [
+        _row(1, "kitchen towel",
+             b1="Bounty", b2="Viva", b3="Brawny",
+             cat1="Home",
+             a1="B009", t1="Only Product"),  # 只有第 1 个商品槽位
+    ])
+
+    brands = session.execute(text("""
+        SELECT b1.name, b2.name, b3.name
+          FROM analysis.fact_daily f
+          LEFT JOIN analysis.dim_brand b1 ON b1.brand_id = f.top1_brand_id
+          LEFT JOIN analysis.dim_brand b2 ON b2.brand_id = f.top2_brand_id
+          LEFT JOIN analysis.dim_brand b3 ON b3.brand_id = f.top3_brand_id
+    """)).one()
+    slots = session.execute(text(
+        "SELECT top2_product_id, top3_product_id FROM analysis.fact_daily"
+    )).one()
+
+    assert brands == ("Bounty", "Viva", "Brawny")
+    assert slots == (None, None), "商品槽位确实只有一个，但三个品牌都留住了"
+
+
+def test_same_asin_under_different_keywords_keeps_own_brand_ranking(session, tmp_path):
+    """同一 ASIN 在两个关键词下对应不同的品牌排行——旧模型下这正是 11.7% 冲突的来源。
+
+    旧写法把品牌#1 当成商品#1 的属性写进 dim_product，两行冲突时 DISTINCT ON 任选其一
+    胜出；现在各自记在自己的事实行上，互不影响。
+    """
+    _import(session, tmp_path, "same_asin.csv", [
+        _row(1, "toilet paper", b1="Charmin", cat1="Health", a1="B777", t1="Shared Product"),
+        _row(2, "bath tissue", b1="Cottonelle", cat1="Health", a1="B777", t1="Shared Product"),
+    ])
+
+    pairs = session.execute(text("""
+        SELECT k.keyword, b.name
+          FROM analysis.fact_daily f
+          JOIN analysis.dim_keyword k ON k.keyword_id = f.keyword_id
+          JOIN analysis.dim_brand b ON b.brand_id = f.top1_brand_id
+         ORDER BY k.keyword
+    """)).all()
+
+    assert pairs == [("bath tissue", "Cottonelle"), ("toilet paper", "Charmin")]
+    # 商品维度只此一份，且不再携带品牌
+    assert session.execute(text(
+        "SELECT count(*) FROM analysis.dim_product WHERE asin='B777'"
+    )).scalar() == 1
+
+
+def test_dim_product_no_longer_carries_brand_or_category(session, tmp_path):
+    """缺陷的根：dim_product 不再被写入伪造属性。"""
+    _import(session, tmp_path, "no_fake_attrs.csv", [
+        _row(1, "mouse", b1="Logitech", cat1="Electronics", a1="B001", t1="Logi Mouse"),
+    ])
+
+    cols = session.execute(text("""
+        SELECT count(*) FROM information_schema.columns
+         WHERE table_schema='analysis' AND table_name='dim_product'
+           AND column_name IN ('brand','category')
+    """)).scalar()
+    assert cols == 0
+
+
+def test_missing_brand_rank_is_null_not_empty_string(session, tmp_path):
+    """名次缺失时该位置为 NULL，不是指向一个空串品牌的引用。
+
+    空串品牌会进 dim_brand 成为一个"名字是空的品牌"，然后出现在下拉里。
+    """
+    _import(session, tmp_path, "partial.csv", [
+        _row(1, "single brand", b1="OnlyOne", cat1="Home", a1="B001", t1="P"),
+    ])
+
+    row = session.execute(text(
+        "SELECT top2_brand_id, top3_brand_id, top2_category_id FROM analysis.fact_daily"
+    )).one()
+    assert row == (None, None, None)
+    assert session.execute(text("SELECT count(*) FROM analysis.dim_brand WHERE name=''")).scalar() == 0

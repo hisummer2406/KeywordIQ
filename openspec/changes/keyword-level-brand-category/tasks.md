@@ -19,9 +19,11 @@
 - [x] 1.3 `dim_product` 删 `brand` / `category` 两列，收敛为 ASIN + 标题；同时删
       `idx_dim_product_brand_trgm` / `idx_dim_product_category_trgm`
 
-> **当前状态：模型层已改，调用方尚未跟上。** `analysis_crud` 有 5 处、`importer.py` 的
-> SQL 有 1 处仍引用已删除的 `DimProduct.brand/.category`。单元测试全绿**掩盖了这一点**
-> ——那些路径要连库才走得到。第 3、5 组做完之前，本分支不可合回 v2。
+> **当前状态：模型 + 迁移 + 导入已完成，查询层尚未跟上。** 在专属库
+> `keywordiq_brandcat` 上跑全量，21 个集成测试红，根因全是同一个
+> （`DimProduct.brand` 不存在），集中在 `test_site_scoped_query_integration`(16) 与
+> `test_analysis_export_integration`(5)，导入侧无一失败。第 5 组修掉它们之前，
+> 本分支不可合回 v2。
 
 ## 2. 迁移（手写，分区表 + 物化视图不在 autogenerate 范围）
 
@@ -42,12 +44,12 @@
 
 ## 3. 导入链路
 
-- [ ] 3.1 `_upsert_dimensions` 增加品牌与类目两个维度的 upsert（源列 c2–c4 / c5–c7），
+- [x] 3.1 `_upsert_dimensions` 增加品牌与类目两个维度的 upsert（源列 c2–c4 / c5–c7），
       在 `_import_staging` 内以 SQL 完成，不进应用内存
-- [ ] 3.2 `_load_facts` 补 6 个引用列
-- [ ] 3.3 `_upsert_dimensions` 里 `dim_product` 的三段 UNION 去掉 brand / category
+- [x] 3.2 `_load_facts` 补 6 个引用列
+- [x] 3.3 `_upsert_dimensions` 里 `dim_product` 的三段 UNION 去掉 brand / category
       ——**这是缺陷的根，改完它 `dim_product` 才不再被写入伪造属性**
-- [ ] 3.4 `import_service._refresh_category_stats` 一并刷新 `brand_stats`
+- [x] 3.4 `import_service._refresh_category_stats` 一并刷新 `brand_stats`
 - [ ] 3.5 用真实体量 CSV 跑 `verify-import` skill，断言六个新列落库正确
 
 ## 4. 索引：先实测再定，不许凭直觉建
