@@ -203,6 +203,24 @@ def upgrade() -> None:
     _create_category_stats()
     _create_brand_stats()
 
+    # ---- 3.5 品牌筛选索引（方案 A：三个独立 btree）----
+    # 「前三任一命中」是三列 OR，计划器用 BitmapOr 合并三路。方案在真实数据上实测选定
+    # （US 周报 278.5 万行：无索引 499ms → 187ms；见 design 决策 4）。
+    #
+    # 选 btree 而非表达式 GIN 的决定性理由不是快那 67ms，而是**表达式 GIN 会把 SQL 形状
+    # 焊死在索引上**：只有写成 ARRAY[...] && ARRAY[...] 才命中，_apply_filters 一旦改回
+    # 自然的 IN ... OR ...，索引会静默失效退回全切片扫描，而测试不会报错。
+    #
+    # 列序 (site, 日期, 品牌)：前两列是作用域边界，每个查询都带；品牌在最后做等值。
+    # 类目暂不建索引——基数只有 122，选择性太低，索引很可能不被选中（V1 有过投机建索引、
+    # 实测 0 命中的先例），等有真实慢查询再说。
+    for table, date_col in (("fact_daily", "report_date"), ("fact_weekly", "report_date_week")):
+        for n in (1, 2, 3):
+            op.create_index(
+                f"idx_{table}_top{n}_brand", table, ["site", date_col, f"top{n}_brand_id"],
+                schema=SCHEMA,
+            )
+
     # ---- 4. 删 dim_product 的伪造属性 ----
     # 顺序在物化视图之后：category_stats 旧定义引用了 p.category，先删列会因依赖而失败。
     op.drop_index("idx_dim_product_brand_trgm", table_name="dim_product", schema=SCHEMA)
@@ -241,7 +259,7 @@ def downgrade() -> None:
     op.execute(f"DROP MATERIALIZED VIEW IF EXISTS {SCHEMA}.category_stats")
     _create_legacy_category_stats()
 
-    # 3. 事实表去掉 6 列
+    # 3. 事实表去掉 6 列（索引随列自动消失）
     for table in _FACT_TABLES:
         for col_name, _ in _NEW_FACT_COLUMNS:
             op.drop_column(table, col_name, schema=SCHEMA)
