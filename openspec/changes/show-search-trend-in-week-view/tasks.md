@@ -38,5 +38,5 @@
 
 - [x] 6.1 顺手修正 `show-top3-products` 变更 delta 里残留的「当周排名变化」——那笔已并入
       v2 但未归档，归档时会把已删除的字段重新写回主 spec
-- [ ] 6.2 全量回归（含 `TEST_DATABASE_URL` 集成）+ `openspec validate --all --strict`
+- [x] 6.2 全量回归（含 `TEST_DATABASE_URL` 集成）+ `openspec validate --all --strict`——**全新库上跑**才是有效验证：借上一轮残留分区的旧跑法会掩盖问题，本次即因此揪出导出集成测试不建分区的历史缺陷
       （本地全量单元/前端/OpenSpec 已通过；当前机器未配置 `TEST_DATABASE_URL`，数据库集成待运行）
