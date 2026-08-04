@@ -86,9 +86,11 @@ def test_count_capped_stops_at_cap(db):
 def test_export_csv_contains_day_extras(db, monkeypatch):
     """端到端 CSV：日视图带走势，且走势是真实跨天回溯的结果。
 
-    走势是最后一列——日视图**不再**附带「当周排名变化」，那列把周报数据混进了
-    日报视图。这里连列名与行尾一起断言，是因为只查列名的话，多出来一列空值不会被
-    发现（表头对了、行尾多个逗号，肉眼与断言都容易放过）。
+    当周排名变化已随 80f83df 从日视图移除（它把周报数据混进了日报视图），故走势是
+    日视图现存的唯一附加列，位置在全部商品列之后——也就是行尾。
+
+    这里连表头与行尾一起断言：只查表头的话，多出来一列空值不会被发现（表头对了、
+    行尾多个逗号，肉眼与断言都容易放过）。
     """
     _seed(db)
     monkeypatch.setattr(service, "SessionFactory", lambda: db)
@@ -100,7 +102,7 @@ def test_export_csv_contains_day_extras(db, monkeypatch):
     assert "近7天走势" in lines[0] and "当周排名变化" not in lines[0]
     assert len(lines) == 3
     kw_one = next(line for line in lines[1:] if "kw-one" in line)
-    assert kw_one.endswith("5 3 1")  # D1→D2→D3 的排名回溯，且它就是最后一列
+    assert kw_one.endswith("5 3 1")  # D1→D2→D3 的排名回溯，且走势就是最后一列
 
 
 def test_export_week_view_has_no_day_extras(db, monkeypatch):

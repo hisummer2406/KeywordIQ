@@ -60,18 +60,42 @@ class ExportTooLargeError(PayloadTooLargeError):
 
 # 导出列：与列表屏保持一致的中文表头。日视图多一列走势附加信息，
 # 与 search 的视图差异同源。
+#
+# 三个商品槽位各输出一组同构列，表头标明名次——界面上能看到前三、导出里没有会被当成缺陷。
+# 列数翻倍不改变导出的流式特性：行数不变、yield_per 分块不变，驻留内存仍与块大小同阶。
+
+
+def _product_slot_columns(slot: int) -> list[tuple[str, str]]:
+    """某个商品槽位的导出列。三个槽位结构相同，只有序号与表头前缀不同。
+
+    **不含品牌与类目**：报表里的「点击量第 N 的品牌 / 分类」是关键词级的独立排行，不是
+    「第 N 个商品的品牌 / 类目」。导入侧把它们按商品存进了 dim_product，而同一 ASIN 在
+    报表中携带互相冲突的取值（实测品牌 28.5%、类目 27.3%，作为对照，标题的冲突率是 0%），
+    落库时任选其一胜出。导出这样的值等于把已知错误写进用户会拿去分析的文件。
+    修复要动数据模型，另开变更。
+    """
+    prefix = f"top{slot}"
+    label = f"Top{slot}"
+    return [
+        (f"{prefix}_asin", f"{label} ASIN"),
+        (f"{prefix}_title", f"{label} 商品标题"),
+        (f"{prefix}_click_share", f"{label} 点击份额"),
+        (f"{prefix}_conversion_share", f"{label} 转化份额"),
+    ]
+
+
 _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
     ("keyword", "关键词"),
     ("current_ranking", "当期排名"),
     ("previous_ranking", "上期排名"),
     ("ranking_change", "排名变化"),
     ("is_new", "是否新词"),
-    ("top1_asin", "ASIN"),
-    ("top1_title", "商品标题"),
+    *_product_slot_columns(1),
+    *_product_slot_columns(2),
+    *_product_slot_columns(3),
+    # top1 的品牌/类目保留原有单列（沿用改造前的行为，不因本变更收窄导出内容）
     ("top1_brand", "品牌"),
     ("top1_category", "类目"),
-    ("top1_click_share", "点击份额"),
-    ("top1_conversion_share", "转化份额"),
 ]
 _EXPORT_COLUMNS_DAY_EXTRA: list[tuple[str, str]] = [
     ("trend", "近7天走势"),

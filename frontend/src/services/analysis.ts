@@ -12,12 +12,30 @@ export interface AnalysisRow {
   previous_ranking: number;
   ranking_change: number;
   is_new: boolean;
+  /**
+   * 三个商品槽位与点击量名次一一对应。槽位缺失时该组字段为空（ASIN/标题/品牌/类目为
+   * null，两个份额为 0），**不由后一名顶替**——名次与槽位的对应关系是这些字段的意义所在。
+   *
+   * 注意：这三组只是展示数据。品牌/类目/ASIN/标题/份额的筛选与排序仍只作用于 top1。
+   */
   top1_asin: string | null;
   top1_title: string | null;
   top1_brand: string | null;
   top1_category: string | null;
   top1_click_share: number;
   top1_conversion_share: number;
+  top2_asin: string | null;
+  top2_title: string | null;
+  top2_brand: string | null;
+  top2_category: string | null;
+  top2_click_share: number;
+  top2_conversion_share: number;
+  top3_asin: string | null;
+  top3_title: string | null;
+  top3_brand: string | null;
+  top3_category: string | null;
+  top3_click_share: number;
+  top3_conversion_share: number;
   trend?: number[];
   trend_dates?: string[];
 }

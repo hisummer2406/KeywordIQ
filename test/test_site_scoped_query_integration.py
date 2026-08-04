@@ -306,3 +306,105 @@ async def test_empty_categories_behaves_as_no_filter(db):
     ))
     assert {r["keyword_id"] for r in empty.data} == {r["keyword_id"] for r in base.data}
     assert empty.total == base.total
+
+
+# ---------------- 前三商品槽位（show-top3-products） ----------------
+
+def _seed_top_slots(db):
+    """两个关键词落在 D3：kw-full 三个槽位齐全，kw-partial 只有前两个。
+
+    槽位与名次的对应关系是这批字段的全部意义，因此测试必须能区分"第三名为空"与
+    "第三名被第二名顶替"。三个商品的品牌各不相同，好让筛选口径的断言有区分度。
+
+    返回 {关键词: keyword_id}。
+    """
+    pids = []
+    for slot in (1, 2, 3):
+        pids.append((db.execute(
+            text("INSERT INTO analysis.dim_product(asin,title,brand,category) "
+                 "VALUES (:a,:t,:b,'Home') RETURNING product_id"),
+            {"a": f"B0SLOT{slot:05d}", "t": f"Title {slot}", "b": f"BRAND{slot}"},
+        )).scalar())
+
+    kids = {}
+    for keyword, slots in (("kw-full", 3), ("kw-partial", 2)):
+        kid = (db.execute(
+            text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
+            {"s": SITE, "k": keyword},
+        )).scalar()
+        params = {"s": SITE, "d": D3, "k": kid, "p1": pids[0], "p2": pids[1],
+                  "p3": pids[2] if slots == 3 else None}
+        db.execute(
+            text("INSERT INTO analysis.fact_daily"
+                 "(site,report_date,keyword_id,current_ranking,"
+                 " top1_product_id,top1_click_share,top1_conversion_share,"
+                 " top2_product_id,top2_click_share,top2_conversion_share,"
+                 " top3_product_id,top3_click_share,top3_conversion_share) "
+                 "VALUES (:s,:d,:k,30,:p1,50.00,20.00,:p2,30.00,10.00,:p3,10.00,5.00)"),
+            params,
+        )
+        kids[keyword] = kid
+    db.flush()
+    return kids
+
+
+async def _row_for(db, keyword_id: int, **kwargs):
+    resp = await service.search(db, AnalysisSearchRequest(
+        site=SITE, view="DAY", date=D3, perPage=100, **kwargs,
+    ))
+    return next((r for r in resp.data if r["keyword_id"] == keyword_id), None), resp
+
+
+async def test_row_carries_three_product_slots(db):
+    """三个槽位齐全时，每组字段各自对应第一、第二、第三名。"""
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+    row, _ = await _row_for(db, kids["kw-full"])
+
+    assert (row["top1_asin"], row["top1_brand"]) == ("B0SLOT00001", "BRAND1")
+    assert (row["top2_asin"], row["top2_brand"]) == ("B0SLOT00002", "BRAND2")
+    assert (row["top3_asin"], row["top3_brand"]) == ("B0SLOT00003", "BRAND3")
+    assert [row["top1_click_share"], row["top2_click_share"], row["top3_click_share"]] == [50, 30, 10]
+    assert [row["top1_conversion_share"], row["top2_conversion_share"],
+            row["top3_conversion_share"]] == [20, 10, 5]
+
+
+async def test_missing_slot_is_null_not_shifted(db):
+    """只有两个商品：第三组为空，前两组仍是第一、第二名——不顺延。"""
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+    row, _ = await _row_for(db, kids["kw-partial"])
+
+    assert row["top1_asin"] == "B0SLOT00001"
+    assert row["top2_asin"] == "B0SLOT00002"
+    assert row["top3_asin"] is None
+    assert row["top3_brand"] is None
+
+
+async def test_brand_filter_does_not_match_second_slot(db):
+    """口径回归：行里展示了第二名的品牌，但以该品牌筛选时这一行不出现。
+
+    这是 show-top3-products 最容易被后续改动无声破坏的一条——`_apply_filters` 里任何
+    一处误引用 top2/top3 的 alias，都会让这个断言失败。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    hit, resp1 = await _row_for(db, kids["kw-full"], brand="BRAND1")
+    assert hit is not None  # 第一名的品牌能筛到
+
+    miss, resp2 = await _row_for(db, kids["kw-full"], brand="BRAND2")
+    assert miss is None     # 第二名的品牌筛不到
+    assert resp2.total == 0
+
+
+async def test_share_filter_only_considers_first_slot(db):
+    """份额区间只看第一名：第二名 30% 落在 20~40 区间内，但该行仍不该被选中。"""
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    miss, _ = await _row_for(db, kids["kw-full"], click_share_min=20, click_share_max=40)
+    assert miss is None  # 第一名是 50%，不在区间内
+
+    hit, _ = await _row_for(db, kids["kw-full"], click_share_min=45, click_share_max=55)
+    assert hit is not None

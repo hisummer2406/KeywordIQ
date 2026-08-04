@@ -4,6 +4,7 @@
 关注点：鉴权（analysis:export 而非 analysis:view）、CSV 形状（BOM/表头/按视图列集）、
 超限拒绝（不静默截断）。数据库访问全部打桩，crud 的真实 SQL 由集成测试覆盖。
 """
+import csv
 from datetime import date
 
 from fastapi import FastAPI
@@ -22,21 +23,26 @@ class _StubUser:
         self.permission_codes = set(permissions)
 
 
-def _row(kid: int, keyword: str, ranking: int) -> dict:
-    return {
+def _row(kid: int, keyword: str, ranking: int, *, slots: int = 3) -> dict:
+    """一行导出数据。``slots`` 控制有几个商品槽位有值，用来验证缺失槽位的呈现。"""
+    row = {
         "keyword_id": kid,
         "keyword": keyword,
         "current_ranking": ranking,
         "previous_ranking": ranking + 3,
         "ranking_change": 3,
         "is_new": False,
-        "top1_asin": f"B0{kid:08d}",
-        "top1_title": "Some Product",
-        "top1_brand": "ACME",
-        "top1_category": "Home",
-        "top1_click_share": 0.25,
-        "top1_conversion_share": 0.1,
     }
+    for slot in range(1, slots + 1):
+        row.update({
+            f"top{slot}_asin": f"B0{kid:04d}{slot:04d}",
+            f"top{slot}_title": f"Some Product {slot}",
+            f"top{slot}_brand": f"BRAND{slot}",
+            f"top{slot}_category": "Home",
+            f"top{slot}_click_share": 25.0 / slot,
+            f"top{slot}_conversion_share": 10.0 / slot,
+        })
+    return row
 
 
 def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(2026, 7, 18),
@@ -132,6 +138,61 @@ def test_export_week_view_omits_day_only_columns(monkeypatch):
 
     assert "近7天走势" not in header and "当周排名变化" not in header
     assert "US_WEEK_2026-07-18.csv" in r.headers["content-disposition"]
+
+
+def test_export_has_one_column_group_per_product_slot(monkeypatch):
+    """三个商品槽位各一组列，表头能区分名次。
+
+    界面上看得到前三、导出里只有第一名，会被当成缺陷——这是 show-top3-products
+    定下的「导出即用户当下看到的那份数据」约定的具体化。
+    """
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True))
+    header = _post(app).content.decode("utf-8-sig").splitlines()[0].split(",")
+
+    for slot in (1, 2, 3):
+        for field in ("ASIN", "商品标题", "点击份额", "转化份额"):
+            assert f"Top{slot} {field}" in header
+    # 名次顺序与卡牌一致：Top1 组整体在 Top2 组之前
+    assert header.index("Top1 ASIN") < header.index("Top2 ASIN") < header.index("Top3 ASIN")
+
+
+def test_export_slot_columns_exclude_brand_and_category(monkeypatch):
+    """槽位列里没有品牌与类目——它们在报表里是关键词级排行，不是商品属性。
+
+    导入侧把它们按商品去重存进 dim_product，同一 ASIN 携带互相冲突的取值时任选其一胜出
+    （实测品牌 28.5%、类目 27.3% 的 ASIN 存在冲突；作为对照标题是 0%）。按槽位导出这样的
+    值等于把已知错误写进用户拿去分析的文件。top1 的两列沿用改造前的行为保留。
+    """
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True))
+    header = _post(app).content.decode("utf-8-sig").splitlines()[0].split(",")
+
+    for slot in (1, 2, 3):
+        assert f"Top{slot} 品牌" not in header
+        assert f"Top{slot} 类目" not in header
+    assert "品牌" in header and "类目" in header  # top1 的原有单列仍在
+
+
+def test_export_day_extra_column_stays_last(monkeypatch):
+    """走势列在全部商品列之后——扩列不该把附加信息挤到中间。"""
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True))
+    header = _post(app).content.decode("utf-8-sig").splitlines()[0].split(",")
+
+    assert header[-1] == "近7天走势"
+
+
+def test_export_missing_slot_is_blank_not_shifted(monkeypatch):
+    """只有两个商品的行：第三组列留空，前两组仍是第一、第二名，不向后顺延。"""
+    rows = [_row(1, "kettle", 1, slots=2)]
+    app = _build_app(monkeypatch, user=_StubUser(is_super=True), rows=rows)
+    body = _post(app).content.decode("utf-8-sig").splitlines()
+    header, data = body[0].split(","), next(csv.reader([body[1]]))
+
+    cell = dict(zip(header, data))
+    assert cell["Top1 ASIN"] == "B000010001"
+    assert cell["Top2 ASIN"] == "B000010002"
+    assert cell["Top3 ASIN"] == ""
+    assert cell["Top3 商品标题"] == ""
+    assert cell["Top3 点击份额"] == ""
 
 
 def test_export_renders_is_new_as_chinese(monkeypatch):

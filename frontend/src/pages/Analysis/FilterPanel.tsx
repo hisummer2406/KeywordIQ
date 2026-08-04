@@ -1,4 +1,4 @@
-import { Button, Input, InputNumber, Radio, Space, Typography } from 'antd';
+import { Button, Input, InputNumber, Radio, Space, Tooltip, Typography } from 'antd';
 import {
   RANGE_PRESETS,
   matchedPreset,
@@ -18,15 +18,40 @@ import {
 
 const LABEL_WIDTH = 88;
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * 商品维度条件的口径提示。
+ *
+ * 表格展示点击量前三，而这些条件只匹配第一名——不标注的后果是具体且可预期的：
+ * 用户会拿卡牌里第二名的品牌回填筛选，得到空结果，并把它当成数据缺失而非口径差异。
+ * 提示挂在填写的位置而不是表格列头，因为误用正发生在填写的那一刻。
+ */
+export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里展示的是前三名';
+
+function Row({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  const text = (
+    <Typography.Text
+      type="secondary"
+      style={{
+        width: LABEL_WIDTH,
+        textAlign: 'right',
+        flexShrink: 0,
+        ...(hint ? { borderBottom: '1px dashed #bfbfbf', cursor: 'help' } : null),
+      }}
+    >
+      {label}
+    </Typography.Text>
+  );
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-      <Typography.Text
-        type="secondary"
-        style={{ width: LABEL_WIDTH, textAlign: 'right', flexShrink: 0 }}
-      >
-        {label}
-      </Typography.Text>
+      {hint ? <Tooltip title={hint}>{text}</Tooltip> : text}
       {children}
     </div>
   );
@@ -34,6 +59,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 interface RangeRowProps {
   label: string;
+  hint?: string;
   suffix?: string;
   presets: readonly RangePreset[];
   value: Range;
@@ -46,10 +72,10 @@ interface RangeRowProps {
  * 档位是区间值的一组预设写入方式，区间值本身才是唯一事实来源——所以档位高亮由
  * 区间值反推（matchedPreset），手输改写一端后高亮自然消失，不需要额外的选中状态。
  */
-function RangeRow({ label, suffix, presets, value, onChange }: RangeRowProps) {
+function RangeRow({ label, hint, suffix, presets, value, onChange }: RangeRowProps) {
   const active = matchedPreset(value, presets);
   return (
-    <Row label={label}>
+    <Row label={label} hint={hint}>
       <Space size={4}>
         <InputNumber
           size="middle"
@@ -109,6 +135,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       />
       <RangeRow
         label="点击份额"
+        hint={TOP1_ONLY_HINT}
         suffix="%"
         presets={RANGE_PRESETS.share}
         value={value.clickShare}
@@ -116,6 +143,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       />
       <RangeRow
         label="转化份额"
+        hint={TOP1_ONLY_HINT}
         suffix="%"
         presets={RANGE_PRESETS.share}
         value={value.conversionShare}
@@ -136,7 +164,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
           ]}
         />
       </Row>
-      <Row label="品牌">
+      <Row label="品牌" hint={TOP1_ONLY_HINT}>
         <Input
           size="middle"
           allowClear
@@ -146,7 +174,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
           onChange={(e) => patch({ brand: e.target.value })}
         />
       </Row>
-      <Row label="商品标题">
+      <Row label="商品标题" hint={TOP1_ONLY_HINT}>
         <Input
           size="middle"
           allowClear
