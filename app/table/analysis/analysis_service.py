@@ -58,8 +58,7 @@ class ExportTooLargeError(PayloadTooLargeError):
     message = "导出结果超出上限"
 
 
-# 导出列：与列表屏保持一致的中文表头。日视图多一列走势附加信息，
-# 与 search 的视图差异同源。
+# 导出列：与列表屏保持一致的中文表头。两视图都有趋势附加信息，表头明确回溯单位。
 #
 # 三个商品槽位各输出一组同构列，表头标明名次——界面上能看到前三、导出里没有会被当成缺陷。
 # 列数翻倍不改变导出的流式特性：行数不变、yield_per 分块不变，驻留内存仍与块大小同阶。
@@ -97,9 +96,16 @@ _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
     ("top1_brand", "品牌"),
     ("top1_category", "类目"),
 ]
-_EXPORT_COLUMNS_DAY_EXTRA: list[tuple[str, str]] = [
-    ("trend", "近7天走势"),
-]
+# 趋势列的表头按视图分。界面上两个视图同名（「搜索趋势」，作用域栏就在同屏上方），
+# 但 CSV 脱离了界面——「近 7 日趋势」这个表头下装着 7 期周报就是直接写错。
+_TREND_COLUMN_LABEL: dict[str, str] = {
+    "DAY": "近 7 日趋势",
+    "WEEK": "近 7 周趋势",
+}
+
+
+def _export_columns(view: str) -> list[tuple[str, str]]:
+    return [*_EXPORT_COLUMNS_BASE, ("trend", _TREND_COLUMN_LABEL[view])]
 
 
 def _resolve_site(site: str | None) -> str:
@@ -128,11 +134,11 @@ async def _available_dates(db: AsyncSession, site: str, view: str) -> list[date]
 
 
 async def _fetch_trends(
-    db: AsyncSession, site: str, keyword_ids: list[int], on: date
+    db: AsyncSession, site: str, keyword_ids: list[int], on: date, view: str
 ) -> tuple[dict[int, list[int]], dict[int, list[date]]]:
     if not keyword_ids:
         return {}, {}
-    rows = (await db.execute(crud.trends_stmt(site, keyword_ids, on))).all()
+    rows = (await db.execute(crud.trends_stmt(site, keyword_ids, on, view))).all()
     return crud.shape_trends(rows), crud.shape_trend_dates(rows)
 
 
@@ -166,19 +172,18 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     else:
         total = (await db.execute(crud.scope_row_count_stmt(site, view, on))).scalar_one_or_none() or 0
 
-    # 按视图构造行 DTO。日视图附带只读的近 7 天走势：先分页拿本页
-    # keyword_id，再批量补附加，避免在整切片上做相关子查询。附加信息不改变结果集构成。
-    if view == "DAY":
-        ids = [r["keyword_id"] for r in rows]
-        trends, trend_dates = await _fetch_trends(db, site, ids, on)
-        data = []
-        for r in rows:
-            item = DayRowItem(**r)
-            item.trend = trends.get(r["keyword_id"], [])
-            item.trend_dates = trend_dates.get(r["keyword_id"], [])
-            data.append(item.model_dump())
-    else:
-        data = [WeekRowItem(**r).model_dump() for r in rows]
+    # 两个视图都附带只读的搜索趋势：先分页拿本页 keyword_id，再批量补附加，避免在整切片上
+    # 做相关子查询。回溯窗口按视图取（日 7 天 / 周 7 期），差异全在 crud 的 _TREND_SPEC 里。
+    # 附加信息不改变结果集构成。
+    row_type = DayRowItem if view == "DAY" else WeekRowItem
+    ids = [r["keyword_id"] for r in rows]
+    trends, trend_dates = await _fetch_trends(db, site, ids, on, view)
+    data = []
+    for r in rows:
+        item = row_type(**r)
+        item.trend = trends.get(r["keyword_id"], [])
+        item.trend_dates = trend_dates.get(r["keyword_id"], [])
+        data.append(item.model_dump())
 
     return AnalysisSearchResponse(
         success=True, data=data, total=total, site=site, view=view, date=on
@@ -220,7 +225,7 @@ def iter_export_csv(
 
     无数据的作用域产出只有表头的 CSV——空表格比一个报错更符合"导出当前视图"的语义。
     """
-    columns = _EXPORT_COLUMNS_BASE + (_EXPORT_COLUMNS_DAY_EXTRA if view == "DAY" else [])
+    columns = _export_columns(view)
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
 
@@ -239,14 +244,12 @@ def iter_export_csv(
     db = SessionFactory()
     try:
         for rows in crud.iter_export_rows(db, site, view, on, req, settings.EXPORT_ROW_CAP):
-            if view == "DAY":
-                ids = [r["keyword_id"] for r in rows]
-                trends = crud.fetch_trends(db, site, ids, on)
+            ids = [r["keyword_id"] for r in rows]
+            trends = crud.fetch_trends(db, site, ids, on, view)
             for r in rows:
                 row = dict(r)
-                if view == "DAY":
-                    kid = r["keyword_id"]
-                    row["trend"] = " ".join(str(v) for v in trends.get(kid, []))
+                kid = r["keyword_id"]
+                row["trend"] = " ".join(str(v) for v in trends.get(kid, []))
                 writer.writerow([_render_cell(row.get(key)) for key, _ in columns])
             yield _flush()
     except GeneratorExit:

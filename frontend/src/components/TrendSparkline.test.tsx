@@ -14,7 +14,7 @@ describe('TrendSparkline', () => {
 
     fireEvent.mouseMove(svg, { clientX: 60 });
 
-    expect(await screen.findByText('2026-07-17')).toBeInTheDocument();
+    expect(await screen.findByText('2026年07月17日')).toBeInTheDocument();
     expect(screen.getByText('20')).toBeInTheDocument();
   });
 
@@ -25,5 +25,19 @@ describe('TrendSparkline', () => {
     expect(line?.tagName.toLowerCase()).toBe('polyline');
     expect(line).toHaveAttribute('points', expect.stringContaining('5.0,47.0'));
     expect(container.querySelector('path[data-testid="trend-line"]')).not.toBeInTheDocument();
+  });
+
+  it('周视图的日期提示复用时间搜索的周序号与日期范围文案', async () => {
+    const { container } = render(
+      <TrendSparkline view="WEEK" values={[30, 20, 10]} dates={['2026-06-27', '2026-07-04', '2026-07-11']} />,
+    );
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    Object.defineProperty(svg, 'getBoundingClientRect', {
+      value: () => ({ left: 0, width: 120, top: 0, right: 120, bottom: 36, height: 36 }),
+    });
+
+    fireEvent.mouseMove(svg, { clientX: 60 });
+
+    expect(await screen.findByText('2026年第27周（06/28–07/04）')).toBeInTheDocument();
   });
 });
