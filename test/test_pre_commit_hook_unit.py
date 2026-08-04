@@ -139,3 +139,87 @@ def test_unparsable_command_falls_back_to_cwd(hook, tmp_path):
     session_cwd.mkdir()
 
     assert hook.target_repo('git commit -m "未闭合', session_cwd) == session_cwd
+
+
+# ---------------- 索引与工作树的分歧（divergent_files） ----------------
+#
+# 门禁验证的是**工作树**（`ruff check .` / `pytest` 读磁盘），提交的却是**索引**。
+# 两者对同一个文件不一致时，刚跑绿的检查并不描述这次提交的内容——检查没报错，
+# 只是查错了东西。
+#
+# 真实发生过：test/_gate_probe.py 被 staged 之后从磁盘删掉（索引状态 AD），
+# 一次裸 `git commit` 把它提进了主干。它含一个未用 import，ruff 若看得见必报 F401，
+# 但磁盘上没有那个文件，于是全程无人发现。
+
+
+def _repo(tmp_path):
+    """建一个最小仓库，返回路径。"""
+    import subprocess as sp
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for args in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "t@t"],
+        ["git", "config", "user.name", "t"],
+    ):
+        sp.run(args, cwd=repo, check=True, capture_output=True)
+    return repo
+
+
+def _git(repo, *args):
+    import subprocess as sp
+
+    return sp.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+
+def test_staged_then_deleted_from_worktree_is_divergent(hook, tmp_path):
+    """AD：已暂存、磁盘已删。提交的内容从未被 lint 过——正是历史上那个洞。"""
+    repo = _repo(tmp_path)
+    (repo / "probe.py").write_text("import os\n")
+    _git(repo, "add", "probe.py")
+    (repo / "probe.py").unlink()
+
+    assert hook.divergent_files(repo, "git commit -m x") == ["probe.py"]
+
+
+def test_staged_then_edited_again_is_divergent(hook, tmp_path):
+    """AM/MM：暂存后又改了。lint 看到的是新内容，提交的是旧内容。"""
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", "a.py")
+    (repo / "a.py").write_text("x = 2\n")
+
+    assert hook.divergent_files(repo, "git commit -m x") == ["a.py"]
+
+
+def test_clean_staging_is_not_divergent(hook, tmp_path):
+    """反向 fixture：暂存内容与磁盘一致——最常见的情形，绝不能误报。"""
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", "a.py")
+
+    assert hook.divergent_files(repo, "git commit -m x") == []
+
+
+def test_commit_all_is_never_divergent(hook, tmp_path):
+    """`git commit -a` 在提交时把工作树一并暂存，提交的就是被 lint 的那份。"""
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", "init")
+    (repo / "a.py").write_text("x = 2\n")
+    _git(repo, "add", "a.py")
+    (repo / "a.py").write_text("x = 3\n")
+
+    assert hook.divergent_files(repo, "git commit -am x") == []
+
+
+def test_pathspec_commit_is_never_divergent(hook, tmp_path):
+    """`git commit -- <路径>` 提交的是工作树内容，与 lint 到的一致。"""
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", "a.py")
+    (repo / "a.py").write_text("x = 2\n")
+
+    assert hook.divergent_files(repo, "git commit -m x -- a.py") == []

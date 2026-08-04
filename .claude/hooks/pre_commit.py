@@ -106,6 +106,41 @@ def target_repo(command: str, cwd: Path) -> Path:
     return cwd
 
 
+def divergent_files(repo: Path, command: str) -> list[str]:
+    """索引与工作树不一致、且会被本次提交带走的文件。
+
+    **门禁验证的是工作树，裸 `git commit` 提交的是索引。** 两者对同一个文件不一致时，
+    刚跑绿的检查并不描述这次提交的内容——检查没报错，只是查错了东西。
+
+    真实发生过：``test/_gate_probe.py`` 被暂存后从磁盘删掉（索引状态 AD），一次裸
+    ``git commit`` 把它提进了主干。它含一个未用 import，ruff 若看得见必报 F401，
+    但磁盘上没那个文件，全程无人发现。
+
+    两种提交形态天然没有这个问题，故排除：
+
+    - ``git commit -a``：提交时把工作树一并暂存，提交的就是被 lint 的那份
+    - ``git commit -- <路径>``：提交的是这些路径的**工作树**内容，同样是被 lint 的那份
+    """
+    if _commits_all(command) or _has_pathspec(command):
+        return []
+
+    _, staged = run(["git", "diff", "--cached", "--name-only"], repo)
+    _, unstaged = run(["git", "diff", "--name-only"], repo)
+
+    staged_set = {line for line in staged.splitlines() if line}
+    unstaged_set = {line for line in unstaged.splitlines() if line}
+    return sorted(staged_set & unstaged_set)
+
+
+def _has_pathspec(command: str) -> bool:
+    """命令里带没带 ``--`` 路径分隔符。"""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    return "--" in tokens
+
+
 def _commits_all(command: str) -> bool:
     """命令里带没带 -a/--all（含 ``-am "msg"`` 这种合并短选项）。"""
     for token in command.split():
@@ -182,6 +217,25 @@ def main() -> None:
 
     # 提交可能落在别的目录（worktree 会话里 `cd 主仓 && git commit` 是常态）
     repo = target_repo(command, cwd)
+
+    # 索引与工作树分歧时，下面跑的检查描述的不是这次提交的内容。先拦掉，
+    # 否则得到的是一份"跑绿了但查错了东西"的验证——比不跑更有害。
+    divergent = divergent_files(repo, command)
+    if divergent:
+        deny(
+            "提交被门禁拦下——**暂存区与工作树不一致**，下面这些文件提交进去的内容"
+            "与磁盘上的不是同一份：\n\n"
+            + "\n".join(f"  - {f}" for f in divergent)
+            + "\n\n门禁的 ruff / pytest 读的是磁盘（工作树），而裸 `git commit` 提交的是"
+            "暂存区。两者不一致时，检查跑绿了也不代表这次提交是绿的——历史上一个含未用"
+            "import 的文件正是这样进的主干（它被暂存后从磁盘删掉，ruff 根本看不见它）。\n\n"
+            "选一种改法：\n"
+            "  - 就要提交磁盘上这份 → `git add <路径>` 重新暂存后再提交\n"
+            "  - 只想提交其中一部分 → `git commit -- <路径>`（按路径提交工作树内容）\n"
+            "  - 那些是别的会话暂存的、与你无关 → 用 `git commit -- <你自己的路径>`，"
+            "不要动它们的暂存区"
+        )
+
     files = staged_files(repo, command)
     if not files:
         sys.exit(0)  # 没东西可验（如空 amend）
