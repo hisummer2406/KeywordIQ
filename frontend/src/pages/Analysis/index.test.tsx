@@ -253,6 +253,40 @@ describe('分析查询屏', () => {
     );
   });
 
+  it('切站点后的查询不再带旧站点的类目（界面清了，生效条件也要清）', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    const user = userEvent.setup();
+
+    // 勾一个类目并让它生效
+    await user.click(screen.getByRole('checkbox', { name: /Electronics/ }));
+    await act(async () => {
+      await user.click(applyFilters());
+    });
+    await waitFor(() =>
+      expect(searchAnalysis).toHaveBeenLastCalledWith(
+        expect.objectContaining({ categories: ['Electronics'] }),
+      ),
+    );
+
+    // 切到 DE：界面上的勾选被清掉
+    await user.click(screen.getByText('🇺🇸 美国站（US）'));
+    await act(async () => {
+      await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+    });
+    expect(screen.getByRole('checkbox', { name: /Electronics/ })).not.toBeChecked();
+
+    // 生效条件里也不能留着它：否则表格查不出数据，而原因在界面上完全不可见
+    await act(async () => {
+      fireEvent.click(submit());
+    });
+    await settle();
+
+    const body = searchAnalysis.mock.calls.at(-1)![0];
+    expect(body.site).toBe('DE');
+    expect(body.categories).toBeUndefined();
+  });
+
   it('过滤区不重复提供关键词与 ASIN 输入（一个维度只有一个入口）', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
@@ -316,6 +350,41 @@ describe('分析查询屏', () => {
     // 导出的是整个作用域下的这组条件，不是当前这一页
     expect(body).not.toHaveProperty('page');
     expect(body).not.toHaveProperty('perPage');
+  });
+
+  it('导出带上生效的排序（导出的就是屏幕上那份，行序也一样）', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    const user = userEvent.setup();
+
+    // 工具栏改排序：按点击份额降序，点「确定」生效
+    await user.click(screen.getByTitle('当前排名'));
+    await act(async () => {
+      await user.click(await screen.findByTitle('点击份额'));
+    });
+    await user.click(screen.getByTitle('升序'));
+    await act(async () => {
+      await user.click(await screen.findByTitle('降序'));
+    });
+    await act(async () => {
+      // antd 会在两个汉字之间插空格，可访问名是「确 定」
+      fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
+    });
+    await waitFor(() =>
+      expect(searchAnalysis).toHaveBeenLastCalledWith(
+        expect.objectContaining({ orderBy: 'top1_click_share', orderDir: 'desc' }),
+      ),
+    );
+
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /导出 CSV/ }));
+    });
+
+    await waitFor(() => expect(exportAnalysis).toHaveBeenCalled());
+    expect(exportAnalysis.mock.calls[0][0]).toMatchObject({
+      orderBy: 'top1_click_share',
+      orderDir: 'desc',
+    });
   });
 
   it('导出用的是生效条件而非草稿（改了条件没查，导的仍是表格里那份）', async () => {

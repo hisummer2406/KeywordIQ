@@ -112,12 +112,20 @@ export default function AnalysisPage() {
    * 只更新选择器选项与类目清单，**不** reload 表格——查询由「立即查询」触发。
    * 已勾选的类目一并清空：上一个站点的类目在新站点下可能不存在，保留会产生一个
    * 查不出任何数据且原因不可见的条件。
+   *
+   * **草稿与生效两份都要清。** 类目清单是按 (站点, 视图) 取的，作用域一变两边的
+   * 类目就同时作废。只清草稿的话，`submitScope` 会把生效态里那份旧作用域的类目
+   * 原样带进下一次查询——界面上一个勾都没有，表格却查不出数据，正是这里要避免的
+   * 那种不可见条件。
    */
   const reloadScopeMeta = async (nextSite: string | undefined, nextView: View) => {
     const s = await getScope(nextSite, nextView);
     setAvailableDates(s.available_dates);
     setScope({ site: s.site, view: nextView, date: s.latest_date });
     setFilters((f) => ({ ...f, categories: [] }));
+    if (appliedRef.current) {
+      appliedRef.current = { ...appliedRef.current, categories: undefined };
+    }
     getCategories(s.site, nextView)
       .then(setCategories)
       .catch(() => setCategories([]));
@@ -155,8 +163,13 @@ export default function AnalysisPage() {
     if (!body) return;
     setExporting(true);
     try {
-      // 导的就是用户当下看到的那份：生效条件，不含分页
-      await exportAnalysis(body);
+      // 导的就是用户当下看到的那份：生效条件 + 生效排序，不含分页。
+      // 排序必须一起带上——行的集合一样但顺序不同的 CSV，用户对不上屏幕上看到的东西。
+      await exportAnalysis({
+        ...body,
+        orderBy: appliedSortRef.current.field,
+        orderDir: appliedSortRef.current.dir,
+      });
     } catch (e: any) {
       // 413（超出行数上限）在这里以后端原文呈现，提示用户加筛选而不是给一份截断数据
       message.error(e?.message || '导出失败');
@@ -266,19 +279,15 @@ export default function AnalysisPage() {
             </Typography.Text>
           </Space>
         }
-        request={async (params, sort) => {
+        request={async (params) => {
           const body = appliedRef.current;
           if (!body?.date) return { data: [], total: 0, success: true };
-          const [sortField, sortDir] = Object.entries(sort ?? {})[0] ?? [];
+          // 排序只有工具栏一个入口（列上没有 sorter），故不读 ProTable 的 sort 参数——
+          // 读了也永远是空对象，那种分支看着像在工作，实际是死代码。
           const res = await searchAnalysis({
             ...body,
-            orderBy: sortField || appliedSortRef.current.field,
-            orderDir:
-              sortDir === 'ascend'
-                ? 'asc'
-                : sortDir === 'descend'
-                  ? 'desc'
-                  : appliedSortRef.current.dir,
+            orderBy: appliedSortRef.current.field,
+            orderDir: appliedSortRef.current.dir,
             page: params.current,
             perPage: params.pageSize,
           });
