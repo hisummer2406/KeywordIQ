@@ -1,3 +1,4 @@
+import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { buildColumns } from './columns';
 
@@ -43,5 +44,24 @@ describe('buildColumns', () => {
     // 钉住位置而不只是存在性——列序是刻意的（品牌是回头才看的辅助信息），
     // 只断言"包含"的话，以后有人在末尾加一列就会无声地把它挤走
     expect(titles.at(-1)).toBe('点击前三品牌');
+  });
+
+  it('关键词渲染成指向该站点亚马逊的链接，新标签页打开', () => {
+    const col = buildColumns('DAY', 'amazon.co.uk').find((c) => c.title === '关键词')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    const a = container.querySelector('a')!;
+
+    expect(a.getAttribute('href')).toBe('https://www.amazon.co.uk/s?k=power%20bank');
+    expect(a.getAttribute('target')).toBe('_blank');
+    // noopener 不是可选项：没有它，打开的页面能通过 window.opener 操纵本页
+    expect(a.getAttribute('rel')).toContain('noopener');
+  });
+
+  it('拿不到站点域名时降级为纯文本，不渲染链接', () => {
+    const col = buildColumns('DAY', undefined).find((c) => c.title === '关键词')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe('power bank');
   });
 });

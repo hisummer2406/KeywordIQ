@@ -3,6 +3,7 @@ import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
 import TrendSparkline from '@/components/TrendSparkline';
 import RankedList from './RankedList';
+import { amazonSearchUrl } from './amazonSearchUrl';
 import TopProductCards from './TopProductCards';
 
 /**
@@ -33,12 +34,30 @@ function renderChange(v: number | null | undefined) {
   );
 }
 
-export function buildColumns(view: View): ProColumns<AnalysisRow>[] {
+export function buildColumns(view: View, siteDomain?: string): ProColumns<AnalysisRow>[] {
   return [
     { title: '排名', dataIndex: 'current_ranking', width: 80 },
     // 关键词与商品标题是两列「要读内容」的列，其余自适应列给定宽，把剩余横向空间
     // 让给这两列。
-    { title: '关键词', dataIndex: 'keyword', width: 220, ellipsis: true, copyable: true },
+    {
+      title: '关键词',
+      dataIndex: 'keyword',
+      width: 220,
+      ellipsis: true,
+      copyable: true,
+      // 关键词点开该站点的亚马逊搜索结果页。域名来自**生效作用域**的站点而非草稿——
+      // 用户切了站点但没点查询时，表格里还是上一个站点的数据，链接必须跟着数据走。
+      // 拿不到域名（站点列表未加载完）时降级为纯文本，不给一个会跳错的链接。
+      render: (_, r) => {
+        const url = amazonSearchUrl(r.keyword, siteDomain);
+        if (!url) return r.keyword;
+        return (
+          <a href={url} target="_blank" rel="noopener noreferrer" title={`在亚马逊搜索「${r.keyword}」`}>
+            {r.keyword}
+          </a>
+        );
+      },
+    },
     {
       title: '搜索趋势',
       dataIndex: 'trend',
