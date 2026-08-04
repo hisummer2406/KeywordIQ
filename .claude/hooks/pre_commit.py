@@ -27,12 +27,30 @@ FRONTEND_PREFIX = "frontend/"
 
 TEST_DB_URL = "postgresql://postgres:pwd123@localhost/keywordiq_test"
 
+# 单条检查的超时上限。后端全量约 5 秒、前端约 15 秒，给到分钟级只为兜住"卡死"这一种
+# 情况——正常慢一点不该被误杀，真卡住则必须有个头。
+CHECK_TIMEOUT = 300
 
-def run(cmd: list[str], cwd: Path, env: dict | None = None) -> tuple[int, str]:
-    proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True,
-        env={**os.environ, **(env or {})},
-    )
+
+def run(cmd: list[str], cwd: Path, env: dict | None = None, timeout: int = CHECK_TIMEOUT) -> tuple[int, str]:
+    """跑一条检查，返回 (退出码, 合并输出)。
+
+    **必须有超时。** 卡住的检查（pytest 抢咨询锁、半开连接的 psycopg2 连接）会让
+    提交无限期挂起且没有任何输出——表现是"agent 不动了"而不是"检查失败了"，
+    比失败难诊断得多。超时按失败处理：卡住本身就说明这次提交不该过。
+    """
+    try:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True,
+            env={**os.environ, **(env or {})},
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = "".join(
+            part.decode(errors="replace") if isinstance(part, bytes) else part
+            for part in (exc.stdout, exc.stderr) if part
+        )
+        return 124, f"超时（{timeout}s）未结束，已终止。\n{partial}".strip()
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
@@ -62,17 +80,44 @@ def _commits_all(command: str) -> bool:
     return False
 
 
-def postgres_up(host: str = "localhost", port: int = 5432) -> bool:
-    """本地测试库在不在。在就解开集成测试的 skip gate，不在就只跑单元部分。
-
-    连不上不算失败：CI 有真库兜底，本地没起库时把 45 个集成测试跳过、
-    让门禁仍然可用，好过把门禁变成「必须先起 docker」。
-    """
+def _port_open(host: str = "localhost", port: int = 5432) -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.4):
             return True
     except OSError:
         return False
+
+
+def _test_db_reachable() -> bool:
+    """能不能真的连上 keywordiq_test 并跑一条语句。
+
+    端口通只说明"本机有个 PostgreSQL"，不说明"有这个库"。装了别的项目的 PG 时
+    端口一样是通的，此时把 TEST_DATABASE_URL 喂下去，集成测试会因为连不上库而
+    整片失败——一堆与本次改动毫无关系的红，比直接跳过糟得多。
+    """
+    try:
+        import psycopg2
+    except ImportError:
+        return False
+
+    try:
+        conn = psycopg2.connect(TEST_DB_URL, connect_timeout=2)
+    except Exception:
+        return False
+    conn.close()
+    return True
+
+
+def postgres_up() -> bool:
+    """本地测试库在不在。在就解开集成测试的 skip gate，不在就只跑单元部分。
+
+    连不上不算失败：CI 有真库兜底，本地没起库时把集成测试跳过、让门禁仍然可用，
+    好过把门禁变成「必须先起 docker」。
+
+    先探端口再连库：端口不通时省掉一次两秒的连接超时，这是最常见的情况
+    （本机根本没起 PG）。
+    """
+    return _port_open() and _test_db_reachable()
 
 
 def deny(reason: str) -> None:
