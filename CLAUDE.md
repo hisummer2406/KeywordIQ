@@ -354,6 +354,46 @@ THREAD_POOL_LIMIT=32
 - **Tests**: Unit tests should not require a live PostgreSQL instance; database/import tests may require `.env` and should use small fixtures rather than real production CSV files. New tests must be collectable by `pytest` and must not reference deleted or experimental module paths. Bug fixes should include a focused regression test when behavior can be reproduced locally.
 - **Configuration and local data**: Keep `.env.example` in sync when adding new settings, including units and safe local defaults. Do not commit `uploads/`, `logs/`, temporary split files, or real customer/search-report CSV data.
 
+## 并行会话：一个变更一个 worktree
+
+**这个仓库经常同时有多个会话在干活。** 默认假设不是「只有我一个人」。
+开工流程见 skill **`start-change`**（认领 → 建 worktree → 收工），下面是它背后的道理。
+
+### 一个变更一个 worktree，路径在仓库外
+
+每个 openspec 变更配一个分支 `change/<变更id>` 和一个 worktree，路径
+`~/.claude-worktrees/<变更id>`——**不要放 `.claude/worktrees/`**。放仓库内，每个
+watcher（uvicorn `--reload`、webpack、pytest 收集）都得单独配排除，漏一个就出事：
+曾有 worktree 让 WatchFiles 把 70 多个文件判为源码变更，连触发 9 次全量重载后
+reloader 直接退出（退出码 144，日志是优雅关闭，极易误判成应用问题）。放仓库外，
+所有 watcher 都看不见它。
+
+worktree 解决的是**共享索引与共享工作树**这两类碰撞：
+
+- `git commit` 提交的是整个索引，别的会话 staged 的文件会被一并带走（真实发生过）
+- 文件在 Read 与 Edit 之间被另一个会话改写，编辑直接失败
+
+### worktree 解决不了的三类，要另外守
+
+1. **重复劳动。** 两个 worktree 不阻止两人做同一件事，只会把撞车从「改到一半」
+   推迟到「合并时」。`openspec list` 只说明变更**存在**，不说明**有人在写代码**——
+   判据是分支：`git branch --list 'change/*'`。开工前查，开工后立刻建分支占位。
+2. **共享测试库。** `keywordiq_test` 是全局的一份。**drop 前必须先查活动连接**
+   （`pg_stat_activity`），无条件 `dropdb` 会把别人正在跑的集成测试拦腰打断，
+   而对方看到的是一堆无从解释的报错。
+3. **共享端口。** 只有主仓跑 dev server（8000/8001）。worktree 里要跑就从变更 id
+   派生端口，不要抢。dev server 被别人杀掉或抢走时，先确认是不是并行会话所致。
+
+### 提交前看索引列
+
+`git status --short` 的**第一列是索引**。看到不属于本次改动的条目，用
+`git commit -- <路径>` 按路径提交，不要裸 `git commit`——后者提交整个索引。
+这条与 worktree 无关，是操作纪律，全面 worktree 化之后同样要守。
+
+> 门禁按**提交实际落地的仓库**取暂存区（`target_repo` 解析 `cd X && git commit`
+> 与 `git -C X commit`），不是按会话 cwd。此前正是这里漏过一个未用 import：会话在
+> worktree 里往主仓提交，门禁查 worktree 的空暂存区，查了个空就放行。
+
 ## 开发 harness（提交门禁）
 
 **开工先 `openspec list`。** 手上的活儿很可能正是某个在飞变更里没勾完的任务，
@@ -423,7 +463,11 @@ THREAD_POOL_LIMIT=32
 
 ### 项目 skill
 
+- **`start-change`** —— 开始或接手一个变更时先跑它：认领（防止与并行会话重复劳动）、
+  建仓库外的 worktree、收工时按路径提交并清理。**动手写代码之前用**，见上文
+  「并行会话」一节。
 - **`local-db`** —— 起测试库、跑含集成测试的全量回归。注意 `225 passed` 与
   `181 passed, 45 skipped` 长得很像，跳过的 45 个恰是唯一碰真实分区表与咨询锁的部分。
+  **drop 测试库前先查 `pg_stat_activity`**，别人可能正在用同一个库。
 - **`verify-import`** —— 用真实体量的报表 CSV 跑一遍端到端导入并逐项断言落库结果。
   改过导入路径就跑一次。
