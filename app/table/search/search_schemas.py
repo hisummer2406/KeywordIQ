@@ -60,7 +60,15 @@ class AnalysisSearchRequest(BaseModel):
 
 
 class _FactRowBase(BaseModel):
-    """两视图共有的事实字段（来自 fact_daily / fact_weekly + top1 维度）。"""
+    """两视图共有的事实字段（来自 fact_daily / fact_weekly + 前三商品维度）。
+
+    三个商品槽位与点击量名次一一对应。某个槽位在源报表中缺失时，该组字段为空
+    （ASIN/标题/品牌/类目为 None，两个份额为 0），**不由后一名顶替**——名次与槽位的
+    对应关系是这些字段的全部意义。
+
+    注意：这三组字段只是**展示**数据。品牌/类目/ASIN/标题/份额的筛选与排序仍只作用于
+    top1，见 crud.\\_apply_filters 与 crud.SORTABLE_FIELDS。
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -77,6 +85,20 @@ class _FactRowBase(BaseModel):
     top1_category: str | None = None
     top1_click_share: float = 0
     top1_conversion_share: float = 0
+
+    top2_asin: str | None = None
+    top2_title: str | None = None
+    top2_brand: str | None = None
+    top2_category: str | None = None
+    top2_click_share: float = 0
+    top2_conversion_share: float = 0
+
+    top3_asin: str | None = None
+    top3_title: str | None = None
+    top3_brand: str | None = None
+    top3_category: str | None = None
+    top3_click_share: float = 0
+    top3_conversion_share: float = 0
 
 
 class DayRowItem(_FactRowBase):

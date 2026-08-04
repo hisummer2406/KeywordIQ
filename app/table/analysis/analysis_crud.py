@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import func, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.table.analysis.dimension_model import DimKeyword, DimProduct
 from app.table.analysis.fact_model import FactDaily, FactWeekly, SiteDataStats
@@ -80,8 +80,18 @@ def scope_row_count_stmt(site: str, view: str, on: date):
 
 
 def _base_query(site: str, view: str, on: date):
-    """作用域恒定的 base query：单站点单日期切片 JOIN 维度。"""
+    """作用域恒定的 base query：单站点单日期切片 JOIN 维度。
+
+    三个商品槽位的关联方式**刻意不对称**：top1 用未取别名的 ``DimProduct``，top2/top3
+    各用一个 alias。因为 ``_apply_filters`` 里全部商品维度的筛选条件都写在 ``DimProduct``
+    上，这样一来新增的 alias 对筛选代码**不可见**——想让品牌/类目/份额等条件扩散到第二、
+    第三名，必须显式改 ``_apply_filters`` 去引用 alias。口径由此是结构事实，而不是一条
+    后来者会无意打破的约定。改动这里前请先读 site-scoped-query 规格里
+    「商品维度的筛选与排序只作用于点击量第一名」。
+    """
     fact, date_col = _fact_and_datecol(view)
+    p2 = aliased(DimProduct)
+    p3 = aliased(DimProduct)
     stmt = (
         select(
             fact.keyword_id.label("keyword_id"),
@@ -96,7 +106,41 @@ def _base_query(site: str, view: str, on: date):
             DimProduct.category.label("top1_category"),
             fact.top1_click_share.label("top1_click_share"),
             fact.top1_conversion_share.label("top1_conversion_share"),
+            p2.asin.label("top2_asin"),
+            p2.title.label("top2_title"),
+            p2.brand.label("top2_brand"),
+            p2.category.label("top2_category"),
+            fact.top2_click_share.label("top2_click_share"),
+            fact.top2_conversion_share.label("top2_conversion_share"),
+            p3.asin.label("top3_asin"),
+            p3.title.label("top3_title"),
+            p3.brand.label("top3_brand"),
+            p3.category.label("top3_category"),
+            fact.top3_click_share.label("top3_click_share"),
+            fact.top3_conversion_share.label("top3_conversion_share"),
         )
+        .select_from(fact)
+        .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
+        .join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
+        # 按 dim_product 主键关联，每页几十行即几十次主键探查，相对事实表的分区扫描可忽略。
+        # 两个 alias 只出现在 SELECT 与 JOIN 条件里、不进 WHERE，故不改变既有执行计划。
+        .join(p2, p2.product_id == fact.top2_product_id, isouter=True)
+        .join(p3, p3.product_id == fact.top3_product_id, isouter=True)
+        .where(fact.site == site, date_col == on)
+    )
+    return stmt, fact
+
+
+def _count_base_query(site: str, view: str, on: date):
+    """计数专用 base query：只关联筛选真正用到的维度（关键词 + top1 商品）。
+
+    与 ``_base_query`` 分开，是因为计数最多要扫 ``FILTERED_COUNT_CAP`` 行，而 top2/top3
+    的关联对"有多少行"毫无贡献（LEFT JOIN 主键不改变行数），带上就是纯粹的开销。
+    筛选条件引用的维度在两条路径上完全一致，故 ``_apply_filters`` 两边通用。
+    """
+    fact, date_col = _fact_and_datecol(view)
+    stmt = (
+        select(fact.keyword_id.label("keyword_id"))
         .select_from(fact)
         .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
         .join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
@@ -106,7 +150,12 @@ def _base_query(site: str, view: str, on: date):
 
 
 def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
-    """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。"""
+    """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。
+
+    这里的商品维度条件全部绑在 ``DimProduct`` 上，而 ``DimProduct`` 在 base query 中关联的是
+    ``top1_product_id``——即筛选只作用于点击量第一名。第二、第三名走的是 alias，这里够不着。
+    要扩到三个槽位必须显式改写本函数，不会因为 base query 多返回了字段而悄悄扩散。
+    """
     if req.keyword:
         stmt = stmt.where(DimKeyword.keyword.ilike(f"%{req.keyword}%"))
     if req.brand:
@@ -163,9 +212,9 @@ def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest
 
     列表分页与导出上限检查共用：两处都只需要"是否超过某个数"，不需要精确总数。
     """
-    stmt, fact = _base_query(site, view, on)
+    stmt, fact = _count_base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
-    capped = stmt.with_only_columns(fact.keyword_id).limit(cap).subquery()
+    capped = stmt.limit(cap).subquery()
     return select(func.count()).select_from(capped)
 
 
