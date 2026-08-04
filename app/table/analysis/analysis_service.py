@@ -191,8 +191,15 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
         item.trend_dates = trend_dates.get(r["keyword_id"], [])
         data.append(item.model_dump())
 
+    # 该切片有没有重建过品牌/类目。一次 LIMIT 1 探测，相对本页的多次查询可忽略。
+    # 未重建时前端要明确提示——静默返回空是最难排查的形态。
+    has_brand = (
+        await db.execute(crud.slice_has_brand_data_stmt(site, view, on))
+    ).first() is not None
+
     return AnalysisSearchResponse(
-        success=True, data=data, total=total, site=site, view=view, date=on
+        success=True, data=data, total=total, site=site, view=view, date=on,
+        pending_rebuild=not has_brand,
     )
 
 

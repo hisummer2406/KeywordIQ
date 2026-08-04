@@ -8,7 +8,7 @@ import {
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useAccess } from '@umijs/max';
-import { Button, Card, Col, Row, Select, Space, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Row, Select, Space, Typography, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportAnalysis,
@@ -64,6 +64,7 @@ export default function AnalysisPage() {
   const [exporting, setExporting] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [resultTotal, setResultTotal] = useState(0);
+  const [pendingRebuild, setPendingRebuild] = useState(false);
   const [sortDraft, setSortDraft] = useState({
     field: 'current_ranking',
     dir: 'asc' as 'asc' | 'desc',
@@ -267,6 +268,16 @@ export default function AnalysisPage() {
         )}
       </Card>
 
+      {pendingRebuild && (
+        <Alert
+          style={{ marginTop: 12 }}
+          type="warning"
+          showIcon
+          message="该日期的品牌与类目尚未重建"
+          description="这份数据导入时品牌与类目还存放在商品维度上，需要从原始文件重导才能按名次筛选。在此之前，按品牌或类目筛选这个日期会得到空结果——那是数据待重建，不是你的筛选条件写错了。"
+        />
+      )}
+
       <ProTable<AnalysisRow>
         style={{ marginTop: 12 }}
         actionRef={actionRef}
@@ -307,6 +318,7 @@ export default function AnalysisPage() {
             perPage: params.pageSize,
           });
           setResultTotal(res.total ?? 0);
+          setPendingRebuild(res.pending_rebuild === true);
           return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
         }}
         toolBarRender={() => [

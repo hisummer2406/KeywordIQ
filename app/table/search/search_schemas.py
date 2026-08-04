@@ -140,6 +140,9 @@ class AnalysisSearchResponse(BaseModel):
     view: View
     date: _Date | None = None
     message: str | None = None
+    # 该切片的品牌/类目尚未重建（历史数据需按批次从 OSS 重导才有这两个字段）。
+    # 前端据此明确提示，**不能静默返回空**——用户会以为是自己筛选条件写错了。
+    pending_rebuild: bool = False
 
 
 class ScopeInfo(BaseModel):

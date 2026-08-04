@@ -72,6 +72,8 @@ export interface SearchResponse {
   site: string;
   view: View;
   date: string | null;
+  /** 该切片的品牌/类目尚未从 OSS 重导补齐 */
+  pending_rebuild?: boolean;
   message?: string;
 }
 

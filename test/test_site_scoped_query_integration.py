@@ -438,3 +438,31 @@ async def test_share_filter_only_considers_first_slot(db):
 
     hit, _ = await _row_for(db, kids["kw-full"], click_share_min=45, click_share_max=55)
     assert hit is not None
+
+
+# --------------------------------------------------------------------------
+# 未重导切片的显式提示
+#
+# 品牌与类目从商品维度移出后，历史分区的六个新列全是 NULL，要靠按批次重导补齐。
+# 重导完成前，按品牌筛选在这些日期上会返回空——**静默返回空是最难排查的形态**，
+# 用户会以为是自己筛选条件写错了，而不是数据还没重建。
+# --------------------------------------------------------------------------
+
+
+async def test_response_flags_slice_pending_rebuild(db):
+    """切片没有任何品牌数据时，响应要标出「待重建」。"""
+    await db.run_sync(_seed)  # _seed 的行不带品牌/类目
+
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
+
+    assert resp.pending_rebuild is True
+
+
+async def test_rebuilt_slice_is_not_flagged(db):
+    """有品牌数据的切片不该被标记——否则提示会一直挂着，很快就没人看了。"""
+    await db.run_sync(_seed)
+    await db.run_sync(_seed_top_slots)  # 这个夹具写了 top1..3_brand_id
+
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
+
+    assert resp.pending_rebuild is False

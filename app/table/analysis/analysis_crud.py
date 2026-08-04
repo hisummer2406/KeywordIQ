@@ -302,6 +302,20 @@ def trends_stmt(site: str, keyword_ids: list[int], on: date, view: str):
     )
 
 
+def slice_has_brand_data_stmt(site: str, view: str, on: date):
+    """该切片是否已有品牌数据（LIMIT 1 探一行，不做全切片聚合）。
+
+    只探 top1：某个关键词可能确实只有一个品牌，但一整个切片不可能所有关键词的第一品牌
+    都为空——除非它还没重导过。
+    """
+    fact, date_col = _fact_and_datecol(view)
+    return (
+        select(fact.keyword_id)
+        .where(fact.site == site, date_col == on, fact.top1_brand_id.isnot(None))
+        .limit(1)
+    )
+
+
 def category_options_stmt(site: str, view: str):
     """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
     return _stats_options_stmt("category_stats", "top_category", site, view)
