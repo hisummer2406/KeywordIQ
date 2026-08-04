@@ -49,8 +49,7 @@ export interface SearchBody {
   orderBy?: string;
   orderDir?: 'asc' | 'desc';
   keyword?: string;
-  brand?: string;
-  category?: string;
+  brands?: string[];
   /** 类目精确匹配集合，命中其一即可；空集合不传（视同不筛） */
   categories?: string[];
   asin?: string;
@@ -81,6 +80,11 @@ export interface ScopeInfo {
   view: View;
   latest_date: string | null;
   available_dates: string[];
+}
+
+export interface BrandOption {
+  brand: string;
+  count: number;
 }
 
 export interface CategoryOption {
@@ -161,4 +165,12 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
     await res.blob(),
     filenameFrom(res.headers.get('Content-Disposition')) ?? 'export.csv',
   );
+}
+
+/** 品牌下拉选项。与 getCategories 同构，作用域参数一致。 */
+export async function getBrands(site?: string, view: View = 'DAY') {
+  return request<BrandOption[]>('/api/analysis/brands', {
+    method: 'GET',
+    params: { site, view },
+  });
 }

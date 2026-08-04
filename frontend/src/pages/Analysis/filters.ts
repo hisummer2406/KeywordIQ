@@ -37,7 +37,8 @@ export interface FilterDraft {
   conversionShare: Range;
   /** undefined = 全部 */
   isNew?: boolean;
-  brand: string;
+  /** 品牌精确多选（前三任一命中），与 categories 对称 */
+  brands: string[];
   productTitle: string;
 }
 
@@ -49,7 +50,7 @@ export const emptyFilters = (): FilterDraft => ({
   clickShare: {},
   conversionShare: {},
   isNew: undefined,
-  brand: '',
+  brands: [],
   productTitle: '',
 });
 
@@ -144,7 +145,7 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     date: scope.date ?? undefined,
     keyword: kind === 'keyword' ? q : undefined,
     asin: kind === 'asin' ? q : undefined,
-    brand: trimmed(filters.brand),
+    brands: filters.brands.length ? filters.brands : undefined,
     product_title: trimmed(filters.productTitle),
     categories: filters.categories.length ? filters.categories : undefined,
     ranking_min: filters.ranking.min,
