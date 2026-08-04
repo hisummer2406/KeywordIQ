@@ -67,22 +67,30 @@ def _update_site_data_stats(session: Session, result: ImportResult) -> None:
     )
 
 
-def _refresh_category_stats(session: Session) -> None:
-    """刷新类目物化视图。
+# 筛选下拉的两个物化视图。品牌与类目是同构的关键词级排行，刷新时机与方式完全一致，
+# 故用一张清单驱动而不是复制一遍函数——漏刷其中一个的表现是"下拉里没有新导入的品牌"，
+# 而这种缺失在界面上看不出是缺陷还是真的没有。
+_FILTER_STATS_VIEWS = ("category_stats", "brand_stats")
+
+
+def _refresh_filter_stats(session: Session) -> None:
+    """刷新筛选下拉的物化视图（类目与品牌）。
 
     首次刷新（物化视图以 WITH NO DATA 创建）不能用 CONCURRENTLY——先判 relispopulated：
     未填充过则普通 REFRESH，之后才能 CONCURRENTLY（不阻塞读）。
     """
-    populated = session.execute(
-        text(
-            "SELECT relispopulated FROM pg_class "
-            "WHERE relname = 'category_stats' AND relnamespace = 'analysis'::regnamespace"
-        )
-    ).scalar()
-    if populated:
-        session.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY analysis.category_stats"))
-    else:
-        session.execute(text("REFRESH MATERIALIZED VIEW analysis.category_stats"))
+    for view in _FILTER_STATS_VIEWS:
+        populated = session.execute(
+            text(
+                "SELECT relispopulated FROM pg_class "
+                "WHERE relname = :view AND relnamespace = 'analysis'::regnamespace"
+            ),
+            {"view": view},
+        ).scalar()
+        if populated:
+            session.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY analysis.{view}"))
+        else:
+            session.execute(text(f"REFRESH MATERIALIZED VIEW analysis.{view}"))
 
 
 def run_import(
@@ -140,7 +148,7 @@ def run_import(
             # 导入后处理：统计 + 物化视图刷新，在事实事务之外。
             _update_site_data_stats(session, result)
             session.commit()
-            _refresh_category_stats(session)
+            _refresh_filter_stats(session)
             session.commit()
 
             # OSS-first：原始文件在入口即持久化于 OSS，OSS 对象即归档，不再做导入后本地归档。

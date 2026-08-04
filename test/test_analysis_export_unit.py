@@ -161,21 +161,26 @@ def test_export_has_one_column_group_per_product_slot(monkeypatch):
     assert header.index("Top1 ASIN") < header.index("Top2 ASIN") < header.index("Top3 ASIN")
 
 
-def test_export_slot_columns_exclude_brand_and_category(monkeypatch):
-    """槽位列里没有品牌与类目——它们在报表里是关键词级排行，不是商品属性。
+def test_export_separates_product_slots_from_brand_and_category_ranks(monkeypatch):
+    """商品槽位列不含品牌与类目；品牌与类目各自按名次单独成列。
 
-    导入侧把它们按商品去重存进 dim_product，同一 ASIN 携带互相冲突的取值时任选其一胜出
-    （实测品牌 28.5%、类目 27.3% 的 ASIN 存在冲突；作为对照标题是 0%）。按槽位导出这样的
-    值等于把已知错误写进用户拿去分析的文件。top1 的两列沿用改造前的行为保留。
+    两者是彼此独立的排行：源报表的商品槽位只有 ASIN/标题/两个份额，从来没有品牌与类目。
+    此前导入侧把品牌#N 配给商品#N 存进 dim_product，同一 ASIN 携带冲突取值时任选其一
+    胜出（实测品牌 11.7%、类目 3.4%，作为对照标题是 0%）——那样的值按名次导出等于把
+    已知错误写进用户拿去分析的文件。现在品牌与类目有了自己的来源，可以按名次导出。
     """
     app = _build_app(monkeypatch, user=_StubUser(is_super=True))
     header = _post(app).content.decode("utf-8-sig").splitlines()[0].split(",")
 
+    # 商品槽位仍只有四类列
     for slot in (1, 2, 3):
         assert f"Top{slot} 品牌" not in header
         assert f"Top{slot} 类目" not in header
-    assert "品牌" in header and "类目" in header  # top1 的原有单列仍在
-
+        assert f"Top{slot} ASIN" in header
+    # 品牌与类目按名次各三列
+    for rank in (1, 2, 3):
+        assert f"品牌 Top{rank}" in header
+        assert f"类目 Top{rank}" in header
 
 def test_export_day_extra_column_stays_last(monkeypatch):
     """走势列在全部商品列之后——扩列不该把附加信息挤到中间。"""

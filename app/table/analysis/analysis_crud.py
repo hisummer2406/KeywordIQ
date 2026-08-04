@@ -9,10 +9,15 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
-from app.table.analysis.dimension_model import DimKeyword, DimProduct
+from app.table.analysis.dimension_model import (
+    DimBrand,
+    DimCategory,
+    DimKeyword,
+    DimProduct,
+)
 from app.table.analysis.fact_model import FactDaily, FactWeekly, SiteDataStats
 from app.table.search.search_schemas import AnalysisSearchRequest
 from config import settings
@@ -53,8 +58,8 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     return any(
         v is not None
         for v in (
-            req.keyword, req.brand, req.category, req.asin, req.product_title,
-            req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
+            req.keyword, req.asin, req.product_title,
+            req.brands or None, req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
             req.conversion_share_min, req.conversion_share_max, req.is_new,
         )
@@ -83,15 +88,19 @@ def _base_query(site: str, view: str, on: date):
     """作用域恒定的 base query：单站点单日期切片 JOIN 维度。
 
     三个商品槽位的关联方式**刻意不对称**：top1 用未取别名的 ``DimProduct``，top2/top3
-    各用一个 alias。因为 ``_apply_filters`` 里全部商品维度的筛选条件都写在 ``DimProduct``
-    上，这样一来新增的 alias 对筛选代码**不可见**——想让品牌/类目/份额等条件扩散到第二、
-    第三名，必须显式改 ``_apply_filters`` 去引用 alias。口径由此是结构事实，而不是一条
-    后来者会无意打破的约定。改动这里前请先读 site-scoped-query 规格里
-    「商品维度的筛选与排序只作用于点击量第一名」。
+    各用一个 alias。因为 ``_apply_filters`` 里剩余的商品维度筛选（ASIN、标题、份额）都写在
+    ``DimProduct`` 上，这样一来 alias 对筛选代码**不可见**——想让它们扩散到第二、第三名，
+    必须显式改 ``_apply_filters`` 去引用 alias。口径由此是结构事实，而不是一条后来者会
+    无意打破的约定。
+
+    **品牌与类目不走这个结构**：它们是关键词级的独立排行，直接挂在事实表的六个引用列上，
+    筛选是"前三任一命中"（见 ``_apply_filters``），与商品槽位无关。
     """
     fact, date_col = _fact_and_datecol(view)
     p2 = aliased(DimProduct)
     p3 = aliased(DimProduct)
+    b1, b2, b3 = (aliased(DimBrand) for _ in range(3))
+    g1, g2, g3 = (aliased(DimCategory) for _ in range(3))
     stmt = (
         select(
             fact.keyword_id.label("keyword_id"),
@@ -102,22 +111,23 @@ def _base_query(site: str, view: str, on: date):
             fact.is_new.label("is_new"),
             DimProduct.asin.label("top1_asin"),
             DimProduct.title.label("top1_title"),
-            DimProduct.brand.label("top1_brand"),
-            DimProduct.category.label("top1_category"),
             fact.top1_click_share.label("top1_click_share"),
             fact.top1_conversion_share.label("top1_conversion_share"),
             p2.asin.label("top2_asin"),
             p2.title.label("top2_title"),
-            p2.brand.label("top2_brand"),
-            p2.category.label("top2_category"),
             fact.top2_click_share.label("top2_click_share"),
             fact.top2_conversion_share.label("top2_conversion_share"),
             p3.asin.label("top3_asin"),
             p3.title.label("top3_title"),
-            p3.brand.label("top3_brand"),
-            p3.category.label("top3_category"),
             fact.top3_click_share.label("top3_click_share"),
             fact.top3_conversion_share.label("top3_conversion_share"),
+            # 关键词级的前三品牌与前三类目，名次由列位置承载
+            b1.name.label("top1_brand"),
+            b2.name.label("top2_brand"),
+            b3.name.label("top3_brand"),
+            g1.name.label("top1_category"),
+            g2.name.label("top2_category"),
+            g3.name.label("top3_category"),
         )
         .select_from(fact)
         .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
@@ -126,6 +136,12 @@ def _base_query(site: str, view: str, on: date):
         # 两个 alias 只出现在 SELECT 与 JOIN 条件里、不进 WHERE，故不改变既有执行计划。
         .join(p2, p2.product_id == fact.top2_product_id, isouter=True)
         .join(p3, p3.product_id == fact.top3_product_id, isouter=True)
+        .join(b1, b1.brand_id == fact.top1_brand_id, isouter=True)
+        .join(b2, b2.brand_id == fact.top2_brand_id, isouter=True)
+        .join(b3, b3.brand_id == fact.top3_brand_id, isouter=True)
+        .join(g1, g1.category_id == fact.top1_category_id, isouter=True)
+        .join(g2, g2.category_id == fact.top2_category_id, isouter=True)
+        .join(g3, g3.category_id == fact.top3_category_id, isouter=True)
         .where(fact.site == site, date_col == on)
     )
     return stmt, fact
@@ -158,12 +174,25 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
     """
     if req.keyword:
         stmt = stmt.where(DimKeyword.keyword.ilike(f"%{req.keyword}%"))
-    if req.brand:
-        stmt = stmt.where(DimProduct.brand.ilike(f"%{req.brand}%"))
-    if req.category:
-        stmt = stmt.where(DimProduct.category.ilike(f"%{req.category}%"))
+    # 品牌与类目：**前三任一命中**。它们是关键词级排行，挂在事实表的六个引用列上，
+    # 与商品槽位无关。语义是「这个词的前三品牌里有 X」——展示口径与筛选口径由此一致。
+    #
+    # 先在维度表上把名称解析成 id 集合（维度表小，走唯一索引），再在事实表上对三列做
+    # IN——三列 OR 的索引方案待实测落定（见变更第 4 组），此处只保证语义正确。
+    if req.brands:
+        ids = select(DimBrand.brand_id).where(DimBrand.name.in_(req.brands)).scalar_subquery()
+        stmt = stmt.where(
+            or_(fact.top1_brand_id.in_(ids), fact.top2_brand_id.in_(ids),
+                fact.top3_brand_id.in_(ids))
+        )
     if req.categories:
-        stmt = stmt.where(DimProduct.category.in_(req.categories))
+        ids = select(DimCategory.category_id).where(
+            DimCategory.name.in_(req.categories)
+        ).scalar_subquery()
+        stmt = stmt.where(
+            or_(fact.top1_category_id.in_(ids), fact.top2_category_id.in_(ids),
+                fact.top3_category_id.in_(ids))
+        )
     if req.asin:
         stmt = stmt.where(DimProduct.asin.ilike(f"%{req.asin}%"))
     if req.product_title:
@@ -273,10 +302,39 @@ def trends_stmt(site: str, keyword_ids: list[int], on: date, view: str):
     )
 
 
+def slice_has_brand_data_stmt(site: str, view: str, on: date):
+    """该切片是否已有品牌数据（LIMIT 1 探一行，不做全切片聚合）。
+
+    只探 top1：某个关键词可能确实只有一个品牌，但一整个切片不可能所有关键词的第一品牌
+    都为空——除非它还没重导过。
+    """
+    fact, date_col = _fact_and_datecol(view)
+    return (
+        select(fact.keyword_id)
+        .where(fact.site == site, date_col == on, fact.top1_brand_id.isnot(None))
+        .limit(1)
+    )
+
+
 def category_options_stmt(site: str, view: str):
     """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
+    return _stats_options_stmt("category_stats", "top_category", site, view)
+
+
+def brand_options_stmt(site: str, view: str):
+    """品牌下拉：读 brand_stats，与类目同构。
+
+    品牌改为精确多选后，**计数不是装饰**：品牌名高度相近（Anker / Anker Direct /
+    Ankermann），计数是用户判断该选哪个的唯一依据——子串搜索时代这个判断是由结果集
+    替他做的。
+    """
+    return _stats_options_stmt("brand_stats", "top_brand", site, view)
+
+
+def _stats_options_stmt(view_name: str, label_col: str, site: str, view: str):
+    """两个下拉共用：物化视图结构同构，只差表名与标签列。"""
     return text(
-        f"SELECT top_category, cnt FROM {_SCHEMA}.category_stats "
+        f"SELECT {label_col}, cnt FROM {_SCHEMA}.{view_name} "
         f"WHERE site = :site AND period_type = :view ORDER BY cnt DESC"
     ).bindparams(site=site, view=view)
 
@@ -311,6 +369,11 @@ def shape_trend_dates(rows) -> dict[int, list[date]]:
 def shape_category_options(rows) -> list[dict[str, Any]]:
     """(top_category, cnt) 行 → 下拉选项列表。"""
     return [{"category": r[0], "count": r[1]} for r in rows]
+
+
+def shape_brand_options(rows) -> list[dict[str, Any]]:
+    """(top_brand, cnt) 行 → 下拉选项列表。"""
+    return [{"brand": r[0], "count": r[1]} for r in rows]
 
 
 # --------------------------------------------------------------------------

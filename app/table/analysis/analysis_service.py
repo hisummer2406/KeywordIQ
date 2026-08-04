@@ -30,6 +30,7 @@ from app.table.analysis import analysis_crud as crud
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
     AnalysisSearchResponse,
+    BrandOption,
     CategoryOption,
     DayRowItem,
     ScopeInfo,
@@ -92,9 +93,14 @@ _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
     *_product_slot_columns(1),
     *_product_slot_columns(2),
     *_product_slot_columns(3),
-    # top1 的品牌/类目保留原有单列（沿用改造前的行为，不因本变更收窄导出内容）
-    ("top1_brand", "品牌"),
-    ("top1_category", "类目"),
+    # 关键词级的前三品牌与前三类目，按名次各三列——与表格展示同构。
+    # 改造前只有 top1 的单列，且那个值是伪造的（品牌#1 配商品#1），按名次导出才有意义。
+    ("top1_brand", "品牌 Top1"),
+    ("top2_brand", "品牌 Top2"),
+    ("top3_brand", "品牌 Top3"),
+    ("top1_category", "类目 Top1"),
+    ("top2_category", "类目 Top2"),
+    ("top3_category", "类目 Top3"),
 ]
 # 趋势列的表头按视图分。界面上两个视图同名（「搜索趋势」，作用域栏就在同屏上方），
 # 但 CSV 脱离了界面——「近 7 日趋势」这个表头下装着 7 期周报就是直接写错。
@@ -185,8 +191,15 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
         item.trend_dates = trend_dates.get(r["keyword_id"], [])
         data.append(item.model_dump())
 
+    # 该切片有没有重建过品牌/类目。一次 LIMIT 1 探测，相对本页的多次查询可忽略。
+    # 未重建时前端要明确提示——静默返回空是最难排查的形态。
+    has_brand = (
+        await db.execute(crud.slice_has_brand_data_stmt(site, view, on))
+    ).first() is not None
+
     return AnalysisSearchResponse(
-        success=True, data=data, total=total, site=site, view=view, date=on
+        success=True, data=data, total=total, site=site, view=view, date=on,
+        pending_rebuild=not has_brand,
     )
 
 
@@ -286,3 +299,10 @@ async def get_categories(db: AsyncSession, site: str | None, view: str) -> list[
     resolved_site = _resolve_site(site)
     rows = (await db.execute(crud.category_options_stmt(resolved_site, view))).all()
     return [CategoryOption(**opt) for opt in crud.shape_category_options(rows)]
+
+
+async def get_brands(db: AsyncSession, site: str | None, view: str) -> list[BrandOption]:
+    """品牌下拉选项（按作用域）。与类目同构。"""
+    resolved_site = _resolve_site(site)
+    rows = (await db.execute(crud.brand_options_stmt(resolved_site, view))).all()
+    return [BrandOption(**opt) for opt in crud.shape_brand_options(rows)]
