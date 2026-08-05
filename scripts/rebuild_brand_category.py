@@ -59,19 +59,26 @@ def _slice_needs_rebuild(session, site: str, period: str, report_date) -> bool:
 
     只看 top1：某个关键词可能确实只有一个品牌，但一整个切片不可能所有关键词的第一品牌
     都为空——除非它就是没重导过。
+
+    **两次 LIMIT 1 探测，不做 count(*)。** 需要回答的只是两个"有没有"，而 count(*) 要
+    扫完整个切片（日报 30 万行、周报 300 万行）；候选批次有几百个，全量 --dry-run 会
+    因此慢上两个数量级。查询层的同一判断（``crud.slice_has_brand_data_stmt``）本就是
+    LIMIT 1，这里跟它保持一致。
     """
     table, date_col = _FACT[period]
-    row = session.execute(
-        text(
-            f"SELECT count(*) FILTER (WHERE top1_brand_id IS NOT NULL), count(*) "
-            f"FROM analysis.{table} WHERE site = :site AND {date_col} = :d"
-        ),
-        {"site": site, "d": report_date},
-    ).one()
-    with_brand, total = row
-    if total == 0:
+
+    def _exists(extra: str) -> bool:
+        return session.execute(
+            text(
+                f"SELECT 1 FROM analysis.{table} "
+                f"WHERE site = :site AND {date_col} = :d {extra} LIMIT 1"
+            ),
+            {"site": site, "d": report_date},
+        ).first() is not None
+
+    if not _exists(""):
         return False  # 切片本身没数据，重导也补不出什么
-    return with_brand == 0
+    return not _exists("AND top1_brand_id IS NOT NULL")
 
 
 def _pending_batches(session, *, site: str | None, limit: int | None) -> list[ImportBatch]:

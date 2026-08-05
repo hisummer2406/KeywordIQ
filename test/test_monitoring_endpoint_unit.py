@@ -27,6 +27,19 @@ def client():
     return TestClient(main.app, raise_server_exceptions=False)
 
 
+@pytest.fixture()
+def fresh_monitor(monkeypatch):
+    """给端点换一个全新的 SystemMonitor。
+
+    `main.system_monitor` 是进程内长驻单例（这正是它要的语义），但对测试而言那意味着
+    样本计数与"上次采样时刻"会从别的测试漏进来——采样闸一旦生效，前一个测试刚采过的
+    时间戳会让本测试的第一次请求也被挡掉，失败信息则完全看不出是污染。
+    """
+    monitor = monitoring.SystemMonitor()
+    monkeypatch.setattr(main, "system_monitor", monitor)
+    return monitor
+
+
 def _fake_cpu_percent(sleep_for: float = 0.0):
     """假采样：形状与 psutil 一致（percpu 给列表），可选地真睡一会儿。"""
 
@@ -79,22 +92,61 @@ async def test_metrics_does_not_block_the_event_loop(monkeypatch):
     assert ticks > 5, f"采样期间事件循环被占住了（只跳了 {ticks} 次）"
 
 
-@pytest.mark.asyncio
-async def test_summary_accumulates_across_calls(monkeypatch):
-    """摘要要能跨请求累积。
-
-    此前每个请求都新建一个 SystemMonitor，`metrics_history` 永远只有一个样本，
-    "摘要"实际上在总结它自己刚采的那一个点。
-    """
-    monkeypatch.setattr(monitoring.psutil, "cpu_percent", _fake_cpu_percent())
-
+async def _get_metrics_twice() -> tuple[dict, dict]:
+    """连打两次监控端点，返回两份响应体。"""
     transport = httpx.ASGITransport(app=main.app)
     main.app.dependency_overrides[simple_auth.get_current_user] = lambda: object()
     try:
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-            first = (await ac.get("/api/monitoring/metrics")).json()
-            second = (await ac.get("/api/monitoring/metrics")).json()
+            return (
+                (await ac.get("/api/monitoring/metrics")).json(),
+                (await ac.get("/api/monitoring/metrics")).json(),
+            )
     finally:
         main.app.dependency_overrides.clear()
 
+
+@pytest.mark.asyncio
+async def test_summary_accumulates_across_calls(monkeypatch, fresh_monitor):
+    """摘要要能跨请求累积。
+
+    此前每个请求都新建一个 SystemMonitor，`metrics_history` 永远只有一个样本，
+    "摘要"实际上在总结它自己刚采的那一个点。
+
+    采样闸在这里关掉（间隔置 0），否则两次请求会共用同一份样本——那是另一条性质，
+    由 `test_sampling_is_throttled` 单独覆盖。两条断言混在一个测试里的话，一旦失败
+    分不清是"单例没累积"还是"闸没放行"。
+    """
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", _fake_cpu_percent())
+    monkeypatch.setattr(monitoring, "MIN_SAMPLE_INTERVAL_SECONDS", 0)
+
+    first, second = await _get_metrics_twice()
+
     assert second["summary"]["samples"] == first["summary"]["samples"] + 1
+
+
+@pytest.mark.asyncio
+async def test_sampling_is_throttled(monkeypatch, fresh_monitor):
+    """闸内的第二次请求复用上一份样本，不再真的采一次。
+
+    每次真实采样占住一条 anyio 线程池线程整整一个采样窗口，而那个池与 bcrypt 登录、
+    CSV 导出、同步导入共用。端点只要求"已登录"，没有这道闸时任何账号都能靠轮询
+    把线程池占满。
+    """
+    calls = 0
+    fake = _fake_cpu_percent()
+
+    def counting_cpu_percent(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return fake(*args, **kwargs)
+
+    monkeypatch.setattr(monitoring.psutil, "cpu_percent", counting_cpu_percent)
+    monkeypatch.setattr(monitoring, "MIN_SAMPLE_INTERVAL_SECONDS", 300)
+
+    first, second = await _get_metrics_twice()
+
+    assert calls == 1, f"闸内应只采一次，实际采了 {calls} 次"
+    # 复用的是同一份样本，故时间戳一致、样本计数不增长
+    assert second["current_metrics"]["timestamp"] == first["current_metrics"]["timestamp"]
+    assert second["summary"]["samples"] == first["summary"]["samples"]
