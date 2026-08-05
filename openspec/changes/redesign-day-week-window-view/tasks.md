@@ -17,10 +17,10 @@
 
 ## 2. 导入侧：掉榜集合算定
 
-- [ ] 2.1 在 `app/table/upload/importer.py` 加掉榜集合计算（`DISTINCT ON (keyword_id)` + `NOT EXISTS` 反连接，`INSERT ... SELECT` 纯库内完成，不读进应用进程），窗口长度按周期取（日 7 天 / 周 4 周）
-- [ ] 2.2 同一期重复导入时先删该期掉榜记录再重算，与事实数据的重复导入处理保持一致
-- [ ] 2.3 在 `import_service._update_site_data_stats` 一并写入 `dropped_count`，与事实写入同一事务提交
-- [ ] 2.4 测试：掉榜集合正确性（窗口内掉出的在、窗口外掉出的不在、在榜的不在）、最后在榜期取窗口内最近一期、重复导入不产生重复记录（`uv run pytest test/`）
+- [x] 2.1 `importer._load_dropped`：`DISTINCT ON (keyword_id)` + `NOT EXISTS` 反连接，纯库内 `INSERT ... SELECT`。窗口回溯天数进 `_PERIOD_CONFIG`（日 6 天 / 周 21 天，不含锚定期）。写入前 `ensure_fact_partitions(session, "fact_dropped", ...)`
+- [x] 2.2 同一期重复导入时先 `DELETE` 该期掉榜记录再重算，与事实数据的覆盖语义一致
+- [x] 2.3 `_update_site_data_stats` 一并写 `dropped_count`，与事实/掉榜写入同一事务提交
+- [x] 2.4 测试：6 条集成（带上最后在榜期与名次、在榜词不进掉榜表、最后在榜取窗口内最近一期而非最早、窗口外掉出的被排除、重复导入不产生重复、`dropped_count` 写入统计表）。全量 `346 passed, 1 skipped`
 - [ ] 2.5 用 `verify-import` 在真实体量报表上各跑一次日报与周报导入，**记录掉榜集合计算的实测耗时与掉榜行数**，回填 design.md 的 Open Questions
 - [ ] 2.6 若周视图耗时超出可接受范围，按 design 的回退方案把周行窗口降到 2 周，并同步改规格与文档
 
