@@ -52,13 +52,14 @@ def _fact_indexes(prefix: str, date_column: str) -> tuple[Index, ...]:
       对应这里的 ``_ranking``。
     - 新词筛选是高频功能（V1 ``idx_amazon_new_day`` 5.9 万次），对应这里的 ``_new``
       部分索引——只索引 is_new 的少数行，很小。
-    - 品牌/类目筛选走 top1 商品关联（V1 ``idx_optimized_count`` 2736 次、
-      ``idx_top_category_with_id`` 1908 次），对应 ``_top1_product``。
+    - top1 商品关联（V1 ``idx_optimized_count`` 2736 次、``idx_top_category_with_id``
+      1908 次），对应 ``_top1_product``。
     - 份额排序使用度中等（V1 click_share 542 次、conversion 173 次），保留但不再拆出
       任何"范围"部分索引——V1 的 ``idx_shares_range`` / ``*_share_range`` 三个部分索引
       **实测 0 次命中**，是投机建的废索引。V2 不重蹈覆辙。
 
     7 天走势索引在 V1 无对应（V1 用 JSONB 存趋势，无历史行），是 V2 的新查询模式。
+    品牌索引同理，随品牌归位到关键词级而来。
     """
     return (
         # 7 天走势：按 (站点, 关键词) 定位，再对日期做范围扫描。
@@ -73,11 +74,26 @@ def _fact_indexes(prefix: str, date_column: str) -> tuple[Index, ...]:
               postgresql_where=text("is_new")),
         # 按排名变化排序/筛选。
         Index(f"idx_{prefix}_change", "site", date_column, "ranking_change"),
-        # 类目/品牌筛选：先在 dim_product 上解析出 product_id，再回查事实表。
+        # ASIN / 标题筛选：先在 dim_product 上解析出 product_id，再回查事实表。
         Index(f"idx_{prefix}_top1_product", "site", date_column, "top1_product_id"),
         # 份额排序（使用度中等，但不拆"范围"部分索引——V1 实测那些 0 命中）。
         Index(f"idx_{prefix}_click_share", "site", date_column, "top1_click_share"),
         Index(f"idx_{prefix}_conversion_share", "site", date_column, "top1_conversion_share"),
+        # 品牌筛选「前三任一命中」= 三列 OR，计划器用 BitmapOr 合并三路，故三个独立
+        # btree 而非一个复合索引。真实数据上实测选定（US 周报 278.5 万行：无索引
+        # 499ms → 187ms，见变更 keyword-level-brand-category 的 design 决策 4）。
+        #
+        # 不用表达式 GIN 的决定性理由不是快那 67ms，而是**表达式 GIN 会把 SQL 形状焊死
+        # 在索引上**：只有写成 ARRAY[...] && ARRAY[...] 才命中，_apply_filters 一旦改回
+        # 自然的 IN ... OR ...，索引会静默失效退回全切片扫描，而测试不会报错。
+        #
+        # 列序 (site, 日期, 品牌)：前两列是作用域边界，每个查询都带；品牌在最后做等值。
+        # **类目刻意不建索引**——基数只有 122，选择性太低，索引很可能不被计划器选中
+        # （V1 有过投机建索引、实测 0 命中的先例），等有真实慢查询再说。
+        *(
+            Index(f"idx_{prefix}_top{n}_brand", "site", date_column, f"top{n}_brand_id")
+            for n in (1, 2, 3)
+        ),
     )
 
 

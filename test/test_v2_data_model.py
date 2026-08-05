@@ -195,6 +195,39 @@ class TestFactTableStructure:
         for idx in model.__table__.indexes:
             assert [c.name for c in idx.columns][0] == "site", f"{idx.name} 未以 site 开头"
 
+    @pytest.mark.parametrize("model,table_name,date_column", [
+        (FactDaily, "fact_daily", "report_date"),
+        (FactWeekly, "fact_weekly", "report_date_week"),
+    ])
+    def test_brand_indexes_are_declared_on_the_model(self, model, table_name, date_column):
+        """三个品牌索引必须**声明在模型上**，不能只存在于迁移里。
+
+        它们是在真实数据上实测选定的（US 周报 278.5 万行：无索引 499ms → 187ms）。
+        但性能改动一度只写进了迁移，模型里没有——于是库里有、模型里没有，下一次
+        ``alembic revision --autogenerate`` 会把它们当成"多余的索引"生成六条 drop_index。
+        那个 diff 看起来完全正常，合进去之后品牌筛选静默退回全切片扫描，没有测试会红。
+
+        列序 (site, 日期, 品牌) 一并钉死：品牌放在最后做等值，前两列是每个查询都带的
+        作用域边界。
+        """
+        indexes = {idx.name: [c.name for c in idx.columns] for idx in model.__table__.indexes}
+        for n in (1, 2, 3):
+            name = f"idx_{table_name}_top{n}_brand"
+            assert name in indexes, f"缺少品牌索引 {name}（迁移里有、模型里没有？）"
+            assert indexes[name] == ["site", date_column, f"top{n}_brand_id"]
+
+    @pytest.mark.parametrize("model", [FactDaily, FactWeekly])
+    def test_no_category_index(self, model):
+        """类目**刻意不建索引**：基数只有 122，选择性太低，计划器多半不会选它。
+
+        V1 有过投机建索引、实测 0 命中的先例。品牌建了是因为基数 13.5 万且实测有效，
+        两者不对称是结论而非疏漏——所以顺手"补全对称性"的改动要先被这条挡下来。
+        """
+        for idx in model.__table__.indexes:
+            assert "category" not in idx.name, (
+                f"{idx.name}：类目索引需要先有实测依据（见 design 决策 4）"
+            )
+
     @pytest.mark.parametrize("model,table_name", [
         (FactDaily, "fact_daily"),
         (FactWeekly, "fact_weekly"),
