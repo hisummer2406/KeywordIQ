@@ -281,3 +281,42 @@ def test_missing_brand_rank_is_null_not_empty_string(session, tmp_path):
     )).one()
     assert row == (None, None, None)
     assert session.execute(text("SELECT count(*) FROM analysis.dim_brand WHERE name=''")).scalar() == 0
+
+
+@pytest.mark.parametrize(
+    ("table", "id_col"),
+    [("dim_category", "category_id"), ("dim_brand", "brand_id")],
+)
+def test_repeat_import_does_not_burn_dimension_sequence(session, tmp_path, table, id_col):
+    """重复导入已知的品牌/类目不得推进序列。
+
+    PostgreSQL 对 ``INSERT ... ON CONFLICT DO NOTHING`` 是**先 nextval 再判冲突**，
+    所以只写 ON CONFLICT 的话，序列会按候选行数前进，与实际插入了几行无关。
+
+    对 ``dim_category`` 这是个定时炸弹：主键是 smallserial，上限 32767。按每次导入约
+    120 个类目、3 站每天各一次日报算约 78 天耗尽，之后每次导入直接
+    ``nextval: reached maximum value of sequence``；全量重导一轮就能烧掉三万多。
+
+    序列**不受事务回滚保护**（这正是问题所在），所以这条断言在夹具的回滚里依然成立
+    ——也正因如此它测的是真实行为，不是事务假象。
+    """
+    seq = session.execute(
+        text(f"SELECT pg_get_serial_sequence('analysis.{table}', '{id_col}')")
+    ).scalar()
+
+    rows = [
+        _row(1, "mouse", b1="Logitech", b2="Anker", cat1="Electronics", cat2="Home",
+             a1="B001", t1="Logi Mouse"),
+        _row(2, "cable", b1="Anker", cat1="Electronics", a1="B002", t1="Anker Cable"),
+    ]
+    _import(session, tmp_path, "seq_first.csv", rows)
+    after_first = session.execute(text(f"SELECT last_value FROM {seq}")).scalar()
+
+    # 同一份维度值再导一次（换个日期，避免与"重复导入覆盖"那条语义纠缠）
+    _import(session, tmp_path, "seq_second.csv", rows, d=date(2026, 7, 16))
+    after_second = session.execute(text(f"SELECT last_value FROM {seq}")).scalar()
+
+    assert after_second == after_first, (
+        f"{table} 的序列在没有新名称时仍前进了 "
+        f"{after_second - after_first}——ON CONFLICT 之前的 nextval 没被挡住"
+    )
