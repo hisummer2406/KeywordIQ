@@ -251,8 +251,22 @@ def _upsert_dimensions(session: Session, site: str) -> None:
     # dim_brand / dim_category：关键词级排行项，三个名次列合并去重。
     #
     # 与 dim_product 不同，这里**没有** ON CONFLICT DO UPDATE——维度只存名称，没有可更新
-    # 的属性，DO NOTHING 即可。空串在此被过滤掉（NULLIF）：让空串进维度会产生一个
-    # "名字是空的品牌"，然后堂而皇之出现在下拉选项里。
+    # 的属性。空串在此被过滤掉（NULLIF）：让空串进维度会产生一个"名字是空的品牌"，
+    # 然后堂而皇之出现在下拉选项里。
+    #
+    # **NOT EXISTS 预筛不是 ON CONFLICT 的冗余，它是本段的要点。**
+    # PostgreSQL 对 `INSERT ... ON CONFLICT DO NOTHING` 是先取默认值（即 nextval）再判冲突，
+    # 所以哪怕一行都没插进去，序列照样按候选行数前进。实测：连插两遍同样的 100 个名字，
+    # 表里始终 100 行，序列却从 100 走到 200。
+    #
+    # 这对 dim_category 是致命的——它的主键是 smallserial，上限 32767（选 smallint 是为了
+    # 省事实表上 3 列 × 2 亿行的空间，见 dimension_model.DimCategory）。按每次导入约 120 个
+    # 类目、3 个站点每天各一次日报算，约 78 天就会耗尽，此后每次导入直接
+    # `ERROR: nextval: reached maximum value of sequence`；rebuild_brand_category 全量重导
+    # 一轮（约 300 个批次）更是一次就能烧掉三万多个值。
+    #
+    # 加了预筛之后，nextval 只对**真正的新名称**发生，与导入次数脱钩。
+    # ON CONFLICT 仍保留作兜底：导入虽由咨询锁串行，但兜底的代价只是极罕见的一次跳号。
     for table, cols in (("dim_brand", ("c2", "c3", "c4")), ("dim_category", ("c5", "c6", "c7"))):
         union = " UNION ".join(
             f"SELECT NULLIF({c}, '') AS name FROM analysis._import_staging" for c in cols
@@ -263,6 +277,9 @@ def _upsert_dimensions(session: Session, site: str) -> None:
                 INSERT INTO analysis.{table} (name)
                 SELECT name FROM ({union}) vals
                  WHERE name IS NOT NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM analysis.{table} d WHERE d.name = vals.name
+                   )
                 ON CONFLICT (name) DO NOTHING
                 """
             )
