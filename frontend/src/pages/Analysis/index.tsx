@@ -60,6 +60,10 @@ export default function AnalysisPage() {
   const [exporting, setExporting] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [resultTotal, setResultTotal] = useState(0);
+  // 总数缓存与"下次要重算"的标记。ProTable 的 request 同时承担翻页与条件变更两种触发，
+  // 靠这个标记把两者区分开——只有条件变更那次才让后端付精确计数的代价。
+  const totalRef = useRef(0);
+  const needsTotalRef = useRef(true);
   const [pendingRebuild, setPendingRebuild] = useState(false);
   const [sortDraft, setSortDraft] = useState({
     field: 'current_ranking',
@@ -71,9 +75,16 @@ export default function AnalysisPage() {
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
   const dirty = draftSig !== appliedSig;
 
-  /** 把当前草稿设为生效条件并重查（回第 1 页）。 */
+  /**
+   * 把当前草稿设为生效条件并重查（回第 1 页）。
+   *
+   * 顺带把"下次请求要重算总数"立起来。总数是精确计数，代价与命中行数同阶（周报最坏
+   * 约 0.9s），而它**只随条件变化**——翻页、改排序、改每页条数都不会改变命中了多少行。
+   * 所以只有这里（条件真的变了）才需要重算，其余情况沿用缓存值。
+   */
   const apply = (body: SearchBody, sig: string) => {
     appliedRef.current = body;
+    needsTotalRef.current = true;
     setAppliedSig(sig);
     setAppliedView(body.view);
     actionRef.current?.reload(true);
@@ -327,16 +338,25 @@ export default function AnalysisPage() {
           if (!body?.date) return { data: [], total: 0, success: true };
           // 排序只有工具栏一个入口（列上没有 sorter），故不读 ProTable 的 sort 参数——
           // 读了也永远是空对象，那种分支看着像在工作，实际是死代码。
+          // 只有条件变更那次要重算总数；翻页/改排序沿用缓存值（见 apply）。
+          // 标记在**拿到成功响应之后**才清——请求失败时保持置位，重试仍会带上重算，
+          // 否则一次失败会让这组条件永远拿不到总数。
+          const wantTotal = needsTotalRef.current;
           const res = await searchAnalysis({
             ...body,
             orderBy: appliedSortRef.current.field,
             orderDir: appliedSortRef.current.dir,
             page: params.current,
             perPage: params.pageSize,
+            include_total: wantTotal,
           });
-          setResultTotal(res.total ?? 0);
+          if (wantTotal) needsTotalRef.current = false;
+          // total 为 null 表示"本次没算"，沿用缓存；0 是真的没有命中行，必须照收
+          const total = res.total ?? totalRef.current;
+          totalRef.current = total;
+          setResultTotal(total);
           setPendingRebuild(res.pending_rebuild === true);
-          return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
+          return { data: res.data ?? [], total, success: res.success !== false };
         }}
         toolBarRender={() => [
           <Select

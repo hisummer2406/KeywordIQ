@@ -46,6 +46,11 @@ export interface SearchBody {
   date?: string;
   page?: number;
   perPage?: number;
+  /**
+   * 是否要后端算总数。总数是精确计数，代价与命中行数同阶（周报最坏约 0.9s），
+   * 而同一组条件下翻页/改排序不会改变它——只在条件变化时传 true。
+   */
+  include_total?: boolean;
   orderBy?: string;
   orderDir?: 'asc' | 'desc';
   keyword?: string;
@@ -68,7 +73,8 @@ export interface SearchBody {
 export interface SearchResponse {
   success: boolean;
   data: AnalysisRow[];
-  total: number;
+  /** `null` = 本次没算（请求带了 include_total:false），调用方沿用上一次的值；`0` = 确实没有命中 */
+  total: number | null;
   site: string;
   view: View;
   date: string | null;

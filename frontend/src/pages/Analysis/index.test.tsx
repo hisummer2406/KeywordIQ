@@ -353,6 +353,59 @@ describe('分析查询屏', () => {
     expect(within(right).getByRole('button', { name: /确.*定/ })).toBeInTheDocument();
   });
 
+  /** 让结果集跨多页，才有"翻页"可点（默认夹具只有 1 行 = 1 页）。 */
+  function seedMultiPage(total = 120) {
+    searchAnalysis.mockResolvedValue({
+      success: true, data: [ROW], total, site: 'US', view: 'DAY', date: '2026-07-18',
+    });
+  }
+
+  it('条件变更才请求总数，翻页沿用缓存值', async () => {
+    seedMultiPage();
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    // 首屏是一次条件变更，必须带 include_total
+    expect(searchAnalysis.mock.calls[0][0].include_total).toBe(true);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('checkbox', { name: /Electronics/ }));
+    await act(async () => {
+      await user.click(applyFilters());
+    });
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+    // 改了筛选条件：命中行数会变，必须重算
+    expect(searchAnalysis.mock.calls[1][0].include_total).toBe(true);
+
+    // 翻页：命中行数不会变，不该再付一次精确计数的代价
+    await act(async () => {
+      await user.click(screen.getByTitle('2'));
+    });
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
+    expect(searchAnalysis.mock.calls[2][0].include_total).toBe(false);
+    expect(searchAnalysis.mock.calls[2][0].page).toBe(2);
+  });
+
+  it('翻页时后端返回 total=null，表格沿用上一次的总数（不清零）', async () => {
+    seedMultiPage();
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('120')).toBeInTheDocument();
+    const user = userEvent.setup();
+
+    // 第二页按真实契约返回 total:null —— 这正是 include_total:false 的响应形状。
+    // 若把 null 当成 0，结果数与翻页器会突然清空，而界面上看不出原因。
+    searchAnalysis.mockResolvedValueOnce({
+      success: true, data: [ROW], total: null, site: 'US', view: 'DAY', date: '2026-07-18',
+    });
+    await act(async () => {
+      await user.click(screen.getByTitle('2'));
+    });
+
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+    // 结果数仍是首次算出的 120，没有被 null 冲成 0
+    expect(screen.getByText('120')).toBeInTheDocument();
+  });
+
   it('导出用当下生效的条件，且不带分页参数', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
