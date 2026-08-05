@@ -381,6 +381,18 @@ worktree 解决的是**共享索引与共享工作树**这两类碰撞：
 2. **共享测试库。** `keywordiq_test` 是全局的一份。**drop 前必须先查活动连接**
    （`pg_stat_activity`），无条件 `dropdb` 会把别人正在跑的集成测试拦腰打断，
    而对方看到的是一堆无从解释的报错。
+
+   **反过来也成立：跑一次全量 pytest 会清空这个库里的业务数据。**
+   `test_import_service_integration.py` 与 `test_oss_ingestion_integration.py` 的夹具在
+   每个测试后 `TRUNCATE analysis.fact_daily, fact_weekly, dim_keyword, dim_product,
+   site_data_stats, import_batch RESTART IDENTITY CASCADE`——它们测的是 `run_import`，
+   而后者内部提交，回滚兜不住，只能靠 TRUNCATE 收尾。所以**别往 `keywordiq_test` 里放
+   你还要用的数据**：`verify-import` 灌进去的真实报表，下一次 `git commit`（门禁会跑
+   全量）就没了，且没有任何提示。要留着就换个库名。
+
+   同理，集成测试里的计数**必须带作用域**（`WHERE site=... AND report_date=...`）。
+   裸 `count(*) FROM analysis.fact_daily` 只在"库里除了我什么都没有"时成立，一旦有别
+   的会话留下的已提交数据就会失败，而报出来的 diff 完全看不出是这个原因。
 3. **共享端口。** 只有主仓跑 dev server（8000/8001）。worktree 里要跑就从变更 id
    派生端口，不要抢。dev server 被别人杀掉或抢走时，先确认是不是并行会话所致。
 
