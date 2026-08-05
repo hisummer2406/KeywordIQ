@@ -6,6 +6,8 @@
 让整个 worker 停摆一整个采样窗口的写法。调用方负责把它放进线程池。
 """
 import logging
+import threading
+import time
 from collections import deque
 from datetime import datetime, timedelta
 
@@ -15,6 +17,13 @@ logger = logging.getLogger(__name__)
 
 # 采样窗口。psutil 要在这段时间里对比两次 CPU 时间片才能算出占用率。
 SAMPLE_INTERVAL_SECONDS = 1
+# 两次真实采样之间的最小间隔。窗口内的请求直接复用上一份结果。
+#
+# 每次采样都占住一条 anyio 线程池线程整整 SAMPLE_INTERVAL_SECONDS，而那个线程池
+# （THREAD_POOL_LIMIT=32）是与 bcrypt 登录、CSV 导出、同步导入任务共用的。这个端点
+# 只要求"已登录"，任何账号都能轮询——没有这道闸，32 个并发轮询就能让全站登录排队一秒。
+# 取 5 秒：监控图表的粒度本就不需要更细，而它把单账号能造成的线程占用降到 1/5。
+MIN_SAMPLE_INTERVAL_SECONDS = 5
 # 历史样本上限。监控对象是长驻单例，不设上限就是一条按请求量增长的内存泄漏。
 HISTORY_MAX = 120
 ALERT_MAX = 200
@@ -28,14 +37,38 @@ class SystemMonitor:
     进程内长驻单例：摘要要跨请求才有意义。此前每个请求新建一个实例，
     `metrics_history` 永远只有一个样本，"最近 10 次的平均"实际上在平均它自己
     刚采的那一个点。
+
+    注意单例是**每 worker 一份**（`start.sh` 固定 4 个 uvicorn worker），所以摘要
+    描述的是接下这次请求的那个 worker 看到的样本序列，不是全机的。指标本身取自
+    宿主机（psutil），跨 worker 一致；受影响的只有"最近 N 次"这个窗口的采样密度。
     """
 
     def __init__(self):
         self.metrics_history: deque[dict] = deque(maxlen=HISTORY_MAX)
         self.alerts: deque[dict] = deque(maxlen=ALERT_MAX)
+        # 采样闸：真实采样是阻塞的，窗口内的并发请求共用同一份结果而不是各采一次。
+        self._lock = threading.Lock()
+        self._last_sampled_at = 0.0
 
     def collect_metrics(self) -> dict:
-        """采集一次系统指标。**阻塞一个采样窗口**，调用方必须放进线程池。"""
+        """取一份系统指标；距上次真实采样不足 `MIN_SAMPLE_INTERVAL_SECONDS` 则复用。
+
+        **真实采样会阻塞一个采样窗口**，调用方必须放进线程池。
+
+        锁是为了让并发请求里只有一个真的去采样：没有它，同时到达的 N 个请求会各占一条
+        线程各阻塞一秒，而这正是要挡掉的那件事。持锁期间确实会阻塞其余请求，但它们本来
+        就要等这一秒，等完拿到的还是同一份数据。
+        """
+        with self._lock:
+            now = time.monotonic()
+            if self.metrics_history and now - self._last_sampled_at < MIN_SAMPLE_INTERVAL_SECONDS:
+                return self.metrics_history[-1]
+            metrics = self._sample()
+            self._last_sampled_at = time.monotonic()
+            return metrics
+
+    def _sample(self) -> dict:
+        """真正采一次。阻塞 `SAMPLE_INTERVAL_SECONDS`。"""
         # 只采一次 percpu，总占用率取各核均值——这正是 psutil.cpu_percent() 的算法。
         # 分两次采样是没有必要的：两次各阻塞一个窗口，代价翻倍而信息量不变。
         cpu_per_core = psutil.cpu_percent(interval=SAMPLE_INTERVAL_SECONDS, percpu=True)

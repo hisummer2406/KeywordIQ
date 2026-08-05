@@ -12,11 +12,19 @@ import { PLACEHOLDER_PIXEL_SIZE, productImageUrl } from './productImage';
  * 份额沿用 0~100 的百分数口径，与过滤区条件、导出内容三处一致，任何一处都不做换算。
  */
 
+/**
+ * 一个商品槽位。
+ *
+ * **刻意不含 brand。** `top{N}_brand` 是「搜这个词的人点击集中在哪几个品牌」这份
+ * 关键词级排行的第 N 名，与「点击量第 N 的商品是谁」是两份彼此独立的榜单。把它放进
+ * 槽位就等于重新宣称「第 N 个商品的品牌是它」——那正是 keyword-level-brand-category
+ * 拆掉的错误配对（旧模型把品牌#N 与商品#N 硬配写进 dim_product，实测 11.7% 的 ASIN
+ * 因此携带互相冲突的品牌值）。品牌按名次单独成列，见 columns.tsx 的 RankedList。
+ */
 export interface TopSlot {
   rank: number;
   asin: string | null;
   title: string | null;
-  brand: string | null;
   clickShare: number;
   conversionShare: number;
 }
@@ -27,7 +35,6 @@ export function topSlots(row: AnalysisRow): TopSlot[] {
     rank,
     asin: row[`top${rank}_asin` as keyof AnalysisRow] as string | null,
     title: row[`top${rank}_title` as keyof AnalysisRow] as string | null,
-    brand: row[`top${rank}_brand` as keyof AnalysisRow] as string | null,
     clickShare: (row[`top${rank}_click_share` as keyof AnalysisRow] as number) ?? 0,
     conversionShare: (row[`top${rank}_conversion_share` as keyof AnalysisRow] as number) ?? 0,
   }));
@@ -43,6 +50,10 @@ const THUMB_SIZE = 56;
  * 而不是 404，`onError` 因此永远不会触发，结果是一个被拉伸的空白方块——比占位符更糟，
  * 因为它看起来像"图还在加载"。所以加载完成后要检查真实尺寸，1×1 即判定为无图。
  * `onError` 仍保留，它负责真正的网络失败。
+ *
+ * `failed` 是组件内部状态，**调用方必须按 asin 给 key**（见 SlotCard）：表格的 rowKey
+ * 是 keyword_id，切换日期时同一个关键词的行不会重建，但它的 top1 商品是会变的。
+ * 不给 key 的话，上一个日期没图的行会把"没图"这个结论带给下一个日期的另一个商品。
  */
 function Thumbnail({ asin }: { asin: string }) {
   const [failed, setFailed] = useState(false);
@@ -111,7 +122,8 @@ function SlotCard({ slot }: { slot: TopSlot }) {
   return (
     <Tooltip title={slot.title || slot.asin} placement="top">
       <div data-testid={`slot-card-${slot.rank}`} style={{ width: CARD_WIDTH, textAlign: 'center' }}>
-        <Thumbnail asin={slot.asin} />
+        {/* key 按 asin：商品换了就重建，不把上一个商品的"没图"结论继承下来 */}
+        <Thumbnail key={slot.asin} asin={slot.asin} />
         <Typography.Text
           copyable={{ text: slot.asin }}
           style={{ display: 'block', fontSize: 11, marginTop: 2 }}
