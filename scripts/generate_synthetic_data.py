@@ -168,16 +168,17 @@ def seed_period(
 
 
 def seed_stats(conn) -> None:
-    """从事实表回填 site_data_stats，并刷新 category_stats 物化视图。
+    """从事实表回填 site_data_stats，并重算每个切片的筛选下拉统计。
 
     生产环境由导入链路在每次导入末尾写这两者；本脚本为查询层验证补齐（否则日期选择器、
-    分页总数、类目下拉无数据可读）。site_data_stats 幂等 upsert；物化视图首刷从 WITH NO DATA
-    起不能 CONCURRENTLY，故用普通 REFRESH。
+    分页总数、类目下拉无数据可读）。site_data_stats 幂等 upsert；筛选统计按
+    (站点, 周期, 日期) 分片，逐切片重算——与导入走同一个 `rebuild_filter_stats`，
+    统计口径只有一处定义。
     """
     from config import settings
 
     schema = settings.DATABASE_SCHEMA
-    logger.info("回填 site_data_stats + 刷新 category_stats")
+    logger.info("回填 site_data_stats + 重算筛选统计")
     conn.execute(
         text(
             f"""
@@ -200,7 +201,16 @@ def seed_stats(conn) -> None:
             """
         )
     )
-    conn.execute(text(f"REFRESH MATERIALIZED VIEW {schema}.category_stats"))
+    # 逐切片重算筛选下拉统计。site_data_stats 此刻已回填完，它正是"有哪些切片"的清单。
+    from app.table.analysis.filter_stats import rebuild_filter_stats
+
+    slices = conn.execute(
+        text(f"SELECT site, period_type, report_date FROM {schema}.site_data_stats")
+    ).all()
+    for site, period, report_date in slices:
+        rebuild_filter_stats(
+            conn, site=site, period=period, report_date=report_date, schema=schema
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

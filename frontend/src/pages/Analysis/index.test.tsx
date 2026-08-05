@@ -232,11 +232,31 @@ describe('分析查询屏', () => {
     });
 
     await waitFor(() => expect(getScope).toHaveBeenCalledWith('DE', 'DAY'));
-    expect(getCategories).toHaveBeenCalledWith('DE', 'DAY');
+    // 带上新站点的最新日期：类目计数按 (站点, 周期, 日期) 分片，与筛选同粒度。
+    // 少这个日期就会取到别的日期的计数，用户对不上「下拉说多少 / 筛出来多少」。
+    expect(getCategories).toHaveBeenCalledWith('DE', 'DAY', '2026-07-16');
     await settle();
     // 表格仍是上一份数据，查询要等用户点「立即查询」
     expect(searchAnalysis).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/未生效条件/)).toBeInTheDocument();
+  });
+
+  it('只换日期也要重拉类目计数（计数按日期分片），但不重查表格', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    getCategories.mockClear();
+    const user = userEvent.setup();
+
+    // 作用域栏的日期选择器：从默认的 2026-07-18 换到 2026-07-17
+    await user.click(screen.getByText('2026年07月18日'));
+    await act(async () => {
+      await user.click(await screen.findByTitle('2026年07月17日'));
+    });
+
+    await waitFor(() => expect(getCategories).toHaveBeenCalledWith('US', 'DAY', '2026-07-17'));
+    await settle();
+    // 类目清单换了，但表格没重查——查询依旧只由「立即查询」触发
+    expect(searchAnalysis).toHaveBeenCalledTimes(1);
   });
 
   it('切站点清空已勾选的类目（旧站点的类目在新站点下可能不存在）', async () => {

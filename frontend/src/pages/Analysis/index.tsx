@@ -108,6 +108,23 @@ export default function AnalysisPage() {
   const resetFilters = () => setFilters((current) => ({ ...emptyFilters(), q: current.q }));
 
   /**
+   * 重拉类目选项。**日期也是选项口径的一部分**——统计按 (站点, 周期, 日期) 分片，
+   * 与筛选严格同粒度，所以换日期同样要重拉，否则下拉里的计数属于另一个日期。
+   *
+   * 改造前统计是跨整个窗口聚合的，下拉说 21944、实际筛出来 17497，用户没法把这两个
+   * 数字对上。现在两者同源，代价是换日期要多一次小表查询。
+   */
+  const reloadCategories = (
+    nextSite: string | undefined,
+    nextView: View,
+    nextDate: string | null | undefined,
+  ) => {
+    getCategories(nextSite, nextView, nextDate)
+      .then(setCategories)
+      .catch(() => setCategories([]));
+  };
+
+  /**
    * 重拉作用域元数据。站点或视图变化时调用。
    *
    * 只更新选择器选项与类目清单，**不** reload 表格——查询由「立即查询」触发。
@@ -129,9 +146,7 @@ export default function AnalysisPage() {
     if (appliedRef.current) {
       appliedRef.current = { ...appliedRef.current, categories: undefined, brands: undefined };
     }
-    getCategories(s.site, nextView)
-      .then(setCategories)
-      .catch(() => setCategories([]));
+    reloadCategories(s.site, nextView, s.latest_date);
     return s;
   };
 
@@ -157,6 +172,12 @@ export default function AnalysisPage() {
     if (next.site !== scope.site || next.view !== scope.view) {
       reloadScopeMeta(next.site, next.view).catch(() => undefined);
       return;
+    }
+    // 只换了日期：日期清单不变，但类目计数是按日期分片的，要跟着换。
+    // 已勾选的类目**不清**——同一站点同一视图下，类目在各日期之间基本是同一批，
+    // 清掉会让用户每换一次日期就得重勾一遍。计数变了，选项本身仍然有效。
+    if (next.date !== scope.date) {
+      reloadCategories(next.site, next.view, next.date);
     }
     setScope(next);
   };

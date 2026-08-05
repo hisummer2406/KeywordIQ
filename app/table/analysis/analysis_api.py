@@ -15,6 +15,9 @@
 端点本身仍进线程池。
 """
 import logging
+
+# 别名引用日期类型：下方端点有名为 ``date`` 的查询参数，直接用 ``date`` 作注解会被它遮蔽。
+from datetime import date as _Date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -94,19 +97,25 @@ async def get_scope(
 async def get_categories(
     view: _View = Query("DAY"),
     site: str | None = Query(None),
+    date: _Date | None = Query(None, description="报告日期，缺省取该作用域最新可用日期"),
     db: AsyncSession = Depends(get_async_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> list[CategoryOption]:
-    """类目下拉选项（按作用域）。"""
-    return await service.get_categories(db, site, view)
+    """类目下拉选项（按作用域三元组）。
+
+    **日期是选项口径的一部分**：统计按 (站点, 周期, 日期) 分片，与筛选严格同粒度。
+    不传则取最新可用日期——这是给"还没选日期"的首屏用的，不是"不限日期"。
+    """
+    return await service.get_categories(db, site, view, date)
 
 
 @analysis_router.get("/brands", response_model=list[BrandOption])
 async def get_brands(
     view: _View = Query("DAY"),
     site: str | None = Query(None),
+    date: _Date | None = Query(None, description="报告日期，缺省取该作用域最新可用日期"),
     db: AsyncSession = Depends(get_async_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> list[BrandOption]:
-    """品牌下拉选项（按作用域）。与 /categories 同构，同一套权限点。"""
-    return await service.get_brands(db, site, view)
+    """品牌下拉选项（按作用域三元组）。与 /categories 同构，同一套权限点。"""
+    return await service.get_brands(db, site, view, date)

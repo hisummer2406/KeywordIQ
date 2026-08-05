@@ -292,15 +292,40 @@ def export_filename(site: str, view: str, on: date | None) -> str:
     return f"{site}_{view}_{on or 'empty'}.csv"
 
 
-async def get_categories(db: AsyncSession, site: str | None, view: str) -> list[CategoryOption]:
-    """类目下拉选项（按作用域）。"""
+async def _resolve_options_scope(
+    db: AsyncSession, site: str | None, view: str, on: date | None
+) -> tuple[str, date | None]:
+    """下拉选项的作用域解析：与列表查询走同一套规则。
+
+    统计按 (站点, 周期, 日期) 分片后，下拉**必须落在某一个日期上**——否则要么把整个窗口
+    的分片加起来（就是改造前那个对不上的数），要么无从取数。日期缺省沿用列表的规则：
+    取该站点该视图的最新可用日期；显式传了就必须在可选集内，非法即报错、不静默回退。
+
+    该 (站点, 视图) 完全没有数据时返回 ``None``，由调用方给出空选项列表——空作用域取不到
+    选项是正常的，不是错误。
+    """
     resolved_site = _resolve_site(site)
-    rows = (await db.execute(crud.category_options_stmt(resolved_site, view))).all()
+    dates = await _available_dates(db, resolved_site, view)
+    return resolved_site, _resolve_date(on, dates)
+
+
+async def get_categories(
+    db: AsyncSession, site: str | None, view: str, on: date | None = None
+) -> list[CategoryOption]:
+    """类目下拉选项（按作用域三元组）。"""
+    resolved_site, resolved_date = await _resolve_options_scope(db, site, view, on)
+    if resolved_date is None:
+        return []
+    rows = (await db.execute(crud.category_options_stmt(resolved_site, view, resolved_date))).all()
     return [CategoryOption(**opt) for opt in crud.shape_category_options(rows)]
 
 
-async def get_brands(db: AsyncSession, site: str | None, view: str) -> list[BrandOption]:
-    """品牌下拉选项（按作用域）。与类目同构。"""
-    resolved_site = _resolve_site(site)
-    rows = (await db.execute(crud.brand_options_stmt(resolved_site, view))).all()
+async def get_brands(
+    db: AsyncSession, site: str | None, view: str, on: date | None = None
+) -> list[BrandOption]:
+    """品牌下拉选项（按作用域三元组）。与类目同构。"""
+    resolved_site, resolved_date = await _resolve_options_scope(db, site, view, on)
+    if resolved_date is None:
+        return []
+    rows = (await db.execute(crud.brand_options_stmt(resolved_site, view, resolved_date))).all()
     return [BrandOption(**opt) for opt in crud.shape_brand_options(rows)]

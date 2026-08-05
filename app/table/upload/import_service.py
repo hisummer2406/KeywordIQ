@@ -5,7 +5,8 @@
 - **串行化**：用 PostgreSQL 咨询锁保证同一时刻只有一个导入在跑（2C4G 上两个 GB 级
   导入并发会互相争抢 WAL 与索引构建）。拿不到锁的置为 QUEUED，不并行。
 - **批次记录**：全程记录 site/period/report_date/行数/耗时/状态。
-- **导入后刷新**（在事实事务提交之后、独立进行）：更新 site_data_stats、刷新类目物化视图。
+- **导入后统计回写**（在事实事务提交之后、独立进行）：更新 site_data_stats，并重算
+  刚导入那个切片的筛选下拉统计（类目 / 品牌）。
 - **原始文件归档**：成功后移到归档目录（可替换为 OSS）；失败则保留原文件供排查。
 
 事务边界由本层控制，crud/importer 不 commit。
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.common.errors import CODE_UPLOAD_IMPORT_REJECTED, ConflictError
 from app.site_registry import normalize_site_code
+from app.table.analysis.filter_stats import rebuild_filter_stats
 from app.table.upload.import_batch_model import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -67,30 +69,15 @@ def _update_site_data_stats(session: Session, result: ImportResult) -> None:
     )
 
 
-# 筛选下拉的两个物化视图。品牌与类目是同构的关键词级排行，刷新时机与方式完全一致，
-# 故用一张清单驱动而不是复制一遍函数——漏刷其中一个的表现是"下拉里没有新导入的品牌"，
-# 而这种缺失在界面上看不出是缺陷还是真的没有。
-_FILTER_STATS_VIEWS = ("category_stats", "brand_stats")
+def _rebuild_filter_stats(session: Session, result: ImportResult) -> None:
+    """重算筛选下拉的统计——**只算刚导入的这一个切片**。
 
-
-def _refresh_filter_stats(session: Session) -> None:
-    """刷新筛选下拉的物化视图（类目与品牌）。
-
-    首次刷新（物化视图以 WITH NO DATA 创建）不能用 CONCURRENTLY——先判 relispopulated：
-    未填充过则普通 REFRESH，之后才能 CONCURRENTLY（不阻塞读）。
+    实现在 `app.table.analysis.filter_stats`：演示/合成数据脚本要写同样的两张表，
+    统计口径只能有一处定义。漏改其中一份的表现是"下拉里的数字对不上"。
     """
-    for view in _FILTER_STATS_VIEWS:
-        populated = session.execute(
-            text(
-                "SELECT relispopulated FROM pg_class "
-                "WHERE relname = :view AND relnamespace = 'analysis'::regnamespace"
-            ),
-            {"view": view},
-        ).scalar()
-        if populated:
-            session.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY analysis.{view}"))
-        else:
-            session.execute(text(f"REFRESH MATERIALIZED VIEW analysis.{view}"))
+    rebuild_filter_stats(
+        session, site=result.site, period=result.period, report_date=result.report_date
+    )
 
 
 def run_import(
@@ -145,10 +132,10 @@ def run_import(
             )
             session.commit()
 
-            # 导入后处理：统计 + 物化视图刷新，在事实事务之外。
+            # 导入后处理：两类统计回写，在事实事务之外。都只涉及刚导入的那个切片。
             _update_site_data_stats(session, result)
             session.commit()
-            _refresh_filter_stats(session)
+            _rebuild_filter_stats(session, result)
             session.commit()
 
             # OSS-first：原始文件在入口即持久化于 OSS，OSS 对象即归档，不再做导入后本地归档。

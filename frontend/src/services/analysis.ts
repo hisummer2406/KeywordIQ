@@ -105,10 +105,16 @@ export async function getScope(site: string | undefined, view: View) {
   });
 }
 
-export async function getCategories(site: string | undefined, view: View) {
+/**
+ * 类目下拉选项。
+ *
+ * **日期是选项口径的一部分**：统计按 (站点, 周期, 日期) 分片，与筛选严格同粒度。
+ * 不传日期时后端取最新可用日期——那是给首屏用的，不是"不限日期"。
+ */
+export async function getCategories(site: string | undefined, view: View, date?: string | null) {
   return request<CategoryOption[]>('/api/analysis/categories', {
     method: 'GET',
-    params: { view, ...(site ? { site } : {}) },
+    params: { view, ...(site ? { site } : {}), ...(date ? { date } : {}) },
   });
 }
 
@@ -169,10 +175,10 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
   );
 }
 
-/** 品牌下拉选项。与 getCategories 同构，作用域参数一致。 */
-export async function getBrands(site?: string, view: View = 'DAY') {
+/** 品牌下拉选项。与 getCategories 同构，作用域参数一致（含日期）。 */
+export async function getBrands(site: string | undefined, view: View, date?: string | null) {
   return request<BrandOption[]>('/api/analysis/brands', {
     method: 'GET',
-    params: { site, view },
+    params: { view, ...(site ? { site } : {}), ...(date ? { date } : {}) },
   });
 }

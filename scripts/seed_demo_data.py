@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import text
 
+from app.table.analysis.filter_stats import rebuild_filter_stats
 from config import settings
 from database import SessionFactory
 
@@ -178,7 +179,7 @@ def main() -> int:
                      **slot_params},
                 )
 
-        # site_data_stats + category_stats
+        # site_data_stats + 筛选下拉统计
         for day in days:
             db.execute(
                 text(f"INSERT INTO {SCHEMA}.site_data_stats(site,period_type,report_date,row_count) "
@@ -193,7 +194,12 @@ def main() -> int:
                      f"ON CONFLICT (site,period_type,report_date) DO UPDATE SET row_count=EXCLUDED.row_count"),
                 {"s": site, "w": week_date, "n": N_KEYWORDS},
             )
-        db.execute(text(f"REFRESH MATERIALIZED VIEW {SCHEMA}.category_stats"))
+        # 筛选下拉统计按 (站点, 周期, 日期) 分片，逐切片重算——与导入链路共用同一个
+        # 实现，口径只有一处定义。
+        for day in days:
+            rebuild_filter_stats(db, site=site, period="DAY", report_date=day, schema=SCHEMA)
+        for week_date in week_dates:
+            rebuild_filter_stats(db, site=site, period="WEEK", report_date=week_date, schema=SCHEMA)
         db.commit()
 
     print(f"演示数据已写入：{site} 日报 {days[0]}..{days[-1]}（{DAYS}天）+ "
