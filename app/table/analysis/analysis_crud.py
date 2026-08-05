@@ -24,8 +24,23 @@ from config import settings
 
 _SCHEMA = settings.DATABASE_SCHEMA
 
-# 有筛选时的总数上限（沿用 V1 权衡：避免在整切片上精确计数）
-FILTERED_COUNT_CAP = 10000
+# 列表总数**一律精确**，不封顶。
+#
+# 这里曾有一个 `FILTERED_COUNT_CAP = 10000`，是从 V1 沿用的权衡——V1 是单张大宽表，
+# 一次精确计数真的要扫全表且逐月变慢，所以数到一万就停。**V2 这个前提不成立了**：
+# 每个查询本来就被锁死在单一 (站点, 视图, 日期) 切片里，计数的代价由切片大小决定，
+# 不随保留窗口增长。日报切片恒定约 30–40 万行，周报约 300 万行，三个月后还是这个数。
+#
+# 实测（US 生产量级数据，`Parallel Seq Scan` 单分区）：
+#   日报 40 万行  类目筛选  热 168ms / 冷 677ms
+#   周报 278 万行 类目筛选  热 242–375ms / 冷 2286ms
+#
+# 封顶省下的是这些，代价却是一个**无法与精确值区分**的 total：返回 10000 时，调用方
+# 无从判断它是"恰好一万"还是"至少一万"。前端据此渲染翻页器，于是 9 万条命中里有 8 万条
+# 在界面上根本够不着——数据在、接口也返回，就是没有那个页码按钮。
+#
+# 类目列上**没有**索引，且实测加了也没用：选择性 23% 时计划器直接弃用（`Parallel Seq Scan`
+# 依旧），加索引前后的差异全部来自缓存冷热。不要再试一次。
 
 # 导出时服务端游标每次取回的行数。块内驻留内存，故不宜大；日视图还要按块回查走势，
 # 太小则回查次数过多。
@@ -150,7 +165,7 @@ def _base_query(site: str, view: str, on: date):
 def _count_base_query(site: str, view: str, on: date):
     """计数专用 base query：只关联筛选真正用到的维度（关键词 + top1 商品）。
 
-    与 ``_base_query`` 分开，是因为计数最多要扫 ``FILTERED_COUNT_CAP`` 行，而 top2/top3
+    与 ``_base_query`` 分开，是因为计数要扫遍命中行（精确计数，不封顶），而 top2/top3
     的关联对"有多少行"毫无贡献（LEFT JOIN 主键不改变行数），带上就是纯粹的开销。
     筛选条件引用的维度在两条路径上完全一致，故 ``_apply_filters`` 两边通用。
     """
@@ -239,7 +254,9 @@ def search_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest):
 def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int):
     """作用域内筛选后的行数，最多数到 ``cap``（数满即返回 cap，不再往下扫）。
 
-    列表分页与导出上限检查共用：两处都只需要"是否超过某个数"，不需要精确总数。
+    **只给导出的上限检查用，不要拿它当列表总数。** 那里问的是"超没超过 EXPORT_ROW_CAP"
+    ——一个是非题，数满即可停；答案也只用于决定放行还是 413，不会作为数字呈现给用户。
+    列表总数是另一回事，必须精确，见 :func:`count_filtered_stmt`。
     """
     stmt, fact = _count_base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
@@ -248,8 +265,14 @@ def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest
 
 
 def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest):
-    """有筛选时的总数：上限内精确计数（超过上限返回上限值）。"""
-    return count_capped_stmt(site, view, on, req, FILTERED_COUNT_CAP)
+    """有筛选时的列表总数：**精确计数，不封顶**（理由见文件头 FILTERED_COUNT_CAP 的墓志铭）。
+
+    代价由切片大小决定、不随保留窗口增长；实测热缓存下日报 168ms、周报 242–375ms。
+    换来的是 total 可以被当成真数使用——翻页器据此算页数，用户才够得着全部命中行。
+    """
+    stmt, fact = _count_base_query(site, view, on)
+    stmt = _apply_filters(stmt, fact, req)
+    return select(func.count()).select_from(stmt.subquery())
 
 
 def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int):
@@ -418,7 +441,7 @@ def count_capped(
 
 
 def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
-    return count_capped(db, site, view, on, req, FILTERED_COUNT_CAP)
+    return db.execute(count_filtered_stmt(site, view, on, req)).scalar_one()
 
 
 def iter_export_rows(

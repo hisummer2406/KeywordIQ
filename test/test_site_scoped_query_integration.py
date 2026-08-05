@@ -210,13 +210,31 @@ async def test_scope_boundary_excludes_other_dates(db):
 
 
 async def test_filtered_total_reflects_filter(db):
-    """带筛选时总数按上限策略在作用域内计算，不用无筛选的 site_data_stats 值。"""
+    """带筛选时总数在作用域内实算，不用无筛选的 site_data_stats 值。"""
     await db.run_sync(_seed)  # D3 有 K1(kw-one)、K2(kw-two)，site_data_stats=2
     resp = await service.search(
         db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, keyword="one")
     )
     assert resp.total == 1  # 只匹配 kw-one，不是无筛选的 2
     assert all("one" in r["keyword"] for r in resp.data)
+
+
+async def test_filtered_total_is_exact_beyond_page_size(db):
+    """带筛选的总数**必须精确**，且与分页大小无关。
+
+    这里曾有一个 `FILTERED_COUNT_CAP = 10000`：命中超过一万时 total 就固定返回 10000，
+    而调用方无法把它与"恰好一万行"区分开。前端据此算翻页页数，于是超出的命中行在界面上
+    根本够不着——数据在、接口也能返回，就是没有那个页码按钮。
+
+    用 perPage=1 取一页：total 必须是命中总数 2，不能是"这一页有几行"，也不能被任何
+    上限截断。断言写成与 perPage 无关的形式，正是因为封顶那版在小数据上看起来是对的。
+    """
+    await db.run_sync(_seed)
+    resp = await service.search(
+        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, ranking_min=0, perPage=1)
+    )
+    assert len(resp.data) == 1
+    assert resp.total == 2
 
 
 async def test_response_has_protable_contract(db):

@@ -286,7 +286,10 @@ V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随
    它塌到 5，一个导入在跑就只剩 4 条线程给全部登录。
 2. **Query Optimization**:
    - 无筛选的分页总数直接读 `site_data_stats.row_count`（O(1)，不在事实表上聚合）
-   - 带筛选的总数用 `FILTERED_COUNT_CAP = 10000` 封顶计数（`analysis_crud.count_filtered`）
+   - 带筛选的总数**精确实算、不封顶**（`analysis_crud.count_filtered`）。曾有 V1 沿用的
+     `FILTERED_COUNT_CAP = 10000`，在 V2 是错的：每个查询本就锁死在单一切片里，计数代价
+     由切片大小决定、不随窗口增长（实测热缓存日报 168ms、周报 242–375ms），而封顶换来的
+     是一个无法与精确值区分的 total——前端据此算页数，超出上限的命中行在界面上够不着
    - 每次查询都被约束在「站点 + 视图 + 日期」单一事实切片内，天然限制扫描范围
    - 类目下拉读 `category_stats` 物化视图，不实时聚合
 3. **Import**: 走 `COPY` 流式装载到 UNLOGGED 暂存表，内存有界；不再有 pandas 分块或多进程分片
