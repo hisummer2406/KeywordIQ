@@ -316,27 +316,39 @@ def slice_has_brand_data_stmt(site: str, view: str, on: date):
     )
 
 
-def category_options_stmt(site: str, view: str):
-    """类目下拉：读 category_stats 物化视图，按 (站点, 周期) 返回选项与计数。"""
-    return _stats_options_stmt("category_stats", "top_category", site, view)
+def category_options_stmt(site: str, view: str, on: date):
+    """类目下拉：读 category_stats，按作用域三元组返回选项与计数。"""
+    return _stats_options_stmt("category_stats", "dim_category", "category_id", site, view, on)
 
 
-def brand_options_stmt(site: str, view: str):
+def brand_options_stmt(site: str, view: str, on: date):
     """品牌下拉：读 brand_stats，与类目同构。
 
     品牌改为精确多选后，**计数不是装饰**：品牌名高度相近（Anker / Anker Direct /
     Ankermann），计数是用户判断该选哪个的唯一依据——子串搜索时代这个判断是由结果集
     替他做的。
     """
-    return _stats_options_stmt("brand_stats", "top_brand", site, view)
+    return _stats_options_stmt("brand_stats", "dim_brand", "brand_id", site, view, on)
 
 
-def _stats_options_stmt(view_name: str, label_col: str, site: str, view: str):
-    """两个下拉共用：物化视图结构同构，只差表名与标签列。"""
+def _stats_options_stmt(
+    table: str, dim_table: str, id_col: str, site: str, view: str, on: date
+):
+    """两个下拉共用：两张统计表结构同构，只差表名与维度。
+
+    **必须带日期。** 统计按 (站点, 周期, 日期) 分片，与筛选的作用域三元组严格同粒度——
+    少一个日期条件就会把整个保留窗口的分片全加起来，得到一个比实际筛选结果大得多的数，
+    而那正是改造前的缺陷（实测两天数据：下拉 21944 / 实筛 17497）。
+
+    统计表存维度 id 不存名称（按日期分片后行数与日期数相乘，存名称等于把同一字符串
+    重复几千万次），故读时回 join 维度表——取的是一个切片，join 走主键，代价可忽略。
+    """
     return text(
-        f"SELECT {label_col}, cnt FROM {_SCHEMA}.{view_name} "
-        f"WHERE site = :site AND period_type = :view ORDER BY cnt DESC"
-    ).bindparams(site=site, view=view)
+        f"SELECT d.name, s.cnt FROM {_SCHEMA}.{table} s "
+        f"JOIN {_SCHEMA}.{dim_table} d ON d.{id_col} = s.{id_col} "
+        f"WHERE s.site = :site AND s.period_type = :view AND s.report_date = :on "
+        f"ORDER BY s.cnt DESC"
+    ).bindparams(site=site, view=view, on=on)
 
 
 # --------------------------------------------------------------------------
@@ -426,5 +438,5 @@ def fetch_trends(
     return shape_trends(db.execute(trends_stmt(site, keyword_ids, on, view)).all())
 
 
-def category_options(db: Session, site: str, view: str) -> list[dict[str, Any]]:
-    return shape_category_options(db.execute(category_options_stmt(site, view)).all())
+def category_options(db: Session, site: str, view: str, on: date) -> list[dict[str, Any]]:
+    return shape_category_options(db.execute(category_options_stmt(site, view, on)).all())
