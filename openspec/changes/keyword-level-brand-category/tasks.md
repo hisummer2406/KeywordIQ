@@ -51,7 +51,23 @@
 - [x] 3.3 `_upsert_dimensions` 里 `dim_product` 的三段 UNION 去掉 brand / category
       ——**这是缺陷的根，改完它 `dim_product` 才不再被写入伪造属性**
 - [x] 3.4 `import_service._refresh_category_stats` 一并刷新 `brand_stats`
-- [ ] 3.5 用真实体量 CSV 跑 `verify-import` skill，断言六个新列落库正确
+- [x] 3.5 用真实体量 CSV 跑 `verify-import` skill，断言六个新列落库正确
+
+      2026-08-05 于全新 `keywordiq_test` 上跑，两个**连续日期**的真实 US 日报
+      （2026-01-16 / 01-17，211MB+235MB，37.8 万 + 42.0 万行）：
+
+      - 批次 `COMPLETED`，`total_rows == written_rows`（0 跳过），105s / 93s
+      - 分区路由正确，两期都落在 `fact_daily_2026_01_us`
+      - **六个新列按名次原样落库**：排名第 1 的词 `tinnitus relief for ringing ears`
+        落库为 品牌 `IHW / HQEHQE / Onzzyl`、类目 `Health & Personal Care / Beauty /
+        Sports`，与源文件第 3 行逐字段对得上。填充率：品牌三列各约 92%，类目
+        100% / 74% / 46%（名次越靠后越稀疏，符合报表形状）
+      - 派生值：首期全部 `is_new`、上期排名全 0；第二期 34.1 万行关联到上一期、
+        7.9 万新词；**全表核对 `ranking_change <> 当期-上期` 的行数为 0**
+      - `site_data_stats` 与事实表行数一致；两个物化视图有数据（类目 115 项、
+        品牌 15.97 万项）
+      - **重复导入**：再导一次 01-16，事实行数/统计/两个序列 **五项差值全为 0**
+        （不翻倍，且不烧序列——见 a72152a）
 
 ## 4. 索引：先实测再定，不许凭直觉建
 
