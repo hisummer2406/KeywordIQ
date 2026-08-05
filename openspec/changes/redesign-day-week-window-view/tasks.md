@@ -6,14 +6,14 @@
 
 ## 1. 数据模型与迁移
 
-- [ ] 1.1 在 `app/table/analysis/fact_model.py` 定义 `FactDropped`（`site`/`period_type`/`anchor_date`/`keyword_id` 主键，`last_seen_date`/`last_ranking`/`created_at`，月度 RANGE 分区声明），并加 `(site, period_type, anchor_date, last_ranking)` 索引
-- [ ] 1.2 在 `SiteDataStats` 加 `dropped_count`（BigInteger，非空，默认 0）
-- [ ] 1.3 手写 Alembic 迁移建 `analysis.fact_dropped`（含 `PARTITION BY RANGE (anchor_date)`、父表索引、当前月及前两月初始分区）
-- [ ] 1.4 手写 Alembic 迁移给 `site_data_stats` 加列
-- [ ] 1.5 用 `uv run alembic upgrade head --sql` 核对生成的 DDL 里确有 `PARTITION BY`，并确认两条迁移都限定在 `analysis` schema
-- [ ] 1.6 扩展 `partitioning.ensure_fact_partitions`，让它一并确保掉榜表的月度分区存在（幂等）
-- [ ] 1.7 在 `retention_service` 把掉榜表纳入按月 `DROP` 的清单
-- [ ] 1.8 测试：迁移可 upgrade / downgrade 往返；`ensure_fact_partitions` 建出掉榜分区；保留清理连带移出掉榜分区（`uv run pytest test/`）
+- [x] 1.1 在 `app/table/analysis/fact_model.py` 定义 `FactDropped`（`site`/`period_type`/`anchor_date`/`keyword_id` 主键，`last_seen_date`/`last_ranking`/`created_at`，月度 RANGE 分区声明），并加 `idx_fact_dropped_segment (site, period_type, anchor_date, last_ranking)` 索引
+- [x] 1.2 在 `SiteDataStats` 加 `dropped_count`（BigInteger，非空，默认 0）
+- [x] 1.3 手写 Alembic 迁移 `a7b8c9d0e1f2` 建 `analysis.fact_dropped`（含 `PARTITION BY RANGE (anchor_date)` 与父表索引）。**叶子分区不在迁移里建**——与两张事实表一致，由 `ensure_fact_partitions` 按需创建，避免迁移写死月份
+- [x] 1.4 **与 1.3 合并为同一条迁移**：加列与建表是同一个逻辑变更、永远一起应用，拆两条只会让 downgrade 面翻倍而无收益
+- [x] 1.5 `uv run alembic upgrade f5a6b7c8d9e0:head --sql` 核对：`PARTITION BY RANGE (anchor_date)` 在，表名与列注释均限定 `analysis` schema。真库上 upgrade → downgrade → upgrade 往返通过，`relkind='p'` 确认是分区表
+- [x] 1.6 扩展分区注册表：`FACT_TABLE_PARTITION_KEYS`（表名→日期列）改为 `PARTITIONED_TABLES`（表名→`PartitionScheme(date_column, site_subpartition)`），`ensure_fact_partitions` 按方案决定建一级还是两级。「这张表分不分站点」因此只有一处答案
+- [x] 1.7 `retention_service` 改为遍历 `PARTITIONED_TABLES`，掉榜表自动纳入按月 `DROP`
+- [x] 1.8 测试：单元 5 条（注册表内容、无站点子分区、主键含分区键、跨期字段非空、分页索引列序）+ 集成 5 条（一级分区无站点后缀、行能落进分区、两站点共用一个分区、保留清理移出掉榜分区、注册表覆盖）。全量 `340 passed, 1 skipped`（此前 328；跳过的是需 `TEST_OSS_*` 的 OSS 回路）
 
 ## 2. 导入侧：掉榜集合算定
 
