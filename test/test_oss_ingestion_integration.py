@@ -101,7 +101,8 @@ def test_oss_source_streams_into_facts_and_records_object_key(factory):
     assert batch.object_key == _OBJECT_KEY
 
     with factory() as s:
-        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily")).scalar() == 2
+        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily "
+                              "WHERE site='US' AND report_date='2026-07-15'")).scalar() == 2
         n = s.execute(text("SELECT row_count FROM analysis.site_data_stats "
                            "WHERE site='US' AND period_type='DAY' AND report_date=:d"),
                       {"d": _RDATE}).scalar()
@@ -123,7 +124,8 @@ def test_reimport_same_slice_overwrites_via_oss_source(factory):
                original_filename="a.csv", object_key=_OBJECT_KEY, session_factory=factory)
 
     with factory() as s:
-        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily")).scalar() == 2
+        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily "
+                              "WHERE site='US' AND report_date='2026-07-15'")).scalar() == 2
 
 
 # --------------------------------------------------------------------------
@@ -153,6 +155,7 @@ def test_real_oss_round_trip(factory):
         assert batch.status == "COMPLETED"
         assert batch.written_rows == 2
         with factory() as s:
-            assert s.execute(text("SELECT count(*) FROM analysis.fact_daily")).scalar() == 2
+            assert s.execute(text("SELECT count(*) FROM analysis.fact_daily "
+                              "WHERE site='US' AND report_date='2026-07-15'")).scalar() == 2
     finally:
         bucket.delete_object(key)

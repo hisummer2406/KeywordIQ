@@ -66,6 +66,18 @@ print(batch.status, batch.total_rows, batch.written_rows, batch.error_message)
 同一期重复导入是**唯一**允许删除事实数据的场景：先删该切片再写。重复导入后
 第 2、4 两项的数字应当不变（而非翻倍）——翻倍说明去重逻辑没生效。
 
+## 灌进去的数据活不过下一次 pytest
+
+`test_import_service_integration.py` 与 `test_oss_ingestion_integration.py` 的夹具会
+`TRUNCATE` 全部业务表（fact/dim/stats/batch）——它们测的是 `run_import`，而后者内部
+提交，回滚兜不住，只能靠 TRUNCATE 收尾。
+
+所以这里灌进去的真实报表，**下一次 `git commit`（提交门禁会跑全量 pytest）就没了**，
+没有任何提示。别把它当成"手上有一份真实数据可以反复用"：
+
+- 验证要一次跑完，断言结果记下来，不要指望回头再查库
+- 真要留着反复用，换个库名（如 `keywordiq_verify`），别放 `keywordiq_test`
+
 ## 别在这里做的事
 
 - 不要为了跑通而手工 `INSERT` 事实表或手工建分区。分区由

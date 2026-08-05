@@ -75,6 +75,30 @@ def _row_count(conn, d: date) -> int:
     ).scalar()
 
 
+# 本文件里各测试自己建的"窗口内"月份（相对固定的 cutoff 2026-05-01）。
+_IN_WINDOW_MONTHS = frozenset(
+    {"fact_daily_2026_05", "fact_daily_2026_06", "fact_daily_2026_07"}
+)
+
+
+def _assert_only_expired_dropped(dropped, cutoff: date) -> None:
+    """被移出的每个分区都必须确实超期（``end <= cutoff``）。
+
+    **断言写成"对全部分区的精确相等"是不成立的。** `keywordiq_test` 是全局共享的一份
+    （见 CLAUDE.md「并行会话」一节），别的会话、或一次 verify-import 的真实导入，都会
+    留下**已提交**的月分区——夹具的事务回滚清不掉它们，因为它们根本不是本测试建的。
+
+    实际发生过：一次真实报表导入留下 `fact_daily_2026_01`，这两条测试随即以
+    `['fact_daily_2026_01', 'fact_daily_2026_04'] != ['fact_daily_2026_04']` 失败。
+    失败的是夹具"库里只有我建的东西"这个假设，被测逻辑完全正确，而 diff 看不出这一点。
+
+    `end <= cutoff` 才是保留清理的真正契约：它对外来分区同样成立，因此在任何库状态下
+    都是确定的。这比原来的写法更强——原来只覆盖本测试建的那几个月。
+    """
+    for p in dropped:
+        assert p.end <= cutoff, f"{p.name} (end={p.end}) 未超期却被移出，cutoff={cutoff}"
+
+
 def test_list_month_partitions_reports_bounds(conn):
     """枚举应从目录读出真实分区及其月度边界。"""
     partitioning.ensure_fact_partitions(conn, "fact_daily", "US", date(2026, 4, 10))
@@ -94,10 +118,14 @@ def test_drop_expired_removes_only_out_of_window_months(conn):
     cutoff = partitioning.retention_cutoff(date(2026, 7, 15), 3)  # 2026-05-01
     dropped = partitioning.drop_partitions_older_than(conn, "fact_daily", cutoff)
 
-    assert [p.name for p in dropped] == ["fact_daily_2026_04"]
+    dropped_names = {p.name for p in dropped}
+    assert "fact_daily_2026_04" in dropped_names
+    assert dropped_names.isdisjoint(_IN_WINDOW_MONTHS)
+    _assert_only_expired_dropped(dropped, cutoff)
+
     remaining = _month_partition_names(conn)
     assert "fact_daily_2026_04" not in remaining
-    assert {"fact_daily_2026_05", "fact_daily_2026_06", "fact_daily_2026_07"} <= set(remaining)
+    assert _IN_WINDOW_MONTHS <= set(remaining)
     # 窗口内数据仍可查，被移出月份查不到。
     assert _row_count(conn, date(2026, 4, 10)) == 0
     assert _row_count(conn, date(2026, 5, 10)) == 1
@@ -115,11 +143,19 @@ def test_dropping_month_removes_its_site_subpartitions(conn):
     assert leftover == []
 
 
-def test_in_window_only_is_noop(conn):
-    """所有月份都在窗口内时，清理不移出任何分区。"""
+def test_in_window_months_are_never_dropped(conn):
+    """窗口内的分区一个都不动。
+
+    原名是 `test_in_window_only_is_noop`、断言 `dropped == []`——那句话只在"库里除了
+    本测试建的东西什么都没有"时才成立，而这是个共享库（见 `_assert_only_expired_dropped`）。
+    真正要守的性质是"窗口内的不许被碰"，它与库里还有什么无关。
+    """
     _seed_month(conn, "US", date(2026, 6, 10), "kw jun", 1)
     _seed_month(conn, "US", date(2026, 7, 10), "kw jul", 2)
     cutoff = partitioning.retention_cutoff(date(2026, 7, 15), 3)
     dropped = partitioning.drop_partitions_older_than(conn, "fact_daily", cutoff)
-    assert dropped == []
+
+    assert {p.name for p in dropped}.isdisjoint(_IN_WINDOW_MONTHS)
+    _assert_only_expired_dropped(dropped, cutoff)
     assert _row_count(conn, date(2026, 6, 10)) == 1
+    assert _row_count(conn, date(2026, 7, 10)) == 1

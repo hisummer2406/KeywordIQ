@@ -69,13 +69,18 @@ def test_full_import_from_local_source_records_batch_and_stats(factory, tmp_path
 
     with factory() as s:
         # 事实落库
-        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily")).scalar() == 2
+        # 计数**必须带作用域**：keywordiq_test 是全局共享的一份，别的会话或一次
+        # verify-import 留下的已提交数据会让裸 count(*) 数到不属于本测试的行。
+        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily "
+                              "WHERE site='US' AND report_date='2026-07-15'")).scalar() == 2
         # 统计写入
         n = s.execute(text("SELECT row_count FROM analysis.site_data_stats "
                            "WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'")).scalar()
         assert n == 2
         # 批次记录可查
-        assert s.execute(text("SELECT count(*) FROM analysis.import_batch WHERE status='COMPLETED'")).scalar() == 1
+        assert s.execute(text("SELECT count(*) FROM analysis.import_batch "
+                              "WHERE status='COMPLETED' AND site='US' "
+                              "AND report_date='2026-07-15'")).scalar() == 1
         # 物化视图已刷新（有类目数据）
         cats = s.execute(text("SELECT count(*) FROM analysis.category_stats WHERE site='US'")).scalar()
         assert cats >= 1
