@@ -13,7 +13,13 @@ Create Date: 2026-08-04
 2. 事实表加 6 列（**不给 DEFAULT**，见下）
 3. 重建 category_stats、新增 brand_stats（category_stats 依赖 dim_product.category，
    必须在第 4 步删列之前先 DROP 掉，否则删列会因视图依赖而失败）
+3.5 建 6 个品牌筛选索引 —— **本迁移唯一与数据量成正比的一步**
 4. 删 dim_product 的 brand/category 与两个 GIN 索引
+
+**停机时长由第 3.5 步决定，不是由 SPA 构建决定。** 其余步骤都是 catalog 操作（秒级），
+而建索引要真读一遍数据：满窗约 2 亿行 × 6 个索引，2C4G 上是小时级。空库首次上线不受
+影响；已装满的库应当先按第 3.5 步注释里的 ONLY + CONCURRENTLY + ATTACH recipe 在线
+把索引建好，之后本迁移的 IF NOT EXISTS 会空转而过。
 
 **为什么 ADD COLUMN 不能带 DEFAULT**：PostgreSQL 11+ 对「可空、无默认值」的 ADD COLUMN
 只改 catalog，是秒级的元数据操作；一旦带上 DEFAULT（哪怕是 0），旧版本会重写整张表。
@@ -214,11 +220,32 @@ def upgrade() -> None:
     # 列序 (site, 日期, 品牌)：前两列是作用域边界，每个查询都带；品牌在最后做等值。
     # 类目暂不建索引——基数只有 122，选择性太低，索引很可能不被选中（V1 有过投机建索引、
     # 实测 0 命中的先例），等有真实慢查询再说。
+    #
+    # ⚠️ **这是本迁移唯一与数据量成正比的一步，在已装满的库上它就是停机时长本身。**
+    # 上面的 ADD COLUMN / DROP COLUMN 都是元数据操作（秒级），但建索引要真读一遍数据：
+    # 保留窗口满窗约 2 亿行 × 6 个索引，2C4G 的 RDS 上是小时级，且分区父表的 CREATE INDEX
+    # **不支持 CONCURRENTLY**，alembic 又把整个迁移包在一个事务里——期间事实表上的读写
+    # 全部阻塞。空库（首次上线）不受影响，秒级完成。
+    #
+    # 用 IF NOT EXISTS 而不是 op.create_index，是为了让**先在线建好、再跑迁移**这条路走得通。
+    # 表里已有数据时的正确做法是先离线把索引建出来，此处随后变成空转：
+    #
+    #     -- 1) 父表上建"空壳"索引，只改 catalog，不读数据
+    #     CREATE INDEX idx_fact_daily_top1_brand ON ONLY analysis.fact_daily
+    #            (site, report_date, top1_brand_id);
+    #     -- 2) 逐个叶子分区并发建（三层结构，叶子是站点子分区 fact_daily_2026_07_us）
+    #     CREATE INDEX CONCURRENTLY fact_daily_2026_07_us_top1_brand
+    #         ON analysis.fact_daily_2026_07_us (site, report_date, top1_brand_id);
+    #     -- 3) 挂回去；全部子分区挂齐后父索引自动转为 valid
+    #     ALTER INDEX analysis.idx_fact_daily_top1_brand
+    #         ATTACH PARTITION analysis.fact_daily_2026_07_us_top1_brand;
+    #
+    # 中间层（月分区 fact_daily_2026_07）同样要走 ONLY + ATTACH 这一层。
     for table, date_col in (("fact_daily", "report_date"), ("fact_weekly", "report_date_week")):
         for n in (1, 2, 3):
-            op.create_index(
-                f"idx_{table}_top{n}_brand", table, ["site", date_col, f"top{n}_brand_id"],
-                schema=SCHEMA,
+            op.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{table}_top{n}_brand "
+                f"ON {SCHEMA}.{table} (site, {date_col}, top{n}_brand_id)"
             )
 
     # ---- 4. 删 dim_product 的伪造属性 ----
