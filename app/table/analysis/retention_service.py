@@ -87,7 +87,7 @@ def run_retention(
     if export_dir is not None and not dry_run:
         os.makedirs(export_dir, exist_ok=True)
 
-    for table_name in partitioning.FACT_TABLE_PARTITION_KEYS:
+    for table_name in partitioning.PARTITIONED_TABLES:
         expired = partitioning.select_expired_partitions(
             partitioning.list_month_partitions(session, table_name), cutoff
         )

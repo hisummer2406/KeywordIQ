@@ -201,6 +201,53 @@ class FactWeekly(Base):
     )
 
 
+class FactDropped(Base):
+    """掉榜词：在行窗口内出现过、但在锚定期没有事实数据的关键词。
+
+    行窗口按周期取——日报是锚定日往前 7 天，周报是锚定周往前 4 周。这张表回答的是
+    「选这一期时，哪些词刚刚掉出榜单」，而那正是选品时最该看见、旧模型却完全看不到的信号
+    （当期切片里它们根本不存在，只能靠人肉对比两天的导出文件）。
+
+    三条与事实表一致的约束：
+
+    1. **导入时算定，查询时只读。** 掉榜是锚定期的一项事实，锚定期一旦确定就不再变化，
+       正好落在「写入时算定、只追加」的模式里。放到查询侧实时算的话，天视图要在 180 万行
+       上做反连接、周视图 900 万行，而且**每翻一页重跑一次**。
+    2. **只追加，不原地更新。** 唯一例外与事实表相同：同一期重复导入时先删该期再重算。
+    3. **按锚定期月度分区**，随保留窗口的分区清理一同移出。不这么做它就成了一张只涨不掉
+       的表——事实数据滚出去了，指向它们的掉榜记录还在。
+
+    **与事实表不同的是不做站点二级分区**：掉榜集合是差集而非全量，比事实表小一到两个
+    数量级，二级分区的裁剪收益这个量级上索引已经够用，代价却是分区数翻倍（站点数 × 月数）。
+    站点因此是普通列，靠索引前缀裁剪。
+    """
+
+    __tablename__ = "fact_dropped"
+
+    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment="ISO alpha-2 站点码")
+    period_type: Mapped[str] = mapped_column(String(8), primary_key=True, comment="DAY 或 WEEK")
+    anchor_date: Mapped[date] = mapped_column(Date, primary_key=True, comment="锚定期（分区键）")
+    keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="→ dim_keyword")
+
+    # 掉榜行唯一能携带的跨期信息。界面上这一行除了历史排名与趋势之外全靠这两个数，
+    # 且必须明确标注期次——不标注就成了「同一列混着不同天的数字」。
+    last_seen_date: Mapped[date] = mapped_column(Date, nullable=False, comment="窗口内最后一次在榜的期次")
+    last_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="最后一次在榜时的排名")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # 掉榜段的分页：作用域三元组做前缀、最后在榜排名承担排序。索引顺序即分页顺序，
+        # 因此计划里不该出现排序节点——出现了说明列序被改动过。
+        Index("idx_fact_dropped_segment", "site", "period_type", "anchor_date", "last_ranking"),
+        {"postgresql_partition_by": "RANGE (anchor_date)",
+         "comment": "掉榜词：行窗口内出现过但锚定期无数据的关键词。导入时算定、查询时只读；"
+                    "按锚定期月度 RANGE 分区，随保留窗口一同移出；不做站点二级分区。"},
+    )
+
+
 class SiteDataStats(Base):
     """按站点 + 周期 + 期次的行数统计。
 
@@ -218,7 +265,13 @@ class SiteDataStats(Base):
     site: Mapped[str] = mapped_column(String(8), primary_key=True)
     period_type: Mapped[str] = mapped_column(String(8), primary_key=True, comment="DAY 或 WEEK")
     report_date: Mapped[date] = mapped_column(Date, primary_key=True)
-    row_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    row_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, comment="在榜行数")
+    # 掉榜行数与在榜行数同粒度预存，分页总数才能保持 O(1)——实时数就是每翻一页付一次
+    # 扫描代价，而避免这件事正是这张表当初存在的理由。
+    dropped_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0"),
+        comment="该期的掉榜词数（见 fact_dropped）",
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
