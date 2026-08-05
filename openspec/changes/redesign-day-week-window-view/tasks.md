@@ -1,7 +1,8 @@
 ## 0. 开工前置
 
-- [ ] 0.1 确认 `async-query-path` 剩余 4 项任务已完成并合入——本变更改的是同一批查询层文件，两边并行会互相覆盖
-- [ ] 0.2 按 `start-change` 建仓库外 worktree（`~/.claude-worktrees/redesign-day-week-window-view`）与分支 `change/redesign-day-week-window-view`
+- [x] 0.1 确认 `async-query-path` 的**代码部分**已合入 `v2`（`analysis_api` 已是 `async def`）。其剩余 4 项全在第 7 组「部署与实测」，无一碰代码，且在 V2 整体发布前本就完不成——不作为本变更的前置条件
+- [x] 0.2 按 `start-change` 建仓库外 worktree `~/.claude-worktrees/redesign-day-week-window-view` 与分支 `change/redesign-day-week-window-view`（从含本变更文档的提交 `c8aa639` 开出，非从 `v2`，否则 openspec 文档会落下）；已补 `.env`、`frontend/node_modules`、专属库 `keywordiq_redesign_day_week_window_view`（已 `alembic upgrade head`）
+- [x] 0.3 基线回归：`328 passed, 1 skipped`（唯一跳过是需 `TEST_OSS_*` 的真实 OSS 回路，与本变更无关）。集成测试确认在跑，不是静默全跳过
 
 ## 1. 数据模型与迁移
 
