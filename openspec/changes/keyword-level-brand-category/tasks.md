@@ -110,6 +110,14 @@
 
 ## 9. 收尾
 
-- [ ] 9.1 全量回归：`ruff` + `pytest`（**全新库首跑**，含 `TEST_DATABASE_URL` 集成）
+- [x] 9.1 全量回归：`ruff` + `pytest`（**全新库首跑**，含 `TEST_DATABASE_URL` 集成）
       + 前端三项 + `openspec validate --strict`
+
+      2026-08-05 于 drop/create 后的全新 `keywordiq_test` 上跑（不是重跑绿的旧库）：
+      `ruff check .` 通过；`pytest test/` **324 passed, 1 skipped** —— skip 数是 1 而不是
+      45，集成部分确实生效；前端 `pnpm lint` / `tsc` / `test`（**123 passed**）三项通过；
+      四个在飞变更 `openspec validate --strict` 全部 valid。
+      另核对：`alembic revision --autogenerate` 探针**无索引漂移**（此前有六条
+      `Detected removed index 'idx_fact_*_top*_brand'`，随 a52381d 修掉），
+      迁移 downgrade/upgrade 往返干净、重复执行幂等。
 - [ ] 9.2 `openspec archive`，delta 合入主 spec
