@@ -27,6 +27,20 @@ class AnalysisSearchRequest(BaseModel):
     page: int = Field(1, ge=1, description="页码")
     perPage: int = Field(50, ge=1, le=200, description="每页数量")
 
+    # 是否要算总数。
+    #
+    # 总数是**精确计数**（去掉封顶之后），代价与命中行数同阶：实测日报筛选约 0.2–0.45s、
+    # 周报约 0.7–0.9s。而同一组条件下翻页、改排序、改每页条数都**不会改变总数**——事实
+    # 切片只追加不原地更新，查询又锁死在单一 (站点,视图,日期) 上。每页重算一遍是纯浪费，
+    # 且浪费的正好是这条路径上最贵的那部分。
+    #
+    # 故由调用方声明：条件变了传 true 重算，只翻页/改排序传 false 沿用上一次的值。
+    # 传 false 时响应的 ``total`` 是 ``None``（"本次没算"），不是 0——0 会被 ProTable
+    # 当成"没有数据"而把翻页器清空，那是一种看不出原因的故障。
+    include_total: bool = Field(
+        True, description="是否计算总数；仅翻页/改排序时传 false 以复用上次结果"
+    )
+
     # 排序（字段按视图白名单校验，非法回落默认；见 crud.SORTABLE_FIELDS）
     orderBy: str | None = Field(None, description="排序字段")
     orderDir: Literal["asc", "desc"] | None = Field(None, description="排序方向")
@@ -135,7 +149,9 @@ class AnalysisSearchResponse(BaseModel):
 
     success: bool = True
     data: list[Any] = Field(default_factory=list)
-    total: int = 0
+    # ``None`` 表示"本次没算总数"（请求带了 include_total=false），调用方应沿用上一次的值。
+    # 与 0 严格区分：0 是"确实没有命中行"。混淆这两者会让翻页器在翻页时突然清空。
+    total: int | None = 0
     site: str
     view: View
     date: _Date | None = None

@@ -171,10 +171,15 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
 
     rows = crud.shape_rows((await db.execute(crud.search_stmt(site, view, on, req))).all())
 
-    if crud.request_has_filters(req):
+    # 总数：条件没变时不必重算（见 AnalysisSearchRequest.include_total）。
+    # 无筛选那条分支是读 site_data_stats 的 O(1) 查询，便宜到不值得跳过，故不受该开关影响
+    # ——少一条分支，也少一处"这次到底算没算"的歧义。
+    if not crud.request_has_filters(req):
+        total = (await db.execute(crud.scope_row_count_stmt(site, view, on))).scalar_one_or_none() or 0
+    elif req.include_total:
         total = (await db.execute(crud.count_filtered_stmt(site, view, on, req))).scalar_one()
     else:
-        total = (await db.execute(crud.scope_row_count_stmt(site, view, on))).scalar_one_or_none() or 0
+        total = None
 
     # 两个视图都附带只读的搜索趋势：先分页拿本页 keyword_id，再批量补附加，避免在整切片上
     # 做相关子查询。回溯窗口按视图取（日 7 天 / 周 7 期），差异全在 crud 的 _TREND_SPEC 里。

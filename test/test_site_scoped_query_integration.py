@@ -237,6 +237,46 @@ async def test_filtered_total_is_exact_beyond_page_size(db):
     assert resp.total == 2
 
 
+async def test_include_total_false_skips_the_count(db):
+    """``include_total=False`` 时不算总数，返回 ``None`` 而不是 0。
+
+    总数是精确计数，代价与命中行数同阶（周报最坏约 0.9s），而同一组条件下翻页、改排序、
+    改每页条数都不会改变它——每页重算一遍浪费的正好是这条路径上最贵的部分。
+
+    **必须是 None 不是 0**：0 的含义是"确实没有命中行"，前端据此会把翻页器清空。
+    两者混淆的表现是"翻到第二页表格突然说没有数据了"，且看不出原因。
+    """
+    await db.run_sync(_seed)
+    req = AnalysisSearchRequest(
+        site=SITE, view="DAY", date=D3, ranking_min=0, include_total=False
+    )
+    resp = await service.search(db, req)
+
+    assert resp.total is None
+    assert len(resp.data) == 2  # 行照常返回，省掉的只是计数
+
+
+async def test_include_total_defaults_to_true(db):
+    """缺省要算总数——漏传的后果应当是"多算一次"，而不是"没有总数"。"""
+    await db.run_sync(_seed)
+    resp = await service.search(
+        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, ranking_min=0)
+    )
+    assert resp.total == 2
+
+
+async def test_unfiltered_total_ignores_include_total(db):
+    """无筛选时总数读 site_data_stats（O(1)），便宜到不值得跳过，故不受开关影响。
+
+    少一条分支，也少一处"这次到底算没算"的歧义。
+    """
+    await db.run_sync(_seed)
+    resp = await service.search(
+        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, include_total=False)
+    )
+    assert resp.total == 2
+
+
 async def test_response_has_protable_contract(db):
     """列表响应含 ProTable 契约字段 {success,data,total} + 作用域回显。"""
     await db.run_sync(_seed)
