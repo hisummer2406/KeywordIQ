@@ -106,24 +106,107 @@ def test_failed_import_preserves_file_and_marks_failed(factory, tmp_path):
     assert Path(bad).exists()
 
 
-def test_second_concurrent_import_is_rejected(factory, tmp_path):
-    """持有锁时，第二个导入被拒（串行）。"""
-    from app.table.upload.import_service import _IMPORT_LOCK_KEY, ImportRejected, run_import
-    from app.table.upload.import_source import LocalFileSource
-    # 手动占住锁，模拟"已有导入在跑"
+@pytest.fixture()
+def lock_holder():
+    """占住导入串行锁，模拟「已有导入在跑」。"""
     engine = create_engine(TEST_URL)
     holder = engine.connect()
+    from app.table.upload.import_service import _IMPORT_LOCK_KEY
     holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY})
     holder.commit()
-    try:
-        path = _write_csv(tmp_path, "US_Day.csv", [_row(1, "a")])
-        with pytest.raises(ImportRejected):
-            run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
-                       source=LocalFileSource(path), original_filename="US_Day.csv",
-                       session_factory=factory)
-        # 被拒时批次记录为 QUEUED
-        with factory() as s:
-            assert s.execute(text("SELECT status FROM analysis.import_batch")).scalar() == "QUEUED"
-    finally:
+
+    def release():
         holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY})
-        holder.commit(); holder.close(); engine.dispose()
+        holder.commit()
+
+    try:
+        yield release
+    finally:
+        release()
+        holder.close()
+        engine.dispose()
+
+
+def test_second_concurrent_import_is_queued(factory, tmp_path, lock_holder):
+    """持有锁时，可重排的批次（有 object_key）留在 QUEUED 等 drain 接手。"""
+    from app.table.upload.import_service import ImportRejected, run_import
+    from app.table.upload.import_source import LocalFileSource
+    path = _write_csv(tmp_path, "US_Day.csv", [_row(1, "a")])
+    with pytest.raises(ImportRejected):
+        run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                   source=LocalFileSource(path), original_filename="US_Day.csv",
+                   object_key="imports/US/DAY/2026-07-15/abc_US_Day.csv",
+                   session_factory=factory)
+    with factory() as s:
+        assert s.execute(text("SELECT status FROM analysis.import_batch")).scalar() == "QUEUED"
+
+
+def test_rejected_local_fallback_fails_fast_instead_of_queueing_forever(
+    factory, tmp_path, lock_holder
+):
+    """本地退路没有 object_key，重建不出源——不能留在 QUEUED 假装在排队。
+
+    这是历史上那个洞：批次停在 QUEUED，界面显示「队列中」，而没有任何东西会回头
+    看它。用户在等一件永远不会发生的事，且没有任何提示告诉他需要重传。
+    """
+    from app.table.upload.import_service import ImportRejected, run_import
+    from app.table.upload.import_source import LocalFileSource
+    path = _write_csv(tmp_path, "US_Day.csv", [_row(1, "a")])
+    with pytest.raises(ImportRejected):
+        run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                   source=LocalFileSource(path), original_filename="US_Day.csv",
+                   session_factory=factory)
+    with factory() as s:
+        status, err = s.execute(
+            text("SELECT status, error_message FROM analysis.import_batch")
+        ).one()
+    assert status == "FAILED"
+    assert "重新上传" in err
+
+
+def test_drain_runs_the_queued_batch_once_the_lock_frees(factory, tmp_path, lock_holder):
+    """锁释放后，drain 接手排队批次并真正导完。"""
+    from app.table.upload.import_service import ImportRejected, drain_import_queue, run_import
+    from app.table.upload.import_source import LocalFileSource
+    path = _write_csv(tmp_path, "US_Day.csv", [_row(1, "a"), _row(2, "b")])
+    key = "imports/US/DAY/2026-07-15/abc_US_Day.csv"
+    with pytest.raises(ImportRejected):
+        run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                   source=LocalFileSource(path), original_filename="US_Day.csv",
+                   object_key=key, session_factory=factory)
+
+    # 锁还占着：drain 不该动它（串行约束高于「尽快跑完」）
+    assert drain_import_queue(
+        source_factory=lambda k: LocalFileSource(path), session_factory=factory
+    ) is None
+    with factory() as s:
+        assert s.execute(text("SELECT status FROM analysis.import_batch")).scalar() == "QUEUED"
+
+    lock_holder()  # 前一个导入结束
+
+    drained = drain_import_queue(
+        source_factory=lambda k: LocalFileSource(path), session_factory=factory
+    )
+    assert drained is not None
+    assert drained.status == "COMPLETED"
+    assert drained.written_rows == 2
+    with factory() as s:
+        # 复用的是原来那条批次记录，不是新建一条——否则界面会留下一条永不消失的 QUEUED
+        assert s.execute(text("SELECT count(*) FROM analysis.import_batch")).scalar() == 1
+        assert s.execute(
+            text("SELECT count(*) FROM analysis.fact_daily WHERE site='US' "
+                 "AND report_date='2026-07-15'")
+        ).scalar() == 2
+        # 导入后统计回写照样发生（drain 走的是同一条执行路径）
+        assert s.execute(
+            text("SELECT row_count FROM analysis.site_data_stats WHERE site='US' "
+                 "AND period_type='DAY' AND report_date='2026-07-15'")
+        ).scalar() == 2
+
+
+def test_drain_returns_none_when_queue_is_empty(factory, tmp_path):
+    from app.table.upload.import_service import drain_import_queue
+    from app.table.upload.import_source import LocalFileSource
+    assert drain_import_queue(
+        source_factory=lambda k: LocalFileSource("/nonexistent"), session_factory=factory
+    ) is None

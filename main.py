@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,6 +14,7 @@ from app.api_router import api_router
 from app.auth.simple_auth import simple_auth
 from app.common.error_handlers import register_error_handlers
 from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
+from app.table.upload.import_queue import run_queue_drainer
 from config import settings
 from database import async_engine, engine
 from monitoring import SystemMonitor
@@ -99,12 +101,29 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("❌ 异步数据库连接测试失败")
 
+    # 排队批次接手：导入串行，抢不到锁的批次留在 QUEUED，靠它在锁释放后接手。
+    # 没有它 QUEUED 就是个死标签——界面显示「队列中」，实际没有任何东西会回头看它。
+    drainer: asyncio.Task | None = None
+    if settings.IMPORT_QUEUE_POLL_SECONDS > 0:
+        drainer = asyncio.create_task(
+            run_queue_drainer(settings.IMPORT_QUEUE_POLL_SECONDS)
+        )
+    else:
+        logger.warning("⚠️ IMPORT_QUEUE_POLL_SECONDS=0，排队批次不会自动接手")
+
     logger.info("🎉 应用启动完成，准备接收请求")
 
     yield
 
     # ==================== 关闭事件 ====================
     logger.info("🛑 应用正在关闭...")
+
+    if drainer is not None:
+        drainer.cancel()
+        try:
+            await drainer
+        except asyncio.CancelledError:
+            logger.info("✅ 导入队列接手任务已停止")
 
     # 关闭数据库连接池
     try:
