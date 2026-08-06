@@ -18,6 +18,28 @@ git branch --list 'change/*'       # 谁已经在写代码了 —— 这才是�
 git worktree list                  # 谁开着工作区
 ```
 
+**顺手扫一遍孤儿库**（十秒，见第 4 节的道理）：
+
+```bash
+for db in $(docker exec pgbase psql -U postgres -tAc \
+      "SELECT datname FROM pg_database WHERE datname LIKE 'keywordiq_%' \
+       AND datname NOT IN ('keywordiq_test','keywordiq_v2_dev')"); do
+  id=${db#keywordiq_}
+  # 库名只能用下划线，变更 id 用连字符 —— 两种写法都要试，否则会把活库判成孤儿
+  if git show-ref --verify --quiet "refs/heads/change/$id" \
+  || git show-ref --verify --quiet "refs/heads/change/${id//_/-}"; then
+    echo "$db  ← 分支还在，别动"
+  else
+    echo "$db  ← 分支没了，是孤儿，按第 4 节删掉"
+  fi
+done
+```
+
+**这个下划线/连字符的坑是实测踩出来的**：第一版只按库名原样查分支，把
+`keywordiq_redesign_day_week_window_view` 判成了孤儿，而它对应的
+`change/redesign-day-week-window-view` 分支不但活着，还正开着 worktree。
+照着删就是把别人干到一半的库端了，且对方只会看到「集成测试忽然全跳过」。
+
 **`openspec list` 只说明变更存在，不说明有人在实现它。** 判据是分支：变更目录可以
 是三天前建的提案，而 `change/<id>` 分支意味着此刻有人在写代码。
 
@@ -27,10 +49,14 @@ git worktree list                  # 谁开着工作区
 ## 2. 建 worktree（仓库外）
 
 ```bash
-ID=<变更id>                        # 与 openspec/changes/<id> 同名
+ID=<变更id>                        # 与 openspec/changes/<id> 同名，通常带连字符
+DB=keywordiq_${ID//-/_}            # 库名只能用下划线，这里定死换算，后面一律用 $DB
 git worktree add -b "change/$ID" ~/.claude-worktrees/$ID v2
 cd ~/.claude-worktrees/$ID
 ```
+
+`$DB` 这一行别省。手工把连字符换成下划线的话，收工那条 `dropdb` 和第 1 节的孤儿扫描
+就得各自再猜一次名字——两处猜法只要不一致，库就会被漏下或被误删。
 
 **路径必须在仓库外。** 放 `.claude/worktrees/` 的代价是每个 watcher 都得单独配排除：
 曾有 worktree 让 uvicorn 的 WatchFiles 把 70 多个文件判为源码变更，连触发 9 次全量
@@ -47,7 +73,7 @@ cd ~/.claude-worktrees/$ID
 ```bash
 cp /Users/stone/Developer/KeywordIQ/.env ~/.claude-worktrees/$ID/.env   # ① 配置
 cd ~/.claude-worktrees/$ID/frontend && pnpm install --prefer-offline    # ② 前端依赖
-docker exec pgbase createdb -U postgres keywordiq_$ID                   # ③ 本 worktree 的库
+docker exec pgbase createdb -U postgres "$DB"                            # ③ 本 worktree 的库
 ```
 
 | 缺什么 | 报错长什么样 | 为什么难认 |
@@ -61,6 +87,24 @@ docker exec pgbase createdb -U postgres keywordiq_$ID                   # ③ �
 "模型改了、查询层没跟上，单元测试全绿"，接上真库后立刻红 21 个。
 
 库名带上变更 id（`keywordiq_<变更id>`），不要共用 `keywordiq_test`——见下一节。
+
+### 为什么是「一个变更一个库」，而不是一个库分 schema
+
+这个问题被问过，评估结论是：**今天做不到，且失败方式是静默的**。两条各自都足以否决：
+
+1. **裸 SQL 里硬编码了 `analysis.`**。`importer.py` 有 5 处、`import_service.py` 有 1 处
+   （`INSERT INTO analysis.site_data_stats`），另有 2 个手写迁移。查询层（`analysis_crud.py`）
+   倒是走 `settings.DATABASE_SCHEMA` 的——**恰恰是这种一半参数化、一半写死的状态最坑**：
+   改 `DATABASE_SCHEMA` 之后查询看着正常，导入却仍然写进 `analysis`。两个会话于是共用一份
+   事实表，而各自的夹具还会 `TRUNCATE` 它——比现在更糟，且没有任何报错。
+2. **咨询锁是按库隔离的，不按 schema**（实测：同一个 key 能同时被 `keywordiq_test` 与
+   `keywordiq_v2_dev` 各持一份）。导入用 `pg_try_advisory_lock` 串行化，同库不同 schema 的
+   两个会话会抢同一把锁，表现是集成测试随机报「导入被拒 / QUEUED」——`local-db` skill 里
+   已经把这类偶发失败列为最难诊断的一档。
+
+要改成 schema 隔离，前置是把那 6 处裸 SQL 与 2 个迁移参数化、并让锁 key 随 schema 派生。
+那是一个独立变更，不是改这份 skill 能解决的。**在此之前，一个变更一个库是有依据的选择，
+真正要治的是「用完不删」——那是第 4 节的事。**
 
 ## 3. 干活期间：三样共享资源要探活
 
@@ -110,13 +154,29 @@ git commit -F <消息文件> -- <只属于本次的路径>
 编译失败，冲突解完后浏览器手上仍是失败那次的产物——页面全白、控制台无异常、
 tsc/eslint/vitest 全过。停掉再起即可，但不知道这条会排查很久。
 
-清理：
+清理**三样一起做完，并当场核对**——漏掉任何一样都不算收工：
 
 ```bash
 git worktree remove ~/.claude-worktrees/$ID
 git branch -d "change/$ID"      # -d 不是 -D：没合并进去的会被拒绝，这是保护
-docker exec pgbase dropdb -U postgres --if-exists keywordiq_$ID   # 第 2 节建的专属库
+docker exec pgbase dropdb -U postgres --if-exists "$DB"           # 第 2 节建的专属库
+
+# 核对：这三条都必须是空的
+git worktree list | grep "$ID"
+git branch --list "change/$ID"
+docker exec pgbase psql -U postgres -lqt | cut -d'|' -f1 | grep -w "$DB"
 ```
+
+drop 之前照例先看有没有人连着（同第 3 节）：专属库理论上只有你在用，但 dev server
+误连过去、或者你自己还开着一个 psql，都会让 drop 失败或打断正在跑的东西。
+
+**收工清理是尽力而为，不是保障——真正的兜底在第 1 节的孤儿扫描。** 会话不是每次都
+善终：崩了、被关掉、或者干到一半换了方向，wrap-up 就永远不会执行，那台库就此留下。
+2026-08-06 的 `keywordiq_redesign_day_week_window_view` 正是这么来的——闲置了一天多、
+0 连接、64 MB，没人知道还要不要。**能清理它的只有下一个会话**，所以每次开工都扫一遍。
+
+判据用分支而不是时间：`change/<id>` 分支还在 = 那个变更还活着，库别动；分支没了而库还在
+= 孤儿，删。用「超过 N 天」当判据会误杀跨天的长变更。
 
 **`git worktree remove` 会拒绝有未跟踪文件的工作区，这是保护不是障碍。** 遇到时先看那是
 什么再决定——曾有一个 worktree 里躺着一份从未进过 git、主仓也没有副本的业务文档
@@ -137,3 +197,5 @@ docker exec pgbase dropdb -U postgres --if-exists keywordiq_$ID   # 第 2 节建
 | worktree 里不配数据库就开工 | 集成测试静默全跳过，"模型改了查询层没跟上"一路绿到接上真库才红 21 个 |
 | `git worktree remove --force` 图省事 | 删掉了工作区里唯一一份未进 git 的业务文档 |
 | 收工不删专属库 | 每个变更留一个几 GB 的库，攒到磁盘见底且无人知道来历 |
+| 只在收工时清理，开工不扫孤儿 | 会话没善终 → wrap-up 从不执行 → 库无限期留着（真实：闲置一天多的 64 MB 孤儿库） |
+| 想当然改成「一个库分 schema」 | 导入侧裸 SQL 写死 `analysis.`，两个会话共用同一份事实表并互相 TRUNCATE，且无任何报错 |

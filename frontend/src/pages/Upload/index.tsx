@@ -1,6 +1,6 @@
 import { InboxOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-components';
-import { Alert, App, Card, Descriptions, Space, Table, Upload } from 'antd';
+import { Alert, App, Card, Space, Table, Tag, Typography, Upload } from 'antd';
 import type { UploadProps } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -12,8 +12,57 @@ import {
 import { ossDirectUploadAndImport } from '@/services/ossUpload';
 
 const { Dragger } = Upload;
+const { Text } = Typography;
 
 const PERIOD_LABEL: Record<string, string> = { DAY: '日报', WEEK: '周报' };
+
+/**
+ * 批次状态的呈现。文案在前端而不在接口里：接口只回状态码。
+ *
+ * `QUEUED` 的说明是这一格的全部意义。它曾经是个死标签（批次停在那里，没有任何东西
+ * 会接手），现在由后端的接手任务在前一个导入结束后自动开始——不把这句话说出来，
+ * 用户看见「排队中」仍然不知道该等还是该重传。
+ */
+const STATUS_META: Record<string, { label: string; color: string; hint?: string }> = {
+  QUEUED: { label: '排队中', color: 'default', hint: '等前一个导入结束后自动开始' },
+  PROCESSING: { label: '处理中', color: 'processing' },
+  COMPLETED: { label: '已完成', color: 'success' },
+  FAILED: { label: '失败', color: 'error' },
+};
+
+function StatusCell({ item }: { item: ImportStatusItem }) {
+  const meta = STATUS_META[item.status];
+  // 未知状态码原样显示，不吞掉——吞掉会让新状态在界面上表现为「这一格空了」
+  const note = item.status === 'FAILED' ? item.error_message : meta?.hint;
+  return (
+    <Space direction="vertical" size={0}>
+      <Tag color={meta?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
+        {meta?.label ?? item.status}
+      </Tag>
+      {note ? (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {note}
+        </Text>
+      ) : null}
+    </Space>
+  );
+}
+
+/**
+ * 归属回显里的一项。标签与值挨在一起，整组左对齐。
+ *
+ * 这里刻意不用 Descriptions：它是等分栅格，column={3} 会把「US / 日报 / 2026-08-07」
+ * 这三个短值平摊到整个卡片宽度上（约 1360px），值与值之间隔着半屏空白，读的时候要横扫
+ * 一整行才能把三项凑齐。三个字段本就该是一行里连读的一句话，不是表格。
+ */
+function ScopeField({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <Space size={6}>
+      <Text type="secondary">{label}</Text>
+      <Text strong>{value}</Text>
+    </Space>
+  );
+}
 
 /** 判定不出时告诉用户该怎么改文件名——界面不提供绕过文件名的途径，提示必须可操作。 */
 const NEED_HINT: Record<string, string> = {
@@ -117,7 +166,18 @@ export default function UploadPage() {
               showIcon
               style={{ marginBottom: 16 }}
               message={
-                inspected.needs.length ? '无法从文件名判定归属，已拒绝该文件' : '按文件名判定的归属'
+                inspected.needs.length ? (
+                  '无法从文件名判定归属，已拒绝该文件'
+                ) : (
+                  // 标题与三元组同处一行：判定成功时没有第二层信息，撑成两行只是把
+                  // 四个短词摊薄。窄屏放不下时按项换行（wrap），不会挤成一坨。
+                  <Space size={[24, 4]} wrap>
+                    <Text type="secondary">按文件名判定的归属</Text>
+                    <ScopeField label="站点" value={inspected.site} />
+                    <ScopeField label="周期" value={PERIOD_LABEL[inspected.period ?? '']} />
+                    <ScopeField label="报告日期" value={inspected.report_date} />
+                  </Space>
+                )
               }
               description={
                 inspected.needs.length ? (
@@ -126,15 +186,7 @@ export default function UploadPage() {
                       <li key={n}>{NEED_HINT[n]}</li>
                     ))}
                   </ul>
-                ) : (
-                  <Descriptions size="small" column={3} style={{ marginTop: 4 }}>
-                    <Descriptions.Item label="站点">{inspected.site}</Descriptions.Item>
-                    <Descriptions.Item label="周期">
-                      {PERIOD_LABEL[inspected.period ?? '']}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="报告日期">{inspected.report_date}</Descriptions.Item>
-                  </Descriptions>
-                )
+                ) : undefined
               }
             />
           )}
@@ -166,7 +218,11 @@ export default function UploadPage() {
                 render: (v: number) => `${v}%`,
               },
               { title: '总记录', dataIndex: 'total_records' },
-              { title: '状态', dataIndex: 'status' },
+              {
+                title: '状态',
+                dataIndex: 'status',
+                render: (_: unknown, row: ImportStatusItem) => <StatusCell item={row} />,
+              },
             ]}
           />
         </Card>

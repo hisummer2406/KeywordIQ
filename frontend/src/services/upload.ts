@@ -35,11 +35,16 @@ export interface ImportTriggered {
   report_date: string;
 }
 
+/** 批次状态码。中文文案由界面负责，接口只回状态码。 */
+export type ImportStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
 export interface ImportStatusItem {
   batch_name: string;
   progress_percent: number;
   total_records: number;
-  status: string;
+  status: ImportStatus | string;
+  /** 失败原因，或成功时的备注（跳过行数等）。无则为空串。 */
+  error_message?: string;
 }
 
 /** 文件名解析出的归属三元组。判定不出的项为 null，并列在 needs 里。 */

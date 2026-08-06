@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
 
+    # 排队批次接手轮询间隔（秒）。导入串行，抢不到锁的批次留在 QUEUED，由
+    # app.table.upload.import_queue 的轮询任务在锁释放后接手。
+    #
+    # 一轮只是一条带索引的 SELECT，间隔小些不心疼；但它决定的是「前一个导入结束后
+    # 多久才轮到下一个」，30 秒是延迟与空转之间的折中。设 0 关闭接手（此时排队批次
+    # 不会自动开始，需要人工重导——只在排障时这么做）。
+    IMPORT_QUEUE_POLL_SECONDS: int = 30
+
     # 对象存储（OSS）配置：表格文件先前端直传 OSS，再由后端凭 object key 从 OSS 拉取导入。
     # 服务端凭证（AK/SK 或 RAM 角色）只在这里持有，前端只拿短时 STS 临时凭证。
     # OSS_ENABLED=False 时上传/导入走本地文件退路（本地开发与 CI 默认关闭）。
