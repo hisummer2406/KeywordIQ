@@ -41,4 +41,10 @@ known = []
 # 失败分支）改为 logger.exception；user_crud.py 的 11 处随「返值式错误」一并消失——
 # 那些 except 块本身就是为了把异常压成 (False, "消息", None) 而存在的，改成抛
 # APIError 之后不再需要捕获，数据库异常直接上浮交全局处理器。
+[missing_path_bootstrap]
+# scripts/ 下 import 了仓库根模块（app / config / database / ...）却没做
+# sys.path 引导的脚本。规则建立时有两处：prune_retention.py 与
+# generate_synthetic_data.py，都在同一次改动里补上了，故基线为空。
+known = []
+
 [lossy_exception_logging.known]

@@ -38,8 +38,13 @@ import logging
 import sys
 import time
 from datetime import date, timedelta
+from pathlib import Path
 
 from sqlalchemy import text
+
+# 让脚本直接运行时也能 import 仓库根的模块（约定同 seed_admin.py）。
+# 上面文档里的 `python scripts/generate_synthetic_data.py` 写法依赖这行。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 logger = logging.getLogger("synthetic")
 
