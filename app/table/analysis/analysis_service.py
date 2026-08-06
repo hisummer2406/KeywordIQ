@@ -33,6 +33,8 @@ from app.table.analysis.row_segments import (
     INCLUDE_LISTED,
     plan_segments,
     remaining_for_dropped,
+    wants_dropped,
+    wants_listed,
 )
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
@@ -299,11 +301,23 @@ def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, 
         return site, req.view, None
 
     cap = settings.EXPORT_ROW_CAP
-    if crud.request_has_filters(req):
-        count = crud.count_capped(db, site, req.view, on, req, cap + 1)
-    else:
-        count = crud.scope_row_count(db, site, req.view, on)
-    if count > cap:
+    has_filters = crud.request_has_filters(req)
+
+    # 上限按**两段之和**判定。只数在榜段的话，合计超限的导出会照常开流，而流一旦开始
+    # 就只能给出 200 加一份被截断的 CSV——截断的 CSV 会被当成完整数据使用。
+    listed = 0
+    if wants_listed(req.include):
+        listed = (
+            crud.count_capped(db, site, req.view, on, req, cap + 1) if has_filters
+            else crud.scope_row_count(db, site, req.view, on)
+        )
+    # 带筛选时掉榜段恒为空：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配。
+    dropped = (
+        crud.scope_dropped_count(db, site, req.view, on)
+        if wants_dropped(req.include) and not has_filters else 0
+    )
+
+    if listed + dropped > cap:
         raise ExportTooLargeError(
             f"导出结果超过 {cap} 行上限，请补充筛选条件后再导出"
         )
@@ -339,7 +353,8 @@ def iter_export_csv(
 
     db = SessionFactory()
     try:
-        for rows in crud.iter_export_rows(db, site, view, on, req, settings.EXPORT_ROW_CAP):
+        def _emit(rows):
+            """一块行 → CSV 文本。两段共用，保证列与走势的处理方式完全一致。"""
             ids = [r["keyword_id"] for r in rows]
             trends = crud.fetch_trends(db, site, ids, on, view)
             for r in rows:
@@ -347,7 +362,20 @@ def iter_export_csv(
                 kid = r["keyword_id"]
                 row["trend"] = " ".join(str(v) for v in trends.get(kid, []))
                 writer.writerow([_render_cell(row.get(key)) for key, _ in columns])
-            yield _flush()
+            return _flush()
+
+        if wants_listed(req.include):
+            for rows in crud.iter_export_rows(db, site, view, on, req, settings.EXPORT_ROW_CAP):
+                yield _emit(rows)
+
+        # 掉榜段接在在榜段之后，与列表里的顺序一致（掉榜恒在末尾）。带筛选时它恒为空，
+        # 连查都不用查。导出的必须就是屏幕上那份行集合——否则用户拿到的 CSV 会比界面上
+        # 少掉一批词，而那批恰恰是掉榜功能最想让人拿去分析的。
+        if wants_dropped(req.include) and not crud.request_has_filters(req):
+            for rows in crud.iter_export_dropped_rows(
+                db, site, view, on, settings.EXPORT_ROW_CAP
+            ):
+                yield _emit(rows)
     except GeneratorExit:
         # 客户端主动断开（关页面、取消下载），不是错误
         raise
