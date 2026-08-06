@@ -27,6 +27,8 @@
 - [x] 4.1 写事实表前调用 `ensure_fact_partitions`，跨月首次导入不得因分区缺失失败
 - [x] 4.2 实现同一期重复导入的覆盖：事务内先 `DELETE (site, report_date)` 切片再插入，外部观察不到中间态
 - [x] 4.3 导入前 `pg_try_advisory_lock` 串行化，拿不到锁置批次为 `QUEUED` 并提示，结束时释放锁
+- [x] 4.7 排队批次的接手者：`import_queue.run_queue_drainer` 轮询接手 `QUEUED`（否则 4.3 的
+      `QUEUED` 是死标签，第二个文件永不开始）；本地退路无 object_key 者当场判 `FAILED`
 - [x] 4.4 站点参数缺失或文件名前缀与声明站点冲突时，在文件落盘前拒绝
 - [x] 4.5 `ImportBatch` 批次记录写入 site/period/report_date/行数/耗时/状态，关键节点日志带站点
 - [ ] 4.6 多进程分片 —— **可能不需要**：V2 用 COPY 流式装载，实测 33MB/12 秒（推算 232MB≈1.5 分、1.5GB≈9 分），已远优于 V1 的 30–60 分。V1 分片是为并行慢速逐行 UPSERT，COPY 无此瓶颈。待 1.3 在 2C4G 实测后再定是否需要
