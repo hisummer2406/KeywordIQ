@@ -1,6 +1,6 @@
 import { InboxOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-components';
-import { Alert, App, Card, Descriptions, Space, Table, Upload } from 'antd';
+import { Alert, App, Card, Space, Table, Typography, Upload } from 'antd';
 import type { UploadProps } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -12,8 +12,25 @@ import {
 import { ossDirectUploadAndImport } from '@/services/ossUpload';
 
 const { Dragger } = Upload;
+const { Text } = Typography;
 
 const PERIOD_LABEL: Record<string, string> = { DAY: '日报', WEEK: '周报' };
+
+/**
+ * 归属回显里的一项。标签与值挨在一起，整组左对齐。
+ *
+ * 这里刻意不用 Descriptions：它是等分栅格，column={3} 会把「US / 日报 / 2026-08-07」
+ * 这三个短值平摊到整个卡片宽度上（约 1360px），值与值之间隔着半屏空白，读的时候要横扫
+ * 一整行才能把三项凑齐。三个字段本就该是一行里连读的一句话，不是表格。
+ */
+function ScopeField({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <Space size={6}>
+      <Text type="secondary">{label}</Text>
+      <Text strong>{value}</Text>
+    </Space>
+  );
+}
 
 /** 判定不出时告诉用户该怎么改文件名——界面不提供绕过文件名的途径，提示必须可操作。 */
 const NEED_HINT: Record<string, string> = {
@@ -117,7 +134,18 @@ export default function UploadPage() {
               showIcon
               style={{ marginBottom: 16 }}
               message={
-                inspected.needs.length ? '无法从文件名判定归属，已拒绝该文件' : '按文件名判定的归属'
+                inspected.needs.length ? (
+                  '无法从文件名判定归属，已拒绝该文件'
+                ) : (
+                  // 标题与三元组同处一行：判定成功时没有第二层信息，撑成两行只是把
+                  // 四个短词摊薄。窄屏放不下时按项换行（wrap），不会挤成一坨。
+                  <Space size={[24, 4]} wrap>
+                    <Text type="secondary">按文件名判定的归属</Text>
+                    <ScopeField label="站点" value={inspected.site} />
+                    <ScopeField label="周期" value={PERIOD_LABEL[inspected.period ?? '']} />
+                    <ScopeField label="报告日期" value={inspected.report_date} />
+                  </Space>
+                )
               }
               description={
                 inspected.needs.length ? (
@@ -126,15 +154,7 @@ export default function UploadPage() {
                       <li key={n}>{NEED_HINT[n]}</li>
                     ))}
                   </ul>
-                ) : (
-                  <Descriptions size="small" column={3} style={{ marginTop: 4 }}>
-                    <Descriptions.Item label="站点">{inspected.site}</Descriptions.Item>
-                    <Descriptions.Item label="周期">
-                      {PERIOD_LABEL[inspected.period ?? '']}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="报告日期">{inspected.report_date}</Descriptions.Item>
-                  </Descriptions>
-                )
+                ) : undefined
               }
             />
           )}
