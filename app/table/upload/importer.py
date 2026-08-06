@@ -44,10 +44,14 @@ CSV_COLUMN_COUNT = 21
 _HEADER_LINES = 2
 _STAGING_TABLE = "analysis._import_staging"
 
-# period → (事实表, 日期列, 上一期偏移天数)
-_PERIOD_CONFIG: dict[str, tuple[str, str, int]] = {
-    "DAY": ("fact_daily", "report_date", 1),
-    "WEEK": ("fact_weekly", "report_date_week", 7),
+# period → (事实表, 日期列, 上一期偏移天数, 行窗口回溯天数)
+#
+# 行窗口决定掉榜集合的范围：天视图是锚定日往前 7 天 [d-6, d]，周视图是锚定周往前 4 周
+# [w-3, w]。这里存的是**回溯天数**（不含锚定期本身）：天 6 天、周 21 天。
+# 它与"上一期偏移"是两回事——后者只回看一期用来算排名变化，前者圈定整个行集合。
+_PERIOD_CONFIG: dict[str, tuple[str, str, int, int]] = {
+    "DAY": ("fact_daily", "report_date", 1, 6),
+    "WEEK": ("fact_weekly", "report_date_week", 7, 21),
 }
 
 
@@ -87,6 +91,7 @@ class ImportResult:
     staged_rows: int       # 通过清洗、进入暂存表的行数
     skipped_rows: int      # 因列数不符或搜索词为空被跳过的行数
     written_rows: int      # 实际写入事实表的行数
+    dropped_rows: int = 0  # 本期掉榜词数（窗口内出现过但本期无数据）
     date_warning: str | None = None  # 文件名日期与 CSV 内日期不一致时的提示
 
 
@@ -146,7 +151,7 @@ def _num(col: str) -> str:
     return f"COALESCE(NULLIF(regexp_replace({col}, '[^0-9.\\-]', '', 'g'), '')::numeric, 0)"
 
 
-def _validate_period(period: str) -> tuple[str, str, int]:
+def _validate_period(period: str) -> tuple[str, str, int, int]:
     if period not in _PERIOD_CONFIG:
         raise ImportError_(f"period 只支持 DAY 或 WEEK，收到 {period!r}")
     return _PERIOD_CONFIG[period]
@@ -288,7 +293,7 @@ def _upsert_dimensions(session: Session, site: str) -> None:
 
 def _load_facts(session: Session, site: str, period: str, report_date: date) -> int:
     """第三段：关联上一期算派生值，覆盖式追加写事实分区。返回写入行数。"""
-    table, date_col, prev_offset = _validate_period(period)
+    table, date_col, prev_offset, _ = _validate_period(period)
     prev_date = report_date - timedelta(days=prev_offset)
 
     # 覆盖语义：同一期重复导入时先删该切片（事务内，外部观察不到中间态）。
@@ -351,6 +356,63 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
     return result.rowcount
 
 
+def _load_dropped(session: Session, site: str, period: str, report_date: date) -> int:
+    """第四段：算定本期的掉榜集合。返回写入行数。
+
+    掉榜 = **行窗口内出现过、但锚定期没有事实数据**的关键词。窗口按周期取（天 7 天、
+    周 4 周），长度存在 :data:`_PERIOD_CONFIG` 里。
+
+    **为什么在导入侧算。** 这个集合放到查询侧实时算的话，是一次在 180 万行（天）/
+    900 万行（周）上的反连接，而且**每翻一页重跑一次**。掉榜是锚定期的一项事实，
+    锚定期一旦确定就不再变化，因此与排名变化、上期排名、是否新词一样在写入时算定。
+
+    ``DISTINCT ON (keyword_id) ... ORDER BY keyword_id, <日期> DESC`` 取每个词在窗口内
+    **最近**一次在榜的期次与名次——取最早那次会让「最后在榜」这个字段名变成谎话。
+
+    整条是库内 ``INSERT ... SELECT``，不把任何行读进应用进程；库内排序超出 ``work_mem``
+    时外部排序落盘，内存有界。
+    """
+    table, date_col, _, window_back = _validate_period(period)
+    window_start = report_date - timedelta(days=window_back)
+
+    # 覆盖语义：与事实表一致，同一期重复导入时先删该期再重算。
+    session.execute(
+        text(
+            "DELETE FROM analysis.fact_dropped "
+            " WHERE site = :site AND period_type = :period AND anchor_date = :anchor"
+        ),
+        {"site": site, "period": period, "anchor": report_date},
+    )
+
+    result = session.execute(
+        text(
+            f"""
+            INSERT INTO analysis.fact_dropped
+                (site, period_type, anchor_date, keyword_id, last_seen_date, last_ranking)
+            SELECT DISTINCT ON (f.keyword_id)
+                   :site, :period, :anchor, f.keyword_id, f.{date_col}, f.current_ranking
+              FROM analysis.{table} f
+             WHERE f.site = :site
+               AND f.{date_col} >= :win_start
+               AND f.{date_col} < :anchor
+               AND NOT EXISTS (
+                     SELECT 1 FROM analysis.{table} c
+                      WHERE c.site = :site
+                        AND c.{date_col} = :anchor
+                        AND c.keyword_id = f.keyword_id
+                   )
+             ORDER BY f.keyword_id, f.{date_col} DESC
+            """
+        ),
+        {"site": site, "period": period, "anchor": report_date, "win_start": window_start},
+    )
+    logger.info(
+        "掉榜集合算定: %s %s %s，窗口 [%s, %s)，%d 行",
+        site, period, report_date, window_start, report_date, result.rowcount,
+    )
+    return result.rowcount
+
+
 def import_report(
     session: Session, *, site: str, period: str, report_date: date, source: ImportSource
 ) -> ImportResult:
@@ -360,25 +422,31 @@ def import_report(
     调用前应已获得导入串行锁（见 service 层）。会在写事实表前确保分区存在。
     """
     site = normalize_site_code(site)
-    table, _, _ = _validate_period(period)
+    table, _, _, _ = _validate_period(period)
 
     validate_structure(source)
     ensure_fact_partitions(session, table, site, report_date)
+    # 掉榜表也是分区表，写入前同样必须确保分区存在——漏掉的表现是导入到最后一步
+    # 才报 "no partition of relation found for row"，前面的事实数据已经写完了。
+    ensure_fact_partitions(session, "fact_dropped", site, report_date)
 
     total, staged, skipped = _stage_csv(session, source)
     written = 0
+    dropped = 0
     date_warning = None
     if staged:
         date_warning = _check_date_consistency(session, report_date)
         _upsert_dimensions(session, site)
         written = _load_facts(session, site, period, report_date)
+        # 必须在事实写入之后：掉榜集合是拿窗口内历史与**本期已落库的事实**做差集算出来的。
+        dropped = _load_dropped(session, site, period, report_date)
 
     session.execute(text(f"DROP TABLE IF EXISTS {_STAGING_TABLE}"))
 
     return ImportResult(
         site=site, period=period, report_date=report_date,
         total_data_rows=total, staged_rows=staged, skipped_rows=skipped, written_rows=written,
-        date_warning=date_warning,
+        dropped_rows=dropped, date_warning=date_warning,
     )
 
 

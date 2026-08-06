@@ -9,13 +9,13 @@
 import os
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.table.analysis import analysis_crud as crud
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import AnalysisSearchRequest
-from test.test_site_scoped_query_integration import D3, SITE, _ensure_partitions_sync, _seed
+from test.test_site_scoped_query_integration import D2, D3, SITE, _ensure_partitions_sync, _seed
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -50,6 +50,21 @@ def db():
 
 def _req(**kw) -> AnalysisSearchRequest:
     return AnalysisSearchRequest(site=SITE, view="DAY", date=D3, **kw)
+
+
+def _bind_stream_to_fixture(monkeypatch, db):
+    """让 iter_export_csv 的自建会话落在夹具那条连接上。
+
+    ``iter_export_csv`` 按设计自建会话（响应体在依赖清理之后才被消费，复用请求会话会踩
+    「会话已关闭」）——但那个 ``SessionFactory`` 绑的是 .env 里的**应用库**，不是测试库。
+    不接管的话，这条路径在测试里查的是另一个库：夹具灌的数据一行也看不见，导出产出
+    只有表头，而针对表头的断言照样通过。**本文件原有的几个 iter_export_csv 用例就是
+    这样在空结果上「通过」的**，我加掉榜行的用例时才暴露出来。
+
+    绑到夹具的连接上而不是新建引擎：夹具的数据在未提交的事务里，另开连接看不见它。
+    """
+    from sqlalchemy.orm import sessionmaker
+    monkeypatch.setattr(service, "SessionFactory", sessionmaker(bind=db.get_bind()))
 
 
 def test_iter_export_rows_streams_scoped_rows(db):
@@ -143,3 +158,74 @@ def test_export_scope_allows_within_cap(db, monkeypatch):
     _seed(db)
     monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 2)
     assert service.resolve_export_scope(db, _req()) == (SITE, "DAY", D3)
+
+
+# --------------------------------------------------------------------------
+# 掉榜行：导出必须与屏幕上那份行集合一致（任务 3.9）
+# --------------------------------------------------------------------------
+
+
+def _seed_dropped(db, keyword: str = "kw-gone", last_ranking: int = 42):
+    """在 D3 这一期造一个掉榜词：窗口内出现过，锚定期没有行。"""
+    kid = db.execute(
+        text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:kw) RETURNING keyword_id"),
+        {"s": SITE, "kw": keyword},
+    ).scalar()
+    db.execute(
+        text("INSERT INTO analysis.fact_dropped"
+             "(site,period_type,anchor_date,keyword_id,last_seen_date,last_ranking) "
+             "VALUES (:s,'DAY',:a,:k,:l,:r)"),
+        {"s": SITE, "a": D3, "k": kid, "l": D2, "r": last_ranking},
+    )
+    # 预存计数与事实行一起维护——生产上由导入收尾同时写这两处。只写事实行的话，
+    # 分页分界线与导出上限读到的仍是 0，测出来的是一个现实中不存在的状态。
+    db.execute(
+        text("UPDATE analysis.site_data_stats SET dropped_count = dropped_count + 1 "
+             "WHERE site=:s AND period_type='DAY' AND report_date=:a"),
+        {"s": SITE, "a": D3},
+    )
+    return kid
+
+
+def test_export_includes_dropped_rows(db, monkeypatch):
+    """导出的就是用户当下看到的那份数据——掉榜行也在其中。
+
+    列表已经按「在榜 ∪ 掉榜」返回，导出若只导在榜段，用户拿到的 CSV 会比屏幕上少一批
+    行，且行数对不上——而这恰恰是掉榜功能最想让人拿去分析的那批词。
+    """
+    _seed(db)
+    _seed_dropped(db)
+    _bind_stream_to_fixture(monkeypatch, db)
+
+    site, view, on = service.resolve_export_scope(db, _req())
+    body = "".join(service.iter_export_csv(site, view, on, _req()))
+
+    assert "kw-gone" in body, "导出漏掉了掉榜行"
+
+
+def test_export_cap_counts_both_segments(db, monkeypatch):
+    """上限要按两段之和判定，且必须在开流之前判完。
+
+    只数在榜段的话，两段合计超限的导出会照常开流——而流一旦开始就只能给出 200 加一份
+    被截断的 CSV，截断的 CSV 会被当成完整数据用。
+    """
+    _seed(db)          # D3 在榜 2 行
+    _seed_dropped(db)  # D3 掉榜 1 行 → 合计 3 行
+
+    monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 2)
+    with pytest.raises(service.ExportTooLargeError):
+        service.resolve_export_scope(db, _req())
+
+
+def test_export_respects_include_listed(db, monkeypatch):
+    """include=LISTED 时导出不含掉榜行——导出与列表用同一个行集合开关。"""
+    _seed(db)
+    _seed_dropped(db)
+    _bind_stream_to_fixture(monkeypatch, db)
+
+    req = _req(include="LISTED")
+    site, view, on = service.resolve_export_scope(db, req)
+    body = "".join(service.iter_export_csv(site, view, on, req))
+
+    assert "kw-gone" not in body
+    assert "kw-one" in body

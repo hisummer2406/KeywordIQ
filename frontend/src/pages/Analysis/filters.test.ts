@@ -132,3 +132,58 @@ describe('快捷档位', () => {
     expect(matchedPreset({ min: 1, max: 99 }, RANGE_PRESETS.ranking)).toBeUndefined();
   });
 });
+
+// --------------------------------------------------------------------------
+// 行集合开关（include）
+// --------------------------------------------------------------------------
+
+describe('行集合开关', () => {
+  it('缺省不传 include —— 后端缺省即 ALL，不必显式带上', () => {
+    const body = toSearchBody(scope, emptyFilters());
+    expect(body.include).toBeUndefined();
+  });
+
+  it('选定 LISTED / DROPPED 时透传', () => {
+    expect(toSearchBody(scope, { ...emptyFilters(), include: 'LISTED' }).include).toBe('LISTED');
+    expect(toSearchBody(scope, { ...emptyFilters(), include: 'DROPPED' }).include).toBe('DROPPED');
+  });
+
+  it('仅掉榜时不带任何其余筛选——它们只会让掉榜段恒为空', () => {
+    // 筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配。带上去的结果是
+    // 用户选了「仅掉榜」又填了条件，然后得到一张空表，且看不出是哪一步造成的。
+    const body = toSearchBody(scope, {
+      ...emptyFilters(),
+      include: 'DROPPED',
+      q: 'coffee',
+      brands: ['Anker'],
+      categories: ['Electronics'],
+      productTitle: 'maker',
+      ranking: { min: 1, max: 100 },
+      change: { min: -50 },
+      clickShare: { min: 10 },
+      conversionShare: { min: 5 },
+      isNew: true,
+    });
+    expect(body.include).toBe('DROPPED');
+    expect(body.keyword).toBeUndefined();
+    expect(body.asin).toBeUndefined();
+    expect(body.brands).toBeUndefined();
+    expect(body.categories).toBeUndefined();
+    expect(body.product_title).toBeUndefined();
+    expect(body.ranking_min).toBeUndefined();
+    expect(body.ranking_max).toBeUndefined();
+    expect(body.change_min).toBeUndefined();
+    expect(body.click_share_min).toBeUndefined();
+    expect(body.conversion_share_min).toBeUndefined();
+    expect(body.is_new).toBeUndefined();
+  });
+
+  it('ALL / LISTED 下其余筛选照常带上', () => {
+    const body = toSearchBody(scope, {
+      ...emptyFilters(), include: 'LISTED', q: 'coffee', ranking: { min: 1, max: 100 },
+    });
+    expect(body.keyword).toBe('coffee');
+    expect(body.ranking_min).toBe(1);
+  });
+
+});

@@ -159,3 +159,92 @@ def test_in_window_months_are_never_dropped(conn):
     _assert_only_expired_dropped(dropped, cutoff)
     assert _row_count(conn, date(2026, 6, 10)) == 1
     assert _row_count(conn, date(2026, 7, 10)) == 1
+
+
+# --------------------------------------------------------------------------
+# 掉榜表：一级月度分区，随保留窗口一同移出
+# --------------------------------------------------------------------------
+
+
+def _seed_dropped(conn, site: str, anchor: date, keyword: str, last_ranking: int) -> None:
+    """建好掉榜表分区并写入一行掉榜记录。"""
+    partitioning.ensure_fact_partitions(conn, "fact_dropped", site, anchor)
+    kid = conn.execute(
+        text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
+        {"s": site, "k": keyword},
+    ).scalar()
+    conn.execute(
+        text("""INSERT INTO analysis.fact_dropped
+                  (site,period_type,anchor_date,keyword_id,last_seen_date,last_ranking)
+                VALUES (:s,'DAY',:a,:k,:seen,:r)"""),
+        {"s": site, "a": anchor, "k": kid, "seen": anchor, "r": last_ranking},
+    )
+
+
+def _dropped_count(conn, site: str, anchor: date) -> int:
+    """带作用域的计数。
+
+    裸 `count(*)` 只在"库里除了我建的东西什么都没有"时成立，而这是个共享库——
+    别的会话留下的已提交数据会让断言失败，且 diff 完全看不出是这个原因。
+    """
+    return conn.execute(
+        text("SELECT count(*) FROM analysis.fact_dropped "
+             "WHERE site = :s AND anchor_date = :a"),
+        {"s": site, "a": anchor},
+    ).scalar()
+
+
+def test_dropped_table_partition_has_no_site_subpartition(conn):
+    """掉榜表只建一级月度分区，不建站点子分区。
+
+    建错成两级不会在建表时报错，只会在**写入时**报「no partition of relation found
+    for row」——而那时错误信息指向的是导入，不是这里。
+    """
+    partitioning.ensure_fact_partitions(conn, "fact_dropped", "US", date(2026, 4, 10))
+    # relkind 必须过滤：pg_class 里同名前缀的还有主键与索引（'i'），不筛会把
+    # fact_dropped_2026_04_pkey 也算成一个分区。
+    children = conn.execute(
+        text("SELECT relname FROM pg_class "
+             "WHERE relname LIKE 'fact_dropped_2026_04%' AND relkind IN ('r','p')")
+    ).scalars().all()
+    assert children == ["fact_dropped_2026_04"]
+
+
+def test_dropped_rows_land_in_month_partition(conn):
+    """一级分区必须真的能收下行——分区方案对不对，只有写一行才知道。"""
+    _seed_dropped(conn, "US", date(2026, 4, 10), "kw dropped apr", 300)
+    assert _dropped_count(conn, "US", date(2026, 4, 10)) == 1
+
+
+def test_two_sites_share_one_month_partition(conn):
+    """没有站点二级分区，两个站点的记录落在同一个月度分区里，各自仍可按站点查出。"""
+    _seed_dropped(conn, "US", date(2026, 4, 10), "kw us", 100)
+    _seed_dropped(conn, "GB", date(2026, 4, 10), "kw gb", 200)
+    assert _dropped_count(conn, "US", date(2026, 4, 10)) == 1
+    assert _dropped_count(conn, "GB", date(2026, 4, 10)) == 1
+
+
+def test_retention_drops_expired_dropped_partitions(conn):
+    """掉榜表适用同一个热窗口。
+
+    不纳入保留清理的话它会成为一张只涨不掉的表：事实数据按月 DROP 滚出去了，指向
+    它们的掉榜记录还在，且再也没有对应的事实行可供解释。
+    """
+    _seed_dropped(conn, "US", date(2026, 4, 10), "kw apr", 1)
+    _seed_dropped(conn, "US", date(2026, 6, 10), "kw jun", 2)
+
+    cutoff = partitioning.retention_cutoff(date(2026, 7, 15), 3)  # 2026-05-01
+    dropped = partitioning.drop_partitions_older_than(conn, "fact_dropped", cutoff)
+
+    assert "fact_dropped_2026_04" in {p.name for p in dropped}
+    _assert_only_expired_dropped(dropped, cutoff)
+    assert _dropped_count(conn, "US", date(2026, 4, 10)) == 0
+    assert _dropped_count(conn, "US", date(2026, 6, 10)) == 1
+
+
+def test_retention_service_covers_dropped_table(conn):
+    """`run_retention` 遍历的是分区表注册表，掉榜表登记进去就自动被覆盖。
+
+    守的是"注册表是唯一事实来源"这条——有人新增分区表却漏了保留清理时，这条会红。
+    """
+    assert "fact_dropped" in partitioning.PARTITIONED_TABLES

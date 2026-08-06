@@ -24,7 +24,7 @@ from app.site_registry import (
 )
 from app.table.analysis import partitioning
 from app.table.analysis.dimension_model import DimKeyword, DimProduct, SiteRef
-from app.table.analysis.fact_model import FactDaily, FactWeekly, SiteDataStats
+from app.table.analysis.fact_model import FactDaily, FactDropped, FactWeekly, SiteDataStats
 from app.table.upload.import_batch_model import (
     PERIOD_DAY,
     PERIOD_WEEK,
@@ -139,15 +139,69 @@ class TestPartitionNaming:
         with pytest.raises(partitioning.UnknownFactTableError):
             partitioning._validate_table("users; DROP TABLE x")
 
-    def test_registered_tables_cover_both_facts(self):
-        assert set(partitioning.FACT_TABLE_PARTITION_KEYS) == {"fact_daily", "fact_weekly"}
-        assert partitioning.FACT_TABLE_PARTITION_KEYS["fact_daily"] == "report_date"
-        assert partitioning.FACT_TABLE_PARTITION_KEYS["fact_weekly"] == "report_date_week"
+    def test_registered_tables_cover_facts_and_dropped(self):
+        assert set(partitioning.PARTITIONED_TABLES) == {
+            "fact_daily", "fact_weekly", "fact_dropped",
+        }
+        assert partitioning.PARTITIONED_TABLES["fact_daily"].date_column == "report_date"
+        assert partitioning.PARTITIONED_TABLES["fact_weekly"].date_column == "report_date_week"
+        assert partitioning.PARTITIONED_TABLES["fact_dropped"].date_column == "anchor_date"
+
+    def test_only_fact_tables_have_site_subpartition(self):
+        """掉榜表只做一级月度 RANGE，不做站点二级分区。
+
+        它是差集而非全量，比事实表小一到两个数量级；二级分区的裁剪收益这个量级上索引
+        已经够用，代价却是分区数翻倍（站点数 × 月数）。分区方案写在注册表里而不是散在
+        调用点，是为了让"这张表分不分站点"只有一处答案。
+        """
+        assert partitioning.PARTITIONED_TABLES["fact_daily"].site_subpartition is True
+        assert partitioning.PARTITIONED_TABLES["fact_weekly"].site_subpartition is True
+        assert partitioning.PARTITIONED_TABLES["fact_dropped"].site_subpartition is False
+
+    def test_dropped_partition_name_has_no_site_suffix(self):
+        """单级分区的名字里不该出现站点后缀——出现了说明走错了建分区的分支。"""
+        assert partitioning.month_partition_name("fact_dropped", date(2026, 7, 23)) == \
+            "fact_dropped_2026_07"
 
 
 # --------------------------------------------------------------------------
 # 模型结构
 # --------------------------------------------------------------------------
+
+
+class TestFactDroppedStructure:
+    """掉榜表：行窗口内出现过、但锚定期没有数据的关键词。"""
+
+    def test_primary_key_contains_partition_key(self):
+        """PostgreSQL 要求分区表的主键包含分区键。这里只有一级 RANGE(anchor_date)。"""
+        pk_columns = [c.name for c in FactDropped.__table__.primary_key]
+        assert "anchor_date" in pk_columns, "缺少 RANGE 分区键"
+        assert pk_columns == ["site", "period_type", "anchor_date", "keyword_id"]
+
+    def test_partitioned_by_anchor_date(self):
+        assert FactDropped.__table__.dialect_options["postgresql"]["partition_by"] == \
+            "RANGE (anchor_date)"
+
+    def test_carries_last_seen_period_and_ranking(self):
+        """掉榜行唯一能带的跨期信息就是这两个字段，且都必须非空。
+
+        它们是"最后一次在榜"的期次与名次——界面上掉榜行除了历史排名与趋势之外，
+        全靠这两个数才不是一行空白。
+        """
+        columns = FactDropped.__table__.columns
+        assert columns["last_seen_date"].nullable is False
+        assert columns["last_ranking"].nullable is False
+
+    def test_has_index_for_dropped_segment_paging(self):
+        """掉榜段按最后在榜排名分页，索引顺序必须就是分页顺序，否则每页都要排序。
+
+        列序 (site, period_type, anchor_date, last_ranking)：前三列是作用域边界、
+        每次查询都带；最后一列承担排序。
+        """
+        index_columns = {
+            tuple(c.name for c in idx.columns) for idx in FactDropped.__table__.indexes
+        }
+        assert ("site", "period_type", "anchor_date", "last_ranking") in index_columns
 
 
 class TestFactTableStructure:
@@ -330,6 +384,14 @@ class TestStatsAndBatch:
         """总数与可选日期都按这个粒度取，粒度错了两个功能一起错。"""
         pk = [c.name for c in SiteDataStats.__table__.primary_key]
         assert pk == ["site", "period_type", "report_date"]
+
+    def test_stats_carry_dropped_count(self):
+        """掉榜行数与在榜行数同粒度预存，分页总数才能保持 O(1)。
+
+        实时数（在事实表上聚合）会让每次翻页都付一次扫描代价，正是这张表当初存在的理由。
+        """
+        column = SiteDataStats.__table__.columns["dropped_count"]
+        assert column.nullable is False
 
     def test_batch_records_full_provenance(self):
         columns = ImportBatch.__table__.columns.keys()

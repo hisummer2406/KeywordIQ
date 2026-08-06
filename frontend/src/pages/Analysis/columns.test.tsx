@@ -65,3 +65,97 @@ describe('buildColumns', () => {
     expect(container.textContent).toBe('power bank');
   });
 });
+
+// --------------------------------------------------------------------------
+// 窗口化行集合：掉榜标签、历史排名、排名变化率
+// --------------------------------------------------------------------------
+
+const listedRow = {
+  keyword_id: 1, keyword: 'coffee maker', is_dropped: false,
+  last_seen_date: null, last_ranking: null,
+  current_ranking: 120, previous_ranking: 100, ranking_change: 20, is_new: false,
+  history: [100, 90, 80],
+} as any;
+
+const droppedRow = {
+  keyword_id: 2, keyword: 'gone word', is_dropped: true,
+  last_seen_date: '2026-07-17', last_ranking: 305,
+  current_ranking: null, previous_ranking: null, ranking_change: null, is_new: false,
+  history: [305, null, 210],
+} as any;
+
+function cell(view: 'DAY' | 'WEEK', title: string, row: any) {
+  const col: any = buildColumns(view).find((c) => c.title === title);
+  expect(col, `找不到列: ${title}`).toBeTruthy();
+  return render(<>{col.render(null, row)}</>);
+}
+
+describe('现排名列吃掉「新词」独立列', () => {
+  it('不再有独立的「新词」列', () => {
+    expect(buildColumns('DAY').map((c) => c.title)).not.toContain('新词');
+  });
+
+  it('新词以标签形式出现在排名列里', () => {
+    const { getByText } = cell('DAY', '排名', { ...listedRow, is_new: true });
+    expect(getByText('120')).toBeTruthy();
+    expect(getByText('新词')).toBeTruthy();
+  });
+
+  it('掉榜行显示「已掉榜」与最后在榜期，且不显示当期排名', () => {
+    const { getByText, queryByText } = cell('DAY', '排名', droppedRow);
+    expect(getByText('已掉榜')).toBeTruthy();
+    expect(getByText(/2026-07-17/)).toBeTruthy();
+    expect(queryByText('新词')).toBeNull();   // 两标签互斥
+  });
+
+  it('掉榜与新词互斥——掉榜优先，不会同时出现', () => {
+    const { getByText, queryByText } = cell('DAY', '排名', { ...droppedRow, is_new: true });
+    expect(getByText('已掉榜')).toBeTruthy();
+    expect(queryByText('新词')).toBeNull();
+  });
+});
+
+describe('历史排名列', () => {
+  it('日视图标签是 昨天 / 3 天前 / 7 天前', () => {
+    const { getByText } = cell('DAY', '历史排名', listedRow);
+    for (const label of ['昨天', '3 天前', '7 天前']) expect(getByText(label)).toBeTruthy();
+  });
+
+  it('周视图标签是 上周 / 4 周前 / 12 周前', () => {
+    const { getByText } = cell('WEEK', '历史排名', listedRow);
+    for (const label of ['上周', '4 周前', '12 周前']) expect(getByText(label)).toBeTruthy();
+  });
+
+  it('参照期缺失显示占位符，且不隐藏该行', () => {
+    // 隐藏那一行会让三个参照点错位——用户读到的「4 周前」其实是「12 周前」的值
+    const { getByText, getAllByText } = cell('WEEK', '历史排名', droppedRow);
+    expect(getByText('上周')).toBeTruthy();
+    expect(getByText('4 周前')).toBeTruthy();
+    expect(getAllByText('—').length).toBeGreaterThan(0);
+  });
+});
+
+describe('排名变化率列', () => {
+  it('由排名变化与上期排名在展示层算出', () => {
+    // 120 名 ← 100 名：变化 +20，相对上期 100 即 20%
+    const { getByText } = cell('DAY', '排名变化率', listedRow);
+    expect(getByText(/20(\.0)?%/)).toBeTruthy();
+  });
+
+  it('符号与「排名变化」列同向：负数=上升', () => {
+    const up = { ...listedRow, previous_ranking: 100, ranking_change: -20 };
+    const { container } = cell('DAY', '排名变化率', up);
+    const changeCell = cell('DAY', '排名变化', up);
+    // 两列用同一个渲染约定：上升同色同箭头
+    expect(container.textContent).toContain('↑');
+    expect(changeCell.container.textContent).toContain('↑');
+  });
+
+  it('上期排名为空或为零时显示占位符，不显示 Infinity 或 NaN', () => {
+    for (const prev of [null, 0]) {
+      const { container } = cell('DAY', '排名变化率', { ...listedRow, previous_ranking: prev });
+      expect(container.textContent).toContain('—');
+      expect(container.textContent).not.toMatch(/Infinity|NaN/);
+    }
+  });
+});

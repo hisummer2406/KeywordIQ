@@ -61,8 +61,11 @@ def test_week_row_also_carries_trend():
 @pytest.mark.parametrize(
     "view, table, earliest",
     [
-        ("DAY", "fact_daily", "2026-07-12"),  # 7-18 往前 6 天
-        ("WEEK", "fact_weekly", "2026-06-06"),  # 7-18 往前 42 天
+        # 回溯范围取「趋势窗口」与「最远参照点」的大者，好让一次查询同时喂两者：
+        #   日 趋势 6 天 vs 参照点 7 天 → 取 7 天
+        #   周 趋势 21 天(4 周) vs 参照点 84 天(12 周) → 取 84 天
+        ("DAY", "fact_daily", "2026-07-11"),
+        ("WEEK", "fact_weekly", "2026-04-25"),
     ],
 )
 def test_trends_stmt_targets_the_view_s_fact_table_and_window(view, table, earliest):
@@ -79,3 +82,97 @@ def test_trends_stmt_rejects_unknown_view():
     """视图码是内部枚举，拿不到就该炸——静默回落到日报会让周视图显示错误的数据。"""
     with pytest.raises(KeyError):
         trends_stmt("US", [1], date(2026, 7, 18), "MONTH")
+
+
+# --------------------------------------------------------------------------
+# 历史排名：从趋势回溯结果里取，不新增查询
+# --------------------------------------------------------------------------
+
+
+def test_history_offsets_are_all_inside_the_fetch_window():
+    """回溯范围必须盖得住最远那个参照点，否则历史排名列会永远为空。
+
+    这是「历史排名不单独查」这个决定成立的前提：盖不住就只能再发一条查询，
+    而那正是当初否掉的方案。
+    """
+    from app.table.analysis.analysis_crud import HISTORY_OFFSETS, fetch_lookback_days
+
+    for view in ("DAY", "WEEK"):
+        assert fetch_lookback_days(view) >= max(HISTORY_OFFSETS[view])
+
+
+def test_day_history_offsets_are_yesterday_three_and_seven_days():
+    from app.table.analysis.analysis_crud import HISTORY_OFFSETS
+
+    assert HISTORY_OFFSETS["DAY"] == (1, 3, 7)
+
+
+def test_week_history_offsets_are_one_four_and_twelve_weeks():
+    """周视图的参照点以天计：上周 7 天、4 周前 28 天、12 周前 84 天。"""
+    from app.table.analysis.analysis_crud import HISTORY_OFFSETS
+
+    assert HISTORY_OFFSETS["WEEK"] == (7, 28, 84)
+
+
+def test_trend_window_matches_the_row_window_in_both_views():
+    """趋势小图的区间与行窗口一致：日 7 天、周 4 周。
+
+    小图回答的是「这批行所在的这段时间里这个词怎么走」，与行集合同一个区间才对得上。
+    它与历史排名列的参照点是两回事——周视图最远参照点是 12 周前，但那一点只进历史
+    排名列，不进小图（否则 4 周的行窗口配一条 12 周的线，读的人无从判断线上哪一段
+    对应表里这批行）。
+    """
+    from app.table.analysis.analysis_crud import _TREND_SPEC, fetch_lookback_days
+
+    assert _TREND_SPEC["DAY"][2] == 6, "日趋势回溯 6 天 = 含锚定日共 7 点"
+    assert _TREND_SPEC["WEEK"][2] == 21, "周趋势回溯 21 天 = 含锚定周共 4 点"
+
+    # 回溯范围仍要够到最远参照点，否则历史排名列得另发一条查询
+    assert fetch_lookback_days("DAY") == 7
+    assert fetch_lookback_days("WEEK") == 84
+
+
+def test_history_picks_the_exact_reference_periods():
+    from app.table.analysis.analysis_crud import shape_history
+
+    on = date(2026, 7, 18)
+    rows = [
+        (7, date(2026, 7, 11), 90),  # 7 天前
+        (7, date(2026, 7, 15), 40),  # 3 天前
+        (7, date(2026, 7, 16), 30),  # 窗口内但不是参照点
+        (7, date(2026, 7, 17), 20),  # 昨天
+        (7, on, 10),
+    ]
+
+    assert shape_history(rows, on, "DAY") == {7: [20, 40, 90]}
+
+
+def test_missing_reference_period_becomes_none_not_zero():
+    """参照期缺失（未导入或已被保留清理移出）要给 None。
+
+    给 0 会被读成「排名第 0」，而 0 在这份数据里是「无上期」的既有编码——两个含义
+    挤在同一个值上，界面无从区分。
+    """
+    from app.table.analysis.analysis_crud import shape_history
+
+    on = date(2026, 7, 18)
+    rows = [(7, date(2026, 7, 17), 20)]
+
+    assert shape_history(rows, on, "DAY") == {7: [20, None, None]}
+
+
+def test_trend_excludes_points_outside_the_render_window():
+    """回溯查得比趋势要画的多一期（为了盖住 7 天前），多出来那期不能画进小图。
+
+    不裁的话日视图会画出 8 个点，而规格说的是 7 个。
+    """
+    from app.table.analysis.analysis_crud import shape_trends
+
+    on = date(2026, 7, 18)
+    rows = [
+        (7, date(2026, 7, 11), 90),  # d-7：只供历史排名，不进趋势
+        (7, date(2026, 7, 12), 80),  # d-6：趋势的第一个点
+        (7, on, 10),
+    ]
+
+    assert shape_trends(rows, on=on, view="DAY") == {7: [80, 10]}

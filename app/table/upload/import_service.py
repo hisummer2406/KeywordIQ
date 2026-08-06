@@ -56,18 +56,25 @@ class ImportRejected(ConflictError):
 
 
 def _update_site_data_stats(session: Session, result: ImportResult) -> None:
-    """按 (site, period, report_date) 记录行数，供分页总数与日期选择器读取。"""
+    """按 (site, period, report_date) 记录在榜与掉榜行数，供分页总数与日期选择器读取。
+
+    两个计数与事实/掉榜写入在**同一事务**内提交。不一致的后果不是"数字略有偏差"——
+    分页把这两个数当作两段行集合的分界线，边界错位会让某一行出现两次或整行消失。
+    """
     session.execute(
         text(
             """
-            INSERT INTO analysis.site_data_stats (site, period_type, report_date, row_count)
-            VALUES (:site, :period, :rdate, :n)
+            INSERT INTO analysis.site_data_stats
+                (site, period_type, report_date, row_count, dropped_count)
+            VALUES (:site, :period, :rdate, :n, :d)
             ON CONFLICT (site, period_type, report_date)
-            DO UPDATE SET row_count = EXCLUDED.row_count, updated_at = now()
+            DO UPDATE SET row_count = EXCLUDED.row_count,
+                          dropped_count = EXCLUDED.dropped_count,
+                          updated_at = now()
             """
         ),
-        {"site": result.site, "period": result.period,
-         "rdate": result.report_date, "n": result.written_rows},
+        {"site": result.site, "period": result.period, "rdate": result.report_date,
+         "n": result.written_rows, "d": result.dropped_rows},
     )
 
 

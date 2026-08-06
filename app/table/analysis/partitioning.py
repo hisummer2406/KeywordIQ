@@ -1,10 +1,10 @@
-"""事实表的分区管理。
+"""分区表的分区管理。
 
 分区缺失会让导入直接报错，是分区方案最常见的运维事故来源。因此"确保分区存在"
 被刻意放在数据模型层交付，而不是留给导入链路——导入方只需在写入前调用一次，
 不必了解分区的命名与边界规则。
 
-分区结构（两级）::
+事实表是两级::
 
     fact_daily                                     PARTITION BY RANGE (report_date)
     └── fact_daily_2026_07    [2026-07-01, 2026-08-01)   PARTITION BY LIST (site)
@@ -12,11 +12,18 @@
         ├── fact_daily_2026_07_gb                  FOR VALUES IN ('GB')
         └── fact_daily_2026_07_de                  FOR VALUES IN ('DE')
 
+掉榜表只有一级::
+
+    fact_dropped                                   PARTITION BY RANGE (anchor_date)
+    └── fact_dropped_2026_07  [2026-07-01, 2026-08-01)   叶子
+
 一级按月而非按天：按天会产生 365 × 站点数个叶子分区，规划时间开始变得可观，而
 收益已被分区内 ``(site, report_date, ...)`` 的索引覆盖。按月时 12 个月 × 3 站
 = 36 个叶子分区/表，PostgreSQL 在这个量级下规划开销可忽略。
 
-二级按站点：业务要求站点数据物理隔离，同时把扫描再压到 1/站点数。
+事实表的二级按站点：业务要求站点数据物理隔离，同时把扫描再压到 1/站点数。掉榜表
+不做这一层——它是差集而非全量，比事实表小一到两个数量级，裁剪收益索引已经够用。
+每张表分不分站点由 :data:`PARTITIONED_TABLES` 单点定义，建分区与删分区都照它走。
 
 本模块不提交事务，由调用方（service 层）控制事务边界。
 """
@@ -36,15 +43,31 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# 事实表 -> 其 RANGE 分区键列名。新增事实表时在此登记。
-FACT_TABLE_PARTITION_KEYS: dict[str, str] = {
-    "fact_daily": "report_date",
-    "fact_weekly": "report_date_week",
+@dataclass(frozen=True)
+class PartitionScheme:
+    """一张分区表的分区方案。
+
+    ``site_subpartition`` 决定建的是两级还是一级分区。把它记在注册表里而不是散在调用点，
+    是为了让「这张表分不分站点」只有一处答案——散开之后建分区与删分区两处各判一次，
+    迟早会不一致。
+    """
+
+    date_column: str
+    site_subpartition: bool
+
+
+# 分区表 -> 其分区方案。新增分区表时在此登记，保留清理也照此表遍历。
+PARTITIONED_TABLES: dict[str, PartitionScheme] = {
+    "fact_daily": PartitionScheme("report_date", site_subpartition=True),
+    "fact_weekly": PartitionScheme("report_date_week", site_subpartition=True),
+    # 掉榜表只做一级月度 RANGE：它是差集而非全量，比事实表小一到两个数量级，
+    # 二级分区的裁剪收益这个量级上索引已经够用，代价却是分区数翻倍。
+    "fact_dropped": PartitionScheme("anchor_date", site_subpartition=False),
 }
 
 
 class UnknownFactTableError(ValueError):
-    """表名不在 :data:`FACT_TABLE_PARTITION_KEYS` 中。"""
+    """表名不在 :data:`PARTITIONED_TABLES` 中。"""
 
 
 def month_bounds(report_date: date) -> tuple[date, date]:
@@ -71,16 +94,16 @@ def site_partition_name(table_name: str, report_date: date, site: str) -> str:
     return f"{month_partition_name(table_name, report_date)}_{normalize_site_code(site).lower()}"
 
 
-def _validate_table(table_name: str) -> str:
-    """校验表名并返回其分区键列名。
+def _validate_table(table_name: str) -> PartitionScheme:
+    """校验表名并返回其分区方案。
 
-    表名只能来自 :data:`FACT_TABLE_PARTITION_KEYS` 的键，因此后续可以安全地把它
+    表名只能来自 :data:`PARTITIONED_TABLES` 的键，因此后续可以安全地把它
     拼进 DDL——标识符无法参数化，白名单是这里唯一可靠的防线。
     """
-    if table_name not in FACT_TABLE_PARTITION_KEYS:
-        known = ", ".join(sorted(FACT_TABLE_PARTITION_KEYS))
-        raise UnknownFactTableError(f"未知事实表 {table_name!r}，已登记的表为: {known}")
-    return FACT_TABLE_PARTITION_KEYS[table_name]
+    if table_name not in PARTITIONED_TABLES:
+        known = ", ".join(sorted(PARTITIONED_TABLES))
+        raise UnknownFactTableError(f"未知分区表 {table_name!r}，已登记的表为: {known}")
+    return PARTITIONED_TABLES[table_name]
 
 
 def ensure_fact_partitions(session: Session, table_name: str, site: str, report_date: date) -> None:
@@ -97,27 +120,35 @@ def ensure_fact_partitions(session: Session, table_name: str, site: str, report_
     asyncpg 直接走协议，会报「the server expects 0 arguments for this query」。
     这与 ``COPY`` 一样，是导入路径必须保持同步的硬约束之一。
     """
-    _validate_table(table_name)
+    scheme = _validate_table(table_name)
     site_code = normalize_site_code(site)
     schema = settings.DATABASE_SCHEMA
 
     start, end = month_bounds(report_date)
     month_part = month_partition_name(table_name, report_date)
-    site_part = site_partition_name(table_name, report_date, site_code)
 
-    # 一级：月度 RANGE 分区，本身再按站点做 LIST 分区。
-    # RANGE 的分区键由父表定义决定，这里不必重复声明；二级键固定为 site。
+    # 一级：月度 RANGE 分区。RANGE 的分区键由父表定义决定，这里不必重复声明。
+    # 两级方案下它自身再按站点做 LIST 分区；一级方案下它就是叶子。
+    subpartition_clause = " PARTITION BY LIST (site)" if scheme.site_subpartition else ""
     session.execute(
         text(
             f'CREATE TABLE IF NOT EXISTS "{schema}"."{month_part}" '
             f'PARTITION OF "{schema}"."{table_name}" '
-            f"FOR VALUES FROM (:start) TO (:end) "
-            f"PARTITION BY LIST (site)"
+            f"FOR VALUES FROM (:start) TO (:end)"
+            f"{subpartition_clause}"
         ),
         {"start": start, "end": end},
     )
 
+    if not scheme.site_subpartition:
+        logger.info(
+            "已确保分区存在: %s.%s (区间=[%s, %s)，无站点二级分区)",
+            schema, month_part, start, end,
+        )
+        return
+
     # 二级：站点 LIST 分区。
+    site_part = site_partition_name(table_name, report_date, site_code)
     session.execute(
         text(
             f'CREATE TABLE IF NOT EXISTS "{schema}"."{site_part}" '
@@ -154,8 +185,8 @@ def ensure_partitions_for_all_enabled_sites(
 
 
 def ensure_all_fact_partitions(session: Session, site: str, report_date: date) -> None:
-    """为两张事实表同时确保分区存在。"""
-    for table_name in FACT_TABLE_PARTITION_KEYS:
+    """为所有已登记的分区表同时确保分区存在（两张事实表 + 掉榜表）。"""
+    for table_name in PARTITIONED_TABLES:
         ensure_fact_partitions(session, table_name, site, report_date)
 
 
