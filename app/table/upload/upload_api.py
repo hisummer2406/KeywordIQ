@@ -305,12 +305,16 @@ async def get_processing_status(
         stmt = stmt.order_by(desc(ImportBatch.created_at)).limit(5)
         records = list((await db.execute(stmt)).scalars().all())
 
+    # status 回的是**状态码**，中文由前端呈现。此处曾只把 PROCESSING 译成「处理中」、
+    # 其余原样返回，界面上于是中英混排（处理中 / COMPLETED / QUEUED）；展示文案放在
+    # 只服务一个 SPA 的接口里，还让「排队中要不要重传」这类说明无处安放。
     items = [
         {
             "batch_name": r.file_name or f"{r.site} {r.period_type} {r.report_date}",
             "progress_percent": round((r.written_rows / max(r.total_rows, 1)) * 100, 1),
             "total_records": r.total_rows,
-            "status": "处理中" if r.status == "PROCESSING" else r.status,
+            "status": r.status,
+            "error_message": r.error_message,
         }
         for r in records
     ]

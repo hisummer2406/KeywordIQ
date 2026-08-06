@@ -135,3 +135,63 @@ describe('数据上传屏的归属判定', () => {
     expect(byName['GB_热门搜索词_简单_Week_2026_07_20.csv']).toMatchObject({ site: 'GB', period: 'WEEK' });
   });
 });
+
+/**
+ * 导入状态列表。后端只回状态码，中文由前端呈现——把展示文案放后端会得到
+ * 「PROCESSING 翻成中文、其余原样」这种半拉子映射（历史现状就是如此）。
+ */
+describe('最近导入状态', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    inspectFilename.mockResolvedValue({
+      filename: 'x.csv', site: 'US', period: 'DAY', report_date: '2026-07-16', needs: [],
+    });
+  });
+
+  it('状态码翻成中文，排队中说明它会自动开始', async () => {
+    getProcessingStatus.mockResolvedValue({
+      items: [
+        { batch_name: 'a.csv', progress_percent: 0, total_records: 0, status: 'QUEUED',
+          error_message: '' },
+      ],
+    });
+    await renderSettled();
+
+    const row = (await screen.findByText('a.csv')).closest('tr')!;
+    expect(within(row).getByText('排队中')).toBeInTheDocument();
+    // 「等前一个导入结束后自动开始」是这一格的全部意义：不说，用户不知道要不要重传
+    expect(within(row).getByText(/自动开始/)).toBeInTheDocument();
+    expect(within(row).queryByText('QUEUED')).not.toBeInTheDocument();
+  });
+
+  it('失败批次把原因显示出来（否则「请重新上传」这句话没人看得见）', async () => {
+    getProcessingStatus.mockResolvedValue({
+      items: [
+        { batch_name: 'b.csv', progress_percent: 0, total_records: 0, status: 'FAILED',
+          error_message: '已有导入正在进行；本地上传无法自动重排，请稍后重新上传' },
+      ],
+    });
+    await renderSettled();
+
+    const row = (await screen.findByText('b.csv')).closest('tr')!;
+    expect(within(row).getByText('失败')).toBeInTheDocument();
+    expect(within(row).getByText(/请稍后重新上传/)).toBeInTheDocument();
+  });
+
+  it('成功与处理中各有自己的文案', async () => {
+    getProcessingStatus.mockResolvedValue({
+      items: [
+        { batch_name: 'c.csv', progress_percent: 100, total_records: 12, status: 'COMPLETED',
+          error_message: '' },
+        { batch_name: 'd.csv', progress_percent: 30, total_records: 10, status: 'PROCESSING',
+          error_message: '' },
+      ],
+    });
+    await renderSettled();
+
+    expect(within((await screen.findByText('c.csv')).closest('tr')!).getByText('已完成'))
+      .toBeInTheDocument();
+    expect(within((await screen.findByText('d.csv')).closest('tr')!).getByText('处理中'))
+      .toBeInTheDocument();
+  });
+});
