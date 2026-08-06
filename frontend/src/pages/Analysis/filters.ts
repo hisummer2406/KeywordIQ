@@ -1,4 +1,4 @@
-import type { SearchBody, View } from '@/services/analysis';
+import type { Include, SearchBody, View } from '@/services/analysis';
 
 /**
  * 分析查询屏的条件模型与转换。
@@ -40,6 +40,11 @@ export interface FilterDraft {
   /** 品牌精确多选（前三任一命中），与 categories 对称 */
   brands: string[];
   productTitle: string;
+  /**
+   * 行集合维度，缺省 ALL。**不是筛选条件**——它决定"哪些行进表"，而筛选决定
+   * "进表的行里留哪些"。放在同一个草稿里是因为它和筛选一起被「立即查询」提交。
+   */
+  include?: Include;
 }
 
 export const emptyFilters = (): FilterDraft => ({
@@ -139,23 +144,31 @@ const trimmed = (s: string) => (s.trim() ? s.trim() : undefined);
 export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBody {
   const kind = detectSearchKind(filters.q);
   const q = filters.q.trim();
+
+  // 「仅掉榜」时不带任何其余筛选。筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行
+  // 可匹配——带上去的必然结果是一张空表，且用户看不出是哪一步造成的。界面上这些控件
+  // 同时置灰（FilterPanel），此处是同一条规则在数据侧的落实：**只靠界面置灰不够**，
+  // 草稿里的旧值会在切换开关后残留并被提交。
+  const onlyDropped = filters.include === 'DROPPED';
+
   return {
     site: scope.site,
     view: scope.view,
     date: scope.date ?? undefined,
-    keyword: kind === 'keyword' ? q : undefined,
-    asin: kind === 'asin' ? q : undefined,
-    brands: filters.brands.length ? filters.brands : undefined,
-    product_title: trimmed(filters.productTitle),
-    categories: filters.categories.length ? filters.categories : undefined,
-    ranking_min: filters.ranking.min,
-    ranking_max: filters.ranking.max,
-    change_min: filters.change.min,
-    change_max: filters.change.max,
-    click_share_min: filters.clickShare.min,
-    click_share_max: filters.clickShare.max,
-    conversion_share_min: filters.conversionShare.min,
-    conversion_share_max: filters.conversionShare.max,
-    is_new: filters.isNew,
+    include: filters.include && filters.include !== 'ALL' ? filters.include : undefined,
+    keyword: !onlyDropped && kind === 'keyword' ? q : undefined,
+    asin: !onlyDropped && kind === 'asin' ? q : undefined,
+    brands: !onlyDropped && filters.brands.length ? filters.brands : undefined,
+    product_title: onlyDropped ? undefined : trimmed(filters.productTitle),
+    categories: !onlyDropped && filters.categories.length ? filters.categories : undefined,
+    ranking_min: onlyDropped ? undefined : filters.ranking.min,
+    ranking_max: onlyDropped ? undefined : filters.ranking.max,
+    change_min: onlyDropped ? undefined : filters.change.min,
+    change_max: onlyDropped ? undefined : filters.change.max,
+    click_share_min: onlyDropped ? undefined : filters.clickShare.min,
+    click_share_max: onlyDropped ? undefined : filters.clickShare.max,
+    conversion_share_min: onlyDropped ? undefined : filters.conversionShare.min,
+    conversion_share_max: onlyDropped ? undefined : filters.conversionShare.max,
+    is_new: onlyDropped ? undefined : filters.isNew,
   };
 }

@@ -5,13 +5,29 @@ import { clearToken, getToken } from '@/utils/token';
 
 export type View = 'DAY' | 'WEEK';
 
+/** 行集合维度。**不是筛选条件**——筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行。 */
+export type Include = 'ALL' | 'LISTED' | 'DROPPED';
+
 export interface AnalysisRow {
   keyword_id: number;
   keyword: string;
-  current_ranking: number;
-  previous_ranking: number;
-  ranking_change: number;
+  /**
+   * 掉榜行（`is_dropped`）的当期字段一律为空：当期排名、商品槽位、品牌、类目、份额。
+   * **不用最后在榜期的值顶替**——顶替会让用户读到一个看似当期、实则属于另一期的数字。
+   * 它能提供的只有 `last_seen_date` / `last_ranking` 与历史排名、趋势。
+   */
+  is_dropped: boolean;
+  last_seen_date: string | null;
+  last_ranking: number | null;
+  current_ranking: number | null;
+  previous_ranking: number | null;
+  ranking_change: number | null;
   is_new: boolean;
+  /**
+   * 三个历史参照点的排名，顺序固定（日视图：昨天 / 3 天前 / 7 天前）。
+   * 参照期缺失（未导入或已被保留清理移出）时该位为 `null`，不补齐、不用相邻期顶替。
+   */
+  history: (number | null)[];
   /**
    * 三个商品槽位与点击量名次一一对应。槽位缺失时该组字段为空（ASIN/标题/品牌/类目为
    * null，两个份额为 0），**不由后一名顶替**——名次与槽位的对应关系是这些字段的意义所在。
@@ -68,6 +84,8 @@ export interface SearchBody {
   conversion_share_min?: number;
   conversion_share_max?: number;
   is_new?: boolean;
+  /** 行集合维度，缺省 ALL。切到 DROPPED 时其余筛选在界面上必须置灰——它们会让掉榜段恒为空。 */
+  include?: Include;
 }
 
 export interface SearchResponse {
