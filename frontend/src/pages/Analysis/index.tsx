@@ -8,7 +8,7 @@ import {
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useAccess } from '@umijs/max';
-import { Alert, Button, Card, Col, Row, Select, Space, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Row, Select, Space, Tooltip, Typography, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportAnalysis,
@@ -39,6 +39,14 @@ import { emptyFilters, toSearchBody, type FilterDraft, type ScopeDraft } from '.
  * - 站点 / 视图改变：立即重拉日期与类目清单（小表查询），但不重查表格——否则用户会在
  *   一份属于上一个站点的日期清单里做选择
  */
+/** SearchBody 里属于「筛选」的字段。行集合开关（include）不在其中——它是行集合维度。 */
+const FILTER_KEYS = [
+  'keyword', 'asin', 'product_title', 'brands', 'categories',
+  'ranking_min', 'ranking_max', 'change_min', 'change_max',
+  'click_share_min', 'click_share_max', 'conversion_share_min', 'conversion_share_max',
+  'is_new',
+] as const satisfies readonly (keyof SearchBody)[];
+
 export default function AnalysisPage() {
   const access = useAccess();
   const actionRef = useRef<ActionType>();
@@ -74,6 +82,16 @@ export default function AnalysisPage() {
   const draftBody = useMemo(() => toSearchBody(scope, filters), [scope, filters]);
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
   const dirty = draftSig !== appliedSig;
+
+  // 生效条件里是否带了任何筛选（行集合开关不算——它是行集合维度，不是筛选）。
+  // 带了就意味着掉榜段被短路为空，界面须明示。
+  const appliedHidesDropped = (() => {
+    const b = appliedRef.current;
+    if (!b || b.include === 'DROPPED' || b.include === 'LISTED') return false;
+    // 显式列出筛选字段，不用"排除已知非筛选字段"的写法：后者在 SearchBody 新增任何
+    // 字段时都会把它当成筛选，从而误报。
+    return FILTER_KEYS.some((k) => b[k] !== undefined && b[k] !== null);
+  })();
 
   /**
    * 把当前草稿设为生效条件并重查（回第 1 页）。
@@ -331,6 +349,17 @@ export default function AnalysisPage() {
             <Typography.Text type="secondary">
               搜索结果：<Typography.Text strong>{resultTotal.toLocaleString()}</Typography.Text>
             </Typography.Text>
+            {/*
+              筛选一生效，掉榜行必然全部消失——筛选以锚定日那一行为准，而掉榜行在那一天
+              没有行可供匹配。不说出来的话，用户看到的是「加了个筛选，掉榜的词全没了」，
+              会当成数据缺失去排查。读的是**生效条件**而不是草稿：草稿改了还没查时，
+              表格里仍是上一组条件的结果，提示必须跟着数据走。
+            */}
+            {appliedHidesDropped && (
+              <Tooltip title="筛选以所选日期那一行为准，而掉榜行在该日期没有数据，无法参与筛选">
+                <Typography.Text type="warning">本次结果不含掉榜行</Typography.Text>
+              </Tooltip>
+            )}
           </Space>
         }
         request={async (params) => {

@@ -52,6 +52,7 @@ def factory():
     # 清理：TRUNCATE 全部业务表 + 物化视图数据
     with engine.begin() as c:
         c.execute(text("TRUNCATE analysis.fact_daily, analysis.fact_weekly, "
+                       "analysis.fact_dropped, "
                        "analysis.dim_keyword, analysis.dim_product, "
                        "analysis.site_data_stats, analysis.import_batch RESTART IDENTITY CASCADE"))
     engine.dispose()
@@ -297,3 +298,92 @@ def test_drain_returns_none_when_queue_is_empty(factory, tmp_path):
     assert drain_import_queue(
         source_factory=lambda k: LocalFileSource("/nonexistent"), session_factory=factory
     ) is None
+
+
+
+# --------------------------------------------------------------------------
+# 掉榜集合：导入收尾时算定
+# --------------------------------------------------------------------------
+
+
+def _import_day(factory, tmp_path, day: str, rows) -> None:
+    """导入某一天的日报。``day`` 形如 ``2026-07-15``。"""
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+    name = f"US_Day_{day.replace('-', '_')}.csv"
+    path = _write_csv(tmp_path, name, rows)
+    run_import(site="US", period="DAY", report_date=date.fromisoformat(day),
+               source=LocalFileSource(path), original_filename=name, session_factory=factory)
+
+
+def _dropped(factory, anchor: str) -> dict[str, tuple[str, int]]:
+    """取某锚定期的掉榜记录：关键词 -> (最后在榜期, 最后排名)。"""
+    with factory() as s:
+        rows = s.execute(text(
+            "SELECT k.keyword, d.last_seen_date, d.last_ranking "
+            "  FROM analysis.fact_dropped d "
+            "  JOIN analysis.dim_keyword k ON k.keyword_id = d.keyword_id "
+            " WHERE d.site='US' AND d.period_type='DAY' AND d.anchor_date=:a"
+        ), {"a": anchor}).all()
+    return {kw: (str(seen), rank) for kw, seen, rank in rows}
+
+
+def test_dropped_set_carries_last_seen_period_and_ranking(factory, tmp_path):
+    """窗口内掉出的词进掉榜表，并带上它最后一次在榜的期次与名次。
+
+    这两个数是掉榜行唯一能携带的跨期信息——界面上那一行除了历史排名与趋势，全靠它们。
+    """
+    _import_day(factory, tmp_path, "2026-07-14", [_row(1, "a"), _row(2, "b"), _row(3, "c")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a"), _row(2, "b")])
+
+    assert _dropped(factory, "2026-07-15") == {"c": ("2026-07-14", 3)}
+
+
+def test_listed_keywords_are_not_in_dropped_set(factory, tmp_path):
+    """当期在榜的词不进掉榜表——两段行集合必须互斥，否则分页会把同一个词数两遍。"""
+    _import_day(factory, tmp_path, "2026-07-14", [_row(1, "a"), _row(2, "b")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a"), _row(2, "b")])
+
+    assert _dropped(factory, "2026-07-15") == {}
+
+
+def test_last_seen_takes_most_recent_period_in_window(factory, tmp_path):
+    """一个词在窗口内出现多次时，取**最近**那一期，不是最早那一期。"""
+    _import_day(factory, tmp_path, "2026-07-13", [_row(1, "a"), _row(9, "c")])
+    _import_day(factory, tmp_path, "2026-07-14", [_row(1, "a"), _row(5, "c")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a")])
+
+    assert _dropped(factory, "2026-07-15") == {"c": ("2026-07-14", 5)}
+
+
+def test_keyword_dropped_before_window_is_excluded(factory, tmp_path):
+    """行窗口是锚定日往前 7 天；更早掉出的词不该出现。
+
+    没有这条边界，掉榜段会随保留窗口一起膨胀——三个月前掉的词也会挤进今天这张表。
+    """
+    _import_day(factory, tmp_path, "2026-07-05", [_row(1, "a"), _row(7, "old")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a")])
+
+    assert "old" not in _dropped(factory, "2026-07-15")
+
+
+def test_reimporting_same_period_does_not_duplicate_dropped_rows(factory, tmp_path):
+    """同一期重复导入先删该期再重算，与事实数据的覆盖语义一致。"""
+    _import_day(factory, tmp_path, "2026-07-14", [_row(1, "a"), _row(3, "c")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a")])
+
+    assert _dropped(factory, "2026-07-15") == {"c": ("2026-07-14", 3)}
+
+
+def test_dropped_count_recorded_in_site_data_stats(factory, tmp_path):
+    """掉榜数与在榜数同粒度预存，分页总数才能保持 O(1)。"""
+    _import_day(factory, tmp_path, "2026-07-14", [_row(1, "a"), _row(2, "b"), _row(3, "c")])
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a")])
+
+    with factory() as s:
+        listed, dropped = s.execute(text(
+            "SELECT row_count, dropped_count FROM analysis.site_data_stats "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'"
+        )).one()
+    assert (listed, dropped) == (1, 2)
