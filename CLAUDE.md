@@ -179,6 +179,19 @@ ali-oss 要读每片的 ETag 才能 `CompleteMultipartUpload`，缺它的表现�
 **导入串行**：`pg_try_advisory_lock` 保证同一时刻只有一个导入在跑（2C4G 上两个 GB 级导入并发会争抢
 WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 
+**`QUEUED` 必须真的会被接手**，否则它就是个死标签。接手者是 `app/table/upload/import_queue.py`
+的轮询任务（lifespan 里起，间隔 `IMPORT_QUEUE_POLL_SECONDS`，默认 30 秒；多 worker 各起一个，
+靠同一把咨询锁保证仍是串行）。历史上没有它：日报 300K 行要跑约 4 分钟，这期间提交的第二个文件
+停在 `QUEUED` 永不开始，界面显示「队列中」，没有任何东西会回头看它——用户在等一件不会发生的事。
+
+因此两条约束：
+
+- **接手用轮询，不用「导入结束时接着跑下一个」**。链式接力在进程被杀、导入崩在半路、或前一个
+  导入由别的 worker 执行时都会断链，而断链的表现恰恰就是「永远排队」，与它要修的病一模一样。
+- **重建不出数据源的批次不许留在 `QUEUED`**。本地退路（`OSS_ENABLED=false`）没有 object_key，
+  批次里只有文件名，接手时无从重建源——这类当场判 `FAILED` 并写明「请稍后重新上传」。
+  留在 `QUEUED` 等于撒谎。
+
 > V1 的 `csv_processor.py`（pandas 分块 + `ON CONFLICT (keyword)` UPSERT + `ranking_trend_day` JSONB
 > 7 天走势）随 V1 `/upload-csv` 端点一同退役，不要在 V2 路径复用。
 
@@ -314,6 +327,7 @@ HOT_WINDOW_MONTHS=3
 # Upload / OSS（OSS_ENABLED=false 时走本地文件退路，其余 OSS_* 可留空）
 MAX_FILE_SIZE=3221225472  # 3GB
 OSS_ENABLED=false
+IMPORT_QUEUE_POLL_SECONDS=30  # 排队批次多久接手一轮；0 = 不自动接手
 
 # Connection pool（两个引擎各自独立配置，上限是两组相加再 × 4 workers）
 DB_POOL_SIZE=20            # 同步：导入 COPY / 导出游标 / 迁移

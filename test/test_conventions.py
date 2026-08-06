@@ -87,6 +87,52 @@ def find_lossy_exception_logging(source: str) -> list[int]:
     return sorted(found)
 
 
+def find_missing_path_bootstrap(source: str) -> set[str]:
+    """找出 import 了仓库根模块、却没把仓库根放上 ``sys.path`` 的脚本。
+
+    返回被 import 的根模块名集合（干净的返回空集）。
+
+    ``python scripts/x.py`` 放上 sys.path 的是 ``scripts/``，不是仓库根，于是
+    ``from app... import`` 直接 ``ModuleNotFoundError``。scripts/ 下多数文件已有
+    ``sys.path.insert(0, ...parent.parent)`` 这行；缺它的表现是脚本在别人的 cron
+    里跑不起来，而本地 ``PYTHONPATH=.`` 跑得好好的——差别只在调用方式，不在代码。
+
+    函数体内的延迟 import 同样算数：prune_retention 正是把 import 写在 ``main()``
+    里，于是 ``--help`` 正常、真跑才炸。
+    """
+    tree = ast.parse(source)
+    root_modules = {"app", "config", "database", "main", "monitoring"}
+    imported: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(
+                a.name.split(".")[0] for a in node.names
+                if a.name.split(".")[0] in root_modules
+            )
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            head = node.module.split(".")[0]
+            if head in root_modules:
+                imported.add(head)
+
+    if not imported:
+        return set()
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "insert"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "path"
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == "sys"
+        ):
+            return set()
+
+    return imported
+
+
 def settings_fields(config_source: str) -> dict[str, ast.expr | None]:
     """从 config.py 取出 ``Settings`` 的字段名 → 默认值 AST（无默认值则 None）。
 
@@ -236,6 +282,45 @@ def test_rule_ignores_correct_exception_logging():
     assert find_lossy_exception_logging(_CLEAN_SAMPLE) == []
 
 
+_SCRIPT_NO_BOOTSTRAP = """
+import argparse
+
+def main():
+    from app.table.analysis import retention_service
+    from database import SessionFactory
+    return 0
+"""
+
+_SCRIPT_WITH_BOOTSTRAP = """
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.table.analysis import retention_service
+from database import SessionFactory
+"""
+
+_SCRIPT_STDLIB_ONLY = """
+import argparse
+import csv
+from datetime import date
+
+def main():
+    return 0
+"""
+
+
+def test_rule_catches_script_missing_path_bootstrap():
+    """函数体内的延迟 import 也要抓到——真实案例正是这一种。"""
+    assert find_missing_path_bootstrap(_SCRIPT_NO_BOOTSTRAP) == {"app", "database"}
+
+
+def test_rule_ignores_bootstrapped_and_stdlib_only_scripts():
+    assert find_missing_path_bootstrap(_SCRIPT_WITH_BOOTSTRAP) == set()
+    assert find_missing_path_bootstrap(_SCRIPT_STDLIB_ONLY) == set()
+
+
 _CONFIG_SAMPLE = """
 from pydantic_settings import BaseSettings
 
@@ -358,6 +443,34 @@ def test_no_new_settings_doc_drift():
     assert not fixed, (
         f"这些配置项的文档漂移已修复：{sorted(fixed)}，"
         "请从 test/conventions_baseline.toml 的 settings_doc_drift 里删掉。"
+    )
+
+
+def test_no_new_scripts_missing_path_bootstrap():
+    """scripts/ 下 import 仓库根模块却没做 sys.path 引导的脚本：不得新增。
+
+    只查 scripts/：app/ 与顶层模块总是被当包 import，不存在这个问题。
+    """
+    baseline = set(_baseline()["missing_path_bootstrap"]["known"])
+    actual = {
+        str(p.relative_to(REPO))
+        for p in (REPO / "scripts").rglob("*.py")
+        if "__pycache__" not in p.parts and find_missing_path_bootstrap(p.read_text("utf-8"))
+    }
+
+    new = actual - baseline
+    assert not new, (
+        f"这些脚本 import 了仓库根的模块，却没把仓库根放上 sys.path：{sorted(new)}。"
+        "照 scripts/seed_admin.py 补一行 "
+        "sys.path.insert(0, str(Path(__file__).resolve().parent.parent))——"
+        "否则 cron 里的 `python scripts/x.py` 会 ModuleNotFoundError，"
+        "而本地 `PYTHONPATH=.` 跑得好好的。"
+    )
+
+    fixed = baseline - actual
+    assert not fixed, (
+        f"这些脚本已补上 sys.path 引导：{sorted(fixed)}，"
+        "请从 test/conventions_baseline.toml 的 missing_path_bootstrap 里删掉。"
     )
 
 

@@ -26,6 +26,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
+from pathlib import Path
+
+# 让脚本直接运行时也能 import 仓库根的模块（约定同 seed_admin.py）。
+# 没有这行，上面文档里的 cron 写法 `python scripts/prune_retention.py` 会
+# ModuleNotFoundError: No module named 'app' —— 而 `PYTHONPATH=.` 跑得好好的。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 logger = logging.getLogger("prune_retention")
 
@@ -45,7 +52,16 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     from app.table.analysis import retention_service
-    from database import SessionFactory
+    from database import SessionFactory, engine
+
+    # 引擎的 echo 跟随 DEBUG（见 config.py 的说明，刻意不做成独立开关）。但本脚本的
+    # 输出就是运维记录本身——移出了哪些分区、导到了哪里——DEBUG=True 时它会被几十行
+    # SQL 淹掉。这里只关掉本进程这一个引擎的 echo，不动全局约定；要看 SQL 就删掉这行。
+    #
+    # 必须改 ``engine.echo`` 而不是给 logger setLevel：echo 走的是
+    # ``sqlalchemy.log.InstanceLogger``，它的 isEnabledFor 只看自己的 _echo 标志，
+    # **完全不查 logger 的 level**——setLevel(WARNING) 静默无效，SQL 照打。
+    engine.echo = False
 
     with SessionFactory() as session:
         # 先做一次 dry-run 枚举，把将移出的分区摆到用户面前再决定是否执行。
