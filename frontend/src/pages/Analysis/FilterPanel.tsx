@@ -63,6 +63,7 @@ function Row({
 interface RangeRowProps {
   label: string;
   hint?: string;
+  disabled?: boolean;
   suffix?: string;
   presets: readonly RangePreset[];
   value: Range;
@@ -75,7 +76,7 @@ interface RangeRowProps {
  * 档位是区间值的一组预设写入方式，区间值本身才是唯一事实来源——所以档位高亮由
  * 区间值反推（matchedPreset），手输改写一端后高亮自然消失，不需要额外的选中状态。
  */
-function RangeRow({ label, hint, suffix, presets, value, onChange }: RangeRowProps) {
+function RangeRow({ label, hint, disabled, suffix, presets, value, onChange }: RangeRowProps) {
   const active = matchedPreset(value, presets);
   return (
     <Row label={label} hint={hint}>
@@ -84,6 +85,7 @@ function RangeRow({ label, hint, suffix, presets, value, onChange }: RangeRowPro
           size="middle"
           style={{ width: 100 }}
           placeholder="最小值"
+          disabled={disabled}
           suffix={suffix}
           value={value.min ?? null}
           onChange={(v) => onChange({ ...value, min: v ?? undefined })}
@@ -93,6 +95,7 @@ function RangeRow({ label, hint, suffix, presets, value, onChange }: RangeRowPro
           size="middle"
           style={{ width: 100 }}
           placeholder="最大值"
+          disabled={disabled}
           suffix={suffix}
           value={value.max ?? null}
           onChange={(v) => onChange({ ...value, max: v ?? undefined })}
@@ -103,6 +106,7 @@ function RangeRow({ label, hint, suffix, presets, value, onChange }: RangeRowPro
           <Button
             key={p.label}
             size="middle"
+            disabled={disabled}
             type={active === p.label ? 'primary' : 'default'}
             onClick={() => onChange({ ...p.value })}
           >
@@ -121,17 +125,43 @@ export interface FilterPanelProps {
 
 export default function FilterPanel({ value, onChange }: FilterPanelProps) {
   const patch = (p: Partial<FilterDraft>) => onChange({ ...value, ...p });
+  // 「仅掉榜」时其余筛选全部失效：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行
+  // 可匹配，任何条件一生效结果必然为空。置灰是把这条规则摆到用户眼前，免得他填了条件、
+  // 得到空表、再去猜是数据没有还是筛错了。数据侧的落实在 filters.ts（草稿旧值不提交）。
+  const onlyDropped = value.include === 'DROPPED';
 
   return (
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Row label="行集合">
+        <Space size={12} wrap>
+          <Radio.Group
+            size="middle"
+            optionType="button"
+            value={value.include ?? 'ALL'}
+            onChange={(e) => patch({ include: e.target.value })}
+            options={[
+              { label: '全部', value: 'ALL' },
+              { label: '仅在榜', value: 'LISTED' },
+              { label: '仅掉榜', value: 'DROPPED' },
+            ]}
+          />
+          {onlyDropped ? (
+            <Typography.Text type="warning">
+              掉榜行在所选日期没有数据，无法参与下列筛选——已全部停用
+            </Typography.Text>
+          ) : null}
+        </Space>
+      </Row>
       <RangeRow
         label="搜索排名"
+        disabled={onlyDropped}
         presets={RANGE_PRESETS.ranking}
         value={value.ranking}
         onChange={(ranking) => patch({ ranking })}
       />
       <RangeRow
         label="排名变化"
+        disabled={onlyDropped}
         presets={RANGE_PRESETS.change}
         value={value.change}
         onChange={(change) => patch({ change })}
@@ -139,6 +169,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       <RangeRow
         label="点击份额"
         hint={TOP1_ONLY_HINT}
+        disabled={onlyDropped}
         suffix="%"
         presets={RANGE_PRESETS.share}
         value={value.clickShare}
@@ -147,6 +178,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
       <RangeRow
         label="转化份额"
         hint={TOP1_ONLY_HINT}
+        disabled={onlyDropped}
         suffix="%"
         presets={RANGE_PRESETS.share}
         value={value.conversionShare}
@@ -156,6 +188,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
         <Radio.Group
           size="middle"
           optionType="button"
+          disabled={onlyDropped}
           value={value.isNew === undefined ? 'all' : String(value.isNew)}
           onChange={(e) =>
             patch({ isNew: e.target.value === 'all' ? undefined : e.target.value === 'true' })
@@ -171,6 +204,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
         <Input
           size="middle"
           allowClear
+          disabled={onlyDropped}
           style={{ width: 320 }}
           placeholder="标题关键字"
           value={value.productTitle}

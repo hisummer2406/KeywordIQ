@@ -36,9 +36,69 @@ function renderChange(v: number | null | undefined) {
   );
 }
 
+/** 历史参照点的标签，按视图取。顺序与接口的 `history` 数组一一对应，不可换序。 */
+const HISTORY_LABELS: Record<View, [string, string, string]> = {
+  DAY: ['昨天', '3 天前', '7 天前'],
+  WEEK: ['上周', '4 周前', '12 周前'],
+};
+
+const PLACEHOLDER = <span style={{ color: '#ccc' }}>—</span>;
+
+/**
+ * 排名变化率：变化量相对**上期**排名的百分比。
+ *
+ * 在展示层算而不在库里存：它是 ranking_change 与 previous_ranking 的纯函数，存一份
+ * 就多一处可能与那两个数对不上的地方（事实表只追加，改口径要重导）。
+ *
+ * 上期排名为空或为零时给占位符——除以零会渲染出 Infinity / NaN，而用户会把它当成
+ * 「变化极大」而不是「无从计算」。
+ */
+function renderChangeRate(row: AnalysisRow) {
+  const { ranking_change: change, previous_ranking: prev } = row;
+  if (change === null || change === undefined || !prev) return PLACEHOLDER;
+  if (change === 0) return <span style={{ color: '#999' }}>0%</span>;
+  const up = change < 0;
+  const pct = Math.abs((change / prev) * 100);
+  return (
+    <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
+      {up ? '↑' : '↓'} {pct.toFixed(1)}%
+    </span>
+  );
+}
+
+/**
+ * 现排名单元格：排名数值 + 状态标签。
+ *
+ * 「新词」与「已掉榜」**互斥**，掉榜优先：一行要么是本期新出现的，要么是本期已经没有的，
+ * 不可能同时成立。原先「新词」是独立一列，掉榜行在那一列只能显示占位符，白占一列宽度。
+ *
+ * 掉榜行没有当期排名（一律为空，不用最后在榜期的值顶替），故显示最后在榜期而非数字。
+ */
+function renderRanking(row: AnalysisRow) {
+  if (row.is_dropped) {
+    return (
+      <span>
+        <Tag color="default">已掉榜</Tag>
+        <span style={{ color: '#999', fontSize: 12 }}>{row.last_seen_date ?? '—'}</span>
+      </span>
+    );
+  }
+  return (
+    <span>
+      {row.current_ranking ?? PLACEHOLDER}
+      {row.is_new ? <Tag color="gold" style={{ marginInlineStart: 6 }}>新词</Tag> : null}
+    </span>
+  );
+}
+
 export function buildColumns(view: View, siteDomain?: string): ProColumns<AnalysisRow>[] {
   return [
-    { title: '排名', dataIndex: 'current_ranking', width: 80 },
+    {
+      title: '排名',
+      dataIndex: 'current_ranking',
+      width: 120,
+      render: (_, r) => renderRanking(r),
+    },
     // 关键词与商品标题是两列「要读内容」的列，其余自适应列给定宽，把剩余横向空间
     // 让给这两列。
     {
@@ -73,10 +133,27 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
       render: (_, r) => renderChange(r.ranking_change),
     },
     {
-      title: '新词',
-      dataIndex: 'is_new',
-      width: 80,
-      render: (_, r) => (r.is_new ? <Tag color="gold">新词</Tag> : '—'),
+      title: '排名变化率',
+      dataIndex: 'ranking_change',
+      width: 110,
+      render: (_, r) => renderChangeRate(r),
+    },
+    // 单列三行：三个参照点同列纵排，读的是"这个词一路怎么变的"。缺期显示占位符而**不**
+    // 隐藏该行——隐藏会让三个点错位，用户读到的「4 周前」其实是「12 周前」的值。
+    {
+      title: '历史排名',
+      dataIndex: 'history',
+      width: 130,
+      render: (_, r) => (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
+          {HISTORY_LABELS[view].map((label, i) => (
+            <span key={label}>
+              <span style={{ color: '#999' }}>{label}</span>{' '}
+              {r.history?.[i] ?? PLACEHOLDER}
+            </span>
+          ))}
+        </span>
+      ),
     },
     // 不给 width：让它吃掉所有剩余横向空间。
     {
