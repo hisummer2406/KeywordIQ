@@ -46,7 +46,7 @@ def _row(kid: int, keyword: str, ranking: int, *, slots: int = 3) -> dict:
 
 
 def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(2026, 7, 18),
-               trends=None):
+               trends=None, dropped=0, dropped_rows=None):
     from app.auth.simple_auth import simple_auth
     from database import get_db
 
@@ -57,6 +57,10 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
     monkeypatch.setattr(service.crud, "count_capped", lambda db, s, v, on, req, cap: min(total, cap))
     monkeypatch.setattr(service.crud, "iter_export_rows",
                         lambda db, s, v, on, req, limit: iter([rows]))
+    # 掉榜段：默认为空，故这些用例断言的仍是原来那份在榜行为
+    monkeypatch.setattr(service.crud, "scope_dropped_count", lambda db, s, v, on: dropped)
+    monkeypatch.setattr(service.crud, "iter_export_dropped_rows",
+                        lambda db, s, v, on, limit: iter([dropped_rows]) if dropped_rows else iter([]))
     monkeypatch.setattr(service.crud, "fetch_trends", lambda db, s, ids, on, view: trends or {})
     # 流式生成器自建会话：测试里换成请求内的桩会话，避免真连库
     monkeypatch.setattr(service, "SessionFactory", lambda: _NullSession())

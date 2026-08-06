@@ -27,6 +27,21 @@ INCLUDE_DROPPED = "DROPPED"
 VALID_INCLUDES = frozenset({INCLUDE_ALL, INCLUDE_LISTED, INCLUDE_DROPPED})
 
 
+def wants_listed(include: str) -> bool:
+    """本次请求要不要在榜段。"""
+    return include in (INCLUDE_ALL, INCLUDE_LISTED)
+
+
+def wants_dropped(include: str) -> bool:
+    """本次请求要不要掉榜段。
+
+    列表侧由 :func:`plan_segments` 顺带表达了这件事，导出侧没有分页、需要单独问一句
+    ——两处都从这里取答案，免得一处改了另一处忘了（那会让导出与屏幕上的行集合不一致，
+    而这正是导出最不该出的错）。
+    """
+    return include in (INCLUDE_ALL, INCLUDE_DROPPED)
+
+
 @dataclass(frozen=True)
 class SegmentPlan:
     """一页数据分别要向两段问什么。

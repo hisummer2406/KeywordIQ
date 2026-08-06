@@ -580,6 +580,10 @@ def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSea
     return db.execute(count_filtered_stmt(site, view, on, req)).scalar_one()
 
 
+def scope_dropped_count(db: Session, site: str, view: str, on: date) -> int:
+    return db.execute(scope_dropped_count_stmt(site, view, on)).scalar_one_or_none() or 0
+
+
 def iter_export_rows(
     db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int
 ):
@@ -587,6 +591,21 @@ def iter_export_rows(
     result = db.execute(export_stmt(site, view, on, req, limit))
     for partition in result.partitions():
         yield shape_rows(partition)
+
+
+def iter_export_dropped_rows(db: Session, site: str, view: str, on: date, limit: int):
+    """导出的掉榜段：与在榜段同样分块产出，顺序与列表一致（末尾、按最后在榜排名）。
+
+    掉榜段没有筛选一说——筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配，
+    所以调用方在带筛选时根本不该走到这里。
+    """
+    result = db.execute(
+        dropped_stmt(site, view, on, offset=0, limit=limit).execution_options(
+            yield_per=EXPORT_CHUNK_SIZE
+        )
+    )
+    for partition in result.partitions():
+        yield shape_dropped_rows(partition)
 
 
 def fetch_trends(
