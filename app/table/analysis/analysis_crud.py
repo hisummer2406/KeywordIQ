@@ -18,7 +18,12 @@ from app.table.analysis.dimension_model import (
     DimKeyword,
     DimProduct,
 )
-from app.table.analysis.fact_model import FactDaily, FactWeekly, SiteDataStats
+from app.table.analysis.fact_model import (
+    FactDaily,
+    FactDropped,
+    FactWeekly,
+    SiteDataStats,
+)
 from app.table.search.search_schemas import AnalysisSearchRequest
 from config import settings
 
@@ -97,6 +102,53 @@ def scope_row_count_stmt(site: str, view: str, on: date):
         SiteDataStats.period_type == view,
         SiteDataStats.report_date == on,
     )
+
+
+def scope_dropped_count_stmt(site: str, view: str, on: date):
+    """作用域内的掉榜行数：读 site_data_stats.dropped_count（O(1)）。
+
+    与 ``row_count`` 同粒度预存。分页把这两个数当作两段行集合的分界线，实时聚合出来的
+    数与写入时刻的数不一致会让页与页之间错位。
+    """
+    return select(SiteDataStats.dropped_count).where(
+        SiteDataStats.site == site,
+        SiteDataStats.period_type == view,
+        SiteDataStats.report_date == on,
+    )
+
+
+def dropped_stmt(site: str, view: str, on: date, offset: int, limit: int):
+    """掉榜段的一页。
+
+    走 ``idx_fact_dropped_segment (site, period_type, anchor_date, last_ranking)``——
+    索引顺序即分页顺序，计划里不该出现排序节点。加 ``keyword_id`` 兜底保证分页稳定
+    （同名次的行在页与页之间必须有确定顺序，否则翻页会重复或漏行）。
+
+    掉榜行**只关联关键词维度**：它的当期字段全部为空，没有商品/品牌/类目可关联。
+    """
+    return (
+        select(
+            FactDropped.keyword_id.label("keyword_id"),
+            DimKeyword.keyword.label("keyword"),
+            FactDropped.last_seen_date.label("last_seen_date"),
+            FactDropped.last_ranking.label("last_ranking"),
+        )
+        .select_from(FactDropped)
+        .join(DimKeyword, DimKeyword.keyword_id == FactDropped.keyword_id)
+        .where(
+            FactDropped.site == site,
+            FactDropped.period_type == view,
+            FactDropped.anchor_date == on,
+        )
+        .order_by(FactDropped.last_ranking.asc(), FactDropped.keyword_id.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+
+
+def shape_dropped_rows(rows) -> list[dict[str, Any]]:
+    """掉榜段行 → 行字典。当期字段留空，由 schema 的默认值承担。"""
+    return [dict(r._mapping) | {"is_dropped": True} for r in rows]
 
 
 def _base_query(site: str, view: str, on: date):
@@ -243,12 +295,24 @@ def _apply_order(stmt, fact, req: AnalysisSearchRequest):
     return stmt.order_by(col, fact.keyword_id.asc())
 
 
-def search_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest):
-    """主查询：作用域内一页数据（含筛选/排序/分页）。"""
+def search_stmt(
+    site: str, view: str, on: date, req: AnalysisSearchRequest,
+    *, offset: int | None = None, limit: int | None = None,
+):
+    """在榜段的一页（含筛选/排序/分页）。
+
+    ``offset``/``limit`` 显式给出时优先于 ``req`` 的分页字段——分段分页下这一段取的
+    未必是整页（跨界时只取到在榜段末尾），偏移与条数由 ``row_segments.plan_segments``
+    算出，不能再从页码反推。
+    """
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req)
     stmt = _apply_order(stmt, fact, req)
-    return stmt.offset((req.page - 1) * req.perPage).limit(req.perPage)
+    if offset is None:
+        offset = (req.page - 1) * req.perPage
+    if limit is None:
+        limit = req.perPage
+    return stmt.offset(offset).limit(limit)
 
 
 def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int):
@@ -288,17 +352,46 @@ def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limi
     return stmt.limit(limit).execution_options(yield_per=EXPORT_CHUNK_SIZE)
 
 
-# 搜索趋势的回溯规格：视图 → (事实表, 日期列, 回溯天数)。
+# 搜索趋势的回溯规格：视图 → (事实表, 日期列, 趋势回溯天数)。
 #
 # 两个视图的差异恰好只有这三个值，其余 SQL 一字不差，故参数化而不是各写一条语句——
 # 并列的两条语句会让"回溯多远"存两份，改一处忘一处不报错，只是两个视图悄悄不一致。
 #
-# 回溯天数都对应"最多 7 个点"：日 6 天、周 42 天（6 周）。用日期范围而非"最近 7 期"，
-# 是因为范围条件能下推做分区裁剪，而按 keyword 分组取前 N 需要窗口函数且裁不了分区。
+# 趋势渲染的点数：日 7 个（回溯 6 天），周 4 个（回溯 21 天 = 3 周）。
+#
+# **趋势窗口与行窗口一致**（日 7 天、周 4 周）：小图回答的是「这批行所在的这段时间里，
+# 这个词怎么走的」，与行集合同一个区间才对得上。它与历史排名列的参照点是两回事——
+# 参照点可以更远（周视图最远 12 周前），由 fetch_lookback_days 统一取大者，一次回溯
+# 同时喂两处，不多发查询。
+#
+# 用日期范围而非"最近 N 期"，是因为范围条件能下推做分区裁剪，而按 keyword 分组取前 N
+# 需要窗口函数且裁不了分区。
 _TREND_SPEC: dict[str, tuple[Any, Any, int]] = {
     "DAY": (FactDaily, FactDaily.report_date, 6),
-    "WEEK": (FactWeekly, FactWeekly.report_date_week, 42),
+    "WEEK": (FactWeekly, FactWeekly.report_date_week, 21),
 }
+
+# 历史排名的三个参照点，以**距锚定期的天数**表示：
+#   日视图 昨天 / 3 天前 / 7 天前
+#   周视图 上周 / 4 周前 / 12 周前
+#
+# 参照点允许落在趋势渲染窗口之外（日视图的 7 天前就是），它们只对已选定的行做补齐，
+# 不参与决定行集合。
+HISTORY_OFFSETS: dict[str, tuple[int, int, int]] = {
+    "DAY": (1, 3, 7),
+    "WEEK": (7, 28, 84),
+}
+
+
+def fetch_lookback_days(view: str) -> int:
+    """一次回溯查询实际要取多远：趋势窗口与最远参照点取大者。
+
+    这是"历史排名不单独发一条查询"的关键——一次回溯同时喂趋势与历史排名。两个视图都
+    要多取：日视图趋势要 6 天、参照点最远 7 天；周视图趋势要 21 天（4 点）、参照点最远
+    84 天（12 周前）。多取的那部分只进历史排名列，不进趋势小图，也不影响行集合。
+    """
+    _, _, trend_lookback = _TREND_SPEC[view]
+    return max(trend_lookback, max(HISTORY_OFFSETS[view]))
 
 
 def trends_stmt(site: str, keyword_ids: list[int], on: date, view: str):
@@ -311,8 +404,9 @@ def trends_stmt(site: str, keyword_ids: list[int], on: date, view: str):
     未知视图码直接 KeyError：静默回落到日报会让周视图显示另一个周期的数据，
     而那种错误在界面上完全看不出来。
     """
-    fact, date_col, lookback = _TREND_SPEC[view]
-    start = on - timedelta(days=lookback)
+    fact, date_col, _ = _TREND_SPEC[view]
+    # 回溯范围盖住最远参照点，一次查询同时喂趋势与历史排名（见 fetch_lookback_days）。
+    start = on - timedelta(days=fetch_lookback_days(view))
     return (
         select(fact.keyword_id, date_col, fact.current_ranking)
         .where(
@@ -384,21 +478,63 @@ def shape_rows(rows) -> list[dict[str, Any]]:
     return [dict(row._mapping) for row in rows]
 
 
-def shape_trends(rows) -> dict[int, list[int]]:
-    """趋势查询行 → {keyword_id: [排名…]}（按日期升序，依赖语句已排序）。"""
+def _trend_window_start(on: date | None, view: str | None) -> date | None:
+    """趋势渲染窗口的起点。``on``/``view`` 缺省时不裁（旧调用方与直接测形状的用法）。"""
+    if on is None or view is None:
+        return None
+    _, _, trend_lookback = _TREND_SPEC[view]
+    return on - timedelta(days=trend_lookback)
+
+
+def shape_trends(rows, on: date | None = None, view: str | None = None) -> dict[int, list[int]]:
+    """趋势查询行 → {keyword_id: [排名…]}（按日期升序，依赖语句已排序）。
+
+    回溯查询取的范围可能比趋势要画的**多一期**（日视图为了盖住 7 天前的参照点），
+    多出来那期必须裁掉，否则日视图会画出 8 个点而规格说的是 7 个。
+    """
+    start = _trend_window_start(on, view)
     out: dict[int, list[int]] = {}
     for row in rows:
-        kid, rank = row[0], row[-1]
+        kid, report_date, rank = row[0], row[1], row[-1]
+        if start is not None and report_date < start:
+            continue
         out.setdefault(kid, []).append(rank)
     return out
 
 
-def shape_trend_dates(rows) -> dict[int, list[date]]:
-    """(keyword_id, report_date, ranking) 行 → {keyword_id: [日期…]}。"""
+def shape_trend_dates(
+    rows, on: date | None = None, view: str | None = None
+) -> dict[int, list[date]]:
+    """(keyword_id, report_date, ranking) 行 → {keyword_id: [日期…]}。
+
+    与 :func:`shape_trends` 用同一个裁剪窗口——两者的点必须一一对应，各裁各的会让
+    某个点的排名配上另一期的日期。
+    """
+    start = _trend_window_start(on, view)
     out: dict[int, list[date]] = {}
     for kid, report_date, _rank in rows:
+        if start is not None and report_date < start:
+            continue
         out.setdefault(kid, []).append(report_date)
     return out
+
+
+def shape_history(rows, on: date, view: str) -> dict[int, list[int | None]]:
+    """回溯行 → {keyword_id: [上期, 4 期前, 12 期前]}，取自同一次回溯查询。
+
+    参照期缺失（未导入，或已被三个月保留窗口清理移出）时给 ``None`` 而非 0——0 在这份
+    数据里已经是"无上期"的编码（见 ``previous_ranking`` 的默认值），两个含义挤在同一个
+    值上会让界面无从区分"那天排第 0"和"那天没数据"。
+    """
+    by_keyword_date: dict[int, dict[date, int]] = {}
+    for kid, report_date, rank in rows:
+        by_keyword_date.setdefault(kid, {})[report_date] = rank
+
+    offsets = HISTORY_OFFSETS[view]
+    return {
+        kid: [dates.get(on - timedelta(days=off)) for off in offsets]
+        for kid, dates in by_keyword_date.items()
+    }
 
 
 def shape_category_options(rows) -> list[dict[str, Any]]:

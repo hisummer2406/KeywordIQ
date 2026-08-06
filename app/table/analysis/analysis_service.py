@@ -27,6 +27,13 @@ from app.common.errors import (
 )
 from app.site_registry import UnknownSiteError, normalize_site_code
 from app.table.analysis import analysis_crud as crud
+from app.table.analysis.row_segments import (
+    INCLUDE_ALL,
+    INCLUDE_DROPPED,
+    INCLUDE_LISTED,
+    plan_segments,
+    remaining_for_dropped,
+)
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
     AnalysisSearchResponse,
@@ -139,11 +146,63 @@ async def _available_dates(db: AsyncSession, site: str, view: str) -> list[date]
 
 async def _fetch_trends(
     db: AsyncSession, site: str, keyword_ids: list[int], on: date, view: str
-) -> tuple[dict[int, list[int]], dict[int, list[date]]]:
+) -> tuple[dict[int, list[int]], dict[int, list[date]], dict[int, list[int | None]]]:
+    """一次回溯查询同时喂趋势与历史排名。
+
+    回溯范围取「趋势窗口」与「最远参照点」的大者（见 ``crud.fetch_lookback_days``），
+    因此历史排名不需要第二条查询——那是设计上刻意否掉的方案：多一次往返、多一段要维护
+    的 SQL，换来的只是趋势与历史排名解耦，而这两者本来就该对齐。
+    """
     if not keyword_ids:
-        return {}, {}
+        return {}, {}, {}
     rows = (await db.execute(crud.trends_stmt(site, keyword_ids, on, view))).all()
-    return crud.shape_trends(rows), crud.shape_trend_dates(rows)
+    return (
+        crud.shape_trends(rows, on=on, view=view),
+        crud.shape_trend_dates(rows, on=on, view=view),
+        crud.shape_history(rows, on, view),
+    )
+
+
+async def _listed_total(
+    db: AsyncSession, site: str, view: str, on: date,
+    req: AnalysisSearchRequest, has_filters: bool,
+) -> int:
+    """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
+
+    这一点与 ``include_total`` 无关：那个开关管的是"要不要把总数报给前端"，而分界线
+    是内部分页正确性的前提。带筛选时必须精确实算（预存值不反映筛选后的行数）；
+    无筛选时读预存值，O(1)。
+    """
+    if not has_filters:
+        return (
+            await db.execute(crud.scope_row_count_stmt(site, view, on))
+        ).scalar_one_or_none() or 0
+    return (await db.execute(crud.count_filtered_stmt(site, view, on, req))).scalar_one()
+
+
+async def _dropped_total(db: AsyncSession, site: str, view: str, on: date) -> int:
+    return (
+        await db.execute(crud.scope_dropped_count_stmt(site, view, on))
+    ).scalar_one_or_none() or 0
+
+
+def _combined_total(
+    listed_total: int, dropped_total: int, req: AnalysisSearchRequest, has_filters: bool,
+) -> int | None:
+    """报给前端的总数。
+
+    ``include_total=False`` 只在带筛选时才省得下东西（精确计数是这条路径上最贵的一步）；
+    无筛选时两个数都是预存值，省不下什么，故照常返回——少一处"这次到底算没算"的歧义。
+    """
+    if not has_filters:
+        combined = listed_total + dropped_total
+        return combined if req.include in (INCLUDE_ALL,) else (
+            listed_total if req.include == INCLUDE_LISTED else dropped_total
+        )
+    if not req.include_total:
+        return None
+    # 带筛选时掉榜段恒为空，故总数就是筛选后的在榜行数；仅掉榜时结果必然为空。
+    return 0 if req.include == INCLUDE_DROPPED else listed_total
 
 
 async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
@@ -169,29 +228,50 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     if on is None:
         return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
 
-    rows = crud.shape_rows((await db.execute(crud.search_stmt(site, view, on, req))).all())
+    # 筛选一律以锚定期那一行为准，掉榜行在锚定期没有行可供匹配——所以**任何筛选一生效，
+    # 掉榜段就为空**。这不是优化，是「只看选定期」这条口径的必然结果，界面侧须明示。
+    has_filters = crud.request_has_filters(req)
 
-    # 总数：条件没变时不必重算（见 AnalysisSearchRequest.include_total）。
-    # 无筛选那条分支是读 site_data_stats 的 O(1) 查询，便宜到不值得跳过，故不受该开关影响
-    # ——少一条分支，也少一处"这次到底算没算"的歧义。
-    if not crud.request_has_filters(req):
-        total = (await db.execute(crud.scope_row_count_stmt(site, view, on))).scalar_one_or_none() or 0
-    elif req.include_total:
-        total = (await db.execute(crud.count_filtered_stmt(site, view, on, req))).scalar_one()
-    else:
-        total = None
+    listed_total = await _listed_total(db, site, view, on, req, has_filters)
+    dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on)
 
-    # 两个视图都附带只读的搜索趋势：先分页拿本页 keyword_id，再批量补附加，避免在整切片上
-    # 做相关子查询。回溯窗口按视图取（日 7 天 / 周 7 期），差异全在 crud 的 _TREND_SPEC 里。
-    # 附加信息不改变结果集构成。
+    # 两段各自有序且永不交错（掉榜恒在末尾），故按边界切分、各发一条查询，而不是
+    # UNION ALL 之后整体排序——后者会强制物化两段全部行，而在榜段就有四十多万行。
+    plan = plan_segments(
+        offset=(req.page - 1) * req.perPage, limit=req.perPage,
+        listed_total=listed_total, include=req.include,
+    )
+
+    rows: list[dict] = []
+    if plan.listed is not None:
+        offset, limit = plan.listed
+        rows += crud.shape_rows(
+            (await db.execute(crud.search_stmt(site, view, on, req, offset=offset, limit=limit))).all()
+        )
+    if plan.dropped is not None and not has_filters:
+        offset, limit = plan.dropped
+        # 只补「整页还差的那几条」。在榜段实际返回多少由查询说了算，不由预存计数决定
+        # ——计数偏小时多出来的在榜行照常返回，这里少补几条即可，不会有行凭空消失。
+        take = remaining_for_dropped(limit, len(rows)) if plan.listed is not None else limit
+        if take > 0:
+            rows += crud.shape_dropped_rows(
+                (await db.execute(crud.dropped_stmt(site, view, on, offset, take))).all()
+            )
+
+    total = _combined_total(listed_total, dropped_total, req, has_filters)
+
+    # 两个视图都附带只读的搜索趋势与历史排名：先分页拿本页 keyword_id，再批量补附加，
+    # 避免在整切片上做相关子查询。两者取自**同一次**回溯查询。附加信息不改变结果集构成。
+    # 掉榜行同样补——它那一行除了历史排名与趋势之外几乎是空的。
     row_type = DayRowItem if view == "DAY" else WeekRowItem
     ids = [r["keyword_id"] for r in rows]
-    trends, trend_dates = await _fetch_trends(db, site, ids, on, view)
+    trends, trend_dates, history = await _fetch_trends(db, site, ids, on, view)
     data = []
     for r in rows:
         item = row_type(**r)
         item.trend = trends.get(r["keyword_id"], [])
         item.trend_dates = trend_dates.get(r["keyword_id"], [])
+        item.history = history.get(r["keyword_id"], [None, None, None])
         data.append(item.model_dump())
 
     # 该切片有没有重建过品牌/类目。一次 LIMIT 1 探测，相对本页的多次查询可忽略。
