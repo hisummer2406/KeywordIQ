@@ -63,6 +63,10 @@ def _ensure_partitions_sync() -> bool:
             ensure_fact_partitions(conn, "fact_daily", SITE, D1)
             ensure_fact_partitions(conn, "fact_weekly", SITE, W1)
             ensure_fact_partitions(conn, "fact_weekly", SITE, WEEK)
+            # 掉榜表的分区同样要建。漏掉它的表现正是本文件注释里那种最难归因的形态：
+            # 全新库上第一次跑红、重跑就绿——因为第一次跑虽然失败了，却把分区 DDL 提交
+            # 了下来。合并后在 keywordiq_test 上真实发生过一次（3 个导出用例首跑失败）。
+            ensure_fact_partitions(conn, "fact_dropped", SITE, D1)
         return True
     finally:
         engine.dispose()
