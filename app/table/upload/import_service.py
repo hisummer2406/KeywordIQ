@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 
 from sqlalchemy import select, text
@@ -81,17 +82,50 @@ def _rebuild_filter_stats(session: Session, result: ImportResult) -> None:
     )
 
 
-def _try_lock(session: Session) -> bool:
-    """尝试拿导入串行锁。拿到返回 True，锁在 :func:`_execute_locked` 结束时释放。"""
-    return bool(
-        session.execute(
-            text("SELECT pg_try_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY}
-        ).scalar()
-    )
+@contextmanager
+def _import_lock(session: Session) -> Iterator[bool]:
+    """在**专属连接**上持有导入串行锁；``yield`` 出是否拿到，退出时释放。
+
+    锁必须有自己的连接，不能借 Session 的：咨询锁是会话（连接）级的，而 Session 每次
+    ``commit()`` 都会把连接还给池子——池里只要有别的活动（健康检查、导出、另一次查询），
+    下一条语句就可能换到另一条连接上，之后的 ``pg_advisory_unlock`` 便跑在错的连接上，
+    **静默返回 false、什么也没解开**。锁就此挂在池里那条空闲连接上直到进程退出，此后
+    每一次导入都被判为「已有导入在进行」，而库里根本没有导入在跑。
+
+    实测确认过：取锁 pid 56739 → commit → 池子被别的会话用过 → pid 56741，unlock 返回
+    False。这个泄漏之所以能藏住，是因为同一条连接再抢自己已持有的锁会成功（可重入），
+    于是后续导入照跑不误——直到某次拿到别的连接为止。
+
+    附带的好处：进程被杀时连接随之关闭，PostgreSQL 自动释放会话级锁，不留孤儿锁。
+
+    代价是导入期间多占**一条**同步连接（导入本就串行，故是全局 +1，不随并发增长）。
+    """
+    conn = session.get_bind().connect()
+    got = False
+    try:
+        got = bool(
+            conn.execute(
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY}
+            ).scalar()
+        )
+        conn.commit()  # 不把连接留在 idle in transaction
+        yield got
+    finally:
+        try:
+            if got:
+                conn.execute(
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY}
+                )
+                conn.commit()
+        finally:
+            # 即便解锁语句失败，关连接也会让 PostgreSQL 释放它，锁不会留下。
+            conn.close()
 
 
 def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) -> ImportBatch:
     """在**已持有串行锁**的前提下跑完一个批次，并把终态落到批次记录上。
+
+    锁的取与放都在调用方的 :func:`_import_lock` 里（它有自己的连接），本函数不碰锁。
 
     调用方是两条：首次提交（:func:`run_import`）与排队后被接手（:func:`drain_import_queue`）。
     两条必须走同一段代码——导入后的统计回写（``site_data_stats`` 与筛选统计）若只在其中
@@ -151,9 +185,6 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
             session.rollback()
         # 失败无碍原始文件留存：OSS 对象仍在，可据 object key 重导排查。
         return batch
-    finally:
-        session.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY})
-        session.commit()
 
 
 def run_import(
@@ -189,11 +220,11 @@ def run_import(
         session.add(batch)
         session.commit()
 
-        if not _try_lock(session):
-            _mark_not_started(session, batch)
-            raise ImportRejected("另一个导入正在进行，请稍后重试")
-
-        return _execute_locked(session, batch, source)
+        with _import_lock(session) as got_lock:
+            if not got_lock:
+                _mark_not_started(session, batch)
+                raise ImportRejected("另一个导入正在进行，请稍后重试")
+            return _execute_locked(session, batch, source)
     finally:
         session.close()
 
@@ -243,23 +274,22 @@ def drain_import_queue(
             return None
 
         # 先查队列再抢锁：反过来会在队列为空时白拿一次锁。
-        if not _try_lock(session):
-            return None
+        with _import_lock(session) as got_lock:
+            if not got_lock:
+                return None
 
-        logger.info("接手排队批次 %s（%s）", batch.file_name, batch.object_key)
-        try:
-            source = source_factory(batch.object_key)
-        except Exception as exc:
-            # 源重建不出来（对象被删、配置变更……）：锁已经拿到了，必须还回去，
-            # 否则这把锁会一直挂到进程结束，之后所有导入都被判为「已有导入在进行」。
-            logger.exception("排队批次的数据源重建失败 %s", batch.file_name)
-            batch.status = STATUS_FAILED
-            batch.error_message = f"排队后无法重建数据源，请重新上传：{exc}"[:2000]
-            session.commit()
-            session.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY})
-            session.commit()
-            return batch
+            logger.info("接手排队批次 %s（%s）", batch.file_name, batch.object_key)
+            try:
+                source = source_factory(batch.object_key)
+            except Exception as exc:
+                # 源重建不出来（对象被删、配置变更……）。锁由 _import_lock 负责还，
+                # 这里只负责把批次判死，别让它继续假装在排队。
+                logger.exception("排队批次的数据源重建失败 %s", batch.file_name)
+                batch.status = STATUS_FAILED
+                batch.error_message = f"排队后无法重建数据源，请重新上传：{exc}"[:2000]
+                session.commit()
+                return batch
 
-        return _execute_locked(session, batch, source)
+            return _execute_locked(session, batch, source)
     finally:
         session.close()
