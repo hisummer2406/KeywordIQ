@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 View = Literal["DAY", "WEEK"]
+Include = Literal["ALL", "LISTED", "DROPPED"]
 
 
 class AnalysisSearchRequest(BaseModel):
@@ -39,6 +40,15 @@ class AnalysisSearchRequest(BaseModel):
     # 当成"没有数据"而把翻页器清空，那是一种看不出原因的故障。
     include_total: bool = Field(
         True, description="是否计算总数；仅翻页/改排序时传 false 以复用上次结果"
+    )
+
+    # 行集合维度。**不是筛选条件**——筛选一律以锚定期那一行为准，而掉榜行在锚定期没有
+    # 行可供匹配，把它做成筛选条件会与那条规则自相矛盾。
+    #
+    # 非法取值按参数不合法拒绝，不静默回落：回落到 ALL 会让用户以为自己在看「仅掉榜」
+    # 而实际看的是全部，而这两者在界面上区分不出来。
+    include: Include = Field(
+        "ALL", description="行集合：ALL 全部 / LISTED 仅在榜 / DROPPED 仅掉榜"
     )
 
     # 排序（字段按视图白名单校验，非法回落默认；见 crud.SORTABLE_FIELDS）
@@ -94,10 +104,17 @@ class _FactRowBase(BaseModel):
 
     keyword_id: int
     keyword: str
-    current_ranking: int
-    previous_ranking: int
-    ranking_change: int
-    is_new: bool
+    # 掉榜行的当期字段全部为空：当期排名、商品槽位、品牌、类目、份额。**不用最后在榜
+    # 那一期的值顶替**——顶替会让同一列混入不同期次的数据，用户无从判断某一格属于哪天。
+    current_ranking: int | None = None
+    previous_ranking: int | None = None
+    ranking_change: int | None = None
+    is_new: bool = False
+
+    # 掉榜行独有：它唯一能携带的跨期信息，且期次明确标注。
+    is_dropped: bool = False
+    last_seen_date: _Date | None = Field(None, description="掉榜行最后一次在榜的期次")
+    last_ranking: int | None = Field(None, description="掉榜行最后一次在榜时的排名")
 
     top1_asin: str | None = None
     top1_title: str | None = None
@@ -132,13 +149,23 @@ class _FactRowBase(BaseModel):
         default_factory=list, description="搜索趋势各点对应的期次日期"
     )
 
+    # 三个历史参照点的排名，顺序固定为 [上期, 4 期前, 12 期前]（日视图即昨天/3 天前/
+    # 7 天前）。取自与趋势**同一次**回溯查询，不额外发查询。
+    # 参照期缺失时该位为 None 而非 0——0 已经是"无上期"的编码，两个含义不能挤在一起。
+    #
+    # **排名变化率不在这里**：它可由 ranking_change 与 previous_ranking 整除得出，
+    # 多下发一份只会在两处口径漂移时产生互相矛盾的数字。前端在展示层算。
+    history: list[int | None] = Field(
+        default_factory=list, description="历史排名 [上期, 4 期前, 12 期前]"
+    )
+
 
 class DayRowItem(_FactRowBase):
-    """日视图行。趋势回溯 7 天。"""
+    """天视图行。趋势渲染 7 点，历史参照点为昨天 / 3 天前 / 7 天前。"""
 
 
 class WeekRowItem(_FactRowBase):
-    """周视图行。趋势回溯 7 期周报。"""
+    """周视图行。趋势渲染 12 点，历史参照点为上周 / 4 周前 / 12 周前。"""
 
 
 class AnalysisSearchResponse(BaseModel):
