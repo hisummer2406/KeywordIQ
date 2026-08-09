@@ -176,3 +176,35 @@ def test_trend_excludes_points_outside_the_render_window():
     ]
 
     assert shape_trends(rows, on=on, view="DAY") == {7: [80, 10]}
+
+
+@pytest.mark.parametrize(
+    "view, outside, inside",
+    [
+        # 日：回溯 7 天盖住 d-7 参照点，趋势只画 [d-6, d] 共 7 点
+        ("DAY", date(2026, 7, 11), date(2026, 7, 12)),
+        # 周：回溯 84 天盖住 w-12 参照点，趋势只画 [w-3, w] 共 4 点
+        ("WEEK", date(2026, 4, 25), date(2026, 6, 27)),
+    ],
+)
+def test_fetch_trends_trims_to_the_render_window(view, outside, inside):
+    """导出走的 ``fetch_trends`` 必须与列表页用同一个裁剪窗口。
+
+    不裁的话导出的走势会比界面多出参照点那几期（日 8 点 vs 7 点、周 13 点 vs 4 点），
+    而导出的契约是「用户当下看到的那份数据」——两边的点数不一样，拿 CSV core 对界面
+    就会发现对不上，且没有任何地方会报错。
+    """
+    from app.table.analysis.analysis_crud import fetch_trends
+
+    on = date(2026, 7, 18)
+    rows = [(7, outside, 90), (7, inside, 80), (7, on, 10)]
+
+    class _FakeResult:
+        def all(self):
+            return rows
+
+    class _FakeSession:
+        def execute(self, _stmt):
+            return _FakeResult()
+
+    assert fetch_trends(_FakeSession(), "US", [7], on, view) == {7: [80, 10]}
