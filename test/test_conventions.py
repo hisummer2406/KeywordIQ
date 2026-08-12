@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from migration_scope import V2_TABLES
+
 pytestmark = pytest.mark.conventions
 
 REPO = Path(__file__).resolve().parent.parent
@@ -232,6 +234,36 @@ def find_settings_doc_drift(
     return drift
 
 
+def declared_table_names(model_sources: list[str]) -> set[str]:
+    """从模型源码里取出所有 ``__tablename__`` 字面量。"""
+    names: set[str] = set()
+    for source in model_sources:
+        for node in ast.walk(ast.parse(source)):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(getattr(t, "id", None) == "__tablename__" for t in node.targets):
+                continue
+            value = _literal(node.value)
+            if isinstance(value, str):
+                names.add(value)
+    return names
+
+
+def find_tables_outside_migration_scope(
+    model_sources: list[str], listed: frozenset[str] | set[str]
+) -> set[str]:
+    """找出声明了 ``__tablename__`` 却没登记进 ``V2_TABLES`` 的表。
+
+    ``migration_scope.include_object`` 是白名单：不在清单里的表，autogenerate 既不
+    比对也不报错，对模型改动的反应是「没有差异」——与「确实没改」无法区分。
+    ``dim_brand`` / ``dim_category`` / ``fact_dropped`` 都曾这样漏过。
+
+    **只查这一个方向。** 反过来「清单里有、模型里没有」是正常的：``role_permission``
+    是 ``Table(...)`` 声明的多对多关联表，没有 ``__tablename__``。
+    """
+    return declared_table_names(model_sources) - set(listed)
+
+
 # --------------------------------------------------------------------------
 # 规则自测：违规样本必须被抓到，干净样本必须不报
 # --------------------------------------------------------------------------
@@ -364,6 +396,24 @@ class Settings(BaseSettings):
     assert drift["POOL"]["documented"] == 8
 
 
+def test_rule_catches_table_outside_migration_scope():
+    model = '''
+class A(Base):
+    __tablename__ = "listed"
+
+class B(Base):
+    __tablename__ = "forgotten"
+'''
+    assert find_tables_outside_migration_scope(
+        [model], {"listed", "assoc_table_without_tablename"}
+    ) == {"forgotten"}
+
+
+def test_rule_ignores_fully_registered_models():
+    model = 'class A(Base):\n    __tablename__ = "listed"\n'
+    assert find_tables_outside_migration_scope([model], {"listed", "extra"}) == set()
+
+
 # --------------------------------------------------------------------------
 # 对真实代码库执行
 # --------------------------------------------------------------------------
@@ -488,4 +538,19 @@ def test_env_example_covers_every_setting():
     assert not missing, (
         f".env.example 缺少这些配置项：{sorted(missing)}。"
         "CLAUDE.md 的 guardrail：新增配置务必同步过去，含单位与安全的本地默认值。"
+    )
+
+
+def test_every_model_table_is_in_migration_scope():
+    """每张模型表都要登记进 alembic/env.py 的 V2_TABLES。
+
+    漏登不会报错，只会让 autogenerate 对这张表的改动一律回答「没有差异」——
+    与「确实没改」无法区分。dim_brand / dim_category / fact_dropped 都曾漏过。
+    """
+    models = [p.read_text("utf-8") for p in _python_files() if p.name.endswith("_model.py")]
+    missing = find_tables_outside_migration_scope(models, V2_TABLES)
+    assert not missing, (
+        f"这些表没登记进 migration_scope.py 的 V2_TABLES：{sorted(missing)}。"
+        "include_object 是白名单，漏登的表 autogenerate 看不见也不报错。"
+        "分区表登记父表名即可，叶子分区不要登记。"
     )
