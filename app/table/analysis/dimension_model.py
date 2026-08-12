@@ -9,6 +9,13 @@
 
 schema 由 ``database.Base`` 的 metadata 统一提供（取自 ``settings.DATABASE_SCHEMA``），
 因此各模型不再单独硬编码 schema。
+
+**站点没有维度表。** 站点的中文名、时区、域名都是 ``app.site_registry.SITE_CATALOG``
+里的编译期常量，界面经 ``GET /api/upload/sites`` 直接取用。曾有一张 ``sites`` 参考表
+存同样三个字段，从建表到删除期间没有任何代码写过它，库里始终是空的——而空表的害处不
+只是没用：它是站点码第二份事实来源的入口，正是 ``GB``/``UK`` 两种写法这类问题的来源。
+等站点真需要存运营可配的数据（站点级导入开关、汇率之类）时再建表也不迟，那时它才有
+非展示用途的字段可存。
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.table.analysis.column_comments import SITE_COLUMN_COMMENT
 from database import Base
 
 # 搜索索引统一用 pg_trgm 三元组 GIN，因为界面的搜索是子串 ILIKE '%x%'（沿用 V1 行为），
@@ -45,7 +53,7 @@ class DimKeyword(Base):
     __tablename__ = "dim_keyword"
 
     keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    site: Mapped[str] = mapped_column(String(8), nullable=False, comment="ISO alpha-2 站点码")
+    site: Mapped[str] = mapped_column(String(8), nullable=False, comment=SITE_COLUMN_COMMENT)
     keyword: Mapped[str] = mapped_column(String(500), nullable=False, comment="搜索关键词原文")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -59,7 +67,7 @@ class DimKeyword(Base):
         Index("idx_dim_keyword_trgm", "keyword", postgresql_using="gin",
               postgresql_ops={"keyword": _TRGM}),
         {"comment": "关键词维度：按站点隔离，(site,keyword) 唯一。子串搜索的 pg_trgm 索引"
-                    "建在此表（约 1500 万行）而非事实表（约 8 亿行）。"},
+                    "建在此表（约 1500 万行）而非事实表（约 8 亿行），是星型模型最大的一处节省。"},
     )
 
 
@@ -139,29 +147,4 @@ class DimCategory(Base):
     __table_args__ = (
         UniqueConstraint("name", name="uq_dim_category_name"),
         {"comment": "类目维度（关键词级排行项，非商品属性）。"},
-    )
-
-
-class SiteRef(Base):
-    """站点参考表，供界面展示站点中文名、时区与域名。
-
-    它**不是**站点合法性的判定依据——那是 ``app.site_registry`` 的职责。这张表刻意
-    不与事实表建外键：批量灌入时每行一次外键检查是纯粹的导入税，而导入是唯一的写入
-    路径且已在应用层校验站点码。作为补偿，应有一条巡检查询定期比对库中实际出现的
-    站点与站点清单。
-    """
-
-    __tablename__ = "sites"
-
-    __table_args__ = {
-        "comment": "站点参考表：仅供界面展示中文名/时区/域名。站点码合法性由 site_registry 保证，"
-                   "此表不与事实表建外键。",
-    }
-
-    code: Mapped[str] = mapped_column(String(8), primary_key=True, comment="ISO alpha-2 站点码")
-    name_zh: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="")
-    domain: Mapped[str] = mapped_column(String(128), nullable=False, default="")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

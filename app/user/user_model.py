@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.user.rbac_model import Role  # rbac_model 不反向依赖本模块，无循环导入
@@ -21,8 +21,15 @@ class UserCenter(Base):
     role_id: Mapped[int | None] = mapped_column(
         ForeignKey(f"{settings.DATABASE_SCHEMA}.role.id", ondelete="RESTRICT"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=func.now(), onupdate=func.now())
+    # 必须显式写 timezone=True。裸 Mapped[datetime] 推出的是**无时区**的 timestamp，
+    # 而库里这两列是 timestamptz（迁移建的）——模型与库不一致时 autogenerate 会生成一条
+    # 把列改窄的 alter_column，跑下去就把时区信息丢了。全仓其余时间戳列都带 timezone=True。
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = {"comment": "用户表：登录账号与口令散列。"}
 
     # 角色随用户取出，供鉴权解析权限
     role: Mapped[Role | None] = relationship(lazy="selectin")
