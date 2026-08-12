@@ -1,0 +1,40 @@
+// Umi 约定式全局样式：src/global.less 会被自动引入，无需手动 import。
+//
+// **这里只放 token 表达不了的东西。** 能用 ProLayout 的 header token 配的一律走 token
+// （见 src/app.tsx）：token 跟着组件版本走，而下面这类选择器盯的是 `ant-pro-*` 内部
+// 类名，组件升级就可能失效。每加一条都要能回答「为什么 token 做不到」。
+
+// 顶栏渐变底。
+//
+// 为什么不能用 token：`token.header.colorBgHeader` 落到 CSS 的 `background-color`，
+// 而 `linear-gradient(...)` 是 `background-image` 的值——塞进 background-color 整条
+// 声明会被浏览器丢弃，顶栏保持白色，不报错也没效果。故渐变只能单独用 background-image
+// 叠在 token 的兜底纯色之上：万一这条选择器随版本失效，顶栏退化成 #1554ad 纯深蓝，
+// 白字仍然可读，不会出现白底白字这种全屏不可用的状态。
+.ant-pro-layout .ant-pro-layout-header {
+  background-image: linear-gradient(90deg, #2f7fd6 0%, #4a9df5 45%, #3fc0bd 100%);
+  // 与下方白色内容区之间的过渡。渐变本身没有边界，靠一道极淡的投影收住。
+  box-shadow: 0 1px 4px rgb(0 21 41 / 12%);
+}
+
+// 顶栏菜单文字加粗。
+//
+// 为什么不能用 token：ProLayout 的 header token 只有颜色（colorTextMenu 那一组），
+// 没有字重的调节口，只能落到选择器。
+//
+// 加粗不只是观感：底色提亮之后白字的对比度随之下降（浅蓝配白已接近 4.5:1 的下限），
+// 而 WCAG 对粗体文字的门槛是 3:1——字重和底色亮度在这里是一件事的两面，调浅了就得加粗，
+// 两条要一起改。谁先动都会让另一条显得「不够」。
+.ant-pro-layout .ant-pro-layout-header {
+  .ant-menu-horizontal .ant-menu-item,
+  .ant-menu-horizontal .ant-menu-submenu-title,
+  .ant-pro-top-nav-header-main-left .ant-pro-top-nav-header-logo h1 {
+    font-weight: 700;
+  }
+}
+
+// 混合布局下，二级菜单所在的左侧栏紧贴顶栏。顶栏变深后，侧栏顶部那条默认分隔线
+// 会在深蓝下方留下一道突兀的浅灰，去掉。
+.ant-pro-layout .ant-pro-sider {
+  border-inline-end: none;
+}

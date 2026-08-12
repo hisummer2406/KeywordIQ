@@ -74,18 +74,27 @@ class SimpleAuth:
         return user
 
     @staticmethod
-    def get_super_user():
-        """获取超级用户依赖（保留兼容；等价于 admin 角色或 is_super）"""
+    def require_super():
+        """要求 ``is_super``。用于**不可授予**的能力——用户管理。
 
-        def _get_super_user(current_user: UserCenter = Depends(simple_auth.get_current_user)) -> UserCenter:
-            if not (current_user.is_super or current_user.role_code == "admin"):
+        判据只看 `is_super`，**不看角色码**。取代了此前那个「is_super 或 role_code ==
+        'admin'」的 `get_super_user`（声明后从未被使用）：把角色码也算作超管，等于让
+        「谁能管用户」变成一件可以通过改角色配置来改变的事，而这正是本守卫要排除的。
+
+        与 :meth:`require_permission` 的分工：权限点是**可授予**的能力，走角色配置；
+        这里是不可授予的能力，没有对应权限点（`user:manage` 已从矩阵中移除——一个
+        勾了也不生效的权限比没有更糟）。
+        """
+
+        def _require_super(current_user: UserCenter = Depends(simple_auth.get_current_user)) -> UserCenter:
+            if not current_user.is_super:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail="需要超级管理员权限"
+                    detail="需要超级管理员权限",
                 )
             return current_user
 
-        return _get_super_user
+        return _require_super
 
     @staticmethod
     def require_permission(permission: str):

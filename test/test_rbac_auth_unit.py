@@ -65,9 +65,71 @@ def test_require_permission_denies_when_missing():
 
 
 def test_super_user_bypasses_permission_check():
-    dep = simple_auth.require_permission(P.USER_MANAGE)
+    dep = simple_auth.require_permission(P.ANALYSIS_EXPORT)
     su = _super()
     assert dep(current_user=su) is su
+
+
+# ---------------- require_super：不可授予的能力（用户管理） ----------------
+
+
+def _admin_not_super():
+    """admin 角色、但 is_super=False。
+
+    这个组合是本组测试的全部意义：用户管理收紧后，「谁能管用户」不再由角色配置决定。
+    此前那个 `get_super_user` 判据是「is_super **或** role_code == 'admin'」，
+    这种用户会被放行。
+    """
+    return _make_user("admin", P.PERMISSIONS.keys(), is_super=False, uid=3)
+
+
+def test_require_super_allows_super():
+    dep = simple_auth.require_super()
+    su = _super()
+    assert dep(current_user=su) is su
+
+
+def test_require_super_denies_admin_role_without_is_super():
+    """核心回归：admin 角色 + 拥有全部权限点，只要 is_super 为假就必须被拒。"""
+    dep = simple_auth.require_super()
+    with pytest.raises(HTTPException) as exc:
+        dep(current_user=_admin_not_super())
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("factory", [_operator, _analyst])
+def test_require_super_denies_ordinary_roles(factory):
+    dep = simple_auth.require_super()
+    with pytest.raises(HTTPException) as exc:
+        dep(current_user=factory())
+    assert exc.value.status_code == 403
+
+
+def test_user_manage_is_not_a_grantable_permission():
+    """用户管理没有权限点——它不可授予。
+
+    留着一个 `user:manage` 而端点只认 is_super，等于在角色编辑界面放一个勾了也不生效
+    的复选框：管理员以为把它给了运营，运营却仍然进不去。
+    """
+    assert "user:manage" not in P.PERMISSIONS
+    assert "role:manage" not in P.PERMISSIONS  # 从加入起就没有任何代码读过，同批清掉
+    for _name, codes in P.ROLES.values():
+        assert "user:manage" not in codes
+        assert "role:manage" not in codes
+
+
+def test_removed_permissions_are_not_referenced_anywhere():
+    """常量也一并删掉——留着会被下一个人当成「还能用」而挂回端点上。"""
+    assert not hasattr(P, "USER_MANAGE")
+    assert not hasattr(P, "ROLE_MANAGE")
+
+
+def test_legacy_loose_super_guard_is_gone():
+    """`get_super_user`（is_super 或 admin 角色）已被 require_super 取代。
+
+    两个近义守卫共存迟早会有人挂错那个宽松的，而两者的差别恰恰是这次收紧的全部内容。
+    """
+    assert not hasattr(simple_auth, "get_super_user")
 
 
 def test_serialize_user_shape():

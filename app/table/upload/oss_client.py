@@ -17,9 +17,13 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.common.errors import (
+    CODE_UPLOAD_BAD_FILE,
+    CODE_UPLOAD_FILE_TOO_LARGE,
     CODE_UPLOAD_OBJECT_NOT_FOUND,
     CODE_UPLOAD_OSS_NOT_READY,
+    BadRequestError,
     NotFoundError,
+    PayloadTooLargeError,
     UnprocessableError,
 )
 from app.site_registry import normalize_site_code
@@ -223,6 +227,38 @@ def issue_upload_credentials(
 def is_key_within_allowed_prefix(object_key: str, site: str, period: str, report_date: date) -> bool:
     """校验前端回传的 object key 落在其被授权的前缀内，防越权触发导入其他切片。"""
     return object_key.startswith(key_prefix_for(site, period, report_date))
+
+
+def verify_source_object(
+    object_key: str, site: str, period: str, report_date: date, *, bucket=None
+) -> int:
+    """导入触发前对源对象的全部校验，返回字节数。
+
+    两个调用点共用：前端直传后的 ``/oss/import``，与历史屏对失败批次的重导。两处的校验
+    必须是同一段代码——重导若少了越权前缀那一道，它就成了绕过授权前缀触发任意切片导入的
+    入口，而这正是直传路径花力气堵上的东西。
+
+    **阻塞**（``head_object`` 是网络往返，oss2 是阻塞 SDK）。async 调用方须经线程池。
+
+    - 前缀越权 → 400，消息不回显 object key（它含站点/期次/日期/原始文件名）
+    - 对象不存在 → 404（由 :func:`stat_object` 抛出）
+    - 超过 ``MAX_FILE_SIZE`` → 413
+    """
+    if not is_key_within_allowed_prefix(object_key, site, period, report_date):
+        raise BadRequestError(
+            "上传凭证与导入目标不匹配，拒绝导入",
+            code=CODE_UPLOAD_BAD_FILE,
+            log_detail=f"object_key 越权: {object_key}",
+        )
+    size = stat_object(object_key, bucket=bucket)
+    if size > settings.MAX_FILE_SIZE:
+        raise PayloadTooLargeError(
+            f"文件超过上限（{size / 1024 ** 3:.2f} GB > "
+            f"{settings.MAX_FILE_SIZE / 1024 ** 3:.2f} GB），请拆分后再导入",
+            code=CODE_UPLOAD_FILE_TOO_LARGE,
+            log_detail=f"object key {object_key} 大小 {size} 超过 {settings.MAX_FILE_SIZE}",
+        )
+    return size
 
 
 def object_exists(object_key: str, *, bucket=None) -> bool:

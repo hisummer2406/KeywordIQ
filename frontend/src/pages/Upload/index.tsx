@@ -1,8 +1,9 @@
 import { InboxOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-components';
-import { Alert, App, Card, Space, Table, Tag, Typography, Upload } from 'antd';
+import { Alert, App, Card, Space, Table, Typography, Upload } from 'antd';
 import type { UploadProps } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import { ImportStatusCell } from '@/components/ImportStatus';
 import {
   getProcessingStatus,
   inspectFilename,
@@ -15,38 +16,6 @@ const { Dragger } = Upload;
 const { Text } = Typography;
 
 const PERIOD_LABEL: Record<string, string> = { DAY: '日报', WEEK: '周报' };
-
-/**
- * 批次状态的呈现。文案在前端而不在接口里：接口只回状态码。
- *
- * `QUEUED` 的说明是这一格的全部意义。它曾经是个死标签（批次停在那里，没有任何东西
- * 会接手），现在由后端的接手任务在前一个导入结束后自动开始——不把这句话说出来，
- * 用户看见「排队中」仍然不知道该等还是该重传。
- */
-const STATUS_META: Record<string, { label: string; color: string; hint?: string }> = {
-  QUEUED: { label: '排队中', color: 'default', hint: '等前一个导入结束后自动开始' },
-  PROCESSING: { label: '处理中', color: 'processing' },
-  COMPLETED: { label: '已完成', color: 'success' },
-  FAILED: { label: '失败', color: 'error' },
-};
-
-function StatusCell({ item }: { item: ImportStatusItem }) {
-  const meta = STATUS_META[item.status];
-  // 未知状态码原样显示，不吞掉——吞掉会让新状态在界面上表现为「这一格空了」
-  const note = item.status === 'FAILED' ? item.error_message : meta?.hint;
-  return (
-    <Space direction="vertical" size={0}>
-      <Tag color={meta?.color ?? 'default'} style={{ marginInlineEnd: 0 }}>
-        {meta?.label ?? item.status}
-      </Tag>
-      {note ? (
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {note}
-        </Text>
-      ) : null}
-    </Space>
-  );
-}
 
 /**
  * 归属回显里的一项。标签与值挨在一起，整组左对齐。
@@ -221,7 +190,9 @@ export default function UploadPage() {
               {
                 title: '状态',
                 dataIndex: 'status',
-                render: (_: unknown, row: ImportStatusItem) => <StatusCell item={row} />,
+                render: (_: unknown, row: ImportStatusItem) => (
+                  <ImportStatusCell status={row.status} errorMessage={row.error_message} />
+                ),
               },
             ]}
           />

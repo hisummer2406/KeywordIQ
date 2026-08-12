@@ -55,7 +55,7 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 |---|---|
 | `dim_keyword` | 关键词维度，`(site, keyword)` 唯一；GIN 全文索引建在这里 |
 | `dim_product` | 商品维度，`asin` 唯一；SCD Type 1（不留历史版本） |
-| `fact_daily` / `fact_weekly` | 事实表，按 `report_date` 月度 RANGE 分区 + 按 `site` 二级 LIST 分区 |
+| `fact_daily` / `fact_weekly` | 事实表，按期次日期月度 RANGE 分区 + 按 `site` 二级 LIST 分区。**分区列名两表不同**：日报是 `report_date`，周报是 `report_date_week`——照着日报的列名写周报查询会直接报 `UndefinedColumn` |
 | `site_data_stats` | 按站点/周期/期次的行数，服务分页总数与日期选择器 |
 | `sites` / `import_batch` | 站点参考表 / 导入批次记录 |
 
@@ -123,6 +123,7 @@ app/
 │   ├── analysis/      # V2 查询层（model, crud, service, api + retention/partitioning）
 │   ├── search/        # 查询请求/响应 schemas
 │   └── upload/        # OSS 直传凭证 + 三段式导入（oss_client / import_source / importer / import_service）
+│                      # + 批次历史与重导（import_batch_crud / import_history_service）
 └── user/              # 用户与角色管理 (model, crud, api)
 
 main.py                # FastAPI app entry, lifespan management, health check
@@ -192,6 +193,29 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   批次里只有文件名，接手时无从重建源——这类当场判 `FAILED` 并写明「请稍后重新上传」。
   留在 `QUEUED` 等于撒谎。
 
+**导入批次有两个读取出口，职责不同、不要合并**：上传屏的「最近导入状态」看板
+（`GET /processing-status`，固定最近 5 条 + 前端 5 秒轮询）回答「我刚传的文件跑到哪了」；
+导入历史屏（`GET /batches`，ProTable 契约 + 站点/周期/状态三项筛选 + 分页，`per_page` 上限
+100 且**超限拒绝不截断**）回答「上周 DE 的周报到底导没导」。历史屏**不轮询**——一张带筛选
+的表每 5 秒整体刷新，用户翻到第 3 页会被刷回第 1 页。两处查询共用 `import_batch_crud`
+的同一份组装代码。
+
+**重导**（`POST /batches/{id}/retry`，权限点同为 `upload:import`）凭批次留存的 object key
+重新导入，不必重传 GB 级文件。两条约束：
+
+- **只允许 `FAILED`。** 重导会先删该 (站点, 周期, 期次) 的现有切片再重写；对 `COMPLETED`
+  做这件事等于让一份正在被查询的数据先消失、再花几分钟重建。也正因只允许 FAILED（失败
+  已整体回滚、切片本就是空的），界面不做二次确认——若将来放开 COMPLETED，必须同时加回确认。
+- **重导新建批次记录，不改写原记录。** 原记录的状态与错误信息是排查依据，抹掉它历史上
+  就只剩一条看不出曾经失败过的成功记录。重导没有独立执行路径，就是拿同一份归属再调一次
+  `run_import`，因此同样受咨询锁串行化、拿不到锁进 `QUEUED` 由轮询任务接手。
+
+准入判定（不存在 404 / 非 FAILED 409 / `object_key` 空 422 / 前缀越权 400 / 对象已删或超限）
+**必须全部在触发后台任务之前完成**——全局处理器不拦 `BackgroundTasks`，校验放进后台任务
+用户只会看到「已触发」然后什么也不发生。越权前缀与对象称量两道校验与 `/oss/import` 共用
+`oss_client.verify_source_object`：重导若少掉越权那道，它就成了绕过授权前缀触发任意切片
+导入的入口。
+
 > V1 的 `csv_processor.py`（pandas 分块 + `ON CONFLICT (keyword)` UPSERT + `ranking_trend_day` JSONB
 > 7 天走势）随 V1 `/upload-csv` 端点一同退役，不要在 V2 路径复用。
 
@@ -199,11 +223,27 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 
 - **自建 JWT + RBAC**（`fastapi-user-auth`/`fastapi-amis-admin` 已随 amis 于阶段七移除）。
   用户模型 `UserCenter`（`user_center` 表）、`passlib` bcrypt 密码、`AuthService`（PyJWT/HS256/
-  `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`）。
+  `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`、
+  `require_super`）。
 - **RBAC**：`role`/`permission`/`role_permission`（M2M），`user_center.role_id`（每用户一角色）。
-  权限点 `analysis:view`/`analysis:export`/`upload:import`/`user:manage`/`role:manage`；内置角色
+  权限点只有三个：`analysis:view`/`analysis:export`/`upload:import`；内置角色
   admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
   is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。
+- **用户管理是「不可授予」的能力，不走权限点**：`/api/user/*` 五个端点一律
+  `Depends(simple_auth.require_super())`，判据只看 `is_super`，**不看角色码**。前端入口在
+  右上角头像下拉里（`components/RightContent`），顶栏不出现（`/user` 路由 `hideInMenu`，
+  但 access 守卫照常生效——菜单隐藏不是访问控制）。
+
+  两条历史教训写在这里，别再走回去：**（1）** 曾有 `user:manage` 权限点，收紧后它成了
+  「勾了也不生效」的复选框——管理员以为把它授予了运营，运营却仍然 403；可授予但无效的
+  权限点比没有更糟，故连同从未被任何代码读过的 `role:manage` 一并从矩阵中删除
+  （迁移 `d0e1f2a3b4c5`）。**（2）** 曾有一个 `get_super_user`，判据是「is_super **或**
+  role_code == 'admin'」——那等于让「谁能管用户」变成改角色配置就能改变的事，已被
+  `require_super` 取代（它声明后从未被使用）。回归在 `test/test_rbac_auth_unit.py`：
+  admin 角色 + 全部权限点、只要 `is_super` 为假就必须 403。
+
+  代价是**能管用户的唯一判据就是 `is_super`**：若唯一超管的该位被误改为 false，界面上
+  没有自救入口，只能靠 `scripts/seed_admin.py` 或直接改库恢复。
 - **端点**：`POST /api/auth/token`（登录发令牌，免鉴权）、`GET /api/auth/me`、
   `POST /api/auth/logout`（干净 REST）。
 - **鉴权显式落在每个端点的依赖上**（`Depends(require_permission(code))` 或 `get_current_user`），
