@@ -70,14 +70,19 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
     logo: logoIcon,
     menu: { locale: false },
 
-    // 顶部菜单而非侧边菜单：本系统是数据展示服务，主屏是一张宽表（分析查询有 8 列
-    // 定宽、合计约 790px，外加关键词与商品标题两列自适应）。常驻侧边栏吃掉约 208px
-    // 横向空间，直接换成表格的横向滚动条。
+    // 一级菜单在顶栏，二级菜单在左侧（mix + splitMenus）。
     //
-    // 这三项必须写在**运行时配置**（本文件）而非 .umirc.ts：Umi Max 生成的
+    // 曾经是纯 `top`，理由是主屏那张宽表：分析查询有 8 列定宽、合计约 790px，外加
+    // 关键词与商品标题两列自适应，常驻侧边栏吃掉的约 208px 会直接换成横向滚动条。
+    // 这个理由现在仍然成立，`mix` 也没有推翻它——**只有带子菜单的一级项才会展开侧栏**，
+    // 分析查询没有子项，进去时左侧不占地方，与从前一样宽。
+    //
+    // 这几项必须写在**运行时配置**（本文件）而非 .umirc.ts：Umi Max 生成的
     // plugin-layout 只从 .umirc.ts 的 layout 里取 title / locale / formatMessage，
     // 其余键不会传给 ProLayout，写在那边是死配置——不报错，也不生效。
-    layout: 'top',
+    layout: 'mix',
+    // 一级留在顶栏、二级下沉到左侧。不开这个，mix 会把整棵菜单树同时塞进顶栏和侧栏。
+    splitMenus: true,
     // 内容区铺满宽度。top 布局下若收成定宽居中，对宽表是反效果：菜单不占地方了，
     // 表格却被夹在中间，横向空间反而更少。
     contentWidth: 'Fluid',
@@ -85,22 +90,35 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
     fixedHeader: true,
 
     /**
-     * 顶栏菜单的选中态。
+     * 顶栏：蓝→青渐变底 + 白字。
      *
-     * ProLayout 的 `ant-pro-base-menu-horizontal-menu-item` 盖掉了 antd 横向菜单默认的
-     * 「主色 + 下边框」选中样式，只剩文字颜色从 rgba(0,0,0,.65) 变成 rgba(0,0,0,.95)
-     * ——同一个黑色的两档透明度，实测几乎看不出来（选中类本身是正常加上的，问题在样式）。
+     * **渐变靠 `colorBgHeader` 实现不了**：这个 token 落到 CSS 的 `background-color`，
+     * 而 `linear-gradient(...)` 是 `background-image` 的值，塞进去整条声明会被丢弃、
+     * 顶栏保持白色——不报错，只是没效果。所以底色分两步：token 里给一个**兜底纯色**
+     * （渐变没生效时至少是深蓝而不是白底白字），渐变本身在 global.less 里用
+     * `background-image` 单独加。
      *
-     * 用 header token 而不是 CSS 覆盖：token 是 ProLayout 给的调节口，跟着组件版本走；
-     * 手写选择器要盯死 `ant-pro-base-*` 这类内部类名，升级即失效。
+     * 其余 token 是文字与选中态。ProLayout 的 `ant-pro-base-menu-horizontal-menu-item`
+     * 盖掉了 antd 横向菜单默认的「主色 + 下边框」选中样式，只靠文字色区分；深色底下
+     * 必须自己把这套配足，否则选中项与未选中项都是白字，完全分不出来。
+     *
+     * 能用 token 就不写选择器：token 是 ProLayout 给的调节口，跟着组件版本走；手写
+     * `ant-pro-base-*` 这类内部类名，升级即失效。渐变那一条是没有 token 才落到 CSS 的。
      */
     token: {
       header: {
-        colorTextMenu: 'rgba(0, 0, 0, 0.65)',
-        colorTextMenuSelected: '#1677ff',
-        colorTextMenuActive: '#1677ff',
-        colorBgMenuItemSelected: 'rgba(22, 119, 255, 0.10)',
-        colorBgMenuItemHover: 'rgba(0, 0, 0, 0.04)',
+        // 兜底纯色 = 渐变的起点色
+        colorBgHeader: '#2f7fd6',
+        colorHeaderTitle: '#ffffff',
+        // 底色提亮后，未选中项的白字不能再压到 0.8——那样在浅蓝上会糊掉
+        colorTextMenu: 'rgba(255, 255, 255, 0.90)',
+        colorTextMenuSelected: '#ffffff',
+        colorTextMenuActive: '#ffffff',
+        colorBgMenuItemSelected: 'rgba(255, 255, 255, 0.18)',
+        colorBgMenuItemHover: 'rgba(255, 255, 255, 0.10)',
+        // 右上角账号区：图标与文字同样要反色，否则深底上留一块看不见的深色文字
+        colorTextRightActionsItem: 'rgba(255, 255, 255, 0.80)',
+        colorBgRightActionsItemHover: 'rgba(255, 255, 255, 0.10)',
       },
     },
     // 未登录访问受保护页 → 跳登录。
