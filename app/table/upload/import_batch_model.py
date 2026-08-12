@@ -23,6 +23,10 @@ from datetime import date, datetime
 from sqlalchemy import BigInteger, Date, DateTime, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.table.analysis.column_comments import (
+    PERIOD_COLUMN_COMMENT,
+    SITE_COLUMN_COMMENT,
+)
 from database import Base
 
 # 导入状态。用普通字符串而非 PG enum，取值由应用层保证。
@@ -47,14 +51,17 @@ class ImportBatch(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
-    site: Mapped[str] = mapped_column(String(8), nullable=False, comment="ISO alpha-2 站点码")
-    period_type: Mapped[str] = mapped_column(String(8), nullable=False, comment="DAY 或 WEEK")
+    site: Mapped[str] = mapped_column(String(8), nullable=False, comment=SITE_COLUMN_COMMENT)
+    period_type: Mapped[str] = mapped_column(String(8), nullable=False, comment=PERIOD_COLUMN_COMMENT)
     report_date: Mapped[date] = mapped_column(Date, nullable=False, comment="报表自身的期次日期")
 
     file_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # OSS-first：原始文件直传后的 OSS object key，供溯源与重导；本地文件退路时为空串。
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="原始文件的 OSS object key")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default=STATUS_QUEUED)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=STATUS_QUEUED,
+        comment="QUEUED（排队）/ PROCESSING / COMPLETED / FAILED",
+    )
 
     total_rows: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, comment="源文件行数")
     written_rows: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, comment="实际写入事实表的行数")
@@ -72,5 +79,5 @@ class ImportBatch(Base):
         Index("idx_import_batch_site_period", "site", "period_type", "report_date"),
         Index("idx_import_batch_status", "status"),
         Index("idx_import_batch_created", "created_at"),
-        {"comment": "导入批次记录：每次导入可追溯到站点/周期/期次；status 含 QUEUED（导入串行排队）。"},
+        {"comment": "导入批次记录：每次导入可追溯到站点/周期/期次。status 含 QUEUED（导入串行，拿不到咨询锁时排队）。"},
     )

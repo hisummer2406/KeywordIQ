@@ -37,6 +37,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.table.analysis.column_comments import (
+    PERIOD_COLUMN_COMMENT,
+    SITE_COLUMN_COMMENT,
+)
 from database import Base
 
 # 份额类字段统一精度，与源报表一致。
@@ -102,24 +106,32 @@ class FactDaily(Base):
 
     __tablename__ = "fact_daily"
 
-    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment="ISO alpha-2 站点码")
-    report_date: Mapped[date] = mapped_column(Date, primary_key=True, comment="报告日期（分区键）")
+    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment=SITE_COLUMN_COMMENT)
+    report_date: Mapped[date] = mapped_column(Date, primary_key=True, comment="报告日期（一级 RANGE 分区键）")
     keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="→ dim_keyword")
 
     current_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="当期搜索频率排名")
     previous_ranking: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上一期排名，写入时算定")
     ranking_change: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="较上一期的变化，写入时算定")
-    is_new: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="本站本周期内首次出现")
+    is_new: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+        comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选",
+    )
 
-    top1_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="→ dim_product")
-    top1_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
-    top1_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
+    top1_product_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="点击量第 1 名商品 → dim_product.product_id（可空：无商品时）")
+    top1_click_share: Mapped[float] = mapped_column(
+        _SHARE, nullable=False, default=0, comment="第 1 名商品的点击份额（%）")
+    top1_conversion_share: Mapped[float] = mapped_column(
+        _SHARE, nullable=False, default=0, comment="第 1 名商品的转化份额（%）")
 
-    top2_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    top2_product_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="点击量第 2 名商品 → dim_product.product_id")
     top2_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
     top2_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
 
-    top3_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    top3_product_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="点击量第 3 名商品 → dim_product.product_id")
     top3_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
     top3_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
 
@@ -144,8 +156,8 @@ class FactDaily(Base):
     __table_args__ = (
         *_fact_indexes("fact_daily", "report_date"),
         {"postgresql_partition_by": "RANGE (report_date)",
-         "comment": "日报事实表（约 30 万行/站/天）。月度 RANGE + 站点 LIST 二级分区；"
-                    "写入后不可变、纯追加，派生字段写入时算定。"},
+         "comment": "日报事实表（约 30 万行/站/天）。按 report_date 月度 RANGE 分区 + 按 site "
+                    "二级 LIST 分区。写入后不可变，纯追加；派生字段在写入时算定。"},
     )
 
 
@@ -154,24 +166,33 @@ class FactWeekly(Base):
 
     __tablename__ = "fact_weekly"
 
-    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment="ISO alpha-2 站点码")
-    report_date_week: Mapped[date] = mapped_column(Date, primary_key=True, comment="所属周的报告日期（分区键）")
+    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment=SITE_COLUMN_COMMENT)
+    report_date_week: Mapped[date] = mapped_column(
+        Date, primary_key=True, comment="所属周的报告日期（一级 RANGE 分区键）")
     keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="→ dim_keyword")
 
     current_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="当期搜索频率排名")
     previous_ranking: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上一期排名，写入时算定")
     ranking_change: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="较上一期的变化，写入时算定")
-    is_new: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, comment="本站本周期内首次出现")
+    is_new: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+        comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选",
+    )
 
-    top1_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, comment="→ dim_product")
-    top1_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
-    top1_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
+    top1_product_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="点击量第 1 名商品 → dim_product.product_id（可空：无商品时）")
+    top1_click_share: Mapped[float] = mapped_column(
+        _SHARE, nullable=False, default=0, comment="第 1 名商品的点击份额（%）")
+    top1_conversion_share: Mapped[float] = mapped_column(
+        _SHARE, nullable=False, default=0, comment="第 1 名商品的转化份额（%）")
 
-    top2_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    top2_product_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="点击量第 2 名商品 → dim_product.product_id")
     top2_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
     top2_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
 
-    top3_product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    top3_product_id: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, comment="点击量第 3 名商品 → dim_product.product_id")
     top3_click_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
     top3_conversion_share: Mapped[float] = mapped_column(_SHARE, nullable=False, default=0)
 
@@ -196,7 +217,7 @@ class FactWeekly(Base):
     __table_args__ = (
         *_fact_indexes("fact_weekly", "report_date_week"),
         {"postgresql_partition_by": "RANGE (report_date_week)",
-         "comment": "周报事实表（约 300 万行/站/周）。结构同 fact_daily，日期粒度为周；"
+         "comment": "周报事实表（约 300 万行/站/周）。结构与 fact_daily 一致，日期粒度为周。"
                     "与日报是独立数据域，各自拥有一套 Top 商品字段。"},
     )
 
@@ -224,8 +245,8 @@ class FactDropped(Base):
 
     __tablename__ = "fact_dropped"
 
-    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment="ISO alpha-2 站点码")
-    period_type: Mapped[str] = mapped_column(String(8), primary_key=True, comment="DAY 或 WEEK")
+    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment=SITE_COLUMN_COMMENT)
+    period_type: Mapped[str] = mapped_column(String(8), primary_key=True, comment=PERIOD_COLUMN_COMMENT)
     anchor_date: Mapped[date] = mapped_column(Date, primary_key=True, comment="锚定期（分区键）")
     keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="→ dim_keyword")
 
@@ -262,10 +283,13 @@ class SiteDataStats(Base):
 
     __tablename__ = "site_data_stats"
 
-    site: Mapped[str] = mapped_column(String(8), primary_key=True)
-    period_type: Mapped[str] = mapped_column(String(8), primary_key=True, comment="DAY 或 WEEK")
+    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment=SITE_COLUMN_COMMENT)
+    period_type: Mapped[str] = mapped_column(String(8), primary_key=True, comment=PERIOD_COLUMN_COMMENT)
     report_date: Mapped[date] = mapped_column(Date, primary_key=True)
-    row_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, comment="在榜行数")
+    row_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0,
+        comment="在榜行数（该站点/周期/期次），供分页总数直接读取",
+    )
     # 掉榜行数与在榜行数同粒度预存，分页总数才能保持 O(1)——实时数就是每翻一页付一次
     # 扫描代价，而避免这件事正是这张表当初存在的理由。
     dropped_count: Mapped[int] = mapped_column(

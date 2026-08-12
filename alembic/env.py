@@ -8,7 +8,8 @@
    因此必须显式限定，不能依赖默认。
 3. **``include_object`` 只放行 V2 的对象**。``Base.metadata`` 里同时挂着 V1 的
    模型（V1 退役前仍需运行），若不过滤，autogenerate 会把 V1 的表也一并带进
-   V2 的数据库。V1 的表随 V1 废弃，不做迁移。
+   V2 的数据库。V1 的表随 V1 废弃，不做迁移。清单与过滤函数在 ``migration_scope.py``
+   ——拆出去是为了让测试能 import 到同一份，本模块在 alembic 运行时之外导不进来。
 """
 
 from logging.config import fileConfig
@@ -23,6 +24,7 @@ from app.table.upload import import_batch_model  # noqa: F401
 from app.user import user_model  # noqa: F401
 from config import settings
 from database import Base
+from migration_scope import include_object
 
 config = context.config
 
@@ -34,34 +36,6 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 target_metadata = Base.metadata
 
 SCHEMA = settings.DATABASE_SCHEMA
-
-# V2 的表清单。只有这些会被 autogenerate 与迁移管理。
-V2_TABLES = frozenset(
-    {
-        "dim_keyword",
-        "dim_product",
-        "sites",
-        "fact_daily",
-        "fact_weekly",
-        "site_data_stats",
-        "import_batch",
-        "user_center",
-        "role",
-        "permission",
-        "role_permission",
-    }
-)
-
-
-def include_object(object_, name, type_, reflected, compare_to):
-    """只放行 V2 的对象，把 V1 的遗留表挡在迁移之外。"""
-    if type_ == "table":
-        return name in V2_TABLES
-    # 索引等从属对象跟随其所属表。
-    parent = getattr(object_, "table", None)
-    if parent is not None:
-        return parent.name in V2_TABLES
-    return True
 
 
 def _configure(**kwargs) -> None:
