@@ -26,7 +26,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "d0e1f2a3b4c5"
-down_revision: Union[str, None] = "a7b8c9d0e1f2"
+# 重挂到 c9d0e1f2a3b4 之后：本迁移与并行会话的 b8c9d0e1f2a3 / c9d0e1f2a3b4 都从
+# a7b8c9d0e1f2 分叉，合并后成了两个 head，`alembic upgrade head` 会直接报
+# 「Multiple head revisions are present」。迁移之间没有实质依赖，串成线性即可。
+down_revision: Union[str, None] = "c9d0e1f2a3b4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
