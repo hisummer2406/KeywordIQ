@@ -23,7 +23,7 @@ from app.site_registry import (
     normalize_site_codes,
 )
 from app.table.analysis import partitioning
-from app.table.analysis.dimension_model import DimKeyword, DimProduct, SiteRef
+from app.table.analysis.dimension_model import DimKeyword, DimProduct
 from app.table.analysis.fact_model import FactDaily, FactDropped, FactWeekly, SiteDataStats
 from app.table.upload.import_batch_model import (
     PERIOD_DAY,
@@ -32,6 +32,7 @@ from app.table.upload.import_batch_model import (
     VALID_STATUSES,
     ImportBatch,
 )
+from database import Base
 
 # --------------------------------------------------------------------------
 # 站点清单
@@ -372,11 +373,20 @@ class TestDimensionStructure:
         for field in ("title", "asin"):
             assert f"idx_dim_product_{field}_trgm" in names, f"缺少 {field} 的子串搜索索引"
 
-    def test_site_ref_has_no_foreign_key_from_facts(self):
-        """站点参考表刻意不与事实表建外键，合法性由应用层保证。"""
-        assert SiteRef.__table__.name == "sites"
+    def test_facts_declare_no_foreign_keys(self):
+        """事实表刻意不建外键：批量灌入时每行一次外键检查是纯粹的导入税，
+        而导入是唯一写入路径且已在应用层校验过站点码与维度 id。"""
         for model in (FactDaily, FactWeekly):
             assert not list(model.__table__.foreign_keys)
+
+    def test_no_site_metadata_table(self):
+        """站点的中文名/时区/域名只有 ``site_registry`` 一份，不进库。
+
+        曾有一张 ``sites`` 参考表存同样三个字段，从建表到删除没有任何代码写过它，
+        库里始终是空的。空表本身不算大事，麻烦的是它是站点元数据第二份事实来源的
+        入口——两份副本迟早分叉，``GB``/``UK`` 两种写法正是这么来的。
+        """
+        assert "sites" not in {t.name for t in Base.metadata.tables.values()}
 
 
 class TestStatsAndBatch:
@@ -411,7 +421,7 @@ class TestStatsAndBatch:
 
 class TestSchemaQualification:
     @pytest.mark.parametrize("model", [
-        DimKeyword, DimProduct, SiteRef, FactDaily, FactWeekly, SiteDataStats, ImportBatch,
+        DimKeyword, DimProduct, FactDaily, FactWeekly, SiteDataStats, ImportBatch,
     ])
     def test_all_tables_are_schema_qualified(self, model):
         """连接串不保证 search_path 指向 analysis，schema 必须显式。"""

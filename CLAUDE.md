@@ -57,7 +57,7 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 | `dim_product` | 商品维度，`asin` 唯一；SCD Type 1（不留历史版本） |
 | `fact_daily` / `fact_weekly` | 事实表，按期次日期月度 RANGE 分区 + 按 `site` 二级 LIST 分区。**分区列名两表不同**：日报是 `report_date`，周报是 `report_date_week`——照着日报的列名写周报查询会直接报 `UndefinedColumn` |
 | `site_data_stats` | 按站点/周期/期次的行数，服务分页总数与日期选择器 |
-| `sites` / `import_batch` | 站点参考表 / 导入批次记录 |
+| `import_batch` | 导入批次记录 |
 
 **三条不可违反的约束**：
 
@@ -67,11 +67,26 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 2. **写事实表前必须调用 `app.table.analysis.partitioning.ensure_fact_partitions`。**
    分区缺失会让导入直接报错，该函数是幂等的，无条件调用即可。
 3. **站点码的唯一事实来源是 `app/site_registry.py`。** 不要在别处硬编码站点列表。
-   英国是 `GB` 不是 `UK`。
+   英国是 `GB` 不是 `UK`。站点的展示元数据（中文名/时区/域名）同样只在那里，界面经
+   `GET /api/upload/sites` 取用——**不要为此建库表**。曾有一张 `sites` 参考表存同样三个
+   字段，从建表到删除没有任何代码写过它，库里始终是空的；它真正的害处是给站点元数据开了
+   第二个事实来源的入口，而两份副本分叉正是 `GB`/`UK` 这类问题的由来。
 
 **迁移注意**：分区表与物化视图不在 SQLAlchemy 的 DDL 生成范围内，autogenerate 会把
 事实表产成普通表并静默丢掉分区。涉及这两类对象的迁移必须手写，并用
 `alembic upgrade head --sql` 核对生成的 DDL 里确有 `PARTITION BY`。
+
+**新增模型必须登记进 `migration_scope.py` 的 `V2_TABLES`**（`alembic/env.py` 的
+`include_object` 用它做白名单；清单单独成模块是为了让测试能 import 到同一份——`env.py`
+在 alembic 运行时之外导不进来）。漏登的表 autogenerate 既看不见也不报错，对模型改动
+一律回答「没有差异」。`test_conventions.py` 会拦住漏登。
+
+**列注释参与 autogenerate 比对**，因此模型里的注释文本要与库里一字不差；改注释就要配
+一条迁移。跨表复用的文本（`site`、`period_type`）收在
+`app/table/analysis/column_comments.py`。这不是洁癖：曾有约 40 条纯注释差异常驻在
+autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异整个盖住。集成测试
+`test_v2_integration.py::test_models_match_migrated_schema` 现在要求 autogenerate 对
+迁移到 head 的库产出**空**结果。
 
 **V2 查询层（site-scoped-query，已落地）**：分析查询查 V2 星型模型，作用域是
 「站点 + 视图（DAY/WEEK）+ 日期」三元组——任一查询只落在单一站点、单一视图、单一日期的
@@ -310,7 +325,7 @@ try/catch 也能让用户看见失败。确需静默的场景在请求上显式�
 **Schema**: `analysis`
 
 表结构见上文「V2 数据模型」一节（星型模型：`dim_keyword` / `dim_product` /
-`fact_daily` / `fact_weekly` / `site_data_stats` / `sites` / `import_batch`）。
+`fact_daily` / `fact_weekly` / `site_data_stats` / `import_batch`）。
 V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随 V1 退役删除。
 
 **物化视图**：`category_stats` — 按 (站点, 周期) 提供类目下拉选项与计数，导入后由
