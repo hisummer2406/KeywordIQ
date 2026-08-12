@@ -165,8 +165,12 @@ frontend/              # AntD Pro SPA（Umi Max），独立构建，产物由 ng
 1. **签发直传凭证** `POST /oss/upload-credentials`（`upload_api.py` → `oss_client.issue_upload_credentials`）：
    后端调 STS `AssumeRole` 换取受限临时凭证（RAM 策略限死到指定 bucket + object key 前缀 + 仅写
    操作 + 短有效期），前端凭此**直传 OSS**，GB 级字节不经应用服务器。服务端凭证只在后端持有。
+   **同时落一条 `UPLOADING` 批次记录，且落库先于交出凭证**——直传那一段服务端全程不知情，
+   没有这条记录，用户关掉标签页就等于什么都没发生过（他以为传上去了，历史屏查不到）。
+   顺序反过来则是「能用的凭证 + 不存在的记录」，正是要消灭的那个状态；落库失败就不签发。
 2. **触发导入** `POST /oss/import`：前端回传 object key；后端校验 key 落在授权前缀内、对象存在，
-   再交后台任务 `run_import`。
+   **按 object key 认领第 1 步那条 `UPLOADING` 批次**（认领不到就新建——回收可能刚把它判失败，
+   或调用方跳过签发直接触发），再交后台任务 `run_import`。
 3. **三段式导入**（`importer.py`，源经 `ImportSource` 抽象）：从 OSS 对象**流式** `COPY` → UNLOGGED
    暂存表 → 补齐维度 → 关联上一期算派生值、**追加**写事实分区（写前必调 `ensure_fact_partitions`）。
    内存有界，不整文件落地。
@@ -206,6 +210,17 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 - **重建不出数据源的批次不许留在 `QUEUED`**。本地退路（`OSS_ENABLED=false`）没有 object_key，
   批次里只有文件名，接手时无从重建源——这类当场判 `FAILED` 并写明「请稍后重新上传」。
   留在 `QUEUED` 等于撒谎。
+
+**`UPLOADING` 适用同一条纪律**（`import_service.reap_stale_uploads`，挂在同一个轮询任务上）。
+回收的判据不是「多久算久」，而是**这次上传还有没有可能传完**：直传每个请求都由 STS 凭证签名，
+凭证一过期后续分片一律被拒。阈值因此由 `OSS_STS_DURATION_SECONDS` 推导（`+300` 秒宽限，
+`config.upload_stale_seconds`），**不是独立配置项**——两个旋钮迟早矛盾，而短于凭证有效期会把
+正在好好传的 1.5GB 周报判死。超时后按对象是否真在 OSS 分流：
+
+- **在** → 字节传完了、只是没触发导入（关标签页的典型形态）：置 `QUEUED` 交给上面那个接手者，
+  **不让用户重传**。这条路径**必须重新执行大小上限**——上限本来在 `/oss/import` 里执行，
+  而这里绕过了它，不补就等于开了一条「不调 /oss/import 即可绕过上限」的路。
+- **不在** → 判 `FAILED`，写明请重新上传。
 
 > V1 的 `csv_processor.py`（pandas 分块 + `ON CONFLICT (keyword)` UPSERT + `ranking_trend_day` JSONB
 > 7 天走势）随 V1 `/upload-csv` 端点一同退役，不要在 V2 路径复用。
