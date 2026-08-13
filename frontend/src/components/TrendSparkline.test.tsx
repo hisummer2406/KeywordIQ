@@ -40,4 +40,21 @@ describe('TrendSparkline', () => {
 
     expect(await screen.findByText('2026年第27周（06/28–07/04）')).toBeInTheDocument();
   });
+
+  it('周视图 4 期数据渲染 4 个点，与行窗口同宽', () => {
+    const { container } = render(
+      <TrendSparkline
+        view="WEEK"
+        values={[40, 30, 20, 10]}
+        dates={['2026-06-27', '2026-07-04', '2026-07-11', '2026-07-18']}
+      />,
+    );
+
+    const points = container
+      .querySelector('[data-testid="trend-line"]')!
+      .getAttribute('points')!
+      .trim()
+      .split(/\s+/);
+    expect(points).toHaveLength(4);
+  });
 });

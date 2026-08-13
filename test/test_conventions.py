@@ -135,10 +135,21 @@ def find_missing_path_bootstrap(source: str) -> set[str]:
     return imported
 
 
+def _is_class_var(annotation: ast.expr) -> bool:
+    """这个注解是不是 ``ClassVar[...]``（含 ``typing.ClassVar[...]``）。"""
+    node = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    if isinstance(node, ast.Attribute):
+        return node.attr == "ClassVar"
+    return isinstance(node, ast.Name) and node.id == "ClassVar"
+
+
 def settings_fields(config_source: str) -> dict[str, ast.expr | None]:
     """从 config.py 取出 ``Settings`` 的字段名 → 默认值 AST（无默认值则 None）。
 
     用 AST 而不是正则：正则要靠缩进宽度和大小写猜，猜错就静默返回空集合。
+
+    **``ClassVar`` 不算配置项。** pydantic 明确不把它当字段，环境变量喂不进去。把它
+    要求进 .env.example 会得到一行「配了也不生效」的假配置——正是这些规则要消灭的东西。
     """
     tree = ast.parse(config_source)
     for node in tree.body:
@@ -146,7 +157,9 @@ def settings_fields(config_source: str) -> dict[str, ast.expr | None]:
             return {
                 stmt.target.id: stmt.value
                 for stmt in node.body
-                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+                if isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and not _is_class_var(stmt.annotation)
             }
     raise AssertionError("config.py 里找不到 Settings 类")
 
@@ -365,6 +378,24 @@ class Settings(BaseSettings):
     def parsed(self) -> str:
         return self.USED_VIA_PROPERTY
 """
+
+
+def test_settings_fields_skips_class_vars():
+    """``ClassVar`` 不是配置项，不能被要求写进 .env.example。
+
+    pydantic 不把它当字段，环境变量喂不进去——要求它出现在模板里，等于教人写一行
+    「配了也不生效」的假配置。
+    """
+    source = """
+from typing import ClassVar
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    REAL_SETTING: int = 5
+    NOT_A_SETTING: ClassVar[int] = 300
+    ALSO_NOT: typing.ClassVar[str] = "x"
+"""
+    assert set(settings_fields(source)) == {"REAL_SETTING"}
 
 
 def test_rule_catches_dead_setting_but_not_property_backed():

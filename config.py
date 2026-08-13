@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from pydantic import ConfigDict, field_validator
 from pydantic_settings import BaseSettings
 
@@ -140,6 +142,18 @@ class Settings(BaseSettings):
             return normalize_site_code(value)
         except UnknownSiteError as exc:
             raise ValueError(str(exc)) from exc
+
+    # 直传中的批次多久算「不可能再传完」。**刻意不是一个独立配置项**：
+    # 直传的每个请求都由 STS 临时凭证签名，凭证一过期后续分片一律被拒，这次上传就再也
+    # 完成不了——判据本来就是凭证有效期，不是「多久算久」。开两个旋钮迟早互相矛盾，而
+    # 两个方向都糟：短于凭证有效期会把正在好好传的 1.5GB 周报判死，远长于它则让用户
+    # 多等几十分钟才看到失败。
+    UPLOAD_STALE_GRACE_SECONDS: ClassVar[int] = 300  # 时钟偏差 + 最后一个分片在途
+
+    @property
+    def upload_stale_seconds(self) -> int:
+        """超过这个时长仍停在 UPLOADING 的批次，交给回收判定（见 import_service）。"""
+        return self.OSS_STS_DURATION_SECONDS + self.UPLOAD_STALE_GRACE_SECONDS
 
     @property
     def default_site(self) -> str:

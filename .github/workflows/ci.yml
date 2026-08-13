@@ -93,7 +93,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22 不是 20：jsdom 30 依赖的 undici 8 在 Node 20 上起不来
+          # （`webidl.util.markAsUncloneable is not a function`，vitest 整批 Unhandled
+          # Error）。开发机是 22.x，CI 跟上才谈得上"CI 绿等于本地绿"。
+          node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 

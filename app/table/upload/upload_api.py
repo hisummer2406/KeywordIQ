@@ -25,7 +25,12 @@ from app.common.errors import (
 from app.common.responses import ProTableResponse, protable
 from app.site_registry import SITE_CATALOG, UnknownSiteError, normalize_site_code
 from app.table.upload import import_batch_crud, import_history_service, oss_client
-from app.table.upload.import_service import ImportRejected, run_import
+from app.table.upload.import_service import (
+    ImportRejected,
+    claim_upload_batch,
+    create_upload_batch,
+    run_import,
+)
 from app.table.upload.import_source import LocalFileSource, OSSObjectSource
 from app.table.upload.importer import infer_period, parse_report_filename
 from app.table.upload.upload_schemas import (
@@ -57,12 +62,18 @@ def _run_import_bg(file_path: str, original_filename: str, site: str, period: st
 
 
 def _run_oss_import_bg(object_key: str, original_filename: str, site: str, period: str, report_date) -> None:
-    """后台任务：以 OSS 对象为源执行 V2 三段式导入。从 OSS 流式读取喂 COPY，异常吞进批次记录。"""
+    """后台任务：以 OSS 对象为源执行 V2 三段式导入。从 OSS 流式读取喂 COPY，异常吞进批次记录。
+
+    先按 object key 认领签发凭证时落下的那条 `UPLOADING` 批次——认领不到就让 `run_import`
+    新建（回收任务可能刚把它判失败，或调用方跳过签发直接触发导入）。不认领的话，一次上传
+    会在历史里留下两条记录：一条永远停在「上传中」，一条从排队开始。
+    """
     try:
         source = OSSObjectSource(oss_client.object_stream, object_key)
         batch = run_import(
             site=site, period=period, report_date=report_date,
             source=source, original_filename=original_filename, object_key=object_key,
+            batch_id=claim_upload_batch(object_key),
         )
         logger.info("OSS 导入任务结束 %s: 状态=%s", object_key, batch.status)
     except ImportRejected as exc:
@@ -173,8 +184,23 @@ async def oss_upload_credentials(
     """
     site, period, report_date = _resolve_import_meta(req.filename, req.site, req.period)
     grant = oss_client.issue_upload_credentials(site, period, report_date, req.filename)
+
+    # **先落库，再把凭证交出去。** 直传那一段服务端全程不知情（字节不经应用服务器），
+    # 没有这条记录，用户关掉标签页就等于什么都没发生过——他以为传上去了，历史屏查不到。
+    #
+    # 顺序不能反：先给凭证后落库，落库失败时用户手上是一份能用的凭证配一条不存在的记录，
+    # 那正是这条记录要消灭的状态。落库失败就不签发——凭证签发不产生副作用，不给不留垃圾。
+    # 这里不 try/except：数据库不可用由全局处理器转成 503，用户看到「稍后重试」，
+    # 而不是开始一次服务端不知情的上传。
+    batch = await run_in_threadpool(
+        create_upload_batch,
+        site=site, period=period, report_date=report_date,
+        original_filename=req.filename, object_key=grant.object_key,
+    )
+
     return {
         **grant.to_response(),
+        "batch_id": batch.id,
         "site": site,
         "period": period,
         "report_date": str(report_date),
