@@ -611,9 +611,18 @@ def iter_export_dropped_rows(db: Session, site: str, view: str, on: date, limit:
 def fetch_trends(
     db: Session, site: str, keyword_ids: list[int], on: date, view: str
 ) -> dict[int, list[int]]:
+    """导出用的走势取值（同步）。
+
+    ``on``/``view`` 必须一路传到 ``shape_trends``：回溯范围盖的是最远参照点，比趋势窗口
+    宽（日 7 天 vs 6 天、周 84 天 vs 21 天），不裁就会把只该喂历史排名列的那几期画进走势。
+    列表页走 ``_fetch_trends`` 已经裁过，这里漏裁的后果是导出比界面多点（日 8 vs 7、
+    周 13 vs 4）——而导出的契约是"用户当下看到的那份数据"，两边点数不一致没有任何
+    地方会报错。
+    """
     if not keyword_ids:
         return {}
-    return shape_trends(db.execute(trends_stmt(site, keyword_ids, on, view)).all())
+    rows = db.execute(trends_stmt(site, keyword_ids, on, view)).all()
+    return shape_trends(rows, on=on, view=view)
 
 
 def category_options(db: Session, site: str, view: str, on: date) -> list[dict[str, Any]]:
