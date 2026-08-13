@@ -36,8 +36,19 @@ STATUS_FAILED = "FAILED"
 STATUS_QUEUED = "QUEUED"
 """排队中——导入是串行的（2C4G 的 RDS 同时承接两个批量灌入会互相争抢），
 拿不到咨询锁的批次进入此状态而非并行开跑。"""
+STATUS_UPLOADING = "UPLOADING"
+"""直传中——签发直传凭证时即落此状态，早于导入被触发。
 
-VALID_STATUSES = frozenset({STATUS_QUEUED, STATUS_PROCESSING, STATUS_COMPLETED, STATUS_FAILED})
+它存在的理由是直传那一段服务端本来什么都不知道：GB 级字节不经应用服务器，用户关掉
+标签页、断网、或分片上传最后一步失败，此前库里连一条记录都不会有，用户以为传上去了、
+历史屏也查不到。有了这条记录，「传到一半没了」至少是可见的。
+
+**与 QUEUED 同一条纪律：它必须会被收尾。** 没人接手的状态就是个死标签——界面永远显示
+「上传中」，比什么都不显示只是换了句谎话。收尾见 ``import_service.reap_stale_uploads``。"""
+
+VALID_STATUSES = frozenset({
+    STATUS_UPLOADING, STATUS_QUEUED, STATUS_PROCESSING, STATUS_COMPLETED, STATUS_FAILED,
+})
 
 PERIOD_DAY = "DAY"
 PERIOD_WEEK = "WEEK"
@@ -60,7 +71,7 @@ class ImportBatch(Base):
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False, default="", comment="原始文件的 OSS object key")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default=STATUS_QUEUED,
-        comment="QUEUED（排队）/ PROCESSING / COMPLETED / FAILED",
+        comment="UPLOADING（直传中）/ QUEUED（排队）/ PROCESSING / COMPLETED / FAILED",
     )
 
     total_rows: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, comment="源文件行数")
