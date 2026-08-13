@@ -40,18 +40,33 @@ export default defineConfig({
       access: 'canViewAnalysis',
     },
     {
+      // 「数据上传」是一级菜单，两个子屏走左侧二级菜单（layout: 'mix' + splitMenus，
+      // 见 src/app.tsx）。二者同属一个权限点 upload:import——能导入的人才需要查导入
+      // 历史、才有资格重导，故 access 挂在父级即可，子项继承。
       name: '数据上传',
       path: '/upload',
-      component: './Upload',
       icon: 'CloudUpload',
       access: 'canUpload',
+      routes: [
+        // 旧地址 /upload 仍可用，重定向到上传屏，不让既有书签落空
+        { path: '/upload', redirect: '/upload/file' },
+        { name: '上传文件', path: '/upload/file', component: './Upload', icon: 'Upload' },
+        { name: '导入历史', path: '/upload/history', component: './ImportHistory', icon: 'History' },
+      ],
     },
     {
+      // 不进顶栏菜单——入口在右上角头像的下拉里（见 components/RightContent）。
+      // 用户管理是低频的管理动作，与「选品 / 上传」这两条日常主线不同层次，摆在
+      // 顶栏与它们平级会让主线变长。
+      //
+      // hideInMenu 只影响菜单渲染，**路由与 access 守卫照常生效**：非超管直接敲
+      // /user 仍会被挡回。菜单隐藏从来不是访问控制。
       name: '用户管理',
       path: '/user',
       component: './User',
       icon: 'Team',
       access: 'canManageUsers',
+      hideInMenu: true,
     },
     { path: '*', component: './404' },
   ],

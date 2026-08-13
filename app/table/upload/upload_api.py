@@ -22,8 +22,9 @@ from app.common.errors import (
     BadRequestError,
     PayloadTooLargeError,
 )
+from app.common.responses import ProTableResponse, protable
 from app.site_registry import SITE_CATALOG, UnknownSiteError, normalize_site_code
-from app.table.upload import oss_client
+from app.table.upload import import_batch_crud, import_history_service, oss_client
 from app.table.upload.import_service import (
     ImportRejected,
     claim_upload_batch,
@@ -34,6 +35,7 @@ from app.table.upload.import_source import LocalFileSource, OSSObjectSource
 from app.table.upload.importer import infer_period, parse_report_filename
 from app.table.upload.upload_schemas import (
     FilenameInspectRequest,
+    ImportBatchRow,
     OSSImportRequest,
     UploadCredentialRequest,
 )
@@ -218,28 +220,12 @@ async def oss_import(
     """
     site, period, report_date = _resolve_import_meta(req.filename, req.site, req.period)
 
-    # 越权防护：object key 必须落在该 (site, period, report_date) 被授权的前缀内。
-    # 错误消息不回显 object_key——它含站点/期次/日期/原文件名。
-    if not oss_client.is_key_within_allowed_prefix(req.object_key, site, period, report_date):
-        raise BadRequestError(
-            "上传凭证与导入目标不匹配，拒绝导入",
-            code=CODE_UPLOAD_BAD_FILE,
-            log_detail=f"object_key 越权: {req.object_key}",
-        )
-
-    # 一次 head 同时确认「对象存在」（不存在则拒绝，不产生部分导入）与「有多大」。
-    # 走线程池：oss2 是阻塞 SDK，直接在 async 端点里调会占住事件循环一整个网络往返。
-    #
-    # 大小上限在这里执行。直传下字节不经应用服务器，这是服务端唯一能称量文件的时机；
-    # 拦在这里挡掉的是"导入一个超大文件"的代价，而非"上传"的代价。
-    size = await run_in_threadpool(oss_client.stat_object, req.object_key)
-    if size > settings.MAX_FILE_SIZE:
-        raise PayloadTooLargeError(
-            f"文件超过上限（{size / 1024 ** 3:.2f} GB > "
-            f"{settings.MAX_FILE_SIZE / 1024 ** 3:.2f} GB），请拆分后再导入",
-            code=CODE_UPLOAD_FILE_TOO_LARGE,
-            log_detail=f"object key {req.object_key} 大小 {size} 超过 {settings.MAX_FILE_SIZE}",
-        )
+    # 越权前缀 + 对象存在 + 大小上限，三道一起做（见 oss_client.verify_source_object）。
+    # 重导端点走的是同一个函数——两处若各写一份，重导少掉越权那道就成了绕过授权前缀
+    # 触发任意切片导入的入口。走线程池：oss2 是阻塞 SDK。
+    await run_in_threadpool(
+        oss_client.verify_source_object, req.object_key, site, period, report_date
+    )
 
     background_tasks.add_task(
         _run_oss_import_bg, req.object_key, req.filename, site, period, report_date
@@ -316,20 +302,16 @@ async def get_processing_status(
     data_type: str | None = None,
     _user=Depends(simple_auth.get_current_user),
 ) -> dict[str, Any]:
-    """最近导入批次状态（读 V2 import_batch）。data_type 兼容前端旧写法 daily/weekly。"""
-    from sqlalchemy import desc, select
+    """最近导入批次状态（读 V2 import_batch）。data_type 兼容前端旧写法 daily/weekly。
 
-    from app.table.upload.import_batch_model import ImportBatch
-
+    这是**看板**：固定最近 5 条、由前端 5 秒轮询。要查历史走 ``GET /batches``——
+    分页与筛选在那边，这里刻意不加参数，两个屏的职责不混。
+    """
     # 数据库异常不再吞成"空列表 + status:1"——那会让前端把"查询失败"显示成"没有批次"。
     # 交给全局的 SQLAlchemyError 处理器区分 503/500。
     async with database.AsyncSessionFactory() as db:
         period = {"daily": "DAY", "weekly": "WEEK"}.get(data_type)
-        stmt = select(ImportBatch)
-        if period:
-            stmt = stmt.where(ImportBatch.period_type == period)
-        stmt = stmt.order_by(desc(ImportBatch.created_at)).limit(5)
-        records = list((await db.execute(stmt)).scalars().all())
+        records = await import_batch_crud.recent_batches(db, period=period, limit=5)
 
     # status 回的是**状态码**，中文由前端呈现。此处曾只把 PROCESSING 译成「处理中」、
     # 其余原样返回，界面上于是中英混排（处理中 / COMPLETED / QUEUED）；展示文案放在
@@ -345,3 +327,52 @@ async def get_processing_status(
         for r in records
     ]
     return {"items": items}
+
+
+@upload_router.get("/batches")
+async def list_import_batches(
+    page: int = 1,
+    per_page: int = 20,
+    site: str | None = None,
+    period: str | None = None,
+    status: str | None = None,
+    _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
+) -> ProTableResponse[ImportBatchRow]:
+    """导入历史列表。ProTable 契约 `{data,total,success}`，按导入时间倒序。
+
+    三项筛选（站点/周期/状态）均可缺省。参数不合法（未知站点、每页超上限）一律抛错，
+    由全局处理器产出统一错误体——列表契约只表达成功。
+    """
+    async with database.AsyncSessionFactory() as db:
+        rows, total = await import_history_service.query_batches(
+            db, site=site, period=period, status=status, page=page, per_page=per_page
+        )
+    return protable(rows, total)
+
+
+@upload_router.post("/batches/{batch_id}/retry")
+async def retry_import_batch(
+    batch_id: int,
+    background_tasks: BackgroundTasks,
+    _user=Depends(simple_auth.require_permission(UPLOAD_IMPORT)),
+) -> dict[str, Any]:
+    """重导一个失败批次：凭已留存的 OSS 对象重新执行导入，无需重传原始文件。
+
+    准入判定（不存在/非 FAILED/原始文件未留存/对象已不在/超限）全部在 service 层
+    完成于触发后台任务**之前**。
+
+    响应里没有新批次的 id：批次记录由导入内核在后台创建（``run_import`` 在拿锁之前
+    先落库），此刻它还不存在。前端刷新列表即可看到——这比返回一个需要靠猜的 id 诚实。
+    """
+    async with database.AsyncSessionFactory() as db:
+        plan = await import_history_service.prepare_retry(db, batch_id)
+    background_tasks.add_task(
+        _run_oss_import_bg, plan.object_key, plan.file_name, plan.site, plan.period, plan.report_date
+    )
+    return {
+        "source_batch_id": plan.source_batch_id,
+        "site": plan.site,
+        "period": plan.period,
+        "report_date": str(plan.report_date),
+        "file_name": plan.file_name,
+    }

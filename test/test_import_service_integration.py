@@ -387,3 +387,61 @@ def test_dropped_count_recorded_in_site_data_stats(factory, tmp_path):
             " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'"
         )).one()
     assert (listed, dropped) == (1, 2)
+
+
+# ---------------- 重导（导入历史屏） ----------------
+
+
+def test_retry_creates_a_new_batch_and_leaves_the_failed_one_intact(factory, tmp_path):
+    """重导新建批次记录，**不改写**被重导的那条。
+
+    原记录的状态与错误信息是「这次为什么失败」的唯一留存，也是判断「重导后是否真的
+    修好了」的参照。改写它等于把证据抹掉，历史屏上就只剩一条看不出曾经失败过的成功记录。
+
+    重导没有独立的执行路径——它就是拿同一份归属再调一次 ``run_import``，而后者在拿锁
+    之前先落一条新批次。这个测试同时钉住那个前提。
+    """
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+
+    key = "imports/US/DAY/2026-07-15/ab12_US_Day_2026_07_15.csv"
+
+    bad = tmp_path / "US_Day_2026_07_15.csv"
+    bad.write_text("not,a,valid,report\n", encoding="utf-8")
+    failed = run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                        source=LocalFileSource(str(bad)),
+                        original_filename="US_Day_2026_07_15.csv",
+                        object_key=key, session_factory=factory)
+    assert failed.status == "FAILED"
+    failed_id, failed_error = failed.id, failed.error_message
+
+    # 重导：同一归属、同一 object key，这次源是好的
+    good = _write_csv(tmp_path, "US_Day_2026_07_15.csv", [_row(1, "a"), _row(2, "b")])
+    retried = run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                         source=LocalFileSource(good),
+                         original_filename="US_Day_2026_07_15.csv",
+                         object_key=key, session_factory=factory)
+
+    assert retried.status == "COMPLETED"
+    assert retried.id != failed_id
+
+    with factory() as s:
+        # 原记录原封不动
+        status, error = s.execute(text(
+            "SELECT status, error_message FROM analysis.import_batch WHERE id=:i"
+        ), {"i": failed_id}).one()
+        assert status == "FAILED"
+        assert error == failed_error
+
+        # 同一份文件的两次执行都在历史里（计数带作用域：keywordiq_test 是共享的一份）
+        n = s.execute(text(
+            "SELECT count(*) FROM analysis.import_batch "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'"
+        )).scalar()
+        assert n == 2
+
+        # 数据确实被重导进来了
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.fact_daily "
+            " WHERE site='US' AND report_date='2026-07-15'"
+        )).scalar() == 2
