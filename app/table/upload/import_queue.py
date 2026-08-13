@@ -21,8 +21,10 @@ import logging
 from starlette.concurrency import run_in_threadpool
 
 from app.table.upload import oss_client
-from app.table.upload.import_service import drain_import_queue
+from app.table.upload.import_service import drain_import_queue, reap_stale_uploads
 from app.table.upload.import_source import ImportSource, OSSObjectSource
+from app.table.upload.oss_client import OSSObjectNotFound
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,37 @@ logger = logging.getLogger(__name__)
 def oss_source_factory(object_key: str) -> ImportSource:
     """object key → 可流式读取的数据源。排队批次只有 OSS 的（本地退路重建不出源）。"""
     return OSSObjectSource(oss_client.object_stream, object_key)
+
+
+def oss_object_size(object_key: str) -> int | None:
+    """对象大小；对象不存在返回 ``None``。回收超时直传批次时用它分流。
+
+    「不存在」与「存在但读不到」必须分开：前者是用户没传完（判失败），后者是基础设施
+    出问题（不该据此把一份可能好好躺在 OSS 里的文件判死）。故只有确认 404 才返回 None，
+    其余异常照常抛出，由调用方按「无法确认」处置。
+    """
+    try:
+        return oss_client.stat_object(object_key)
+    except OSSObjectNotFound:
+        return None
+
+
+def _reap_stale_uploads() -> None:
+    """回收超时的直传批次。OSS 未启用时整条路径不存在，直接跳过。
+
+    异常在这里就地吞掉：回收是轮询的附带工作，它失败不该连累排队接手——那是两件事，
+    而把它们绑在一起意味着 OSS 抖一下就没人接排队批次了。
+    """
+    if not settings.OSS_ENABLED:
+        return
+    try:
+        reap_stale_uploads(
+            object_size=oss_object_size,
+            max_file_size=settings.MAX_FILE_SIZE,
+            stale_seconds=settings.upload_stale_seconds,
+        )
+    except Exception:
+        logger.exception("回收超时直传批次时出错，本轮跳过")
 
 
 async def run_queue_drainer(interval_seconds: int) -> None:
@@ -44,6 +77,9 @@ async def run_queue_drainer(interval_seconds: int) -> None:
     logger.info("🧹 导入队列接手任务已启动（每 %d 秒一轮）", interval_seconds)
     while True:
         try:
+            # 先回收超时的直传批次再抽队列：回收会把「传完了但没触发导入」的批次置为
+            # QUEUED，同一轮里紧接着就能被抽走，不必多等一个间隔。
+            await run_in_threadpool(_reap_stale_uploads)
             batch = await run_in_threadpool(
                 drain_import_queue, source_factory=oss_source_factory
             )
