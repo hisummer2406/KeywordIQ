@@ -25,6 +25,8 @@ from datetime import date
 import pytest
 from sqlalchemy import create_engine, text
 
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 
 pytestmark = pytest.mark.skipif(
@@ -159,3 +161,53 @@ def test_partition_pruning_touches_single_leaf(conn):
     assert "2026_08" not in plan, f"未按月裁剪，计划触及了 8 月分区:\n{plan}"
     assert "_gb" not in plan, f"未按站点裁剪，计划触及了 GB 分区:\n{plan}"
     assert "fact_daily_2026_07_us" in plan, f"未命中目标叶子分区:\n{plan}"
+
+
+def test_models_match_migrated_schema(conn):
+    """模型与迁移到 head 的库之间不得有任何 autogenerate 差异。
+
+    这条守的是「autogenerate 的输出是信号，不是噪音」。库里的注释与模型对不上时，
+    一次 autogenerate 会吐出几十条纯注释的 alter_column，**真正的结构差异就淹在里面**
+    ——``user_center.created_at/updated_at`` 在模型里是无时区 DateTime、库里是
+    timestamptz，这条就那样躲了很久。注释差异在这里同样算失败，正是因为放任它们
+    就会重新把噪音养起来。
+
+    失败时 diff 会直接列出差异项：改模型或补一条迁移，二选一。
+    """
+    import alembic.config
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    # 必须逐个 import 模型模块，与 alembic/env.py 做的事一样：模型是靠 import 的副作用
+    # 注册到 Base.metadata 的。漏掉就是一份空 metadata，比对结果会是「库里每张表都多余」
+    # ——一屏 remove_table，看起来像天塌了，实际只是没导入。
+    from app.table.analysis import dimension_model, fact_model  # noqa: F401
+    from app.table.upload import import_batch_model  # noqa: F401
+    from app.user import user_model  # noqa: F401
+    from database import Base
+    from migration_scope import include_object
+
+    # 库落后于 head 时差异必然存在，但那说明的是「测试库该迁移了」，不是模型有问题。
+    cfg = alembic.config.Config(os.path.join(REPO, "alembic.ini"))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    current = conn.execute(
+        text("SELECT version_num FROM analysis.alembic_version")
+    ).scalar()
+    if current != head:
+        pytest.skip(f"测试库在 {current}，head 是 {head}，请先 alembic upgrade head")
+
+    ctx = MigrationContext.configure(
+        connection=conn,
+        opts={
+            "include_schemas": True,
+            "include_object": include_object,
+            "compare_type": True,
+            "version_table_schema": "analysis",
+        },
+    )
+    diffs = compare_metadata(ctx, Base.metadata)
+    assert diffs == [], (
+        "模型与库不一致，autogenerate 会生成这些操作：\n"
+        + "\n".join(f"  - {d}" for d in diffs)
+    )
