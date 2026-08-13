@@ -104,3 +104,66 @@ export async function getProcessingStatus(dataType?: 'daily' | 'weekly') {
     params: dataType ? { data_type: dataType } : {},
   });
 }
+
+/**
+ * 导入历史的一行。
+ *
+ * 没有 `object_key`——它含站点/期次/日期/原始文件名，属内部细节，后端不序列化。
+ * 界面需要的是「这一行还能不能重导」，那就是 `source_retained`。
+ */
+export interface ImportBatchRow {
+  id: number;
+  site: string;
+  period_type: Period;
+  report_date: string;
+  file_name: string;
+  status: ImportStatus | string;
+  total_rows: number;
+  written_rows: number;
+  processing_seconds: number;
+  error_message: string;
+  created_at: string;
+  completed_at: string | null;
+  /** 原始文件是否仍可据以重导（本地退路导入的批次为 false）。 */
+  source_retained: boolean;
+}
+
+/** ProTable request：拉分页的导入历史（`{data,total,success}`）。 */
+export async function fetchImportBatches(params: {
+  current?: number;
+  pageSize?: number;
+  site?: string;
+  period_type?: Period;
+  status?: string;
+}) {
+  const res = await request<{ data: ImportBatchRow[]; total: number; success: boolean }>(
+    '/api/upload/batches',
+    {
+      method: 'GET',
+      params: {
+        page: params.current ?? 1,
+        per_page: params.pageSize ?? 20,
+        site: params.site,
+        // 后端参数名是 period；表格列名沿用 period_type 与行字段一致，此处做映射
+        period: params.period_type,
+        status: params.status,
+      },
+    },
+  );
+  return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
+}
+
+/**
+ * 重导一个失败批次。凭后端留存的 object key 重新导入，不必重传原始文件。
+ *
+ * 响应里没有新批次 id：批次记录由导入内核在后台创建，此刻还不存在。调用方刷新列表即可。
+ */
+export async function retryImportBatch(id: number) {
+  return request<{
+    source_batch_id: number;
+    site: string;
+    period: Period;
+    report_date: string;
+    file_name: string;
+  }>(`/api/upload/batches/${id}/retry`, { method: 'POST' });
+}

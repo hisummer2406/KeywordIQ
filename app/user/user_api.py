@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.permissions import USER_MANAGE
 from app.auth.simple_auth import simple_auth
 from app.common.responses import ProTableResponse, protable
 from app.user.rbac_model import Role
@@ -21,7 +20,7 @@ user_router = APIRouter()
 @user_router.get("/roles", response_model=list[RoleOut])
 async def list_roles(
         db: AsyncSession = Depends(get_async_db),
-        current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
+        current_user=Depends(simple_auth.require_super()),
 ) -> list[RoleOut]:
     """[SPA] 角色下拉数据，供用户管理屏分配角色。"""
     roles = (await db.execute(select(Role).order_by(Role.id))).scalars().all()
@@ -35,7 +34,7 @@ async def get_users_table(
         user_name: str | None = Query(None, description="搜索关键词"),
         is_active: bool | None = Query(None, description="用户状态筛选"),
         db: AsyncSession = Depends(get_async_db),
-        current_user=Depends(simple_auth.require_permission(USER_MANAGE)),
+        current_user=Depends(simple_auth.require_super()),
 ) -> ProTableResponse[UserCenterList]:
     """[SPA] 用户列表。**成功**时返回 ProTable 契约 {data, total, success}。
 
@@ -53,7 +52,7 @@ async def get_users_table(
 async def register(
         user_data: UserCenterCreate,
         db: AsyncSession = Depends(get_async_db),
-        current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
+        current_user: dict = Depends(simple_auth.require_super()),
 ) -> dict[str, Any]:
     """创建用户。用户名重复 → 409。
 
@@ -79,7 +78,7 @@ async def update_user(
         user_id: int,
         user_data: UserCenterUpdate,
         db: AsyncSession = Depends(get_async_db),
-        current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
+        current_user: dict = Depends(simple_auth.require_super()),
 ) -> dict[str, Any]:
     """更新用户信息。用户不存在 → 404，用户名与他人冲突 → 409。"""
     user = await UserCenterCRUD(db).update_user(user_id, user_data)
@@ -97,7 +96,7 @@ async def update_user(
 async def toggle_user_status(
         user_id: int,
         db: AsyncSession = Depends(get_async_db),
-        current_user: dict = Depends(simple_auth.require_permission(USER_MANAGE)),
+        current_user: dict = Depends(simple_auth.require_super()),
 ) -> dict[str, Any]:
     """切换用户状态（激活/禁用）。用户不存在 → 404，禁用超管 → 409。"""
     user = await UserCenterCRUD(db).toggle_user_status(user_id)

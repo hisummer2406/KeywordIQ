@@ -2,6 +2,12 @@
 
 权限判定用这里的常量；Alembic 种子迁移按同一份矩阵硬编码写入 DB（迁移不 import 应用代码，
 两处若调整需同步，见 design 决策 4b）。
+
+**这里只登记「可授予」的能力。** 用户管理不在其列——它要求 `is_super`，由
+`simple_auth.require_super()` 把守，改角色配置不能把它授予出去。曾经有过一个
+`user:manage` 权限点，收紧后它就成了「勾了也不生效」的复选框，比没有这个权限点更糟：
+角色编辑界面会让人以为把它给了运营，运营就能管用户。同批移除的还有 `role:manage`
+——它从加入起就没有任何代码读过，是纯粹的死配置。
 """
 from typing import Final
 
@@ -9,16 +15,12 @@ from typing import Final
 ANALYSIS_VIEW: Final = "analysis:view"
 ANALYSIS_EXPORT: Final = "analysis:export"
 UPLOAD_IMPORT: Final = "upload:import"
-USER_MANAGE: Final = "user:manage"
-ROLE_MANAGE: Final = "role:manage"
 
 # code -> 中文名
 PERMISSIONS: Final[dict[str, str]] = {
     ANALYSIS_VIEW: "查询分析数据",
     ANALYSIS_EXPORT: "导出分析数据",
     UPLOAD_IMPORT: "上传/导入数据",
-    USER_MANAGE: "用户管理",
-    ROLE_MANAGE: "角色与权限管理",
 }
 
 # ---- 内置角色 ----  code -> (中文名, 权限集合)

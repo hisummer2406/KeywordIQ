@@ -132,6 +132,9 @@ CODE_UPLOAD_OSS_NOT_READY: Final = "upload.oss_not_ready"
 CODE_UPLOAD_OBJECT_NOT_FOUND: Final = "upload.object_not_found"
 CODE_UPLOAD_BAD_FILE: Final = "upload.bad_file"
 CODE_UPLOAD_FILE_TOO_LARGE: Final = "upload.file_too_large"
+CODE_UPLOAD_BATCH_NOT_FOUND: Final = "upload.batch_not_found"
+CODE_UPLOAD_RETRY_NOT_ALLOWED: Final = "upload.retry_not_allowed"    # 状态不允许重导
+CODE_UPLOAD_SOURCE_NOT_RETAINED: Final = "upload.source_not_retained"  # 原始文件未留存
 
 # 用户管理
 CODE_USER_DUPLICATE_NAME: Final = "user.duplicate_name"
