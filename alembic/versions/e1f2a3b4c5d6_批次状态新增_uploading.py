@@ -1,8 +1,12 @@
 """批次状态新增 UPLOADING
 
 Revision ID: e1f2a3b4c5d6
-Revises: c9d0e1f2a3b4
+Revises: d0e1f2a3b4c5
 Create Date: 2026-08-12
+
+重挂到 d0e1f2a3b4c5 之后：本迁移与并行会话的「移除 user:manage 与 role:manage」都从
+c9d0e1f2a3b4 分叉，合并 v2 后成了两个 head。迁移之间没有实质依赖，串成线性即可
+（同 d0e1f2a3b4c5 自己重挂时的处理）。
 
 **只改一条列注释，不改结构。** `import_batch.status` 是 `String(16)`，没有 PG enum、
 没有 CHECK 约束，取值由应用层的 `VALID_STATUSES` 约束——新增一个状态值因此不需要 DDL。
@@ -22,7 +26,7 @@ from alembic import op
 from config import settings
 
 revision: str = "e1f2a3b4c5d6"
-down_revision: str | None = "c9d0e1f2a3b4"
+down_revision: str | None = "d0e1f2a3b4c5"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
