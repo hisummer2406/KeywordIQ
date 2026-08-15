@@ -31,6 +31,13 @@ class UploadCredentialRequest(BaseModel):
     site: str = Field(..., description="站点码，如 US/GB/DE，必须已登记")
     filename: str = Field(..., description="原始文件名，须形如 ..._2026_07_18.csv 以解析报告日期")
     period: Period | None = Field(None, description="DAY/WEEK；缺省时从文件名推断")
+    object_key: str | None = Field(
+        None,
+        description=(
+            "续签既有上传的凭证时传入本次上传的 object key；"
+            "传了即为续签——只签发凭证、不新建批次记录、不生成新 key。缺省为新上传。"
+        ),
+    )
 
     @field_validator("site")
     @classmethod

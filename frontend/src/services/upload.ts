@@ -79,6 +79,11 @@ export async function getUploadCredentials(body: {
   site: string;
   filename: string;
   period?: Period;
+  /**
+   * 续签既有上传的凭证时传本次的 object key。传了后端就认出这是续签——只签发凭证、
+   * 不新建批次记录、不生成新 key。不传即为一次新上传。
+   */
+  object_key?: string;
 }) {
   return request<OssCredential>('/api/upload/oss/upload-credentials', {
     method: 'POST',
