@@ -40,21 +40,6 @@ export default defineConfig({
       access: 'canViewAnalysis',
     },
     {
-      // 「数据上传」是一级菜单，两个子屏走左侧二级菜单（layout: 'mix' + splitMenus，
-      // 见 src/app.tsx）。二者同属一个权限点 upload:import——能导入的人才需要查导入
-      // 历史、才有资格重导，故 access 挂在父级即可，子项继承。
-      name: '数据上传',
-      path: '/upload',
-      icon: 'CloudUpload',
-      access: 'canUpload',
-      routes: [
-        // 旧地址 /upload 仍可用，重定向到上传屏，不让既有书签落空
-        { path: '/upload', redirect: '/upload/file' },
-        { name: '上传文件', path: '/upload/file', component: './Upload', icon: 'Upload' },
-        { name: '导入历史', path: '/upload/history', component: './ImportHistory', icon: 'History' },
-      ],
-    },
-    {
       // 「工具箱」装的是不属于选品主线的独立工具，三个子屏走左侧二级菜单（同「数据上传」）。
       // 三者同属一个权限点 toolbox:view——外观专利与全球商标库尚无数据源、也没有后端端点，
       // 各给一个权限点等于加两个「勾了也不生效」的复选框（`user:manage` 踩过这个坑）。
@@ -84,6 +69,28 @@ export default defineConfig({
           component: './Toolbox/Trademark',
           icon: 'Trademark',
         },
+      ],
+    },
+    {
+      // 「数据上传」是一级菜单，两个子屏走左侧二级菜单（layout: 'mix' + splitMenus，
+      // 见 src/app.tsx）。二者同属一个权限点 upload:import——能导入的人才需要查导入
+      // 历史、才有资格重导，故 access 挂在父级即可，子项继承。
+      //
+      // 排在最后一位是有意的：它是三个一级菜单里唯一「喂数据」的屏，选品与工具箱
+      // 都是「看数据」，夹在中间会把同类的两块拆开。顶栏顺序会被读成主线先后，
+      // 支持功能压在末尾即可——**不要**改成藏进头像下拉（那是 `用户管理` 的位置，
+      // 判据是低频管理动作）：上传是日常操作，还带一个要盯的进度看板和二级菜单。
+      // 另注：ProLayout 横向菜单从 logo 往右顺排，「排最后」不等于贴右边缘，
+      // 真右对齐要自己接管菜单渲染，不值得。
+      name: '数据上传',
+      path: '/upload',
+      icon: 'CloudUpload',
+      access: 'canUpload',
+      routes: [
+        // 旧地址 /upload 仍可用，重定向到上传屏，不让既有书签落空
+        { path: '/upload', redirect: '/upload/file' },
+        { name: '上传文件', path: '/upload/file', component: './Upload', icon: 'Upload' },
+        { name: '导入历史', path: '/upload/history', component: './ImportHistory', icon: 'History' },
       ],
     },
     {
