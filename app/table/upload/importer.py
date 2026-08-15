@@ -234,6 +234,23 @@ def _upsert_dimensions(session: Session, site: str) -> None:
     # 修掉的缺陷：商品槽位在源报表里根本没有这两个字段，配对出来的值没有数据来源。
     # 实测同一 ASIN 固定在槽位 1 时，title 冲突率 0%（真属性），brand 11.7%、
     # category 3.4%——后两者的冲突正是"把别的东西当成商品属性"的直接证据。
+    #
+    # **`WHERE ... IS DISTINCT FROM` 不是冗余，删掉它导入会随维度表增长持续变慢。**
+    # PostgreSQL 的 UPDATE 无论新旧值是否相同都写新元组、标死旧元组、并在该行涉及的每个
+    # 索引上插新条目——而 title 上正挂着这张表最大的索引（GIN trgm，生产上 1.3 GB）。
+    # 无条件更新意味着每次导入重写**所有已存在的商品行**：一份日报约 40 万行 × 3 个槽位
+    # ≈ 120 万个 ASIN 提及，其中绝大多数早已在库里。
+    #
+    # 它还会自我加速恶化：维度表越大，新导入里"已存在"的比例越高，白做的更新越多，
+    # 承受这些更新的索引也越大。实测同一份 10 万行日报从 54 秒退化到 416 秒（7.7 倍），
+    # 现场证据是 n_tup_upd 达到 n_tup_ins 的 6.4 倍（issue #33）。
+    #
+    # **用 `IS DISTINCT FROM` 而非 `<>`**：title 现为 NOT NULL，两者等价；但 `<>` 在任一侧
+    # 为 NULL 时结果是 NULL（不成立），一旦将来放宽可空性就会静默退化成"NULL 的行永远不
+    # 更新"。`IS DISTINCT FROM` 对 NULL 有定义，不留这个坑。
+    #
+    # 标题**确实变了**的商品照常更新（SCD Type 1 语义不变），回归见
+    # test_importer_integration.py 的 test_changed_title_still_updates_the_product。
     session.execute(
         text(
             """
@@ -252,6 +269,7 @@ def _upsert_dimensions(session: Session, site: str) -> None:
              ORDER BY asin
             ON CONFLICT (asin) DO UPDATE
                SET title = EXCLUDED.title
+             WHERE analysis.dim_product.title IS DISTINCT FROM EXCLUDED.title
             """
         )
     )
