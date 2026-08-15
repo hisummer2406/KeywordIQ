@@ -193,18 +193,26 @@ def issue_upload_credentials(
     report_date: date,
     original_filename: str,
     *,
+    existing_key: str | None = None,
     assume_role=None,
 ) -> UploadGrant:
     """签发一次直传所需的受限临时凭证与目标 object key。
 
     ``assume_role(role_arn, session_name, policy, duration) -> dict`` 可注入（默认调用阿里云 STS）。
     凭证权限被 RAM 策略限死到本次上传的 bucket 与 key 前缀，仅写操作、短有效期。
+
+    ``existing_key`` 为**续签**路径：大文件直传耗时可能超过凭证有效期，前端会在传输途中
+    反复续签。续签的是同一次上传，因此沿用原 key 而不生成新的——换 key 会把一个文件传成
+    两个对象。新凭证的 RAM 策略限定的是前缀而非具体 key，故对正在写入的 key 依然有效。
+
+    调用方须在传 ``existing_key`` 前自行校验它落在授权前缀内
+    （见 :func:`is_key_within_allowed_prefix`）：本函数签发的是**写**权限。
     """
     _require_config()
     if not settings.OSS_STS_ROLE_ARN:
         raise OSSNotConfigured(log_detail="配置缺失: OSS_STS_ROLE_ARN")
 
-    object_key = build_object_key(site, period, report_date, original_filename)
+    object_key = existing_key or build_object_key(site, period, report_date, original_filename)
     prefix = key_prefix_for(site, period, report_date)
     policy = _upload_policy(settings.OSS_BUCKET, prefix)
 

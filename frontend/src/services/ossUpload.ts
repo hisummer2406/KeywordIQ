@@ -66,11 +66,20 @@ export async function ossDirectUploadAndImport(
     bucket: cred.bucket,
     secure: true,
     refreshSTSTokenInterval: STS_REFRESH_INTERVAL_MS,
-    // 续期只取凭证部分。后端每次签发都会生成一个新的 object key，这里**必须丢弃**它——
-    // 本次上传自始至终写同一个 key，换 key 会把一个文件传成两个对象。新凭证的 RAM 策略
-    // 限定的是前缀而非具体 key，因此对已在传的 key 依然有效。
+    // 续期**必须带上本次的 object_key**：后端据它认出这是续签而非新上传，从而只签发
+    // 凭证、不新建批次记录、也不生成新 key（本次上传自始至终写同一个 key，换 key 会把
+    // 一个文件传成两个对象）。新凭证的 RAM 策略限定的是前缀而非具体 key，因此对已在传
+    // 的 key 依然有效。
+    //
+    // 不带它的代价不是"多一条记录"那么轻：那些幽灵记录的 key 从未被写入过任何对象，
+    // 回收任务查不到对象会把它们判成 FAILED「请重新上传」——文件明明传成功了。
     refreshSTSToken: async () => {
-      const fresh = await getUploadCredentials({ site, filename: file.name, period });
+      const fresh = await getUploadCredentials({
+        site,
+        filename: file.name,
+        period,
+        object_key: cred.object_key,
+      });
       return {
         accessKeyId: fresh.credentials.access_key_id,
         accessKeySecret: fresh.credentials.access_key_secret,
