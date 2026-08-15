@@ -25,7 +25,9 @@ import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
 import { buildColumns, totalColumnWidth } from './columns';
-import { emptyFilters, toSearchBody, type FilterDraft, type ScopeDraft } from './filters';
+import { emptyFilters, toSearchBody, type ScopeDraft } from './filters';
+import { readSnapshot, sameRequest, writeSlot, type RequestKey } from './stateCache';
+import { useCachedState } from './useCachedState';
 
 /**
  * 分析查询屏：作用域 / 过滤 / 结果三段。
@@ -51,37 +53,122 @@ export default function AnalysisPage() {
   const access = useAccess();
   const actionRef = useRef<ActionType>();
 
+  /**
+   * 挂载时读一次快照。它同时决定两件事：各 ref 的初值，以及**这次是「复原」还是
+   * 「首次进入」**——后者是挂载副作用那道闸的判据。用惰性 useState 而不是直接调用，
+   * 保证整个生命周期只读一次；之后所有写入都走 write-through。
+   */
+  const [initialSnapshot] = useState(() => readSnapshot());
+  const restored = initialSnapshot !== null;
+
   // 草稿态：用户正在编辑
-  const [scope, setScope] = useState<ScopeDraft>({ view: 'DAY' });
-  const [filters, setFilters] = useState<FilterDraft>(emptyFilters);
+  const [scope, setScope] = useCachedState('scope', { view: 'DAY' } as ScopeDraft);
+  const [filters, setFilters] = useCachedState('filters', emptyFilters);
 
   // 生效态：表格 request 实际读的那份。用 ref 承载，供 request 闭包读取。
-  const appliedRef = useRef<SearchBody | null>(null);
+  const appliedRef = useRef<SearchBody | null>(initialSnapshot?.applied ?? null);
   // 生效态的视图单独提出来做 state：列集合（走势/周变化）随它变，需要触发重渲染
-  const [appliedView, setAppliedView] = useState<View>('DAY');
+  const [appliedView, setAppliedView] = useCachedState('appliedView', 'DAY' as View);
   // 生效条件的签名，与草稿签名比较得出 dirty，不额外维护脏标记
-  const [appliedSig, setAppliedSig] = useState<string>('');
+  const [appliedSig, setAppliedSig] = useCachedState('appliedSig', '');
 
-  const [sites, setSites] = useState<SiteOption[]>([]);
-  const [availableDates, setAvailableDates] = useState<string[]>([]);
-  const [categories, setCategories] = useState<CategoryOption[]>([]);
+  const [sites, setSites] = useCachedState('sites', [] as SiteOption[]);
+  const [availableDates, setAvailableDates] = useCachedState('availableDates', [] as string[]);
+  const [categories, setCategories] = useCachedState('categories', [] as CategoryOption[]);
+  // 导出中的状态**不进缓存**：它描述的是一次正在进行的请求，而请求随组件一起没了。
+  // 缓存它会让用户切回来看到一个永远转下去的按钮。
   const [exporting, setExporting] = useState(false);
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [resultTotal, setResultTotal] = useState(0);
+  const [filterOpen, setFilterOpen] = useCachedState('filterOpen', false);
+  const [resultTotal, setResultTotal] = useCachedState('resultTotal', 0);
   // 总数缓存与"下次要重算"的标记。ProTable 的 request 同时承担翻页与条件变更两种触发，
   // 靠这个标记把两者区分开——只有条件变更那次才让后端付精确计数的代价。
-  const totalRef = useRef(0);
-  const needsTotalRef = useRef(true);
-  const [pendingRebuild, setPendingRebuild] = useState(false);
-  const [sortDraft, setSortDraft] = useState({
+  const totalRef = useRef(initialSnapshot?.total ?? 0);
+  const needsTotalRef = useRef(initialSnapshot?.needsTotal ?? true);
+  const [pendingRebuild, setPendingRebuild] = useCachedState('pendingRebuild', false);
+  const [sortDraft, setSortDraft] = useCachedState('sortDraft', {
     field: 'current_ranking',
     dir: 'asc' as 'asc' | 'desc',
   });
-  const appliedSortRef = useRef(sortDraft);
+  const appliedSortRef = useRef(initialSnapshot?.appliedSort ?? sortDraft);
+
+  /**
+   * 滚动位置的恢复。
+   *
+   * **必须等结果行落到 DOM 之后**：行还没渲染时页面高度不足，`scrollTo` 会被截断到
+   * 当前最大滚动量，停在一个与离开前对不上的位置——而这种错误没有任何地方会报错。
+   * 故由 `request` 交付数据后调 `markDataReady`，再在 effect 里滚。
+   *
+   * **只恢复一次**：不清标记的话，用户在本屏内自己滚动、触发任一次重渲染都会被弹回。
+   */
+  /** 复原的缓存行是否已经交付过。一次性——之后所有请求都真的去查（见 request 里的注释）。 */
+  const restoreServedRef = useRef(false);
+  const pendingScrollRef = useRef<number | null>(restored ? (initialSnapshot?.scrollY ?? 0) : null);
+  const [dataTick, setDataTick] = useState(0);
+  const markDataReady = () => setDataTick((n) => n + 1);
+
+  useEffect(() => {
+    if (dataTick === 0) return;
+    const y = pendingScrollRef.current;
+    if (y === null || y === 0) return;
+    pendingScrollRef.current = null;
+
+    // `markDataReady` 在 request 返回**之前**调用，那时行还没进 DOM、页面高度不够，
+    // 直接滚会被浏览器截断到当前最大滚动量（实测就是回到 0）。所以逐帧等页面长到
+    // 够高再滚，并给一个上限——数据真的只有半屏时不能无限等下去。
+    let frame = 0;
+    let handle = 0;
+    const tryScroll = () => {
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      if (max >= y || frame > 30) {
+        window.scrollTo({ top: y });
+        return;
+      }
+      frame += 1;
+      handle = requestAnimationFrame(tryScroll);
+    };
+    handle = requestAnimationFrame(tryScroll);
+    return () => cancelAnimationFrame(handle);
+  }, [dataTick]);
+
+  /**
+   * 持续把滚动量写进快照。节流到每帧一次——scroll 事件的频率远高于渲染帧。
+   *
+   * **不要改成「在 cleanup 里读一次 window.scrollY」**：那看起来更省事，实际是把
+   * 正确值毁掉的路径。导航时新页面比当前页矮，浏览器会把滚动量夹到 0，而这个夹取
+   * 与组件卸载谁先谁后并无保证——一旦排在前面，cleanup 存进去的就是 0，功能静默失效。
+   * 监听器记的是用户滚动那一刻的值，之后任何重置都影响不到它。
+   */
+  useEffect(() => {
+    let queued = false;
+    const onScroll = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => {
+        writeSlot({ scrollY: window.scrollY });
+        queued = false;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  /**
+   * 是否已经查过一次。`appliedSig` 只在 `apply()` 里被写非空值，所以它就是这个判据，
+   * 不用再养一个独立标记。
+   *
+   * 用途是把「还没查」和「查出来 0 行」在界面上分开——两者都是空表格，但一个是等待
+   * 用户动作、另一个是条件太严。不分开的话用户会以为系统弄丢了数据。
+   */
+  const hasQueried = appliedSig !== '';
 
   const draftBody = useMemo(() => toSearchBody(scope, filters), [scope, filters]);
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
-  const dirty = draftSig !== appliedSig;
+  /**
+   * 「有未生效改动」提示。**没查过就不提示**——首屏生效态本来就是空的，判据必然为真，
+   * 而那时用户一个条件都没改，「存在未生效条件」这句话是错的。此时该看的引导是表格
+   * 空状态里那句「点立即查询」，两处一起出现还重复。
+   */
+  const dirty = hasQueried && draftSig !== appliedSig;
 
   // 生效条件里是否带了任何筛选（行集合开关不算——它是行集合维度，不是筛选）。
   // 带了就意味着掉榜段被短路为空，界面须明示。
@@ -103,6 +190,7 @@ export default function AnalysisPage() {
   const apply = (body: SearchBody, sig: string) => {
     appliedRef.current = body;
     needsTotalRef.current = true;
+    writeSlot({ applied: body, needsTotal: true });
     setAppliedSig(sig);
     setAppliedView(body.view);
     actionRef.current?.reload(true);
@@ -174,25 +262,30 @@ export default function AnalysisPage() {
     setFilters((f) => ({ ...f, categories: [], brands: [] }));
     if (appliedRef.current) {
       appliedRef.current = { ...appliedRef.current, categories: undefined, brands: undefined };
+      writeSlot({ applied: appliedRef.current });
     }
     reloadCategories(s.site, nextView, s.latest_date);
     return s;
   };
 
   useEffect(() => {
+    // 从缓存复原：整段初始化跳过，一个请求都不发。表格那次 request 会命中短路分支，
+    // 拿缓存行渲染。**只跳过挂载初始化**——用户动作触发的请求（改站点/视图重拉
+    // scope 与 categories、点「立即查询」）一律照旧。
+    if (restored) return;
     getSites()
       .then(setSites)
       .catch(() => undefined);
-    // 首屏：拉作用域后立即查一次，用户不必先点一下才看到数据
-    reloadScopeMeta(undefined, 'DAY')
-      .then((s) => {
-        const body = toSearchBody(
-          { site: s.site, view: 'DAY', date: s.latest_date },
-          emptyFilters(),
-        );
-        apply(body, JSON.stringify(body));
-      })
-      .catch(() => undefined);
+    // 首屏**只拉作用域元数据**（站点、可选日期、类目），不查数据表。
+    //
+    // 拉的这三样都是小表，且是选择器渲染的前提——不拉的话用户连日期都选不了。
+    // 数据表那一次查询才是贵的（周报最坏近 1 秒），而进屏时的默认条件多半不是用户
+    // 想看的那组：他进来就是要改站点/日期/筛选的。先查一次等于必然浪费一次。
+    // 所以表格留空，等用户点「立即查询」。
+    //
+    // 表格在挂载时仍会调一次 request，但 `appliedRef.current` 是 null，那里直接返回
+    // 空结果、不发请求（见 request 开头）。
+    reloadScopeMeta(undefined, 'DAY').catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -373,7 +466,20 @@ export default function AnalysisPage() {
         scroll={{ x: totalColumnWidth(appliedView) }}
         // 筛选全部在上面的过滤区，表格不再自带条件表单
         search={false}
-        pagination={{ pageSize: 50, showSizeChanger: true }}
+        // 空表格有两种含义，必须说清是哪一种（见 hasQueried 的注释）
+        locale={
+          hasQueried
+            ? undefined
+            : { emptyText: '选好站点、视图与日期后，点「立即查询」查看数据' }
+        }
+        // 页码与每页条数由 ProTable 自己管，这里只给初值——复原时给回离开前那一页，
+        // 否则表格会从第 1 页起请求，短路判定（含页码）随即失配，白跑一次查询。
+        // 用 default* 而不是受控的 pageSize：后者会和 showSizeChanger 抢同一个值。
+        pagination={{
+          defaultCurrent: initialSnapshot?.lastRequest?.page ?? 1,
+          defaultPageSize: initialSnapshot?.lastRequest?.perPage ?? 50,
+          showSizeChanger: true,
+        }}
         dateFormatter="string"
         options={false}
         headerTitle={
@@ -388,9 +494,15 @@ export default function AnalysisPage() {
                 导出 CSV
               </Button>
             )}
-            <Typography.Text type="secondary">
-              搜索结果：<Typography.Text strong>{resultTotal.toLocaleString()}</Typography.Text>
-            </Typography.Text>
+            {/*
+              没查过就不显示条数。显示「搜索结果：0」会被读成「这个条件查出来是 0 行」，
+              而实际是「还没查」——两者在界面上必须能分开。
+            */}
+            {hasQueried && (
+              <Typography.Text type="secondary">
+                搜索结果：<Typography.Text strong>{resultTotal.toLocaleString()}</Typography.Text>
+              </Typography.Text>
+            )}
             {/*
               筛选一生效，掉榜行必然全部消失——筛选以锚定日那一行为准，而掉榜行在那一天
               没有行可供匹配。不说出来的话，用户看到的是「加了个筛选，掉榜的词全没了」，
@@ -407,6 +519,29 @@ export default function AnalysisPage() {
         request={async (params) => {
           const body = appliedRef.current;
           if (!body?.date) return { data: [], total: 0, success: true };
+          const key: RequestKey = {
+            body,
+            orderBy: appliedSortRef.current.field,
+            orderDir: appliedSortRef.current.dir,
+            page: params.current ?? 1,
+            perPage: params.pageSize ?? 50,
+          };
+          // 短路只作用于**复原后的第一次请求**（切回来那一次），一次性。
+          //
+          // 不能改成「参数相同就用缓存」：那样同参数的「立即查询」也会被短路，
+          // 而它是用户强制刷新的唯一入口——数据刚导完想看新的，点了却什么都不动。
+          // 翻页、改排序、重新查询一律真的去查。
+          //
+          // 仍然要 `sameRequest` 核对：万一表格请求的页码/排序与缓存那次对不上
+          // （如页码没复原成功），拿缓存行去填就是显示了另一页的数据。
+          if (restored && !restoreServedRef.current) {
+            restoreServedRef.current = true;
+            const cached = readSnapshot();
+            if (cached && sameRequest(key, cached.lastRequest)) {
+              markDataReady();
+              return { data: cached.rows, total: cached.total, success: true };
+            }
+          }
           // 排序只有工具栏一个入口（列上没有 sorter），故不读 ProTable 的 sort 参数——
           // 读了也永远是空对象，那种分支看着像在工作，实际是死代码。
           // 只有条件变更那次要重算总数；翻页/改排序沿用缓存值（见 apply）。
@@ -427,7 +562,11 @@ export default function AnalysisPage() {
           totalRef.current = total;
           setResultTotal(total);
           setPendingRebuild(res.pending_rebuild === true);
-          return { data: res.data ?? [], total, success: res.success !== false };
+          const rows = res.data ?? [];
+          // 把「这次请求是什么 + 拿回了什么」一并落进快照，供下次挂载短路
+          writeSlot({ lastRequest: key, rows, total, needsTotal: needsTotalRef.current });
+          markDataReady();
+          return { data: rows, total, success: res.success !== false };
         }}
         toolBarRender={() => [
           <Select
@@ -459,6 +598,7 @@ export default function AnalysisPage() {
             type="primary"
             onClick={() => {
               appliedSortRef.current = sortDraft;
+              writeSlot({ appliedSort: sortDraft });
               actionRef.current?.reload(true);
             }}
           >

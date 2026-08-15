@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const { accessState, searchAnalysis, getScope, getCategories, getBrands, getSites, exportAnalysis } =
@@ -18,12 +18,24 @@ vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories,
 vi.mock('@/services/upload', () => ({ getSites }));
 
 import AnalysisPage from '@/pages/Analysis';
+import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
 
-/** 渲染并把进屏时的异步 effect（作用域解析 → 表格首次请求）跑完，避免 act 警告淹没真实失败。 */
-async function renderSettled(expandFilters = true) {
+/**
+ * 渲染并把进屏时的异步 effect（作用域解析）跑完，避免 act 警告淹没真实失败。
+ *
+ * **默认会替你点一次「立即查询」**：首屏只拉作用域元数据、不查数据表，而下面绝大多数
+ * 用例断言的是「已经查过一次」之后的行为。要验首屏本身（不该发查询、复原不必点）的
+ * 用例传 `query = false`。
+ */
+async function renderSettled(expandFilters = true, query = true) {
   await act(async () => {
     render(<AnalysisPage />);
   });
+  if (query) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /立即查询/ }));
+    });
+  }
   if (expandFilters) {
     fireEvent.click(screen.getByRole('button', { name: /展开过滤条件/ }));
   }
@@ -65,6 +77,10 @@ const ROW = {
 describe('分析查询屏', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 会话缓存是模块级的，测试之间会串。不清的话第一个用例留下的快照会让后面每个
+    // 用例的挂载都被当成「切走再切回」——初始化整段跳过，断言看到的是一屏空数据，
+    // 而报错信息（找不到某个按钮）完全指不到这个原因。
+    clearSnapshot();
     accessState.canExport = true;
     getSites.mockResolvedValue([
       { code: 'US', name_zh: '美国', domain: 'amazon.com' },
@@ -105,6 +121,75 @@ describe('分析查询屏', () => {
     expect(screen.getByRole('button', { name: /展开过滤条件/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /开始筛选/ })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('搜索类目')).not.toBeInTheDocument();
+  });
+
+  /**
+   * 首屏只拉作用域元数据、不查数据表。进屏时的默认条件多半不是用户想看的那组——
+   * 他进来就是要改站点/日期/筛选的，先查一次必然浪费，而那是这一屏最贵的一次请求。
+   */
+  describe('首屏', () => {
+    it('只拉作用域元数据，不查数据表', async () => {
+      await renderSettled(false, false);
+
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+      expect(getSites).toHaveBeenCalled();
+      expect(getCategories).toHaveBeenCalled();
+      await settle();
+      expect(searchAnalysis).not.toHaveBeenCalled();
+    });
+
+    it('未查询时不显示「搜索结果」条数（0 会被读成查出来是 0 行）', async () => {
+      await renderSettled(false, false);
+      await settle();
+
+      // 用「搜索结果：」带冒号的形式，否则会匹配到过滤区标题「搜索结果过滤」
+      expect(screen.queryByText(/搜索结果：/)).not.toBeInTheDocument();
+    });
+
+    it('未查询时的空表格明说要点查询，而不是「暂无数据」', async () => {
+      await renderSettled(false, false);
+      await settle();
+
+      expect(screen.getByText(/点「立即查询」查看数据/)).toBeInTheDocument();
+    });
+
+    it('点了立即查询才发请求，此后条数出现', async () => {
+      await renderSettled(false, false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+      expect(searchAnalysis).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+      expect(searchAnalysis.mock.calls[0][0]).toMatchObject({
+        site: 'US',
+        view: 'DAY',
+        date: '2026-07-18',
+      });
+      expect(await screen.findByText(/搜索结果：/)).toBeInTheDocument();
+    });
+
+    it('未查询时不提示「存在未生效条件」（一个条件都没改，那句话是错的）', async () => {
+      await renderSettled(false, false);
+      await settle();
+
+      expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument();
+    });
+
+    it('一次都没查过就切走再切回，仍然不发查询', async () => {
+      await renderSettled(false, false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false, false); // 切回来
+      await settle();
+
+      expect(searchAnalysis).not.toHaveBeenCalled();
+      expect(screen.getByText(/点「立即查询」查看数据/)).toBeInTheDocument();
+    });
   });
 
   it('进屏解析作用域并把三元组带进首次查询', async () => {
@@ -486,5 +571,100 @@ describe('分析查询屏', () => {
     await waitFor(() => expect(getScope).toHaveBeenCalled());
     await settle();
     expect(searchAnalysis).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 切走再切回。umi 没有 keepalive，切换路由会真的卸载这个组件，所以「重新挂载一次」
+   * 就是对切回来的忠实模拟——不清模块级缓存即可。
+   */
+  describe('切走再切回', () => {
+    it('复原时一个请求都不发', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false, false); // 第二次挂载 = 切回来，不点查询
+      await settle();
+
+      expect(getSites).not.toHaveBeenCalled();
+      expect(getScope).not.toHaveBeenCalled();
+      expect(getCategories).not.toHaveBeenCalled();
+      expect(searchAnalysis).not.toHaveBeenCalled();
+    });
+
+    it('复原后仍显示离开前的结果行', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false, false);
+      expect(await screen.findByText('coffee maker')).toBeInTheDocument();
+    });
+
+    it('复原后点「立即查询」仍然真的去查（强制刷新的唯一入口不能被短路吃掉）', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false, false);
+      await settle();
+      expect(searchAnalysis).not.toHaveBeenCalled(); // 复原那次确实没查
+
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    });
+
+    /**
+     * 滚动恢复只验到「接线正确」这一层：复原且数据就绪后，确实拿离开前那个值调了
+     * `scrollTo`。真实浏览器里的时机（行渲染完没有、页面够不够高）jsdom 表达不了，
+     * 那部分要手测。
+     */
+    it('复原后按离开前的滚动量调用 scrollTo', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      // 模拟用户滚动：jsdom 不会自己派发 scroll，直接写快照即可——被测的是恢复那一侧
+      writeSlot({ scrollY: 900 });
+      cleanup();
+      vi.clearAllMocks();
+
+      const scrollTo = vi.fn();
+      vi.stubGlobal('scrollTo', scrollTo);
+      // 页面「够高」，否则恢复逻辑会逐帧等下去
+      vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(5000);
+
+      await renderSettled(false, false);
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 900 }));
+      vi.unstubAllGlobals();
+    });
+
+    it('首次进入（没有缓存）不动滚动位置', async () => {
+      const scrollTo = vi.fn();
+      vi.stubGlobal('scrollTo', scrollTo);
+
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      await settle();
+
+      expect(scrollTo).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('刷新页面（缓存清空）后回到完整初始化', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+      clearSnapshot(); // 刷新页面 = 模块级缓存随页面一起没了
+
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      expect(getSites).toHaveBeenCalled();
+      expect(getScope).toHaveBeenCalled();
+    });
   });
 });
