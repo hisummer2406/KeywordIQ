@@ -335,3 +335,54 @@ def test_repeat_import_does_not_burn_dimension_sequence(session, tmp_path, table
         f"{table} 的序列在没有新名称时仍前进了 "
         f"{after_second - after_first}——ON CONFLICT 之前的 nextval 没被挡住"
     )
+
+
+def _product_versions(session, asins: list[str]) -> dict[str, tuple[str, str]]:
+    """{asin: (ctid, title)}。
+
+    **判据用 ``ctid`` 而不是 ``xmin``**：同一个事务里 INSERT 再 UPDATE，两次的 xmin 都是
+    当前事务号，看不出区别；而任何一次更新都会让元组换到新的物理位置，ctid 必变。
+    这些测试整个跑在一个回滚掉的事务里，所以只有 ctid 能用。
+    """
+    rows = session.execute(
+        text("SELECT asin, ctid::text, title FROM analysis.dim_product WHERE asin = ANY(:a)"),
+        {"a": asins},
+    ).all()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def test_reimporting_identical_titles_does_not_rewrite_products(session, tmp_path):
+    """标题一字未变时不产生新行版本。
+
+    无条件 ``DO UPDATE`` 会让每次导入重写所有已存在的商品行，每条 no-op 更新都要造死元组、
+    维护 title 上那个 GIN trgm 索引（生产上 1.3 GB）。维度表越大，新导入里"已存在"的比例
+    越高，代价越大——是正反馈而非一次性开销。实测同一份 10 万行日报因此从 54 秒退化到 416 秒。
+    """
+    rows = [
+        _row(1, "wireless mouse", a1="B001", t1="Logi Mouse", b1="Logitech", cat1="Electronics"),
+        _row(2, "usb cable", a1="B002", t1="Anker Cable", b1="Anker", cat1="Electronics"),
+    ]
+    _import(session, tmp_path, "day1.csv", rows)
+    before = _product_versions(session, ["B001", "B002"])
+    assert set(before) == {"B001", "B002"}
+
+    # 同一期重导同样的内容（覆盖语义：事实切片先删后写，维度照旧走 UPSERT）
+    _import(session, tmp_path, "day1_again.csv", rows)
+    after = _product_versions(session, ["B001", "B002"])
+
+    assert after == before, "标题没变却产生了新的行版本——no-op 更新没有被跳过"
+
+
+def test_changed_title_still_updates_the_product(session, tmp_path):
+    """SCD Type 1 语义不能被一并关掉：标题真变了就要更新为最新值。"""
+    _import(session, tmp_path, "day1.csv",
+            [_row(1, "wireless mouse", a1="B001", t1="旧标题", b1="Logitech", cat1="Electronics")])
+    before = _product_versions(session, ["B001"])
+
+    _import(session, tmp_path, "day2.csv",
+            [_row(1, "wireless mouse", a1="B001", t1="新标题", b1="Logitech", cat1="Electronics")],
+            d=date(2026, 7, 16))
+    after = _product_versions(session, ["B001"])
+
+    assert after["B001"][1] == "新标题"
+    assert after["B001"][0] != before["B001"][0], "标题变了却没有产生新行版本"
