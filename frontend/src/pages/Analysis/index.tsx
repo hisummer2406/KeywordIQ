@@ -22,7 +22,7 @@ import {
 } from '@/services/analysis';
 import { getSites, type SiteOption } from '@/services/upload';
 import CategoryPanel from './CategoryPanel';
-import FilterPanel from './FilterPanel';
+import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
 import { buildColumns, totalColumnWidth } from './columns';
 import { emptyFilters, toSearchBody, type FilterDraft, type ScopeDraft } from './filters';
@@ -274,7 +274,15 @@ export default function AnalysisPage() {
               <Typography.Text strong>选择筛选类目</Typography.Text>
             </Col>
             <Col flex="auto" style={{ paddingLeft: 16 }}>
-              <Typography.Text strong>搜索结果过滤</Typography.Text>
+              {/*
+                标题与下方条件标签共用同一条右对齐线：标签定宽 LABEL_WIDTH 且右对齐，
+                标题若从列左缘起排，就与「行集合」这些标签差出四十余像素，看着是飘在外面的。
+                宽度取自 FilterPanel 导出的同一个常量——两处各写一个数值迟早分叉，
+                而分叉的表现就是标题又飘开。
+              */}
+              <span style={{ display: 'inline-block', width: LABEL_WIDTH, textAlign: 'right' }}>
+                <Typography.Text strong>搜索结果过滤</Typography.Text>
+              </span>
             </Col>
           </Row>
         }
