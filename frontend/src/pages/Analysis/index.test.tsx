@@ -23,19 +23,14 @@ import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
 /**
  * 渲染并把进屏时的异步 effect（作用域解析）跑完，避免 act 警告淹没真实失败。
  *
- * **默认会替你点一次「立即查询」**：首屏只拉作用域元数据、不查数据表，而下面绝大多数
- * 用例断言的是「已经查过一次」之后的行为。要验首屏本身（不该发查询、复原不必点）的
- * 用例传 `query = false`。
+ * **不替你点「立即查询」**：首屏会按默认作用域自动查一次，渲染完就已经是「查过一次」
+ * 的状态，下面绝大多数用例断言的正是这之后的行为。替它再点一次会让请求数多一次，
+ * 「首屏是否自动查」的用例也就永远为真、测不出回归。
  */
-async function renderSettled(expandFilters = true, query = true) {
+async function renderSettled(expandFilters = true) {
   await act(async () => {
     render(<AnalysisPage />);
   });
-  if (query) {
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /立即查询/ }));
-    });
-  }
   if (expandFilters) {
     fireEvent.click(screen.getByRole('button', { name: /展开过滤条件/ }));
   }
@@ -124,71 +119,65 @@ describe('分析查询屏', () => {
   });
 
   /**
-   * 首屏只拉作用域元数据、不查数据表。进屏时的默认条件多半不是用户想看的那组——
-   * 他进来就是要改站点/日期/筛选的，先查一次必然浪费，而那是这一屏最贵的一次请求。
+   * 首屏按默认作用域自动查一次。这一屏是主力数据屏，用户进来就是要看数据的——延迟到
+   * 点击才查的是持续增长市场屏，不是这一屏（曾经把两屏做反过一次）。
    */
   describe('首屏', () => {
-    it('只拉作用域元数据，不查数据表', async () => {
-      await renderSettled(false, false);
+    it('拉完作用域后自动查一次，条件是默认作用域', async () => {
+      await renderSettled(false);
 
       await waitFor(() => expect(getScope).toHaveBeenCalled());
       expect(getSites).toHaveBeenCalled();
       expect(getCategories).toHaveBeenCalled();
-      await settle();
-      expect(searchAnalysis).not.toHaveBeenCalled();
-    });
-
-    it('未查询时不显示「搜索结果」条数（0 会被读成查出来是 0 行）', async () => {
-      await renderSettled(false, false);
-      await settle();
-
-      // 用「搜索结果：」带冒号的形式，否则会匹配到过滤区标题「搜索结果过滤」
-      expect(screen.queryByText(/搜索结果：/)).not.toBeInTheDocument();
-    });
-
-    it('未查询时的空表格明说要点查询，而不是「暂无数据」', async () => {
-      await renderSettled(false, false);
-      await settle();
-
-      expect(screen.getByText(/点「立即查询」查看数据/)).toBeInTheDocument();
-    });
-
-    it('点了立即查询才发请求，此后条数出现', async () => {
-      await renderSettled(false, false);
-      await waitFor(() => expect(getScope).toHaveBeenCalled());
-      expect(searchAnalysis).not.toHaveBeenCalled();
-
-      await act(async () => {
-        fireEvent.click(submit());
-      });
-
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
       expect(searchAnalysis.mock.calls[0][0]).toMatchObject({
         site: 'US',
         view: 'DAY',
         date: '2026-07-18',
       });
+    });
+
+    it('自动查询之后条数就出现', async () => {
+      await renderSettled(false);
+
       expect(await screen.findByText(/搜索结果：/)).toBeInTheDocument();
     });
 
-    it('未查询时不提示「存在未生效条件」（一个条件都没改，那句话是错的）', async () => {
-      await renderSettled(false, false);
+    it('自动查询只发一次，不会连着查两遍', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+      await settle();
+
+      expect(searchAnalysis).toHaveBeenCalledTimes(1);
+    });
+
+    it('首屏不提示「存在未生效条件」（一个条件都没改，那句话是错的）', async () => {
+      await renderSettled(false);
       await settle();
 
       expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument();
     });
 
-    it('一次都没查过就切走再切回，仍然不发查询', async () => {
-      await renderSettled(false, false);
-      await waitFor(() => expect(getScope).toHaveBeenCalled());
-      cleanup();
-      vi.clearAllMocks();
+    /**
+     * 站点一期数据都没有时，`request` 开头那道 `!body?.date` 守卫会挡掉请求。此时若沿用
+     * 「搜索结果：0」，用户会去排查筛选条件，而真正的原因是这个站点根本没导过数据。
+     */
+    it('作用域没有可查日期时不发请求，空表格说明是没有数据', async () => {
+      getScope.mockResolvedValue({
+        site: 'US',
+        view: 'DAY',
+        latest_date: null,
+        available_dates: [],
+      });
 
-      await renderSettled(false, false); // 切回来
+      await renderSettled(false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
       await settle();
 
       expect(searchAnalysis).not.toHaveBeenCalled();
-      expect(screen.getByText(/点「立即查询」查看数据/)).toBeInTheDocument();
+      expect(screen.getByText(/还没有导入任何数据/)).toBeInTheDocument();
+      // 用「搜索结果：」带冒号的形式，否则会匹配到过滤区标题「搜索结果过滤」
+      expect(screen.queryByText(/搜索结果：/)).not.toBeInTheDocument();
     });
   });
 
@@ -564,15 +553,6 @@ describe('分析查询屏', () => {
     expect(exportAnalysis.mock.calls[0][0].categories).toBeUndefined();
   });
 
-  it('作用域无可用日期时不发查询（避免查一个空日期）', async () => {
-    getScope.mockResolvedValue({ site: 'US', view: 'DAY', latest_date: null, available_dates: [] });
-    await renderSettled();
-
-    await waitFor(() => expect(getScope).toHaveBeenCalled());
-    await settle();
-    expect(searchAnalysis).not.toHaveBeenCalled();
-  });
-
   /**
    * 切走再切回。umi 没有 keepalive，切换路由会真的卸载这个组件，所以「重新挂载一次」
    * 就是对切回来的忠实模拟——不清模块级缓存即可。
@@ -584,7 +564,7 @@ describe('分析查询屏', () => {
       cleanup();
       vi.clearAllMocks();
 
-      await renderSettled(false, false); // 第二次挂载 = 切回来，不点查询
+      await renderSettled(false); // 第二次挂载 = 切回来，不点查询
       await settle();
 
       expect(getSites).not.toHaveBeenCalled();
@@ -599,7 +579,7 @@ describe('分析查询屏', () => {
       cleanup();
       vi.clearAllMocks();
 
-      await renderSettled(false, false);
+      await renderSettled(false);
       expect(await screen.findByText('coffee maker')).toBeInTheDocument();
     });
 
@@ -609,7 +589,7 @@ describe('分析查询屏', () => {
       cleanup();
       vi.clearAllMocks();
 
-      await renderSettled(false, false);
+      await renderSettled(false);
       await settle();
       expect(searchAnalysis).not.toHaveBeenCalled(); // 复原那次确实没查
 
@@ -637,7 +617,7 @@ describe('分析查询屏', () => {
       // 页面「够高」，否则恢复逻辑会逐帧等下去
       vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(5000);
 
-      await renderSettled(false, false);
+      await renderSettled(false);
       await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 900 }));
       vi.unstubAllGlobals();
     });
