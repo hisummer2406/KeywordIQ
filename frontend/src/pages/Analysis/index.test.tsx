@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const { accessState, searchAnalysis, getScope, getCategories, getBrands, getSites, exportAnalysis } =
@@ -18,6 +18,7 @@ vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories,
 vi.mock('@/services/upload', () => ({ getSites }));
 
 import AnalysisPage from '@/pages/Analysis';
+import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
 
 /** 渲染并把进屏时的异步 effect（作用域解析 → 表格首次请求）跑完，避免 act 警告淹没真实失败。 */
 async function renderSettled(expandFilters = true) {
@@ -65,6 +66,10 @@ const ROW = {
 describe('分析查询屏', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 会话缓存是模块级的，测试之间会串。不清的话第一个用例留下的快照会让后面每个
+    // 用例的挂载都被当成「切走再切回」——初始化整段跳过，断言看到的是一屏空数据，
+    // 而报错信息（找不到某个按钮）完全指不到这个原因。
+    clearSnapshot();
     accessState.canExport = true;
     getSites.mockResolvedValue([
       { code: 'US', name_zh: '美国', domain: 'amazon.com' },
@@ -486,5 +491,100 @@ describe('分析查询屏', () => {
     await waitFor(() => expect(getScope).toHaveBeenCalled());
     await settle();
     expect(searchAnalysis).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 切走再切回。umi 没有 keepalive，切换路由会真的卸载这个组件，所以「重新挂载一次」
+   * 就是对切回来的忠实模拟——不清模块级缓存即可。
+   */
+  describe('切走再切回', () => {
+    it('复原时一个请求都不发', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false); // 第二次挂载 = 切回来
+      await settle();
+
+      expect(getSites).not.toHaveBeenCalled();
+      expect(getScope).not.toHaveBeenCalled();
+      expect(getCategories).not.toHaveBeenCalled();
+      expect(searchAnalysis).not.toHaveBeenCalled();
+    });
+
+    it('复原后仍显示离开前的结果行', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false);
+      expect(await screen.findByText('coffee maker')).toBeInTheDocument();
+    });
+
+    it('复原后点「立即查询」仍然真的去查（强制刷新的唯一入口不能被短路吃掉）', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false);
+      await settle();
+      expect(searchAnalysis).not.toHaveBeenCalled(); // 复原那次确实没查
+
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    });
+
+    /**
+     * 滚动恢复只验到「接线正确」这一层：复原且数据就绪后，确实拿离开前那个值调了
+     * `scrollTo`。真实浏览器里的时机（行渲染完没有、页面够不够高）jsdom 表达不了，
+     * 那部分要手测。
+     */
+    it('复原后按离开前的滚动量调用 scrollTo', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      // 模拟用户滚动：jsdom 不会自己派发 scroll，直接写快照即可——被测的是恢复那一侧
+      writeSlot({ scrollY: 900 });
+      cleanup();
+      vi.clearAllMocks();
+
+      const scrollTo = vi.fn();
+      vi.stubGlobal('scrollTo', scrollTo);
+      // 页面「够高」，否则恢复逻辑会逐帧等下去
+      vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(5000);
+
+      await renderSettled(false);
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 900 }));
+      vi.unstubAllGlobals();
+    });
+
+    it('首次进入（没有缓存）不动滚动位置', async () => {
+      const scrollTo = vi.fn();
+      vi.stubGlobal('scrollTo', scrollTo);
+
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      await settle();
+
+      expect(scrollTo).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('刷新页面（缓存清空）后回到完整初始化', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+      clearSnapshot(); // 刷新页面 = 模块级缓存随页面一起没了
+
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      expect(getSites).toHaveBeenCalled();
+      expect(getScope).toHaveBeenCalled();
+    });
   });
 });
