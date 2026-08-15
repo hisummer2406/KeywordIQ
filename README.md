@@ -140,13 +140,27 @@ KeywordIQ/
 │   │   └── upload/         # OSS 直传 + 三段式导入 + 批次历史
 │   └── user/                # 用户与角色管理
 ├── alembic/                 # 数据库迁移（分区表/物化视图需手写）
-├── frontend/                 # Ant Design Pro SPA（Umi Max），独立构建
+├── frontend/                 # Ant Design Pro SPA（Umi Max），独立构建，见下方目录说明
 ├── scripts/                  # seed_admin / prune_retention / check_oss 等运维脚本
 ├── test/                     # pytest（单元 + 需真实库的集成测试）
 ├── main.py                   # FastAPI 入口
 ├── config.py                 # Pydantic Settings
 └── database.py               # SQLAlchemy 2.0 sync + async 双引擎
 ```
+
+**`frontend/`**（独立 pnpm 项目，构建产物由 nginx 托管，不随后端启动）：
+
+```
+frontend/src/
+├── app.tsx           # 运行时配置：getInitialState / layout / request 拦截器（token 注入、401 跳转）
+├── access.ts          # 权限工厂，由 initialState.currentUser 派生，控制路由/菜单显隐
+├── typings.d.ts        # 全局 API 类型（API.CurrentUser、API.TableResponse 等）
+├── services/            # 后端接口封装，按域拆分
+├── components/           # 跨页复用组件（ImportStatus、RightContent 等）
+└── pages/                 # 屏：Login / Analysis / Upload / ImportHistory / User
+```
+
+前端本地开发、环境变量与常用脚本见 [frontend/README.md](./frontend/README.md)。
 
 ### 开发约束（节选）
 
