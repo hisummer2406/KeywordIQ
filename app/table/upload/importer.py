@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from app.site_registry import normalize_site_code
 from app.table.analysis.partitioning import ensure_fact_partitions
 from app.table.upload.import_source import ImportSource
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ class ImportResult:
     skipped_rows: int      # 因列数不符或搜索词为空被跳过的行数
     written_rows: int      # 实际写入事实表的行数
     dropped_rows: int = 0  # 本期掉榜词数（窗口内出现过但本期无数据）
+    growth_rows: int = 0   # 本期持续增长词数（仅日报；周报恒为 0，它没有「连续 7 天」）
     date_warning: str | None = None  # 文件名日期与 CSV 内日期不一致时的提示
 
 
@@ -413,6 +415,95 @@ def _load_dropped(session: Session, site: str, period: str, report_date: date) -
     return result.rowcount
 
 
+def load_growth(session: Session, site: str, anchor_date: date) -> int:
+    """第五段：算定本期的持续增长榜。返回写入行数。**只适用于日报。**
+
+    命中口径（三条同时满足，窗口是 ``[d-(N-1), d]`` 共 N 期，N = ``GROWTH_WINDOW_DAYS``）：
+
+    1. 窗口内每一期都在榜；
+    2. 累计净增 ``rank(首期) − rank(锚定期)`` > ``GROWTH_MIN_RANK_GAIN``；
+    3. 窗口内每一个日环比 ``(前期 − 本期) / 前期`` ≥ ``GROWTH_MIN_DAILY_RATE``。
+
+    N 期数据产生 **N−1** 个日环比。要凑满 N 个环比就得取 N+1 期，那与掉榜的 7 天窗口
+    对不齐，且多依赖一天的数据——需求方确认按 N−1 个环比判定。
+
+    **``days_on = N`` 一条同时兑现两件事**，因此不必去查 ``fact_dropped``：
+
+    - *中途掉榜自动出局*——掉的那期没有行，凑不满 N；
+    - *窗口内缺期时整期榜单为空*——所有词都凑不满 N。这是据实反映而非缺陷，缺期由查询侧
+      回传、界面明示（否则用户会把它读成「今天没有增长词」）。
+
+    ``current_ranking > 0`` 不是可有可无的防御：排名来自 CSV 且经 ``_num`` 清洗，脏值
+    落库为 0，而 0 会让日环比的分母为零直接炸掉整个导入。排除它同时也让「这一期不算在榜」
+    成立——排名为 0 的行本就不是一条有效榜单记录。
+
+    与 :func:`_load_dropped` 一样是整条库内 ``INSERT ... SELECT``，不把任何行读进应用
+    进程；窗口排序键 ``(keyword_id, report_date)`` 与
+    ``idx_fact_daily_keyword_history (site, keyword_id, report_date)`` 列序一致，可走索引序，
+    回落到外部排序时 PostgreSQL 落盘处理，内存有界。
+
+    **公开而非下划线私有**：回填脚本 ``scripts/backfill_growth.py`` 要调同一份实现——
+    口径只能有一处定义，抄一份到脚本里迟早与导入侧漂移，而漂移的表现是「回填出来的榜单
+    和每日导入出来的不一样」，没有任何地方会报错。
+    """
+    window_days = settings.GROWTH_WINDOW_DAYS
+    win_start = anchor_date - timedelta(days=window_days - 1)
+
+    # 覆盖语义：与事实表一致，同一期重复导入时先删该期再重算。
+    session.execute(
+        text("DELETE FROM analysis.fact_growth WHERE site = :site AND anchor_date = :anchor"),
+        {"site": site, "anchor": anchor_date},
+    )
+
+    # 锚定期排名与最低日环比在 SELECT / HAVING 里各出现两次，抽成常量免得两处写法漂移。
+    end_rank = "max(current_ranking) FILTER (WHERE report_date = :anchor)"
+    min_rate = (
+        "min((prev_ranking - current_ranking)::numeric / prev_ranking) "
+        "FILTER (WHERE prev_ranking IS NOT NULL)"
+    )
+    result = session.execute(
+        text(
+            f"""
+            INSERT INTO analysis.fact_growth
+                (site, anchor_date, keyword_id,
+                 start_ranking, end_ranking, rank_gain, min_growth_rate)
+            WITH win AS (
+                SELECT keyword_id, report_date, current_ranking,
+                       lag(current_ranking) OVER w             AS prev_ranking,
+                       first_value(current_ranking) OVER w     AS start_ranking,
+                       count(*) OVER (PARTITION BY keyword_id) AS days_on
+                  FROM analysis.fact_daily
+                 WHERE site = :site
+                   AND report_date BETWEEN :win_start AND :anchor
+                   AND current_ranking > 0
+                WINDOW w AS (PARTITION BY keyword_id ORDER BY report_date)
+            )
+            SELECT :site, :anchor, keyword_id,
+                   max(start_ranking),
+                   {end_rank},
+                   max(start_ranking) - {end_rank},
+                   {min_rate}
+              FROM win
+             WHERE days_on = :window_days
+             GROUP BY keyword_id
+            HAVING max(start_ranking) - {end_rank} > :min_gain
+               AND {min_rate} >= :min_rate
+            """
+        ),
+        {
+            "site": site, "anchor": anchor_date, "win_start": win_start,
+            "window_days": window_days,
+            "min_gain": settings.GROWTH_MIN_RANK_GAIN,
+            "min_rate": settings.GROWTH_MIN_DAILY_RATE,
+        },
+    )
+    logger.info(
+        "持续增长榜算定: %s %s，窗口 [%s, %s]，%d 行",
+        site, anchor_date, win_start, anchor_date, result.rowcount,
+    )
+    return result.rowcount
+
+
 def import_report(
     session: Session, *, site: str, period: str, report_date: date, source: ImportSource
 ) -> ImportResult:
@@ -429,10 +520,13 @@ def import_report(
     # 掉榜表也是分区表，写入前同样必须确保分区存在——漏掉的表现是导入到最后一步
     # 才报 "no partition of relation found for row"，前面的事实数据已经写完了。
     ensure_fact_partitions(session, "fact_dropped", site, report_date)
+    if period == "DAY":
+        ensure_fact_partitions(session, "fact_growth", site, report_date)
 
     total, staged, skipped = _stage_csv(session, source)
     written = 0
     dropped = 0
+    growth = 0
     date_warning = None
     if staged:
         date_warning = _check_date_consistency(session, report_date)
@@ -440,13 +534,17 @@ def import_report(
         written = _load_facts(session, site, period, report_date)
         # 必须在事实写入之后：掉榜集合是拿窗口内历史与**本期已落库的事实**做差集算出来的。
         dropped = _load_dropped(session, site, period, report_date)
+        # 同样必须在事实写入之后（窗口含锚定期本身）。**只有日报**：周报没有「连续 7 天」
+        # 这个概念，给它算一份等于把两种时间粒度混进同一张榜。
+        if period == "DAY":
+            growth = load_growth(session, site, report_date)
 
     session.execute(text(f"DROP TABLE IF EXISTS {_STAGING_TABLE}"))
 
     return ImportResult(
         site=site, period=period, report_date=report_date,
         total_data_rows=total, staged_rows=staged, skipped_rows=skipped, written_rows=written,
-        dropped_rows=dropped, date_warning=date_warning,
+        dropped_rows=dropped, growth_rows=growth, date_warning=date_warning,
     )
 
 
