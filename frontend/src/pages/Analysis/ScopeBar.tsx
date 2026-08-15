@@ -50,6 +50,8 @@ export default function ScopeBar({
       <Space.Compact className="scope-bar__query">
         <Select
           className="scope-bar__site"
+          // 触发器按内容收窄后，下拉若仍与它同宽会截断较长的站点名
+          popupMatchSelectWidth={false}
           value={scope.site}
           placeholder="站点"
           onChange={(site) => onScopeChange({ ...scope, site })}
