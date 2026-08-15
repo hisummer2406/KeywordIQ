@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { buildColumns } from './columns';
+import { TREND_COLORS } from '@/components/trendColors';
 
 describe('buildColumns', () => {
   it('表头不提供点击排序，统一使用表格工具栏排序', () => {
@@ -156,6 +157,36 @@ describe('排名变化率列', () => {
       const { container } = cell('DAY', '排名变化率', { ...listedRow, previous_ranking: prev });
       expect(container.textContent).toContain('—');
       expect(container.textContent).not.toMatch(/Infinity|NaN/);
+    }
+  });
+});
+
+describe('升降色值来自共享 token', () => {
+  // 同一语义在同一屏上用两组色值，会让用户把色差误读成含义差别
+  const colored = (title: string, row: any) =>
+    cell('DAY', title, row).container.querySelector('span')!;
+
+  it('上升取共享的绿', () => {
+    for (const title of ['排名变化', '排名变化率']) {
+      expect(colored(title, { ...listedRow, ranking_change: -20 })).toHaveStyle({
+        color: TREND_COLORS.up,
+      });
+    }
+  });
+
+  it('下降取共享的红', () => {
+    for (const title of ['排名变化', '排名变化率']) {
+      expect(colored(title, { ...listedRow, ranking_change: 20 })).toHaveStyle({
+        color: TREND_COLORS.down,
+      });
+    }
+  });
+
+  it('无变化是蓝色，不再是灰色', () => {
+    for (const title of ['排名变化', '排名变化率']) {
+      const span = colored(title, { ...listedRow, ranking_change: 0 });
+      expect(span).toHaveStyle({ color: TREND_COLORS.flat });
+      expect(span).not.toHaveStyle({ color: '#999999' });
     }
   });
 });
