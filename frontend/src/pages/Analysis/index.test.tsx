@@ -20,11 +20,22 @@ vi.mock('@/services/upload', () => ({ getSites }));
 import AnalysisPage from '@/pages/Analysis';
 import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
 
-/** 渲染并把进屏时的异步 effect（作用域解析 → 表格首次请求）跑完，避免 act 警告淹没真实失败。 */
-async function renderSettled(expandFilters = true) {
+/**
+ * 渲染并把进屏时的异步 effect（作用域解析）跑完，避免 act 警告淹没真实失败。
+ *
+ * **默认会替你点一次「立即查询」**：首屏只拉作用域元数据、不查数据表，而下面绝大多数
+ * 用例断言的是「已经查过一次」之后的行为。要验首屏本身（不该发查询、复原不必点）的
+ * 用例传 `query = false`。
+ */
+async function renderSettled(expandFilters = true, query = true) {
   await act(async () => {
     render(<AnalysisPage />);
   });
+  if (query) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /立即查询/ }));
+    });
+  }
   if (expandFilters) {
     fireEvent.click(screen.getByRole('button', { name: /展开过滤条件/ }));
   }
@@ -110,6 +121,75 @@ describe('分析查询屏', () => {
     expect(screen.getByRole('button', { name: /展开过滤条件/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /开始筛选/ })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('搜索类目')).not.toBeInTheDocument();
+  });
+
+  /**
+   * 首屏只拉作用域元数据、不查数据表。进屏时的默认条件多半不是用户想看的那组——
+   * 他进来就是要改站点/日期/筛选的，先查一次必然浪费，而那是这一屏最贵的一次请求。
+   */
+  describe('首屏', () => {
+    it('只拉作用域元数据，不查数据表', async () => {
+      await renderSettled(false, false);
+
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+      expect(getSites).toHaveBeenCalled();
+      expect(getCategories).toHaveBeenCalled();
+      await settle();
+      expect(searchAnalysis).not.toHaveBeenCalled();
+    });
+
+    it('未查询时不显示「搜索结果」条数（0 会被读成查出来是 0 行）', async () => {
+      await renderSettled(false, false);
+      await settle();
+
+      // 用「搜索结果：」带冒号的形式，否则会匹配到过滤区标题「搜索结果过滤」
+      expect(screen.queryByText(/搜索结果：/)).not.toBeInTheDocument();
+    });
+
+    it('未查询时的空表格明说要点查询，而不是「暂无数据」', async () => {
+      await renderSettled(false, false);
+      await settle();
+
+      expect(screen.getByText(/点「立即查询」查看数据/)).toBeInTheDocument();
+    });
+
+    it('点了立即查询才发请求，此后条数出现', async () => {
+      await renderSettled(false, false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+      expect(searchAnalysis).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+      expect(searchAnalysis.mock.calls[0][0]).toMatchObject({
+        site: 'US',
+        view: 'DAY',
+        date: '2026-07-18',
+      });
+      expect(await screen.findByText(/搜索结果：/)).toBeInTheDocument();
+    });
+
+    it('未查询时不提示「存在未生效条件」（一个条件都没改，那句话是错的）', async () => {
+      await renderSettled(false, false);
+      await settle();
+
+      expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument();
+    });
+
+    it('一次都没查过就切走再切回，仍然不发查询', async () => {
+      await renderSettled(false, false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false, false); // 切回来
+      await settle();
+
+      expect(searchAnalysis).not.toHaveBeenCalled();
+      expect(screen.getByText(/点「立即查询」查看数据/)).toBeInTheDocument();
+    });
   });
 
   it('进屏解析作用域并把三元组带进首次查询', async () => {
@@ -504,7 +584,7 @@ describe('分析查询屏', () => {
       cleanup();
       vi.clearAllMocks();
 
-      await renderSettled(false); // 第二次挂载 = 切回来
+      await renderSettled(false, false); // 第二次挂载 = 切回来，不点查询
       await settle();
 
       expect(getSites).not.toHaveBeenCalled();
@@ -519,7 +599,7 @@ describe('分析查询屏', () => {
       cleanup();
       vi.clearAllMocks();
 
-      await renderSettled(false);
+      await renderSettled(false, false);
       expect(await screen.findByText('coffee maker')).toBeInTheDocument();
     });
 
@@ -529,7 +609,7 @@ describe('分析查询屏', () => {
       cleanup();
       vi.clearAllMocks();
 
-      await renderSettled(false);
+      await renderSettled(false, false);
       await settle();
       expect(searchAnalysis).not.toHaveBeenCalled(); // 复原那次确实没查
 
@@ -557,7 +637,7 @@ describe('分析查询屏', () => {
       // 页面「够高」，否则恢复逻辑会逐帧等下去
       vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(5000);
 
-      await renderSettled(false);
+      await renderSettled(false, false);
       await waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 900 }));
       vi.unstubAllGlobals();
     });
