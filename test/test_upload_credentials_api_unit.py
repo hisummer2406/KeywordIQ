@@ -37,14 +37,23 @@ def _grant():
     )
 
 
-def _build_app(monkeypatch, *, create_raises=False, recorder=None):
+def _build_app(monkeypatch, *, create_raises=False, recorder=None, issued=None):
     import app.table.upload.upload_api as upload_api_mod
     from app.auth.simple_auth import simple_auth
 
-    monkeypatch.setattr(
-        upload_api_mod.oss_client, "issue_upload_credentials",
-        lambda *a, **k: (recorder.append("issue") if recorder is not None else None) or _grant(),
-    )
+    def fake_issue(*a, **k):
+        if recorder is not None:
+            recorder.append("issue")
+        if issued is not None:
+            issued.append(k)
+        # 续签沿用传入的 key；新上传才生成新 key
+        existing = k.get("existing_key")
+        grant = _grant()
+        if existing:
+            grant.object_key = existing
+        return grant
+
+    monkeypatch.setattr(upload_api_mod.oss_client, "issue_upload_credentials", fake_issue)
 
     def fake_create(**kwargs):
         if recorder is not None:
@@ -86,6 +95,65 @@ class TestCredentialsCreateBatch:
         body = r.json()
         assert body.get("success") is False
         assert "access_key_id" not in body and "security_token" not in body
+
+
+class TestRefreshDoesNotCreateBatch:
+    """续签凭证不是一次新上传，MUST NOT 新增批次记录。
+
+    大文件直传耗时可能超过凭证有效期，前端每 5 分钟续签一次。曾经续签走的是与新上传
+    完全相同的路径，于是一次 25 分钟的周报上传在历史里留下 5 条记录——其中 4 条的
+    object key 从未被写入过任何对象，65 分钟后被回收判成 FAILED「请重新上传」，
+    而文件其实传成功了。
+    """
+
+    def test_refresh_creates_no_batch(self, monkeypatch):
+        recorder: list[str] = []
+        client = TestClient(_build_app(monkeypatch, recorder=recorder))
+
+        r = client.post("/api/upload/oss/upload-credentials",
+                        json={"filename": FILENAME, "site": "US", "object_key": OBJECT_KEY})
+
+        assert r.status_code == 200
+        assert "create" not in recorder, "续签不该落批次记录"
+        assert recorder == ["issue"]
+
+    def test_refresh_reuses_the_same_object_key(self, monkeypatch):
+        """续签沿用同一个 key——换 key 会把一个文件传成两个对象。"""
+        issued: list[dict] = []
+        client = TestClient(_build_app(monkeypatch, issued=issued))
+
+        r = client.post("/api/upload/oss/upload-credentials",
+                        json={"filename": FILENAME, "site": "US", "object_key": OBJECT_KEY})
+
+        assert r.json()["object_key"] == OBJECT_KEY
+        assert issued[0].get("existing_key") == OBJECT_KEY
+
+    def test_refresh_still_enforces_prefix(self, monkeypatch):
+        """续签不能成为「为任意 key 取得写凭证」的入口——它签发的是**写**权限。"""
+        recorder: list[str] = []
+        client = TestClient(_build_app(monkeypatch, recorder=recorder))
+
+        r = client.post("/api/upload/oss/upload-credentials",
+                        json={"filename": FILENAME, "site": "US",
+                              "object_key": "imports/DE/DAY/2026-07-18/evil_x.csv"})
+
+        assert r.status_code == 400
+        assert recorder == [], "越权应在签发之前被拒"
+        body = r.json()
+        assert body.get("success") is False
+        assert "access_key_id" not in body
+
+    def test_new_upload_still_creates_batch(self, monkeypatch):
+        """不带 object_key 的既有行为逐字不变。"""
+        recorder: list[str] = []
+        client = TestClient(_build_app(monkeypatch, recorder=recorder))
+
+        r = client.post("/api/upload/oss/upload-credentials",
+                        json={"filename": FILENAME, "site": "US"})
+
+        assert r.status_code == 200
+        assert "create" in recorder
+        assert r.json()["batch_id"] == 42
 
 
 class TestImportClaimsBatch:
