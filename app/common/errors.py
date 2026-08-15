@@ -126,6 +126,10 @@ CODE_RESOURCE_CONFLICT: Final = "resource.conflict"
 CODE_ANALYSIS_SCOPE_INVALID: Final = "analysis.scope_invalid"
 CODE_ANALYSIS_EXPORT_TOO_LARGE: Final = "analysis.export_too_large"
 
+# 工具箱
+CODE_TOOLBOX_SCOPE_INVALID: Final = "toolbox.scope_invalid"
+CODE_TOOLBOX_SORT_INVALID: Final = "toolbox.sort_invalid"
+
 # 导入与对象存储
 CODE_UPLOAD_IMPORT_REJECTED: Final = "upload.import_rejected"
 CODE_UPLOAD_OSS_NOT_READY: Final = "upload.oss_not_ready"

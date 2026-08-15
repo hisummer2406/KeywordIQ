@@ -168,6 +168,21 @@ def test_weekly_uses_separate_table_and_prev_week(session, tmp_path):
     assert row == (30, 50, -20)  # 上一"周"= 7/8
 
 
+def test_weekly_import_does_not_touch_growth_board(session, tmp_path):
+    """周报不参与持续增长榜——它没有「连续 7 天」这个概念。
+
+    真跑一次周报导入而不是断言函数没被调用：漏掉 `period == 'DAY'` 这道判定时，周报会
+    拿日报的窗口长度去查 `fact_daily`，算出一份**属于日报的**榜单挂在周期次上，两种时间
+    粒度就此混在同一张表里。那种错误不抛异常，只有真跑一遍才看得见。
+    """
+    _import(session, tmp_path, "w15.csv", [_row(30, "kw", a1="B1", t1="T")],
+            period="WEEK", d=date(2026, 7, 15))
+
+    assert session.execute(
+        text("SELECT count(*) FROM analysis.fact_growth WHERE site='US'")
+    ).scalar() == 0
+
+
 # --------------------------------------------------------------------------
 # 品牌与类目是关键词级排行，不是商品属性
 # --------------------------------------------------------------------------

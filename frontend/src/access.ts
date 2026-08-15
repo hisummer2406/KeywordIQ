@@ -19,6 +19,9 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     canViewAnalysis: has('analysis:view'),
     canExport: has('analysis:export'),
     canUpload: has('upload:import'),
+    // 工具箱下全部屏幕共用一个权限点。外观专利与全球商标库尚无数据源与端点，
+    // 各给一个权限点就成了「勾了也不生效」的复选框。
+    canViewToolbox: has('toolbox:view'),
     // 只认 is_super，不认 admin 角色码——把角色码也算进来，等于让「谁能管用户」
     // 变成一件改角色配置就能改变的事，而这正是收紧要排除的
     canManageUsers: isSuper,

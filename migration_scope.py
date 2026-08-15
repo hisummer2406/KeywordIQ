@@ -27,6 +27,7 @@ V2_TABLES = frozenset(
         "fact_daily",
         "fact_weekly",
         "fact_dropped",
+        "fact_growth",
         "site_data_stats",
         "import_batch",
         "user_center",
