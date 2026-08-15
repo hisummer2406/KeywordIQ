@@ -87,3 +87,38 @@ describe('TopProductCards', () => {
     expect(screen.queryByTestId('thumb-placeholder')).toBeNull();
   });
 });
+
+describe('卡牌可点击至商品页', () => {
+  it('卡牌整体是链接，新标签页打开该站点商品详情页', () => {
+    render(<TopProductCards row={row(3)} siteDomain="amazon.com" />);
+
+    const link = screen.getByTestId('slot-card-1').closest('a')!;
+    expect(link.getAttribute('href')).toBe('https://www.amazon.com/dp/B0SLOT00001');
+    expect(link.getAttribute('target')).toBe('_blank');
+    // 没有 noopener，打开的页面能通过 window.opener 操纵本页
+    expect(link.getAttribute('rel')).toContain('noopener');
+  });
+
+  it('取不到图的卡牌同样可点击——那恰恰是最需要这个入口的时候', () => {
+    // 图床对本项目 ASIN 覆盖率很低（实测 12 个中仅 2 个有图），占位方块是常态而非例外。
+    // 链接挂在卡牌而非图片上，故有无图都可点。
+    render(<TopProductCards row={row(3)} siteDomain="amazon.com" />);
+    const card = screen.getByTestId('slot-card-2');
+
+    expect(card.closest('a')).not.toBeNull();
+  });
+
+  it('域名随站点变化', () => {
+    render(<TopProductCards row={row(1)} siteDomain="amazon.co.uk" />);
+
+    expect(screen.getByTestId('slot-card-1').closest('a')!.getAttribute('href')).toBe(
+      'https://www.amazon.co.uk/dp/B0SLOT00001',
+    );
+  });
+
+  it('拿不到域名时降级为不可点击，不拼出错误地址', () => {
+    render(<TopProductCards row={row(1)} />);
+
+    expect(screen.getByTestId('slot-card-1').closest('a')).toBeNull();
+  });
+});

@@ -66,6 +66,9 @@ export default function ScopeBar({
         />
         <Select
           className="scope-bar__date"
+          // 下拉宽度由选项内容决定，不随触发器：触发器改为自适应后会变窄，若下拉仍与它
+          // 同宽，选项就会被截断——而用户正是在这个列表里挑日期。两者必须一起改。
+          popupMatchSelectWidth={false}
           value={scope.date ?? undefined}
           placeholder="无可用日期"
           onChange={(date) => onScopeChange({ ...scope, date })}

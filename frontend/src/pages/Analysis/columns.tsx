@@ -22,7 +22,7 @@ import TopProductCards from './TopProductCards';
  * 互相冲突的品牌值；keyword-level-brand-category 把它移到了事实表的独立列上，展示
  * 也就必须跟着分开——挂回卡牌里等于把那个配对重新宣称一遍。
  *
- * 类目数据同样已按名次下发（`top1~3_category`），只是暂不展示，需要时照品牌列加回即可。
+ * 类目同样按名次下发（`top1~3_category`），已作为独立一列展示，位置在品牌之前。
  */
 
 /** 排名变化：数值变小 = 名次上升。0 与空各有各的呈现，不要混。 */
@@ -44,6 +44,9 @@ const HISTORY_LABELS: Record<View, [string, string, string]> = {
 };
 
 const PLACEHOLDER = <span style={{ color: '#ccc' }}>—</span>;
+
+/** 历史排名标签列的宽度，按最长的「12 周前」取。数字不定宽——定宽会再次制造空隙。 */
+const HISTORY_LABEL_WIDTH = 52;
 
 /**
  * 排名变化率：变化量相对**上期**排名的百分比。
@@ -92,12 +95,34 @@ function renderRanking(row: AnalysisRow) {
   );
 }
 
+/**
+ * 表头与单元格内容统一居中。
+ *
+ * `align` 同时作用于表头与内容，故不再另设 `onHeaderCell`。
+ *
+ * **注意 `align` 只是给 td 设 `text-align`，对块级的 flex 容器不生效**——历史排名、
+ * 商品卡牌、品牌/类目三处的内容都是 flex 布局，它们各自用 `inline-flex` 或
+ * `justify-content` 自行居中。只加 `align` 而不管那三处，表头会居中而内容仍然靠左。
+ */
+/** 内容宽度随行变化的列——它们必须左对齐，居中会让每行起点不同、往下扫时左右横跳。 */
+const LEFT_ALIGNED = new Set(['关键词', '历史排名', '点击前三类目', '点击前三品牌']);
+
+function alignColumns(columns: ProColumns<AnalysisRow>[]): ProColumns<AnalysisRow>[] {
+  return columns.map((column) => ({
+    ...column,
+    align: LEFT_ALIGNED.has(String(column.title)) ? ('left' as const) : ('center' as const),
+    // 表头一律居中，与内容对齐方式无关：表头是短标签，居中只影响观感；
+    // 正文对齐则决定能不能顺着列扫读，两者不该被同一个开关绑住。
+    onHeaderCell: () => ({ style: { textAlign: 'center' as const } }),
+  }));
+}
+
 export function buildColumns(view: View, siteDomain?: string): ProColumns<AnalysisRow>[] {
-  return [
+  return alignColumns([
     {
       title: '排名',
       dataIndex: 'current_ranking',
-      width: 120,
+      width: 100,
       render: (_, r) => renderRanking(r),
     },
     // 关键词与商品标题是两列「要读内容」的列，其余自适应列给定宽，把剩余横向空间
@@ -105,8 +130,10 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
     {
       title: '关键词',
       dataIndex: 'keyword',
+      // 定宽 + 换行，不用省略号：搜索词常有十几个单词，省略号会把后半截藏掉，而后半截往往
+      // 正是区分同类词的部分（"case for iphone 15 **pro max**"）。换行占的是纵向空间，
+      // 而行高已由商品卡牌撑起，多一两行不额外增加表格高度。
       width: 220,
-      ellipsis: true,
       copyable: true,
       // 关键词点开该站点的亚马逊搜索结果页。域名来自**生效作用域**的站点而非草稿——
       // 用户切了站点但没点查询时，表格里还是上一个站点的数据，链接必须跟着数据走。
@@ -115,7 +142,14 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
         const url = amazonSearchUrl(r.keyword, siteDomain);
         if (!url) return r.keyword;
         return (
-          <a href={url} target="_blank" rel="noopener noreferrer" title={`在亚马逊搜索「${r.keyword}」`}>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`在亚马逊搜索「${r.keyword}」`}
+            // 长词无空格时也要断得开，否则会把列宽顶破
+            style={{ wordBreak: 'break-word' }}
+          >
             {r.keyword}
           </a>
         );
@@ -124,7 +158,9 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
     {
       title: '搜索趋势',
       dataIndex: 'trend',
-      width: 190,
+      // 加宽后小图同步变宽（见 TrendSparkline 的 width 默认值）：这一列的信息密度取决于
+      // 横向像素——七个点的排名标签是交替错开排的，宽度越大同侧标签间距越松。
+      width: 240,
       render: (_, r) => <TrendSparkline view={view} values={r.trend} dates={r.trend_dates} />,
     },
     {
@@ -142,21 +178,45 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
     // 单列三行：三个参照点同列纵排，读的是"这个词一路怎么变的"。缺期显示占位符而**不**
     // 隐藏该行——隐藏会让三个点错位，用户读到的「4 周前」其实是「12 周前」的值。
     //
-    // 数字**右对齐 + 等宽数字**：标签宽度不一（周视图「上周」2 字 vs「12 周前」4 字），
-    // 数字若紧跟标签就会参差，位数差看不出来——而排名跨度达 1 到 43 万，"这是三位数还是
-    // 六位数"正是这三行要一眼回答的问题。tabular-nums 让各位数字等宽，个位对个位。
+    // 标签**右对齐**、数字**左对齐**，两边都朝中间靠——这是这一格唯一不留大空隙的排法。
+    //
+    // 踩过两次的坑，写下来免得再改回去：
+    // 1. 数字用 `flex:1` 撑满 → 被顶到 130px 列的最右端，标签只有「昨天」两字时空出约 60px。
+    // 2. 改成两段定宽、但都朝外对齐 → 标签在 52px 盒里左对齐右边空 28px，数字在 52px 盒里
+    //    右对齐左边又空 32px，**空隙加了两遍**共 66px，比第 1 种还糟。
+    //
+    // 代价是数字不再个位对齐（标签宽度不一：周视图「上周」2 字 vs「12 周前」4 字）。这是
+    // 刻意取舍：这三行是同一个词的纵向对照，读的是"一路怎么变的"，紧凑比位数可比更要紧。
+    // tabular-nums 保留，至少同位数的行之间仍然齐。
     {
       title: '历史排名',
       dataIndex: 'history',
-      width: 130,
+      width: 140,
       render: (_, r) => (
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
+        <span
+          style={{
+            // 不居中：块宽随数字位数变化，各行不同，居中后起点会左右跳（同 RankedList）
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            fontSize: 12,
+          }}
+        >
           {HISTORY_LABELS[view].map((label, i) => (
             <span key={label} style={{ display: 'flex', gap: 6 }}>
-              <span style={{ color: '#999', flexShrink: 0 }}>{label}</span>
+              <span
+                style={{
+                  width: HISTORY_LABEL_WIDTH,
+                  flexShrink: 0,
+                  textAlign: 'right',
+                  color: '#999',
+                }}
+              >
+                {label}
+              </span>
               <span
                 data-testid="history-value"
-                style={{ flex: 1, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+                style={{ textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}
               >
                 {r.history?.[i] ?? PLACEHOLDER}
               </span>
@@ -165,19 +225,55 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
         </span>
       ),
     },
-    // 不给 width：让它吃掉所有剩余横向空间。
+    // 定宽贴合内容：三张卡牌 3×112 + 2×8 = 352px，留 8px 余量。此处原为"不给 width，让它
+    // 吃掉所有剩余空间"——但它的内容是固定结构，吃掉的富余全变成卡牌与右邻列之间的空白。
+    //
+    // 这一格信息密度最高（三张卡 × 图 + ASIN + 两个份额），所以宽裕是靠**把卡牌做大**
+    // 换来的（CARD_WIDTH 92→112、缩略图 56→72），不是靠给列加宽——后者只会加宽空白。
     {
       title: '点击前三 ASIN',
       dataIndex: 'top1_asin',
-      render: (_, r) => <TopProductCards row={r} />,
+      width: 360,
+      render: (_, r) => <TopProductCards row={r} siteDomain={siteDomain} />,
+    },
+    // 类目与品牌同为长文本列，各给 180px 并允许换行。**所有列都定宽**是刻意的：只要有
+    // 任何一列不定宽，它就会独吞全部横向富余，在它与相邻列之间造出一个显眼的洞——这一点
+    // 试过三种分法（卡牌列独吞 / 关键词独吞 / 两列平分），洞只是换位置，没有消失。
+    // 全部定宽后，多余宽度由浏览器按比例微调摊给每一列，不再堆在任何一处。
+    //
+    // **位置必须在品牌之前。** 品牌列被要求恒在最末（见 analysis-screen-layout），而那条
+    // 要求的理由正是"后来者在末尾追加新列就会把它挤走，且没有检查会报错"——本列就是它
+    // 预言的那个新列。columns.test.tsx 的 `titles.at(-1)` 会拦住放错位置。
+    {
+      title: '点击前三类目',
+      dataIndex: 'top1_category',
+      // 与品牌同为**辅助信息**，不该占宽：两者都是 ellipsis + 悬停看全文，
+      // 截断的代价很小，而占宽的代价是挤掉关键词这类真正要读的列。
+      width: 130,
+      render: (_, r) => (
+        <RankedList values={[r.top1_category, r.top2_category, r.top3_category]} rows={1} />
+      ),
     },
     // 品牌放在最末列：它是辅助信息，读表时先看排名与商品，品牌是回头才需要的那一眼。
-    // 类目列暂不展示（数据仍在接口里，需要时把列加回来即可）。
     {
       title: '点击前三品牌',
       dataIndex: 'top1_brand',
-      width: 150,
+      width: 130,
       render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
     },
-  ];
+  ]);
+}
+
+/**
+ * 列宽合计，供表格的 `scroll.x` 使用。
+ *
+ * **不给 `scroll.x` 的话，AntD 用 `table-layout: auto`，列上的 `width` 只是建议值**——
+ * 浏览器按内容多少重新分配，于是同样写 130px 的类目与品牌会渲染成两个宽度（类目名长，
+ * 抢到更多）。给了确定总宽才切到 `table-layout: fixed`，`width` 才真正生效。
+ *
+ * 由列定义算出而不是写死：加列或改宽时自动同步，否则总宽与实际列宽对不上，
+ * 差额又会被分摊回各列，等于回到 auto 的老问题。
+ */
+export function totalColumnWidth(view: View): number {
+  return buildColumns(view).reduce((sum, col) => sum + (Number(col.width) || 0), 0);
 }

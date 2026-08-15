@@ -3,9 +3,9 @@ import { productImageUrl } from './productImage';
 
 describe('productImageUrl', () => {
   it('地址里带 .01. 段——少了它尺寸指令失效，返回的是全尺寸原图', () => {
-    // 实测：省略该段时 _SL112_ 不被解析，同一张图 12.7KB vs 1.5KB
+    // 实测：省略该段时尺寸指令不被解析，返回全尺寸原图（29KB vs 2.9KB）
     const url = productImageUrl('B0TEST0001');
-    expect(url).toBe('https://m.media-amazon.com/images/P/B0TEST0001.01._SL112_.jpg');
+    expect(url).toBe('https://m.media-amazon.com/images/P/B0TEST0001.01._SL144_.jpg');
   });
 
   it('地址不随站点变化——图床按 ASIN 全局解析，市场码取值被忽略', () => {
