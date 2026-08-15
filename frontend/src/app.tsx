@@ -2,6 +2,7 @@ import type { RequestConfig, RunTimeLayoutConfig } from '@umijs/max';
 import { history } from '@umijs/max';
 import { message } from 'antd';
 import { getCurrentUser, logout } from '@/services/auth';
+import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { clearToken, getToken } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
 import RightContent from '@/components/RightContent';
@@ -61,6 +62,9 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
       console.warn('服务端登出失败，仍继续清理本地会话', e);
     }
     clearToken();
+    // 分析屏的会话缓存与令牌同生共死：同一标签页内换账号登录，绝不能看到上一个
+    // 用户的查询条件与结果行。
+    clearSnapshot();
     await setInitialState((s) => ({ ...s, currentUser: undefined, name: undefined }));
     history.push(LOGIN_PATH);
   };
