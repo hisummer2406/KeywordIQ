@@ -1,7 +1,11 @@
 # growth-market-list Specification
 
 ## Purpose
-TBD - created by archiving change toolbox-growth-market. Update Purpose after archive.
+定义「持续增长市场」榜单：命中口径（窗口内每期在榜 + 累计净增名次 + 每日环比下限）、
+算定时机与只读约束、分页查询与走势补齐、窗口缺期时的语义、阈值的单一事实来源、随保留窗口
+清理，以及历史期次的回填。榜单在日报导入收尾时算定、持久化到 `fact_growth`，查询侧只读、
+不实时计算；周报不参与——它没有「连续 N 天」这个概念。
+
 ## Requirements
 ### Requirement: 持续增长口径
 
@@ -149,4 +153,3 @@ SHALL 把缺失的期次一并回传，界面 SHALL 明示，MUST NOT 让用户�
 
 - **WHEN** 带 `--dry-run` 运行
 - **THEN** 只报告每期将写入的行数，不写库
-

@@ -61,8 +61,8 @@
 - [x] 7.1 `CLAUDE.md` 补一段工具箱与增长榜（算定位置、阈值、改阈值要回填、周报不参与）
 - [x] 7.2 `uv run pytest test/ -q` 全绿（含集成测试，需 `TEST_DATABASE_URL`）；
       `frontend` 侧 `pnpm lint && pnpm tsc && pnpm test` 全绿
-- [ ] 7.3 按路径提交、推分支、`gh pr create --base v2`，PR 正文含变更 id、`Refs #10`、
-      spec delta 文件列表 —— **收工动作本身，故在本次提交里仍是未勾选状态**
+- [x] 7.3 按路径提交、推分支、`gh pr create --base v2`，PR 正文含变更 id、`Refs #10`、
+      spec delta 文件列表 —— PR #19，2026-08-15 合并进 v2（`3af2f63`）
 
 ---
 

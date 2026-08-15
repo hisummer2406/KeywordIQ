@@ -1,7 +1,9 @@
 # toolbox-navigation Specification
 
 ## Purpose
-TBD - created by archiving change toolbox-growth-market. Update Purpose after archive.
+定义「工具箱」菜单容器：父子菜单形态与父路由重定向、`toolbox:view` 这一个共用权限点的
+授予与执行方式，以及尚未接入数据源的二级屏应有的行为（明确的占位说明、不发请求、不建端点）。
+
 ## Requirements
 ### Requirement: 工具箱菜单容器
 
@@ -51,4 +53,3 @@ MUST NOT 发起任何后端请求，系统 MUST NOT 为它们新增端点。
 
 - **WHEN** 用户点击「外观专利」
 - **THEN** 页面显示空状态与「数据源尚未接入」的说明，网络面板中没有该屏发出的请求
-
