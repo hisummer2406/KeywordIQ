@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { buildColumns } from './columns';
+import { TREND_COLORS } from '@/components/trendColors';
 
 describe('buildColumns', () => {
   it('表头不提供点击排序，统一使用表格工具栏排序', () => {
@@ -126,6 +127,20 @@ describe('历史排名列', () => {
     for (const label of ['上周', '4 周前', '12 周前']) expect(getByText(label)).toBeTruthy();
   });
 
+  it('三个排名右对齐且用等宽数字，位数差一眼可见', () => {
+    // 标签宽度不一（周视图「上周」2 字 vs「12 周前」4 字），数字若紧跟标签就会参差，
+    // 而这三行要回答的正是"这个词一路怎么变的"——位数可比是它的全部意义
+    const { container } = cell('WEEK', '历史排名', { ...listedRow, history: [305, 12004, 88] });
+    const numbers = [...container.querySelectorAll('[data-testid="history-value"]')];
+
+    expect(numbers).toHaveLength(3);
+    for (const n of numbers) {
+      expect(n).toHaveStyle({ textAlign: 'right', fontVariantNumeric: 'tabular-nums' });
+    }
+    // 三个数字占同一宽度才谈得上右边缘对齐
+    expect(new Set(numbers.map((n) => (n as HTMLElement).style.flex)).size).toBe(1);
+  });
+
   it('参照期缺失显示占位符，且不隐藏该行', () => {
     // 隐藏那一行会让三个参照点错位——用户读到的「4 周前」其实是「12 周前」的值
     const { getByText, getAllByText } = cell('WEEK', '历史排名', droppedRow);
@@ -156,6 +171,36 @@ describe('排名变化率列', () => {
       const { container } = cell('DAY', '排名变化率', { ...listedRow, previous_ranking: prev });
       expect(container.textContent).toContain('—');
       expect(container.textContent).not.toMatch(/Infinity|NaN/);
+    }
+  });
+});
+
+describe('升降色值来自共享 token', () => {
+  // 同一语义在同一屏上用两组色值，会让用户把色差误读成含义差别
+  const colored = (title: string, row: any) =>
+    cell('DAY', title, row).container.querySelector('span')!;
+
+  it('上升取共享的绿', () => {
+    for (const title of ['排名变化', '排名变化率']) {
+      expect(colored(title, { ...listedRow, ranking_change: -20 })).toHaveStyle({
+        color: TREND_COLORS.up,
+      });
+    }
+  });
+
+  it('下降取共享的红', () => {
+    for (const title of ['排名变化', '排名变化率']) {
+      expect(colored(title, { ...listedRow, ranking_change: 20 })).toHaveStyle({
+        color: TREND_COLORS.down,
+      });
+    }
+  });
+
+  it('无变化是蓝色，不再是灰色', () => {
+    for (const title of ['排名变化', '排名变化率']) {
+      const span = colored(title, { ...listedRow, ranking_change: 0 });
+      expect(span).toHaveStyle({ color: TREND_COLORS.flat });
+      expect(span).not.toHaveStyle({ color: '#999999' });
     }
   });
 });
