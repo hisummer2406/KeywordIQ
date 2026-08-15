@@ -37,7 +37,8 @@
 
 - [x] 5.1 `src/app.tsx` 的 `doLogout` 增加第四步 `clearSnapshot()`，与清令牌 / 清 initialState / 回登录页并列
 - [ ] 5.2 手测：A 登录查数据 → 登出 → B 在同一标签页登录进分析屏，看到的是默认首屏，没有 A 的条件与结果
-      —— **未完成**：本地只有一个账号，换账号登录没法自测。清空调用点已接在 doLogout 上。
+      —— 待验。2026-08-16 已建测试账号：operator1 / analyst1 / admin2（密码均 pwd123），
+      可用其中任意两个账号走一遍。清空调用点已接在 doLogout 上。
 
 ## 6. 验证与收尾
 
@@ -56,3 +57,11 @@
   由既有用例「顶部立即查询不会偷带尚未应用的筛选条件」抓到。
 - 与本变更无关的现象一并记在这里：本地库没跑迁移，`/api/toolbox/growth/search` 报
   `relation "analysis.fact_growth" does not exist`（500）。跑 `uv run alembic upgrade head` 即可。
+
+## 7. 首屏不查数据表（2026-08-16 追加）
+
+- [x] 7.1 挂载副作用去掉 `apply(...)`，只保留 `reloadScopeMeta`（站点/日期/类目仍要拉，它们是选择器的前提）
+- [x] 7.2 未查询时不显示「搜索结果」条数；空表格给出「点立即查询」的提示，与「查出来 0 行」区分开
+- [x] 7.3 共用的 `renderSettled` 默认替测试点一次「立即查询」，验首屏行为的用例传 `query=false`
+- [x] 7.4 新增首屏回归 5 条：只拉元数据不查表 / 不显示条数 / 空状态文案 / 点了才发请求 / 没查过就切走切回仍不查
+- [x] 7.5 同步 spec delta、proposal 与 CLAUDE.md（原先写的「首次进入照常查询默认条件」已被推翻）

@@ -152,9 +152,23 @@ export default function AnalysisPage() {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  /**
+   * 是否已经查过一次。`appliedSig` 只在 `apply()` 里被写非空值，所以它就是这个判据，
+   * 不用再养一个独立标记。
+   *
+   * 用途是把「还没查」和「查出来 0 行」在界面上分开——两者都是空表格，但一个是等待
+   * 用户动作、另一个是条件太严。不分开的话用户会以为系统弄丢了数据。
+   */
+  const hasQueried = appliedSig !== '';
+
   const draftBody = useMemo(() => toSearchBody(scope, filters), [scope, filters]);
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
-  const dirty = draftSig !== appliedSig;
+  /**
+   * 「有未生效改动」提示。**没查过就不提示**——首屏生效态本来就是空的，判据必然为真，
+   * 而那时用户一个条件都没改，「存在未生效条件」这句话是错的。此时该看的引导是表格
+   * 空状态里那句「点立即查询」，两处一起出现还重复。
+   */
+  const dirty = hasQueried && draftSig !== appliedSig;
 
   // 生效条件里是否带了任何筛选（行集合开关不算——它是行集合维度，不是筛选）。
   // 带了就意味着掉榜段被短路为空，界面须明示。
@@ -262,16 +276,16 @@ export default function AnalysisPage() {
     getSites()
       .then(setSites)
       .catch(() => undefined);
-    // 首屏：拉作用域后立即查一次，用户不必先点一下才看到数据
-    reloadScopeMeta(undefined, 'DAY')
-      .then((s) => {
-        const body = toSearchBody(
-          { site: s.site, view: 'DAY', date: s.latest_date },
-          emptyFilters(),
-        );
-        apply(body, JSON.stringify(body));
-      })
-      .catch(() => undefined);
+    // 首屏**只拉作用域元数据**（站点、可选日期、类目），不查数据表。
+    //
+    // 拉的这三样都是小表，且是选择器渲染的前提——不拉的话用户连日期都选不了。
+    // 数据表那一次查询才是贵的（周报最坏近 1 秒），而进屏时的默认条件多半不是用户
+    // 想看的那组：他进来就是要改站点/日期/筛选的。先查一次等于必然浪费一次。
+    // 所以表格留空，等用户点「立即查询」。
+    //
+    // 表格在挂载时仍会调一次 request，但 `appliedRef.current` 是 null，那里直接返回
+    // 空结果、不发请求（见 request 开头）。
+    reloadScopeMeta(undefined, 'DAY').catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -427,6 +441,12 @@ export default function AnalysisPage() {
         scroll={{ x: totalColumnWidth(appliedView) }}
         // 筛选全部在上面的过滤区，表格不再自带条件表单
         search={false}
+        // 空表格有两种含义，必须说清是哪一种（见 hasQueried 的注释）
+        locale={
+          hasQueried
+            ? undefined
+            : { emptyText: '选好站点、视图与日期后，点「立即查询」查看数据' }
+        }
         // 页码与每页条数由 ProTable 自己管，这里只给初值——复原时给回离开前那一页，
         // 否则表格会从第 1 页起请求，短路判定（含页码）随即失配，白跑一次查询。
         // 用 default* 而不是受控的 pageSize：后者会和 showSizeChanger 抢同一个值。
@@ -449,9 +469,15 @@ export default function AnalysisPage() {
                 导出 CSV
               </Button>
             )}
-            <Typography.Text type="secondary">
-              搜索结果：<Typography.Text strong>{resultTotal.toLocaleString()}</Typography.Text>
-            </Typography.Text>
+            {/*
+              没查过就不显示条数。显示「搜索结果：0」会被读成「这个条件查出来是 0 行」，
+              而实际是「还没查」——两者在界面上必须能分开。
+            */}
+            {hasQueried && (
+              <Typography.Text type="secondary">
+                搜索结果：<Typography.Text strong>{resultTotal.toLocaleString()}</Typography.Text>
+              </Typography.Text>
+            )}
             {/*
               筛选一生效，掉榜行必然全部消失——筛选以锚定日那一行为准，而掉榜行在那一天
               没有行可供匹配。不说出来的话，用户看到的是「加了个筛选，掉榜的词全没了」，
