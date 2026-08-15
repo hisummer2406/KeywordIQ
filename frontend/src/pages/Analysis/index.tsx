@@ -275,12 +275,24 @@ export default function AnalysisPage() {
             </Col>
             <Col flex="auto" style={{ paddingLeft: 16 }}>
               {/*
-                标题与下方条件标签共用同一条右对齐线：标签定宽 LABEL_WIDTH 且右对齐，
-                标题若从列左缘起排，就与「行集合」这些标签差出四十余像素，看着是飘在外面的。
+                标题「搜索结果过滤」的**右边缘**与下方条件标签的右边缘对齐（「滤」对「合」）：
+                标签定宽 LABEL_WIDTH 且右对齐，标题若从列左缘起排就飘在条件外面。
+
+                用 flex + justify-content: flex-end，**不是** inline-block + text-align: right：
+                后者在标题宽于盒子时会从左缘起排并向右溢出，右对齐等于失效、右边缘反而越过
+                对齐线；flex 在溢出时把内容推出起始侧，右边缘无论多宽都钉在 LABEL_WIDTH 上。
+
                 宽度取自 FilterPanel 导出的同一个常量——两处各写一个数值迟早分叉，
                 而分叉的表现就是标题又飘开。
               */}
-              <span style={{ display: 'inline-block', width: LABEL_WIDTH, textAlign: 'right' }}>
+              <span
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  width: LABEL_WIDTH,
+                  whiteSpace: 'nowrap',
+                }}
+              >
                 <Typography.Text strong>搜索结果过滤</Typography.Text>
               </span>
             </Col>
@@ -303,7 +315,12 @@ export default function AnalysisPage() {
         {filterOpen && (
           <>
             <Row gutter={16}>
-              <Col flex="260px">
+              {/*
+                minWidth: 0 不是可有可无的——flex 子项默认 min-width: auto，内容的最小宽度
+                会顶破 flex-basis。类目名不截断时（见 OptionPanel）这一列被撑到约 302px，
+                把右边整列推出 42px，表现就是标题与条件标签对不齐。
+              */}
+              <Col flex="260px" style={{ minWidth: 0 }}>
                 <CategoryPanel
                   options={categories}
                   value={filters.categories}

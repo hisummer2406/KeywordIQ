@@ -71,7 +71,21 @@ export default function OptionPanel({ options, value, onChange }: OptionPanelPro
           >
             {visible.map((o) => (
               <Checkbox key={o.name} value={o.name}>
-                <span title={o.name}>{o.name}</span>{' '}
+                {/* 截断而非换行：不截断时长类目名会顶破所在列的 flex-basis（见 index.tsx
+                    那一列的 minWidth 注释）。title 属性已在，悬停可看全名。 */}
+                <span
+                  title={o.name}
+                  style={{
+                    display: 'inline-block',
+                    maxWidth: 168,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    verticalAlign: 'bottom',
+                  }}
+                >
+                  {o.name}
+                </span>{' '}
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   ({o.count})
                 </Typography.Text>
