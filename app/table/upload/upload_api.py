@@ -183,6 +183,33 @@ async def oss_upload_credentials(
     前端据此直传，完成后把 object_key 回传到 /oss/import 触发导入。
     """
     site, period, report_date = _resolve_import_meta(req.filename, req.site, req.period)
+
+    # **续签不是新上传，不落库。** 1.5GB 周报传得久，凭证会中途过期，前端因此每 5 分钟
+    # 续签一次（ossUpload.ts 的 refreshSTSToken）。续签走的若是与新上传相同的路径，一次
+    # 25 分钟的上传就会在历史里留下 5 条记录——其中 4 条的 object key 从未被写入过任何
+    # 对象，65 分钟后被回收判成 FAILED「请重新上传」，而文件其实传成功了。
+    #
+    # 前缀校验一道都不能少：这个端点签发的是**写**权限，少掉它就成了为授权范围外的任意
+    # key 取得写凭证的入口。但**不**做对象存在性与大小校验——续签发生在传输途中，此刻
+    # 对象尚未 Complete，head_object 必然查不到（那两道在 /oss/import 触发导入时才执行）。
+    if req.object_key:
+        if not oss_client.is_key_within_allowed_prefix(req.object_key, site, period, report_date):
+            raise BadRequestError(
+                "上传凭证与目标不匹配，拒绝签发",
+                code=CODE_UPLOAD_BAD_FILE,
+                log_detail=f"续签 object_key 越权: {req.object_key}",
+            )
+        grant = oss_client.issue_upload_credentials(
+            site, period, report_date, req.filename, existing_key=req.object_key,
+        )
+        return {
+            **grant.to_response(),
+            "site": site,
+            "period": period,
+            "report_date": str(report_date),
+            "filename": req.filename,
+        }
+
     grant = oss_client.issue_upload_credentials(site, period, report_date, req.filename)
 
     # **先落库，再把凭证交出去。** 直传那一段服务端全程不知情（字节不经应用服务器），

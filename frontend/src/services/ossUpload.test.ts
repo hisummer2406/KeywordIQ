@@ -171,6 +171,20 @@ describe('大文件直传的韧性', () => {
     expect(opts.refreshSTSTokenInterval).toBeLessThanOrEqual(10 * 60 * 1000);
   });
 
+  it('续期请求带上本次上传的 object_key，后端据此认出是续签而不新建批次', async () => {
+    // 不带 key 时后端会把每次续期都当成一次新上传，一次 25 分钟的周报上传会因此在
+    // 导入历史里留下 5 条记录，其中 4 条最终被回收判成「请重新上传」——而文件传成功了
+    await ossDirectUploadAndImport(file, { site: 'US', period: 'DAY' });
+    const { refreshSTSToken } = ossCtor.mock.calls[0][0];
+
+    const before = requestMock.mock.calls.length;
+    await refreshSTSToken();
+
+    const [url, opts] = requestMock.mock.calls[before];
+    expect(url).toContain('/upload-credentials');
+    expect(opts.data.object_key).toBe(CRED.object_key);
+  });
+
   it('续期回调重新向后端换凭证，返回 SDK 要的三个字段', async () => {
     await ossDirectUploadAndImport(file, { site: 'US', period: 'DAY' });
     const { refreshSTSToken } = ossCtor.mock.calls[0][0];
