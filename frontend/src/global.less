@@ -17,6 +17,25 @@
   box-shadow: 0 1px 4px rgb(0 21 41 / 12%);
 }
 
+// 顶栏内容左右收进来，与下方内容块对齐。
+//
+// 为什么不能用 token：ProLayout 的 header token 那一组只有颜色和高度，没有内边距的
+// 调节口，只能落到选择器。
+//
+// 40px 不是拍脑袋的数：PageContainer 的内容区用 `paddingInlinePageContainerContent`
+// 收边，默认就是 40（见 pro-provider 的 layoutToken）。顶栏内层 `-main` 的默认值是
+// `padding-inline-start: 16`，右侧账号区约 16——比内容整体外扩 24px，看起来像「菜单
+// 顶到边上、内容缩在里面」。两边都取 40 即落在同一条竖线上。**改内容区那个 token 也能
+// 对齐，但那是把整屏内容往外推**，主屏那张宽表要的是尽可能宽，所以收顶栏、不动内容。
+//
+// 只收内层：渐变底铺在外层 `-layout-header` 上，仍然通栏，不受这条影响。
+//
+// 局限：`上传` / `工具箱` 有左侧二级菜单栏，那两屏的内容卡片从侧栏右缘起算，logo 对不到
+// 那条线上——那里对齐的是右边缘。主屏（分析查询，无侧栏）左右都齐。
+.ant-pro-layout .ant-pro-top-nav-header-main {
+  padding-inline: 40px;
+}
+
 // 顶栏菜单文字加粗。
 //
 // 为什么不能用 token：ProLayout 的 header token 只有颜色（colorTextMenu 那一组），
