@@ -127,6 +127,20 @@ describe('历史排名列', () => {
     for (const label of ['上周', '4 周前', '12 周前']) expect(getByText(label)).toBeTruthy();
   });
 
+  it('三个排名右对齐且用等宽数字，位数差一眼可见', () => {
+    // 标签宽度不一（周视图「上周」2 字 vs「12 周前」4 字），数字若紧跟标签就会参差，
+    // 而这三行要回答的正是"这个词一路怎么变的"——位数可比是它的全部意义
+    const { container } = cell('WEEK', '历史排名', { ...listedRow, history: [305, 12004, 88] });
+    const numbers = [...container.querySelectorAll('[data-testid="history-value"]')];
+
+    expect(numbers).toHaveLength(3);
+    for (const n of numbers) {
+      expect(n).toHaveStyle({ textAlign: 'right', fontVariantNumeric: 'tabular-nums' });
+    }
+    // 三个数字占同一宽度才谈得上右边缘对齐
+    expect(new Set(numbers.map((n) => (n as HTMLElement).style.flex)).size).toBe(1);
+  });
+
   it('参照期缺失显示占位符，且不隐藏该行', () => {
     // 隐藏那一行会让三个参照点错位——用户读到的「4 周前」其实是「12 周前」的值
     const { getByText, getAllByText } = cell('WEEK', '历史排名', droppedRow);
