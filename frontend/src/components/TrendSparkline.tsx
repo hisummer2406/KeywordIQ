@@ -20,7 +20,7 @@ export default function TrendSparkline({
   view = 'DAY',
   values,
   dates,
-  width = 168,
+  width = 210,
   // 高度含上下两条标签带。行高已由商品卡牌撑到约 100px，这里的增高不改变行高——
   // 趋势列不是决定行高的那一列，这是交替标注方案成立的前提。
   height = 72,

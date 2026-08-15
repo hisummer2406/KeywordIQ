@@ -24,7 +24,7 @@ import { getSites, type SiteOption } from '@/services/upload';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel from './FilterPanel';
 import ScopeBar from './ScopeBar';
-import { buildColumns } from './columns';
+import { buildColumns, totalColumnWidth } from './columns';
 import { emptyFilters, toSearchBody, type FilterDraft, type ScopeDraft } from './filters';
 
 /**
@@ -329,6 +329,10 @@ export default function AnalysisPage() {
         actionRef={actionRef}
         rowKey="keyword_id"
         columns={columns}
+        // 给定总宽 → AntD 切到 table-layout: fixed，列上的 width 才真正生效。
+        // 不给的话是 auto 布局，width 只是建议值，浏览器按内容抢宽度——表现为
+        // "同样写 130px 的两列渲染出来不一样宽"。窗口比总宽窄时横向滚动。
+        scroll={{ x: totalColumnWidth(appliedView) }}
         // 筛选全部在上面的过滤区，表格不再自带条件表单
         search={false}
         pagination={{ pageSize: 50, showSizeChanger: true }}

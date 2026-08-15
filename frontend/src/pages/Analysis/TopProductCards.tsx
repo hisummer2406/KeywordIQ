@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Tooltip, Typography } from 'antd';
 import type { AnalysisRow } from '@/services/analysis';
+import { amazonProductUrl } from './amazonProductUrl';
 import { PLACEHOLDER_PIXEL_SIZE, productImageUrl } from './productImage';
 
 /**
@@ -40,8 +41,8 @@ export function topSlots(row: AnalysisRow): TopSlot[] {
   }));
 }
 
-const CARD_WIDTH = 92;
-const THUMB_SIZE = 56;
+const CARD_WIDTH = 112;
+const THUMB_SIZE = 72;
 
 /**
  * 缩略图：取不到图时降级为 ASIN 首字母占位方块，不影响卡牌其余信息。
@@ -69,7 +70,9 @@ function Thumbnail({ asin }: { asin: string }) {
           borderRadius: 4,
           background: '#f5f5f5',
           border: '1px solid #f0f0f0',
-          display: 'flex',
+          // inline-flex 而非 flex：块级元素不会被卡牌的 text-align: center 居中，
+          // 而 <img> 是 inline-block 会居中——两者不一致会让"有图"和"没图"的卡牌歪成两样
+          display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
           color: '#bfbfbf',
@@ -106,7 +109,7 @@ function Thumbnail({ asin }: { asin: string }) {
   );
 }
 
-function SlotCard({ slot }: { slot: TopSlot }) {
+function SlotCard({ slot, siteDomain }: { slot: TopSlot; siteDomain?: string }) {
   // 空槽位渲染等宽占位：位置必须留着，否则名次与位置的对应关系就断了
   if (!slot.asin) {
     return (
@@ -119,34 +122,55 @@ function SlotCard({ slot }: { slot: TopSlot }) {
     );
   }
 
+  const href = amazonProductUrl(slot.asin, siteDomain);
+
+  const card = (
+    <div data-testid={`slot-card-${slot.rank}`} style={{ width: CARD_WIDTH, textAlign: 'center' }}>
+      {/* key 按 asin：商品换了就重建，不把上一个商品的"没图"结论继承下来 */}
+      <Thumbnail key={slot.asin} asin={slot.asin} />
+      <Typography.Text
+        copyable={{ text: slot.asin }}
+        style={{ display: 'block', fontSize: 11, marginTop: 2 }}
+      >
+        {slot.asin}
+      </Typography.Text>
+      <div style={{ fontSize: 11, color: '#1677ff', fontVariantNumeric: 'tabular-nums' }}>
+        点击 {slot.clickShare}%
+      </div>
+      <div style={{ fontSize: 11, color: '#52c41a', fontVariantNumeric: 'tabular-nums' }}>
+        转化 {slot.conversionShare}%
+      </div>
+    </div>
+  );
+
+  // 链接包在**整张卡牌**外而不是图片上：图床覆盖率很低（实测 12 个 ASIN 仅 2 个有图），
+  // 占位方块是常态，而那恰恰是用户最需要"去看看这到底是什么商品"的时候。
+  // 拿不到域名就不给链接——宁可不可点，也不要拼出一个会跳错的地址。
   return (
     <Tooltip title={slot.title || slot.asin} placement="top">
-      <div data-testid={`slot-card-${slot.rank}`} style={{ width: CARD_WIDTH, textAlign: 'center' }}>
-        {/* key 按 asin：商品换了就重建，不把上一个商品的"没图"结论继承下来 */}
-        <Thumbnail key={slot.asin} asin={slot.asin} />
-        <Typography.Text
-          copyable={{ text: slot.asin }}
-          style={{ display: 'block', fontSize: 11, marginTop: 2 }}
-        >
-          {slot.asin}
-        </Typography.Text>
-        <div style={{ fontSize: 11, color: '#1677ff', fontVariantNumeric: 'tabular-nums' }}>
-          点击 {slot.clickShare}%
-        </div>
-        <div style={{ fontSize: 11, color: '#52c41a', fontVariantNumeric: 'tabular-nums' }}>
-          转化 {slot.conversionShare}%
-        </div>
-      </div>
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>
+          {card}
+        </a>
+      ) : (
+        card
+      )}
     </Tooltip>
   );
 }
 
 /** 三张卡牌横排，从左到右是点击量第一、第二、第三名。 */
-export default function TopProductCards({ row }: { row: AnalysisRow }) {
+export default function TopProductCards({
+  row,
+  siteDomain,
+}: {
+  row: AnalysisRow;
+  siteDomain?: string;
+}) {
   return (
-    <div style={{ display: 'flex', gap: 8 }}>
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
       {topSlots(row).map((slot) => (
-        <SlotCard key={slot.rank} slot={slot} />
+        <SlotCard key={slot.rank} slot={slot} siteDomain={siteDomain} />
       ))}
     </div>
   );
