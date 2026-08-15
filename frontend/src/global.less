@@ -57,3 +57,19 @@
 .ant-pro-layout .ant-pro-sider {
   border-inline-end: none;
 }
+
+// 侧栏菜单项与顶栏 logo 对齐到同一条竖线（40px）。
+//
+// 默认链路是：`sider-children` padding-left 8 → 菜单 8 → 菜单项 margin-left 4 →
+// 项内 padding-left 16 → 图标落在 28，比 logo 的 40 少 12，两层菜单之间留下一道
+// 看得见的错位。
+//
+// **加的这 12px 必须落在 `sider-children` 上，不能去改菜单项的 padding**：那 16px
+// 是 antd Menu 写在元素上的**行内样式**，CSS 要盖它得上 `!important`，而且 antd 在
+// 展开/收起时会重算并改写这个行内值——等于跟组件抢同一个属性。收在外层容器上则各管各的。
+//
+// `:not(.ant-layout-sider-collapsed)` 不是保险起见：收起态侧栏只有 64px 宽、图标居中，
+// 再多 12px 内边距会把图标顶偏。加了这条守卫，收起时内边距退回 8px、图标仍在 24。
+.ant-pro-layout .ant-pro-sider:not(.ant-layout-sider-collapsed) .ant-layout-sider-children {
+  padding-inline-start: 20px;
+}

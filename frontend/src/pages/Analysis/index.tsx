@@ -260,6 +260,14 @@ export default function AnalysisPage() {
       <Card
         size="small"
         style={{ marginTop: 12 }}
+        // 左右内边距取 24，与下方表格对齐：表格那块是 ProCard（无边框、body 内边距 24），
+        // 内容线落在 40 + 24 = 64；这张是 Card size="small"（1px 边框 + head 内边距 12），
+        // 默认落在 53，两行差 11px，肉眼看得出来。只调 paddingInline，不动上下内边距——
+        // 那会改变行高。
+        //
+        // 有 1px 边框在，24 实际落到 65 而非 64。差这 1px 是边框吃掉的，要抹平只能让这张
+        // 卡片也无边框，那是另一种外观，没顺手做。
+        styles={{ header: { paddingInline: 24 }, body: { paddingInline: 24 } }}
         title={
           <Row gutter={16} wrap={false} style={{ width: '100%' }}>
             <Col flex="260px">
@@ -271,8 +279,11 @@ export default function AnalysisPage() {
           </Row>
         }
         extra={
+          // 边框与文字走主色（outlined 变体），不是默认的灰边：这个按钮是过滤区唯一的
+          // 入口，灰边会让它退到与卡片边框同一层次，看起来像装饰而不是可点的东西。
           <Button
-            type="link"
+            color="primary"
+            variant="outlined"
             size="small"
             icon={filterOpen ? <UpOutlined /> : <DownOutlined />}
             onClick={() => setFilterOpen((v) => !v)}
@@ -295,9 +306,11 @@ export default function AnalysisPage() {
                 <FilterPanel value={filters} onChange={setFilters} />
               </Col>
             </Row>
+            {/* 负 margin 让这条分隔线铺满卡片宽度，左右两个值必须等于 body 的 paddingInline
+                （见上面 styles），改了那边这里要跟着改，否则线到不了卡片边缘。 */}
             <div
               style={{
-                margin: '20px -12px -12px',
+                margin: '20px -24px -12px',
                 padding: '16px 0 4px',
                 borderTop: '1px solid #f0f0f0',
                 textAlign: 'center',
