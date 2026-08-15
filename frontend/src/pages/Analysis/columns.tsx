@@ -2,6 +2,7 @@ import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
 import TrendSparkline from '@/components/TrendSparkline';
+import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
 import TopProductCards from './TopProductCards';
@@ -27,10 +28,10 @@ import TopProductCards from './TopProductCards';
 /** 排名变化：数值变小 = 名次上升。0 与空各有各的呈现，不要混。 */
 function renderChange(v: number | null | undefined) {
   if (v === null || v === undefined) return <span style={{ color: '#ccc' }}>—</span>;
-  if (v === 0) return <span style={{ color: '#999' }}>0</span>;
+  if (v === 0) return <span style={{ color: TREND_COLORS.flat }}>0</span>;
   const up = v < 0;
   return (
-    <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
+    <span style={{ color: up ? TREND_COLORS.up : TREND_COLORS.down }}>
       {up ? '↑' : '↓'} {Math.abs(v)}
     </span>
   );
@@ -56,11 +57,11 @@ const PLACEHOLDER = <span style={{ color: '#ccc' }}>—</span>;
 function renderChangeRate(row: AnalysisRow) {
   const { ranking_change: change, previous_ranking: prev } = row;
   if (change === null || change === undefined || !prev) return PLACEHOLDER;
-  if (change === 0) return <span style={{ color: '#999' }}>0%</span>;
+  if (change === 0) return <span style={{ color: TREND_COLORS.flat }}>0%</span>;
   const up = change < 0;
   const pct = Math.abs((change / prev) * 100);
   return (
-    <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
+    <span style={{ color: up ? TREND_COLORS.up : TREND_COLORS.down }}>
       {up ? '↑' : '↓'} {pct.toFixed(1)}%
     </span>
   );
@@ -140,16 +141,25 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
     },
     // 单列三行：三个参照点同列纵排，读的是"这个词一路怎么变的"。缺期显示占位符而**不**
     // 隐藏该行——隐藏会让三个点错位，用户读到的「4 周前」其实是「12 周前」的值。
+    //
+    // 数字**右对齐 + 等宽数字**：标签宽度不一（周视图「上周」2 字 vs「12 周前」4 字），
+    // 数字若紧跟标签就会参差，位数差看不出来——而排名跨度达 1 到 43 万，"这是三位数还是
+    // 六位数"正是这三行要一眼回答的问题。tabular-nums 让各位数字等宽，个位对个位。
     {
       title: '历史排名',
       dataIndex: 'history',
       width: 130,
       render: (_, r) => (
-        <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
           {HISTORY_LABELS[view].map((label, i) => (
-            <span key={label}>
-              <span style={{ color: '#999' }}>{label}</span>{' '}
-              {r.history?.[i] ?? PLACEHOLDER}
+            <span key={label} style={{ display: 'flex', gap: 6 }}>
+              <span style={{ color: '#999', flexShrink: 0 }}>{label}</span>
+              <span
+                data-testid="history-value"
+                style={{ flex: 1, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+              >
+                {r.history?.[i] ?? PLACEHOLDER}
+              </span>
             </span>
           ))}
         </span>
