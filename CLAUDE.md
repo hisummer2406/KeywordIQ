@@ -226,6 +226,17 @@ frontend/              # AntD Pro SPA（Umi Max），独立构建，产物由 ng
 3. **三段式导入**（`importer.py`，源经 `ImportSource` 抽象）：从 OSS 对象**流式** `COPY` → UNLOGGED
    暂存表 → 补齐维度 → 关联上一期算派生值、**追加**写事实分区（写前必调 `ensure_fact_partitions`）。
    内存有界，不整文件落地。
+
+   **维度补齐只在属性真变时才写。** `dim_product` 的 UPSERT 带
+   `WHERE dim_product.title IS DISTINCT FROM EXCLUDED.title`，这条 WHERE **不是冗余**：
+   PostgreSQL 的 UPDATE 无论新旧值是否相同都写新元组、标死旧元组、并在该行涉及的每个索引
+   上插新条目——而 title 上挂着这张表最大的索引（GIN trgm，1.3 GB）。无条件更新意味着每次
+   导入重写**所有已存在的商品行**（一份日报约 40 万行 × 3 个槽位 ≈ 120 万个 ASIN 提及，
+   绝大多数早已在库里），而且会自我加速恶化：维度表越大，"已存在"的比例越高，白做的更新
+   越多，承受它们的索引也越大。实测同一份 10 万行日报因此从 54 秒退化到 416 秒（issue #33）。
+   用 `IS DISTINCT FROM` 而非 `<>` 是因为后者遇 NULL 结果为 NULL，将来放宽可空性会静默
+   退化成"NULL 的行永远不更新"。`dim_keyword` / `dim_brand` / `dim_category` 走
+   `DO NOTHING` + `NOT EXISTS` 预筛，本来就不重写既有行。
 4. **OSS 对象即原始归档**：文件入口即持久化于 OSS，不再做导入后本地归档；批次记录（`import_batch.object_key`）
    持久化 object key 供溯源与重导。失败也无碍——OSS 对象仍在，凭 key 重导。
 
