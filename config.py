@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     # 一次性下载令牌，该路径尚未实现，故此处以拒绝代替。
     EXPORT_ROW_CAP: int = 50000
 
+    # 持续增长市场（工具箱）的判定口径。三项都在**日报导入收尾时**参与算定，命中结果写进
+    # analysis.fact_growth；查询侧只读，不重算。
+    #
+    # **改这三个值不会影响已算定的期次**——旧榜单仍是旧口径算出来的。要让历史期次跟上，
+    # 必须跑 scripts/backfill_growth.py 重算（保留窗口内的日报事实数据都还在，可重算）。
+    # 这是「只存命中行」换来的代价，见 openspec/changes/toolbox-growth-market/design.md 决策 1。
+    #
+    # 窗口 7 期产生 6 个日环比，不是 7 个；要 7 个环比就得取 8 期数据。
+    GROWTH_WINDOW_DAYS: int = 7           # 窗口期数（含锚定日），仅日报
+    GROWTH_MIN_RANK_GAIN: int = 10000     # 累计净增名次下限（不含），rank(d-6) - rank(d)
+    GROWTH_MIN_DAILY_RATE: float = 0.10   # 每个日环比的下限（含），0.10 = 10%
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
@@ -168,6 +180,30 @@ class Settings(BaseSettings):
     def _validate_hot_window(cls, value: int) -> int:
         if value < 1:
             raise ValueError("HOT_WINDOW_MONTHS 至少为 1")
+        return value
+
+    @field_validator("GROWTH_WINDOW_DAYS")
+    @classmethod
+    def _validate_growth_window(cls, value: int) -> int:
+        # 至少 2 期才产生得出一个日环比；1 期时「持续增长」无从谈起。
+        if value < 2:
+            raise ValueError("GROWTH_WINDOW_DAYS 至少为 2（少于两期算不出日环比）")
+        return value
+
+    @field_validator("GROWTH_MIN_RANK_GAIN")
+    @classmethod
+    def _validate_growth_min_gain(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("GROWTH_MIN_RANK_GAIN 不能为负（它是名次前进量，负数意味着把下跌也算作增长）")
+        return value
+
+    @field_validator("GROWTH_MIN_DAILY_RATE")
+    @classmethod
+    def _validate_growth_min_rate(cls, value: float) -> float:
+        # 上界取 1：日环比 = (前期 − 本期)/前期，排名为正整数时它恒 < 1，配成 ≥1 会让榜单
+        # 永远为空，而那种「配置写错」的表现与「今天没有增长词」完全一样，看不出来。
+        if not 0 <= value < 1:
+            raise ValueError("GROWTH_MIN_DAILY_RATE 必须在 [0, 1) 内（0.10 表示 10%）")
         return value
 
     model_config = ConfigDict(env_file=".env", extra="ignore")

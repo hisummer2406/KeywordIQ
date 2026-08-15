@@ -40,7 +40,9 @@ def _super():
 
 def test_permission_codes_from_role():
     op = _operator()
-    assert op.permission_codes == {"analysis:view", "analysis:export", "upload:import"}
+    assert op.permission_codes == {
+        "analysis:view", "analysis:export", "upload:import", "toolbox:view",
+    }
     assert op.role_code == "operator"
 
 
@@ -140,7 +142,9 @@ def test_serialize_user_shape():
         "role": "operator",
         # 角色展示名与 role 表同源，前端据此显示身份，不自建 code → 中文名的映射
         "role_name": "operator",
-        "permissions": ["analysis:export", "analysis:view", "upload:import"],
+        "permissions": [
+            "analysis:export", "analysis:view", "toolbox:view", "upload:import",
+        ],
         "is_active": True,
         "is_super": False,
     }
@@ -163,5 +167,7 @@ def test_decode_malformed_token_returns_none():
 def test_role_permission_matrix_matches_spec():
     # 矩阵与 design 决策 4b 一致
     assert P.ROLES["admin"][1] == set(P.PERMISSIONS.keys())
-    assert P.ROLES["operator"][1] == {"analysis:view", "analysis:export", "upload:import"}
-    assert P.ROLES["analyst"][1] == {"analysis:view", "analysis:export"}
+    assert P.ROLES["operator"][1] == {
+        "analysis:view", "analysis:export", "upload:import", "toolbox:view",
+    }
+    assert P.ROLES["analyst"][1] == {"analysis:view", "analysis:export", "toolbox:view"}

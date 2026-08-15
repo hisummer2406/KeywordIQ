@@ -57,6 +57,7 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 | `dim_product` | 商品维度，`asin` 唯一；SCD Type 1（不留历史版本） |
 | `fact_daily` / `fact_weekly` | 事实表，按期次日期月度 RANGE 分区 + 按 `site` 二级 LIST 分区。**分区列名两表不同**：日报是 `report_date`，周报是 `report_date_week`——照着日报的列名写周报查询会直接报 `UndefinedColumn` |
 | `fact_dropped` | 掉榜词表，按 `anchor_date` 月度 RANGE 分区，**只有一级、没有站点子分区**（站点是普通索引列）。它是差集不是全量，比事实表小一到两个数量级，二级分区的裁剪收益抵不上分区数翻倍的代价 |
+| `fact_growth` | 持续增长词表（工具箱），同样按 `anchor_date` 月度 RANGE、无站点子分区。**只有日报**，故没有 `period_type` 列 |
 | `site_data_stats` | 按站点/周期/期次的行数（`row_count` 在榜 + `dropped_count` 掉榜），服务分页总数与日期选择器 |
 | `import_batch` | 导入批次记录 |
 
@@ -143,6 +144,24 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
   `test/test_site_scoped_query_integration.py`（`TEST_DATABASE_URL` gate）。
 - 演示数据：`scripts/seed_demo_data.py`（连续 7 天 + 对齐周报，让走势可见，仅本地）。
 
+**工具箱 · 持续增长市场（`/api/toolbox/growth/*`，权限点 `toolbox:view`）**：近 7 天名次
+持续前进的关键词榜。命中口径三条同时成立——窗口内每期都在榜、累计净增 `rank(d-6) − rank(d)`
+> `GROWTH_MIN_RANK_GAIN`、6 个日环比全部 ≥ `GROWTH_MIN_DAILY_RATE`。四条要点：
+
+- **只有日报**。周报没有「连续 7 天」，`period='WEEK'` 的导入不算定、不写表。
+- **导入收尾算定（`importer.load_growth`），查询侧只读**，与 `fact_dropped` 同一模式。
+  口径只有那一处定义；查询层或脚本里再写一遍，漂移的表现是「界面显示的行不满足界面
+  自己写的口径」，没有任何地方会报错。
+- **改 `GROWTH_*` 阈值不会影响已算定的期次**（表里只存命中行，不存全量指标）。改完
+  必须跑 `scripts/backfill_growth.py` 重算，**上线时也必须跑一次**，否则库里明明有三个月
+  日报、界面却要等 7 天才出现第一条榜单。
+- **窗口内缺期时榜单据实为空**，缺失期次随响应回传、界面必须明示——「今天没有增长词」
+  与「有两天数据没导进来」在界面上长得一模一样。
+
+「外观专利」「全球商标库」只是占位屏：仓库里没有任何专利/商标数据，**不发请求、无后端
+端点**。三个二级菜单共用 `toolbox:view` 一个权限点——给没有端点的屏各开一个权限点，就是
+再造一遍 `user:manage` 那种「勾了也不生效」的复选框。
+
 **数据保留：只保留最近三个月。** 由 `HOT_WINDOW_MONTHS`（默认 3）定义热窗口，报告日期
 早于窗口下界的月度分区由保留清理**自动移出**——日报与周报统一适用同一窗口。移出是整
 分区 `DROP`（连带站点子分区），不逐行删除、不产生死元组、不影响窗口内其他月份。清理逻辑
@@ -166,6 +185,9 @@ app/
 ├── table/
 │   ├── analysis/      # V2 查询层（model, crud, service, api + retention/partitioning）
 │   ├── search/        # 查询请求/响应 schemas
+│   ├── toolbox/       # 工具箱查询层（持续增长市场 growth_crud/service/api/schemas）
+│   │                  # 模型 fact_growth 寄居在 analysis/fact_model.py——分区、保留、
+│   │                  # 导入收尾都在那个域内，登记一处即被三处接管
 │   └── upload/        # OSS 直传凭证 + 三段式导入（oss_client / import_source / importer / import_service）
 │                      # + 批次历史与重导（import_batch_crud / import_history_service）
 └── user/              # 用户与角色管理 (model, crud, api)
@@ -285,7 +307,7 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`、
   `require_super`）。
 - **RBAC**：`role`/`permission`/`role_permission`（M2M），`user_center.role_id`（每用户一角色）。
-  权限点只有三个：`analysis:view`/`analysis:export`/`upload:import`；内置角色
+  权限点只有四个：`analysis:view`/`analysis:export`/`upload:import`/`toolbox:view`；内置角色
   admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
   is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。
 - **用户管理是「不可授予」的能力，不走权限点**：`/api/user/*` 五个端点一律
@@ -427,6 +449,11 @@ DATABASE_SCHEMA=analysis
 ENABLED_SITES=US,GB,DE   # 必须是 site_registry 已登记的站点码
 DEFAULT_SITE=US
 HOT_WINDOW_MONTHS=3
+
+# 持续增长市场的判定口径（仅日报）。改了要跑 scripts/backfill_growth.py 重算历史期次
+GROWTH_WINDOW_DAYS=7          # 窗口期数（含锚定日）；7 期产生 6 个日环比
+GROWTH_MIN_RANK_GAIN=10000    # 累计净增名次下限（不含）
+GROWTH_MIN_DAILY_RATE=0.10    # 每个日环比的下限（含）
 
 # Upload / OSS（OSS_ENABLED=false 时走本地文件退路，其余 OSS_* 可留空）
 MAX_FILE_SIZE=3221225472  # 3GB
