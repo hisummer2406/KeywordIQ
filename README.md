@@ -1,91 +1,96 @@
-# 🚀 KeywordIQ AI选品Agent v0.0.1
+# 🚀 KeywordIQ
 
-> 专业的亚马逊搜索词数据分析平台，支持GB级大文件处理、实时数据分析和可视化展示
+> 专业的亚马逊搜索词数据分析平台，支持 GB 级文件处理、实时数据分析和可视化展示
 >
-> **使用场景**：单用户数据导入（日报 ~30万行 / 周报 ~300万行）+ 200用户高并发查询
+> **使用场景**：单用户数据导入（日报 ~30 万行 / 周报 ~300 万行）+ 约 200 用户高并发只读查询
 
 ---
 
 ## ✨ 功能特性
 
-- **📊 数据分析**：多维度筛选、排名趋势图、自定义导出
-- **📁 大文件处理**：支持GB级CSV上传、智能分块、多进程处理
-- **🔍 智能搜索**：15+维度组合查询、实时数据更新
-- **👥 权限管理**：多用户系统、JWT认证、细粒度权限
-- **⚡ 高性能**：千万级数据秒级查询、批量UPSERT去重
+- **📊 数据分析**：站点 + 视图（日/周）+ 锚定期 + 行窗口的多维度筛选，走势与历史排名，在榜/掉榜/全部三态切换
+- **📁 大文件导入**：OSS 直传（浏览器直接上传，字节不经应用服务器）+ 服务端流式 `COPY` 装载，GB 级文件内存有界
+- **🔍 智能检索**：单一检索框按格式自动判定关键词 / ASIN，类目多选、品牌/排名/份额等多维过滤
+- **👥 权限管理**：自建 JWT + RBAC，`analysis:view` / `analysis:export` / `upload:import` 三个权限点
+- **⚡ 高性能**：星型模型 + 月度分区，日期选择器与分页总数走预聚合统计表，不在事实表上实时聚合
 
 ---
 
 ## 🏗️ 技术架构
 
 ```
-前端 (Amis UI) → 应用层 (FastAPI) → 数据层 (PostgreSQL)
-                     ↓
-            ┌────────┴────────┐
-            ├─ 认证模块 (JWT)
-            ├─ 数据分析接口
-            ├─ 文件上传处理
-            └─ 用户权限管理
+前端 (Ant Design Pro / Umi Max SPA) → 应用层 (FastAPI) → 数据层 (PostgreSQL, schema: analysis)
+                                          ↓
+                                ┌─────────┴─────────┐
+                                ├─ 认证模块 (自建 JWT + RBAC)
+                                ├─ 数据分析接口 (site-scoped-query)
+                                ├─ 导入管线 (OSS 直传 → 流式 COPY → 三段式装载)
+                                └─ 用户权限管理
 ```
 
-**核心技术**：FastAPI + PostgreSQL + Pandas + 多进程处理
+数据模型是星型模型：`dim_keyword` / `dim_product` 两张维度表 + `fact_daily` / `fact_weekly` /
+`fact_dropped` 三张按月分区的事实表，事实表只追加、不原地更新。详见 [CLAUDE.md](./CLAUDE.md)
+「V2 数据模型」一节。
+
+**核心技术**：FastAPI（sync + async 双引擎）+ PostgreSQL 15（分区表）+ Ant Design Pro
 
 ---
 
 ## 🚀 快速开始
 
-### 线上环境
-
-- ECS Alibaba Cloud Linux 3.2104 LTS 64位 4 核（vCPU）8 GiB
-- RDS PostgreSQL15.0 2C4G默认连接数 400
-
-### 部署
-
-部署形态为**宿主机 nginx + uvicorn**（不使用容器）：nginx 托管前端 SPA 产物并反代
-`/api` 到本机 uvicorn。
+### 本地开发
 
 ```bash
-# 1. 克隆项目
-git clone <project-repo>
-cd keywordiq
-
-# 2. 后端依赖与配置
+# 1. 后端依赖（uv 按 .python-version 与 uv.lock 管理 .venv）
 uv sync
-cp .env.example .env        # 按注释填写数据库、ADMIN_SECRET_KEY、OSS_* 等
+cp .env.example .env        # 按注释填写数据库、ADMIN_SECRET_KEY 等；OSS_ENABLED=false 时走本地文件退路
 
-# 3. 构建前端产物并同步到 nginx root
+# 2. 数据库迁移
+uv run alembic upgrade head
+
+# 3. 启动后端
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# 4. 启动前端（另开一个终端）
+cd frontend
+pnpm install                # 首次安装，postinstall 会自动跑 max setup
+pnpm dev                    # 默认 http://localhost:8000，/api 反代到后端 uvicorn
+```
+
+前端本地开发细节见 [frontend/README.md](./frontend/README.md)。
+
+### 生产部署
+
+部署形态是**宿主机 nginx + uvicorn**（不使用容器）：nginx 托管前端 SPA 产物并反代 `/api`
+到本机 uvicorn（4 workers）。
+
+```bash
+# 首次部署
+git clone <project-repo> && cd KeywordIQ
+uv sync
+cp .env.example .env        # 填写生产配置：数据库、ADMIN_SECRET_KEY、OSS_*、ENABLED_SITES 等
+uv run alembic upgrade head
 cd frontend && pnpm install && pnpm build && cd ..
 rsync -a --delete frontend/dist/ /var/www/keywordiq/
 
-# 4. 配置 nginx（改好 server_name 后启用站点）
 sudo cp etc/keywordiq-nginx.conf /etc/nginx/sites-available/keywordiq
 sudo ln -sf /etc/nginx/sites-available/keywordiq /etc/nginx/sites-enabled/keywordiq
 sudo nginx -t && sudo systemctl reload nginx
 
-# 5. 初始化管理员并启动后端
-uv run python scripts/seed_admin.py
+uv run python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次登录后请修改
 ./start.sh
-
-# 6. 访问系统
-浏览器访问: http://your-domain.com
-默认账号: admin / pwd123（首次登录后请修改）
 ```
 
-首次部署完成后，**后续发布用 `./deploy.sh`**（同步依赖 → 迁移 → 构建前端 → 发布产物 →
-reload nginx）：
+后续发布用 `./deploy.sh`（`uv sync` → 迁移 → 构建前端 → 发布产物 → reload nginx）：
 
 ```bash
 ./deploy.sh                  # 全量发布
 ./deploy.sh --skip-migrate   # 只发前端，不动数据库
-./deploy.sh --skip-frontend  # 只更新后端
 ./deploy.sh --yes            # 不交互确认迁移（无人值守）
 ```
 
-产物目录与服务名可用环境变量覆盖：`WEB_ROOT`（默认 `/var/www/keywordiq`，须与 nginx
-`root` 一致）、`SERVICE_NAME`（默认 `keywordiq`）。
-
 > **后端重启**：仓库暂未提供 systemd unit。`deploy.sh` 检测到 `${SERVICE_NAME}.service`
-> 才会重启后端，否则跳过并提示你手动重启（停掉旧 uvicorn 后跑 `./start.sh`）。
+> 才会重启后端，否则跳过并提示手动重启（停掉旧 uvicorn 后跑 `./start.sh`）。
 
 ---
 
@@ -93,130 +98,89 @@ reload nginx）：
 
 | 类别 | 规格 |
 |------|------|
-| 应用服务器 | 阿里云 ECS · Alibaba Cloud Linux 3.2104 LTS 64位 · 4 vCPU / 8 GiB |
-| 数据库 | 阿里云 RDS PostgreSQL 15.0 · 2C4G · 默认最大连接数 400 |
+| 应用服务器 | 阿里云 ECS · Alibaba Cloud Linux 3.2104 LTS 64 位 · 4 vCPU / 8 GiB |
+| 数据库 | 阿里云 RDS PostgreSQL 15.0 · 2C4G · `max_connections=400` |
+
+三个月保留窗口下满窗约 2 亿行 / 50 GB，当前规格通常无需扩容；扩容触发条件与连接池取值算式
+见 [CLAUDE.md](./CLAUDE.md)「Production Environment」一节。
 
 ---
 
-## 📦 生产环境部署
+## 📦 关键配置（.env）
 
-### 环境配置
-
-创建 `.env` 文件：
+完整项与单位说明见 [.env.example](./.env.example)，新增配置务必同步过去。核心几项：
 
 ```bash
-# 数据库配置
-DATABASE_URL=postgresql://postgres:your_password@db:5432/amazon_db
+DATABASE_URL=postgresql://user:pass@host/db
+DATABASE_URL_ASYNC=postgresql+asyncpg://user:pass@host/db
 DATABASE_SCHEMA=analysis
 
-# 安全配置（必须修改）
-ADMIN_SECRET_KEY=<生成随机字符串>
+ENABLED_SITES=US,GB,DE      # 必须是 app/site_registry.py 已登记的站点码
+DEFAULT_SITE=US
+HOT_WINDOW_MONTHS=3         # 数据保留窗口（月）
 
-# 性能配置
-BATCH_SIZE=5000
-MAX_WORKERS=4
+MAX_FILE_SIZE=3221225472    # 3GB
+OSS_ENABLED=false           # true 时走前端 OSS 直传；false 时走本地文件上传（仅供本地/CI）
 ```
-
-### Nginx 配置示例
-
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com;
-    client_max_body_size 3G;
-    
-    location / {
-        proxy_pass http://localhost:8000;
-        proxy_set_header Host $host;
-        proxy_read_timeout 600;
-    }
-}
-```
-
----
-
-## 📖 使用指南
-
-### 项目使用场景说明 
-
-1. **数据导入场景**（低频 / 重计算）
-   - 操作角色：数据专员（1 人）
-   - 使用方式：手动上传数据文件
-   - 数据规模：日报约 **30 万行**（~150MB）/ 周报约 **300 万行**（~1.5GB），两者相差 10 倍
-   - 使用频率：非高频（按批次上传，日报每日一次，周报每周一次）
-2. **数据查询场景**（高并发 / 读为主）
-   - 操作角色：运营专员（约 200 人）
-   - 使用方式：Web 页面查询、筛选、查看结果
-   - 并发特征：
-     - 峰值支持 200 用户同时在线查询
-     - 查询以 读操作为主，无复杂写入
-
-### 数据上传
-
-1. **文件格式**：亚马逊搜索词报告CSV格式
-2. **上传方式**：点击"上传日数据"或"上传周数据"
-3. **文件命名**：建议包含日期，如 `amazon_2024-01-15.csv`
-
-### 数据查询
-
-**基础搜索**：关键词、品牌、类目、ASIN
-
-**高级筛选**（点击"高级搜索"）：
-- 排名范围（日排名/周排名）
-- 变化趋势（日变化/周变化）
-- 数据指标（点击份额/转化份额/转化率）
-- 状态筛选（日新品/周新品）
-
-### 用户管理
-
-进入"用户管理"页面 → "新增用户" → 填写信息（用户名/密码/状态）
 
 ---
 
 ## 💻 开发指南
 
-### 本地开发
-
-```bash
-# 1. 安装依赖（使用 uv，自动创建 .venv 并固定到 .python-version 指定的版本）
-uv sync
-
-# 2. 启动应用
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-> 项目使用 [uv](https://docs.astral.sh/uv/) 管理依赖。新增/更新依赖请用 `uv add <package>`（运行时依赖）或 `uv add --dev <package>`（仅测试/工具用），并提交 `uv.lock`。
-
 ### 项目结构
 
 ```
-keywordiq/
-├── app/                    # 应用主目录
-│   ├── auth/              # 认证模块
-│   ├── table/             # 数据模块
-│   │   ├── analysis/      # 数据分析
-│   │   ├── search/        # 搜索功能
-│   │   └── upload/        # 文件上传
-│   └── user/              # 用户模块
-├── static/                # 静态文件
-├── uploads/               # 上传目录
-├── main.py                # 应用入口
-└── config.py              # 配置文件
+KeywordIQ/
+├── app/
+│   ├── auth/               # 自建 JWT + RBAC
+│   ├── site_registry.py    # 站点码唯一事实来源
+│   ├── table/
+│   │   ├── analysis/       # V2 查询层（model/crud/service/api + retention/partitioning）
+│   │   ├── search/         # 查询请求/响应 schemas
+│   │   └── upload/         # OSS 直传 + 三段式导入 + 批次历史
+│   └── user/                # 用户与角色管理
+├── alembic/                 # 数据库迁移（分区表/物化视图需手写）
+├── frontend/                 # Ant Design Pro SPA（Umi Max），独立构建
+├── scripts/                  # seed_admin / prune_retention / check_oss 等运维脚本
+├── test/                     # pytest（单元 + 需真实库的集成测试）
+├── main.py                   # FastAPI 入口
+├── config.py                 # Pydantic Settings
+└── database.py               # SQLAlchemy 2.0 sync + async 双引擎
 ```
 
-### 技术约束
+### 开发约束（节选）
 
-- **SQLAlchemy 2.0 Only**：新增 ORM 代码必须使用 `DeclarativeBase`、`Mapped`、`mapped_column`、`select()`、`Session.execute(...).scalars()` 等 2.0 写法。
-- 禁止引入 SQLAlchemy 1.x 风格 API：`declarative_base()`、模型字段 `Column(...)`、`session.query(...)`。
-- **Pydantic 2.0 Only**：请求/响应模型必须使用 `ConfigDict`、`field_validator`、`model_validate()`、`model_dump()`。
-- 禁止引入 Pydantic v1 风格 API：`class Config`、`@validator`、`@root_validator`、`.dict()`、`.parse_obj()`。
-- ORM 模型、请求 Schema、响应 Schema 应保持明确类型，避免无必要的 `dict`、`Any` 和字符串日期。
-- 数据库结构变更必须通过 Alembic migration 管理；修改 ORM 模型时同步更新迁移，并确认目标 schema 为 `analysis`。
-- Service 层负责事务提交/回滚边界，CRUD 层只做数据访问；大文件导入避免长事务，子进程不得复用父进程数据库连接。
-- FastAPI 请求处理应保持轻量；CSV 解析、阻塞数据库操作、整文件读取等重任务不要直接运行在事件循环中。
-- 大数据路径必须控制内存和结果集大小：禁止一次性读入 GB 级 CSV，禁止返回未分页的大表查询结果，新增筛选/关联查询需考虑索引和执行计划。
-- 单元测试不应依赖真实 PostgreSQL；数据库/导入测试使用 `.env` 和小样本 fixture，新增测试必须可被 `pytest` 正常收集。
-- 新增配置项时同步更新 `.env.example`，说明单位和安全默认值；不要提交 `uploads/`、`logs/`、临时分片文件或真实业务 CSV 数据。
+- **SQLAlchemy 2.0 / Pydantic 2.0 Only**：`DeclarativeBase` + `Mapped`/`mapped_column` + `select()`；
+  `ConfigDict` + `field_validator` + `model_validate()`。禁止 1.x / v1 风格 API。
+- 数据库结构变更一律走 Alembic migration；分区表与物化视图不在 autogenerate 范围内，需手写并用
+  `alembic upgrade head --sql` 核对。
+- Service 层控制事务边界，CRUD 层不提交；大文件导入用流式 `COPY`，不整文件读入内存。
+- FastAPI 请求处理保持轻量，阻塞数据库操作、CPU 密集任务（如 bcrypt）不直接跑在事件循环上。
+
+完整的架构说明、层次约定、导入/查询链路细节、错误契约与并行开发纪律见
+**[CLAUDE.md](./CLAUDE.md)**（本仓库的权威开发文档）。
+
+### 常用命令
+
+```bash
+# 测试
+uv run pytest test/
+
+# 依赖管理
+uv add <package>              # 运行时依赖
+uv add --dev <package>        # 仅测试/工具
+
+# 数据库迁移
+uv run alembic upgrade head
+uv run alembic revision --autogenerate -m "说明"
+uv run alembic current
+
+# 监控导入日志
+tail -f logs/app.log | grep -i import
+
+# 磁盘占用排查
+du -ah /path/to/search | sort -rh | head -n 20
+```
 
 ### API 文档
 
@@ -225,96 +189,9 @@ keywordiq/
 
 ---
 
-### 上传问题
-
-**Q: 文件上传失败？**
-- 检查文件格式（CSV）
-- 检查文件大小限制（3GB）
-- 检查磁盘空间
-
-**Q: 处理速度慢？**
-- 调整 `MAX_WORKERS`（建议4-8）
-- 调整 `BATCH_SIZE`（建议5000）
-
-### 性能优化
-
-```bash
-# .env 配置
-BATCH_SIZE=5000          # 批处理大小
-MAX_WORKERS=4            # 工作进程数
-DB_POOL_SIZE=100         # 连接池大小
-```
-
----
-
-## 🔧 技术栈
-
-| 类别 | 技术 | 版本 |
-|------|------|------|
-| 后端 | Python / FastAPI | 3.11+ / 0.104+ |
-| 数据库 | PostgreSQL | 15+ |
-| 数据处理 | Pandas / SQLAlchemy | 2.1+ / 2.0+ |
-| 前端 | Amis UI / ECharts | 最新版 |
-| 基础设施 | Docker / Nginx | 20.10+ / 1.20+ |
-
----
-
-## 📝 常用命令
-
-```bash
-
-# 本地开发
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
-# 生产启动 / 重启（宿主机 uvicorn，4 workers）
-./start.sh
-
-# 重新发布前端产物
-cd frontend && pnpm build && cd .. && rsync -a --delete frontend/dist/ /var/www/keywordiq/
-
-# nginx 改配置后校验并热加载
-sudo nginx -t && sudo systemctl reload nginx
-
-# 监控导入日志
-tail -f logs/app.log | grep -i import
-
-使用 du 命令查看目录占用空间
-du 命令可以查看文件或目录的磁盘使用情况。
-
-`du -ah /path/to/search | sort -rh | head -n 20`
-
-* -a：显示所有文件和目录的大小。
-* -h：以人类可读的方式显示文件大小（例如 MB、GB）。
-* sort -rh：按文件大小降序排序。
-* head -n 20：显示前 20 个最大文件或目录。
-
-# Nginx 日志
-    access_log /var/log/nginx/keywordiq.access.log;
-    error_log /var/log/nginx/keywordiq.error.log;
-
-```
-
----
-
-## 📞 参考资料
-
-### 对标网站
-- 网站: [https://8b164h4196.vicp.fun/](https://8b164h4196.vicp.fun/)
-- 账号: zhangxiaoxiao / 密码: 1
-
-### 紫鸟浏览器
-- 公司: 郑州采参堂电子商务有限公司
-- 用户: 开发 / 密码: KF112233@
-
-### 相关文档
-- [FastAPI 文档](https://fastapi.tiangolo.com/)
-- [Amis 文档](https://docs.amis.work/zh/)
-
----
-
 <div align="center">
 
-**© 2025 KeywordIQ | 专业·高效·智能**
+**© 2026 KeywordIQ**
 
 技术支持: stone_summer24
 
