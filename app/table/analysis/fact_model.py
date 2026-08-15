@@ -269,6 +269,68 @@ class FactDropped(Base):
     )
 
 
+class FactGrowth(Base):
+    """持续增长词：近 7 天名次持续前进、且幅度达标的关键词。
+
+    口径（三条同时满足，窗口是锚定日往前 7 期 ``[d-6, d]``）：
+
+    1. 窗口内**每一期都在榜**——七期在 ``fact_daily`` 里都有行；
+    2. **累计净增** ``rank(d-6) − rank(d)`` 超过 ``GROWTH_MIN_RANK_GAIN``（默认 1 万名）；
+    3. 窗口内**每一个日环比** ``(前期排名 − 本期排名) / 前期排名`` 都 ≥
+       ``GROWTH_MIN_DAILY_RATE``（默认 10%）。
+
+    七期数据产生**六个**日环比，不是七个。要凑满七个环比就得把窗口扩到八期，那与掉榜
+    的七天窗口对不齐，且多依赖一天的数据——需求方确认按六个环比判定。
+
+    **只有日报有这个概念**，周报没有「连续 7 天」。因此这张表没有 ``period_type`` 列：
+    有那一列就等于宣称 WEEK 也会出现在这里。
+
+    与 :class:`FactDropped` 同属「导入时算定、查询时只读」：口径固定，实时算要在 210 万行
+    （7 期 × 30 万）上做窗口聚合，而且**每翻一页重跑一次**；算定之后成本从「每次查询」
+    降到「每期一次」。同样只追加不更新，同一期重复导入时先删该期再重算。
+
+    **只存命中行**（每期数千行），不存全量指标。存下所有「连续七天在榜」的词及其指标能
+    让改阈值免回填，但那是每站每期约 20 万行、三个月约 5400 万行——为一个以季度计频率的
+    阈值调整长期背一张与事实表同量级的表。代价是**改阈值后旧期次仍是旧口径**，必须跑
+    ``scripts/backfill_growth.py`` 重算。
+
+    分区与掉榜表一致：按 ``anchor_date`` 月度 RANGE、**不做站点二级分区**（量级比事实表
+    小两到三个数量级，索引前缀裁剪已经够用），随保留窗口的分区清理一同移出。
+    """
+
+    __tablename__ = "fact_growth"
+
+    site: Mapped[str] = mapped_column(String(8), primary_key=True, comment=SITE_COLUMN_COMMENT)
+    anchor_date: Mapped[date] = mapped_column(Date, primary_key=True, comment="锚定日（分区键），窗口右端")
+    keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="→ dim_keyword")
+
+    # 起止排名都存，界面才能回答「从哪儿涨到哪儿」；只存净增的话，从 10 万涨到 6 万与
+    # 从 5 万涨到 1 万在表里一模一样，而这两件事在选品上完全不是一回事。
+    start_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="窗口首期（d-6）排名")
+    end_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="锚定期（d）排名")
+    rank_gain: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="累计净增名次 = start_ranking - end_ranking，正数为名次前进"
+    )
+    # 存最低环比而不只存「命中」这个布尔，界面才能区分「刚过线」与「远超线」。
+    min_growth_rate: Mapped[float] = mapped_column(
+        Numeric(6, 4), nullable=False, comment="窗口内 6 个日环比的最小值，如 0.1234 表示 12.34%"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # 榜单分页：作用域二元组做前缀、净增名次承担排序。
+        # 不写 DESC——btree 可反向扫描，默认排序（净增降序）照样免排序节点，而表达式/
+        # 带方向的索引会在 autogenerate 里产生比不掉的差异（集成测试要求 autogenerate 为空）。
+        Index("idx_fact_growth_rank", "site", "anchor_date", "rank_gain"),
+        {"postgresql_partition_by": "RANGE (anchor_date)",
+         "comment": "持续增长词：近 7 期名次持续前进且幅度达标的关键词。仅日报；导入时算定、"
+                    "查询时只读；按锚定日月度 RANGE 分区，随保留窗口一同移出；不做站点二级分区。"},
+    )
+
+
 class SiteDataStats(Base):
     """按站点 + 周期 + 期次的行数统计。
 

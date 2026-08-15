@@ -24,7 +24,13 @@ from app.site_registry import (
 )
 from app.table.analysis import partitioning
 from app.table.analysis.dimension_model import DimKeyword, DimProduct
-from app.table.analysis.fact_model import FactDaily, FactDropped, FactWeekly, SiteDataStats
+from app.table.analysis.fact_model import (
+    FactDaily,
+    FactDropped,
+    FactGrowth,
+    FactWeekly,
+    SiteDataStats,
+)
 from app.table.upload.import_batch_model import (
     PERIOD_DAY,
     PERIOD_WEEK,
@@ -140,13 +146,14 @@ class TestPartitionNaming:
         with pytest.raises(partitioning.UnknownFactTableError):
             partitioning._validate_table("users; DROP TABLE x")
 
-    def test_registered_tables_cover_facts_and_dropped(self):
+    def test_registered_tables_cover_facts_and_derived(self):
         assert set(partitioning.PARTITIONED_TABLES) == {
-            "fact_daily", "fact_weekly", "fact_dropped",
+            "fact_daily", "fact_weekly", "fact_dropped", "fact_growth",
         }
         assert partitioning.PARTITIONED_TABLES["fact_daily"].date_column == "report_date"
         assert partitioning.PARTITIONED_TABLES["fact_weekly"].date_column == "report_date_week"
         assert partitioning.PARTITIONED_TABLES["fact_dropped"].date_column == "anchor_date"
+        assert partitioning.PARTITIONED_TABLES["fact_growth"].date_column == "anchor_date"
 
     def test_only_fact_tables_have_site_subpartition(self):
         """掉榜表只做一级月度 RANGE，不做站点二级分区。
@@ -158,6 +165,8 @@ class TestPartitionNaming:
         assert partitioning.PARTITIONED_TABLES["fact_daily"].site_subpartition is True
         assert partitioning.PARTITIONED_TABLES["fact_weekly"].site_subpartition is True
         assert partitioning.PARTITIONED_TABLES["fact_dropped"].site_subpartition is False
+        # 增长榜同理，且比掉榜还小两个数量级（每期数千行）
+        assert partitioning.PARTITIONED_TABLES["fact_growth"].site_subpartition is False
 
     def test_dropped_partition_name_has_no_site_suffix(self):
         """单级分区的名字里不该出现站点后缀——出现了说明走错了建分区的分支。"""
@@ -203,6 +212,44 @@ class TestFactDroppedStructure:
             tuple(c.name for c in idx.columns) for idx in FactDropped.__table__.indexes
         }
         assert ("site", "period_type", "anchor_date", "last_ranking") in index_columns
+
+
+class TestFactGrowthStructure:
+    """持续增长榜：近 N 期名次持续前进且幅度达标的关键词。仅日报。"""
+
+    def test_primary_key_contains_partition_key(self):
+        pk_columns = [c.name for c in FactGrowth.__table__.primary_key]
+        assert "anchor_date" in pk_columns, "缺少 RANGE 分区键"
+        assert pk_columns == ["site", "anchor_date", "keyword_id"]
+
+    def test_partitioned_by_anchor_date(self):
+        assert FactGrowth.__table__.dialect_options["postgresql"]["partition_by"] == \
+            "RANGE (anchor_date)"
+
+    def test_has_no_period_type_column(self):
+        """只有日报有「连续 7 天」这个概念。
+
+        留一列 period_type 等于宣称 WEEK 也会出现在这张表里，而那会让读表的人以为
+        「周报的增长榜在哪儿」是个待补的功能，而不是一个刻意不存在的东西。
+        """
+        assert "period_type" not in FactGrowth.__table__.columns
+
+    def test_carries_both_endpoints_not_just_the_gain(self):
+        """只存净增的话，「从 10 万涨到 6 万」与「从 5 万涨到 1 万」在表里一模一样。"""
+        columns = FactGrowth.__table__.columns
+        for name in ("start_ranking", "end_ranking", "rank_gain", "min_growth_rate"):
+            assert columns[name].nullable is False
+
+    def test_has_index_for_board_paging(self):
+        """榜单按净增名次分页：作用域二元组做前缀、净增承担排序。
+
+        不写 DESC 是刻意的——btree 可反向扫描，默认的净增降序照样免排序节点，而带方向
+        的索引会在 autogenerate 里产生比不掉的差异（集成测试要求 autogenerate 为空）。
+        """
+        index_columns = {
+            tuple(c.name for c in idx.columns) for idx in FactGrowth.__table__.indexes
+        }
+        assert ("site", "anchor_date", "rank_gain") in index_columns
 
 
 class TestFactTableStructure:

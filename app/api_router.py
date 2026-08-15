@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.auth.auth_api import auth_router
 from app.table.analysis.analysis_api import analysis_router
+from app.table.toolbox.growth_api import toolbox_router
 from app.table.upload.upload_api import upload_router
 from app.user.user_api import user_router
 
@@ -18,6 +19,12 @@ api_router.include_router(
     analysis_router,
     prefix="/analysis",
     tags=["数据分析"]
+)
+
+api_router.include_router(
+    toolbox_router,
+    prefix="/toolbox",
+    tags=["工具箱"]
 )
 
 api_router.include_router(

@@ -63,6 +63,8 @@ PARTITIONED_TABLES: dict[str, PartitionScheme] = {
     # 掉榜表只做一级月度 RANGE：它是差集而非全量，比事实表小一到两个数量级，
     # 二级分区的裁剪收益这个量级上索引已经够用，代价却是分区数翻倍。
     "fact_dropped": PartitionScheme("anchor_date", site_subpartition=False),
+    # 持续增长榜同理，且比掉榜还小两个数量级（每期数千行）。
+    "fact_growth": PartitionScheme("anchor_date", site_subpartition=False),
 }
 
 
