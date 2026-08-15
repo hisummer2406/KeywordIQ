@@ -2,6 +2,7 @@ import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
 import TrendSparkline from '@/components/TrendSparkline';
+import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
 import TopProductCards from './TopProductCards';
@@ -27,10 +28,10 @@ import TopProductCards from './TopProductCards';
 /** 排名变化：数值变小 = 名次上升。0 与空各有各的呈现，不要混。 */
 function renderChange(v: number | null | undefined) {
   if (v === null || v === undefined) return <span style={{ color: '#ccc' }}>—</span>;
-  if (v === 0) return <span style={{ color: '#999' }}>0</span>;
+  if (v === 0) return <span style={{ color: TREND_COLORS.flat }}>0</span>;
   const up = v < 0;
   return (
-    <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
+    <span style={{ color: up ? TREND_COLORS.up : TREND_COLORS.down }}>
       {up ? '↑' : '↓'} {Math.abs(v)}
     </span>
   );
@@ -56,11 +57,11 @@ const PLACEHOLDER = <span style={{ color: '#ccc' }}>—</span>;
 function renderChangeRate(row: AnalysisRow) {
   const { ranking_change: change, previous_ranking: prev } = row;
   if (change === null || change === undefined || !prev) return PLACEHOLDER;
-  if (change === 0) return <span style={{ color: '#999' }}>0%</span>;
+  if (change === 0) return <span style={{ color: TREND_COLORS.flat }}>0%</span>;
   const up = change < 0;
   const pct = Math.abs((change / prev) * 100);
   return (
-    <span style={{ color: up ? '#3f8600' : '#cf1322' }}>
+    <span style={{ color: up ? TREND_COLORS.up : TREND_COLORS.down }}>
       {up ? '↑' : '↓'} {pct.toFixed(1)}%
     </span>
   );
