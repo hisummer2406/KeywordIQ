@@ -19,6 +19,11 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // **默认的 5 秒超时对这套测试太紧。** 分析屏那类用例要渲染整屏（作用域栏 + 过滤区 +
+    // 50 列宽的 ProTable），单条实测 4 秒上下；并行跑满 CPU 时就会零星翻红，而翻红的
+    // 用例每次都不同、报的又是超时而非断言失败——那种"随机红"比慢更贵，它会让人开始
+    // 忽略红灯。放宽到 20 秒不掩盖任何断言：真挂住的用例照样会红，只是晚 15 秒。
+    testTimeout: 20000,
     setupFiles: ['./src/test/setup.ts'],
     // Umi 生成物与构建产物不参与测试
     exclude: ['node_modules/**', 'dist/**', 'src/.umi/**', 'src/.umi-production/**'],

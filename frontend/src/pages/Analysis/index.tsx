@@ -687,19 +687,18 @@ export default function AnalysisPage() {
         actionRef={actionRef}
         rowKey="keyword_id"
         columns={columns}
-        // 给定总宽 → AntD 切到 table-layout: fixed，列上的 width 才真正生效。
-        // 不给的话是 auto 布局，width 只是建议值，浏览器按内容抢宽度——表现为
-        // "同样写 130px 的两列渲染出来不一样宽"。窗口比总宽窄时横向滚动。
+        // **`tableLayout` 必须显式给。** rc-table 只在四种情形下才用 fixed：显式传入、
+        // 有固定列、有 scroll.y 或粘性头、或某列开了 ellipsis。**给 `scroll.x` 不在其中**
+        // ——早期版本算，升级后不算了，而这种退化不报错：列上的 width 悄悄变回建议值，
+        // 浏览器按内容抢宽度（实测关键词列 220 渲染成 247，表格 1578 撑到 1792）。见 #43。
+        tableLayout="fixed"
+        // 总宽给 scroll.x：窗口比它窄时横向滚动，而不是把列压扁。
         scroll={{ x: totalColumnWidth(appliedView) + SELECTION_COLUMN_WIDTH }}
         // 勾选若干行后可批量「加入词库」。**选中状态不进会话快照**：它是一次性的界面
         // 状态，切走再切回清空是预期行为，因此这一项不需要动 CACHE_VERSION。
         rowSelection={{
           // 选择列必须显式给宽：它不给宽度时 colgroup 里是空值，而 `scroll.x` 那边
           // 已经按 48 把它算进去了，两处对不上就是横向多出/少掉一截。
-          //
-          // **注意别照搬"给了 scroll.x 就会切 fixed 布局"那句话**：实测这个 antd 版本
-          // 下本表始终是 `table-layout: auto`（加选择列之前也是），列宽仍只是建议值。
-          // 这是既有行为、不是本次改动引入的，另案处理。
           columnWidth: SELECTION_COLUMN_WIDTH,
           selectedRowKeys: selectedKeywordIds,
           onChange: (keys) => setSelectedKeywordIds(keys as number[]),
