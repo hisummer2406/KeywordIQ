@@ -33,15 +33,19 @@ function renderStatus(row: LibraryWatchRow) {
 
 export const STATUS_COLUMN_WIDTH = 110;
 
-/** 复选框列的宽度。ProTable 的选择列不在 columns 里，但它照样占横向空间。 */
-const SELECTION_COLUMN_WIDTH = 48;
+/**
+ * 复选框列的宽度。它不在 `columns` 里，但照样占横向空间，所以必须同时出现在两处：
+ * 这里算进 `scroll.x`，以及 `rowSelection.columnWidth`。只给一处，两边对不上。
+ */
+export const SELECTION_COLUMN_WIDTH = 48;
 
 /**
- * 表格的 `scroll.x`。
+ * 表格的 `scroll.x`：分析屏那套列的总宽 + 状态列 + 复选框列。
  *
- * **不给 `scroll.x` 的话，AntD 用 `table-layout: auto`，列上的 `width` 只是建议值**，
- * 调多少都不生效。状态列与复选框列都要算进来——漏掉它们的表现不是报错，而是最右边
- * 那一列被挤扁。
+ * 漏算后两列的表现不是报错，而是最右边那一列被挤扁。
+ *
+ * （沿用分析屏的做法。实测这个 antd 版本下表格实际仍是 `table-layout: auto`，列宽
+ * 只是建议值——那是既有行为，两屏一致，不在本变更范围内。）
  */
 export function watchTableWidth(view: View): number {
   return totalColumnWidth(view) + STATUS_COLUMN_WIDTH + SELECTION_COLUMN_WIDTH;

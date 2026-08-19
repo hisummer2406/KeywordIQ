@@ -182,6 +182,14 @@ describe('空状态', () => {
     await renderSettled();
     await waitFor(() => expect(screen.getByText('还没有分组')).toBeTruthy());
   });
+
+  it('一个分组都没有时，表格说的是「先建一个分组」而不是「这个分组还没有词」', async () => {
+    // 「这个分组还没有词」在没有分组时是错的：它把用户引向去加词，而他缺的是先建组。
+    listGroups.mockResolvedValue([]);
+    await renderSettled();
+    await waitFor(() => expect(screen.getByText(/先在左边新建一个分组/)).toBeTruthy());
+    expect(screen.queryByText(/这个分组还没有词/)).toBeNull();
+  });
 });
 
 describe('入库入口不在这一屏', () => {

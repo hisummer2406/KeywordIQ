@@ -31,7 +31,7 @@ import {
   type LibraryWatchRow,
 } from '@/services/library';
 import { getSites, type SiteOption } from '@/services/upload';
-import { buildWatchColumns, watchTableWidth } from './columns';
+import { SELECTION_COLUMN_WIDTH, buildWatchColumns, watchTableWidth } from './columns';
 import { toSortParams } from './sort';
 
 /**
@@ -151,17 +151,26 @@ export default function KeywordLibraryPage() {
     actionRef.current?.reload(true);
   };
 
-  /** 空表格的两种含义必须分开说，否则用户会去排查一个不存在的问题。 */
-  const emptyText = scopeHasNoDates
-    ? '这个站点还没有导入任何数据，暂时无法盯盘'
-    : '这个分组还没有词。到「ABA数据选品」勾选结果行，点「加入词库」即可加入';
+  /**
+   * 空表格的**三种**含义必须分开说，否则用户会去排查一个不存在的问题。
+   *
+   * 「一个分组都没有」曾被并进「这个分组还没有词」，那句话在没有分组时是错的——它把
+   * 用户引向「去加词」，而他真正缺的是先建一个组。
+   */
+  const emptyText = !active
+    ? '还没有分组。先在左边新建一个分组，再到「ABA数据选品」把关心的词加进来'
+    : scopeHasNoDates
+      ? '这个站点还没有导入任何数据，暂时无法盯盘'
+      : '这个分组还没有词。到「ABA数据选品」勾选结果行，点「加入词库」即可加入';
 
   return (
     <PageContainer title="我的词库">
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <Card
           size="small"
-          style={{ width: 260, flex: '0 0 260px' }}
+          // 280 是实测出来的：自己排完之后，「站点标签 + 分组名 + 条数 + 两个按钮」
+          // 在这个宽度下一行放得下且分组名还有约 100px 可读（见下面 renderItem 的注释）。
+          style={{ width: 280, flex: '0 0 280px' }}
           title="分组"
           extra={
             <Button
@@ -200,9 +209,27 @@ export default function KeywordLibraryPage() {
                   cursor: 'pointer',
                   background: group.group_id === activeId ? '#e6f4ff' : undefined,
                 }}
-                actions={[
+              >
+                {/*
+                  **不用 List.Item 的 `actions`**：antd 给那个 <ul> 挂了固定的
+                  `margin-inline-start: 48px`，在 260px 的侧栏里直接吃掉近四分之一宽度
+                  ——实测内容区只剩 122px，「(6)」被挤成 9px 宽逐字竖排。这 48px 从
+                  组件外面改不掉，索性自己排。
+
+                  两个 `minWidth: 0` 也不可省：flex 子项默认 min-width 是 auto，放不下
+                  时不收缩而是把文字压成竖排。配 ellipsis 才是「放不下就截断」。
+                */}
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', minWidth: 0 }}
+                >
+                  <Tag style={{ marginInlineEnd: 0, flexShrink: 0 }}>{group.site}</Tag>
+                  <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }} title={group.name}>
+                    {group.name}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+                    ({group.item_count})
+                  </Typography.Text>
                   <Button
-                    key="rename"
                     type="text"
                     size="small"
                     icon={<EditOutlined />}
@@ -211,11 +238,12 @@ export default function KeywordLibraryPage() {
                       e.stopPropagation();
                       setNaming({ open: true, target: group, value: group.name });
                     }}
-                  />,
-                  // 删组连带删掉全部条目且不可撤销，故这里**要**二次确认——与分析屏
-                  // 「重置条件」那种只影响一份表单的按钮不是一回事。
+                  />
+                  {/*
+                    删组连带删掉全部条目且不可撤销，故这里**要**二次确认——与分析屏
+                    「重置条件」那种只影响一份表单的按钮不是一回事。
+                  */}
                   <Popconfirm
-                    key="delete"
                     title={`删除「${group.name}」`}
                     description={`组内 ${group.item_count} 个词会一并删除，且不可撤销。`}
                     okText="删除"
@@ -231,14 +259,8 @@ export default function KeywordLibraryPage() {
                       title="删除分组"
                       onClick={(e) => e.stopPropagation()}
                     />
-                  </Popconfirm>,
-                ]}
-              >
-                <Space size={4}>
-                  <Tag>{group.site}</Tag>
-                  <span>{group.name}</span>
-                  <Typography.Text type="secondary">({group.item_count})</Typography.Text>
-                </Space>
+                  </Popconfirm>
+                </div>
               </List.Item>
             )}
           />
@@ -299,6 +321,9 @@ export default function KeywordLibraryPage() {
             scroll={{ x: watchTableWidth(view) }}
             pagination={{ pageSize: 50, showSizeChanger: true }}
             rowSelection={{
+              // 与分析屏同因：不给选择列宽度，rc-table 就不用 fixed 布局，
+              // 所有列宽退回建议值（见 columns.ts 的 watchTableWidth）。
+              columnWidth: SELECTION_COLUMN_WIDTH,
               selectedRowKeys: selected,
               onChange: (keys) => setSelected(keys as number[]),
             }}
