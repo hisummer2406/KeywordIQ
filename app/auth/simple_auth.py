@@ -120,6 +120,10 @@ def serialize_user(user: UserCenter) -> dict:
     return {
         "id": user.id,
         "username": user.user_name,
+        # 展示名：SSO 账号取自钉钉姓名；本地账号通常为空，前端回落到 username。
+        "display_name": user.display_name,
+        # 账号来源。None = 本地账号（可用密码登录）。
+        "external_idp": user.external_idp,
         "role": user.role_code,
         # 展示名与 role 表同源，前端不必自己维护 code → 中文名的映射
         "role_name": user.role_name,

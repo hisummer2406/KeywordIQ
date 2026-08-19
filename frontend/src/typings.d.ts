@@ -17,6 +17,16 @@ declare global {
       is_super?: boolean;
       nickname?: string;
       avatar?: string;
+      /** 展示名。SSO 账号取自身份源姓名；本地账号可能为空。 */
+      display_name?: string | null;
+      /** 外部身份源；null 表示本地账号（可用密码登录）。 */
+      external_idp?: string | null;
+    };
+
+    /** SSO 可用性探测。关闭时登录页不渲染钉钉按钮。 */
+    type SsoStatus = {
+      enabled: boolean;
+      provider_name: string;
     };
 
     type LoginParams = {

@@ -25,9 +25,26 @@ from sqlalchemy.orm import Session
 
 from app.table.analysis.partitioning import ensure_fact_partitions
 from app.table.upload.importer import load_growth
+from config import settings
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_URL, reason="设置 TEST_DATABASE_URL 运行增长榜集成测试")
+
+@pytest.fixture(autouse=True)
+def _pinned_growth_thresholds(monkeypatch):
+    """把口径阈值钉在默认值上，不随本机 .env 漂移。
+
+    这些用例的全部意义是「每个阈值的两侧各钉一个」——夹具造的数据精确卡在 9.9% 与
+    10% 之间。而 `load_growth` 与作用域端点都在调用时读 `settings.GROWTH_*`，于是本机
+    .env 只要覆盖了阈值（开发机上确实有人把 GROWTH_MIN_DAILY_RATE 调成 0.05 做过实验），
+    这些用例就稳定失败，而 CI 因为没有 .env 一直是绿的（issue #41）。
+
+    失败信息完全指不到成因：看到的是"这个词不该在榜上却在榜上"，不会想到是环境变量。
+    """
+    monkeypatch.setattr(settings, "GROWTH_WINDOW_DAYS", 7)
+    monkeypatch.setattr(settings, "GROWTH_MIN_RANK_GAIN", 10000)
+    monkeypatch.setattr(settings, "GROWTH_MIN_DAILY_RATE", 0.10)
+
 
 SITE = "US"
 ANCHOR = date(2026, 7, 15)

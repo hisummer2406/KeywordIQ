@@ -213,6 +213,72 @@ class UserCenterCRUD:
         logger.info("用户更新成功: %s", user_id)
         return db_user
 
+    # ---------- 外部身份（SSO） ----------
+
+    async def get_by_external_identity(self, idp: str, external_id: str) -> UserCenter | None:
+        """按 ``(external_idp, external_id)`` 取账号。
+
+        **账号匹配只认这一对。** 绝不按用户名匹配——若按用户名自动绑定已有账号，任何能
+        修改自己钉钉 userid 的人都可以把它改成 ``admin``，扫一次码就接管超级管理员。
+        """
+        return await self.db.scalar(
+            select(UserCenter).where(
+                UserCenter.external_idp == idp,
+                UserCenter.external_id == external_id,
+            )
+        )
+
+    async def list_user_names(self) -> set[str]:
+        """已占用的用户名集合，供 SSO 建档时避让冲突。
+
+        用户表是几十到几百行的量级，一次全取比逐个试探省事。真到了万级再改成按前缀查。
+        """
+        return set(await self.db.scalars(select(UserCenter.user_name)))
+
+    async def create_sso_user(
+        self,
+        *,
+        user_name: str,
+        display_name: str | None,
+        idp: str,
+        external_id: str,
+        role_code: str,
+    ) -> UserCenter:
+        """建立一个外部身份账号。
+
+        三条不可动摇：``hashed_pwd`` 为 NULL（没有密码是**事实**，不是"永不匹配的散列"
+        那条隐含约定）；``is_super`` **恒假**（用户管理是不可授予的能力，由 require_super
+        把守，不能由外部身份源决定谁拥有它）；角色取配置的默认值，**不从钉钉部门映射**
+        ——那会让"谁能导入数据"取决于通讯录怎么编排。
+        """
+        role_id = await self.db.scalar(select(Role.id).where(Role.code == role_code))
+        if role_id is None:
+            # 启动期检查本该拦住这种情况；真走到这里说明角色被删了，宁可报错也不要
+            # 建出一个无角色、进任何页面都 403 的空壳账号。
+            raise ValueError(f"SSO 默认角色不存在: {role_code}")
+
+        user = UserCenter(
+            user_name=user_name,
+            display_name=display_name or None,
+            hashed_pwd=None,
+            is_active=True,
+            is_super=False,
+            role_id=role_id,
+            external_idp=idp,
+            external_id=external_id,
+        )
+        try:
+            self.db.add(user)
+            await self.db.commit()
+            await self.db.refresh(user)
+        except Exception as exc:
+            await self.db.rollback()
+            _reraise_duplicate_name(exc)
+            raise
+
+        logger.info("SSO 建档: id=%s user_name=%s idp=%s", user.id, user.user_name, idp)
+        return user
+
     async def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """验证密码。**bcrypt 经线程池执行，不占事件循环。**
 
@@ -247,7 +313,11 @@ class UserCenterCRUD:
         固定的哑哈希跑校验，两条路径耗时同阶。
         """
         user = await self.get_user_by_username(username)
-        target_hash = user.hashed_pwd if user else _DUMMY_PASSWORD_HASH
+        # `user.hashed_pwd` 为 NULL 的是 SSO 账号（钉钉扫码建立，本就没有密码）。
+        # 它同样要跑完哑哈希，**不能提前返回**：提前返回把这条路径压到毫秒级，
+        # 「这个用户名是不是 SSO 账号」就能靠响应耗时逐个试出来——正是这个哑哈希
+        # 当初要堵的那条侧信道。顺带也避免 passlib 拿 None 去 verify 时抛异常刷日志。
+        target_hash = user.hashed_pwd if user and user.hashed_pwd else _DUMMY_PASSWORD_HASH
         password_ok = await self.verify_password(password, target_hash)
 
         if not user or not user.is_active or not password_ok:
