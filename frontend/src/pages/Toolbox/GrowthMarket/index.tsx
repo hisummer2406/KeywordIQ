@@ -23,6 +23,14 @@ import { formatCriteria, formatMissingDates, toSortParams } from './criteria';
  *
  * 改站点会立即重拉 `/scope`（小表），但**不重查表格**：否则用户会在一份属于上一个站点
  * 的日期清单里做选择。
+ *
+ * **首屏不自动查询榜单**（与分析屏相反，那一屏是进去就查）。这一屏的默认锚定日多半不是
+ * 用户想看的那一天：榜单按锚定日切片，而最新一期恰恰最可能因窗口内缺期或口径过严而为空。
+ * 先查一次既浪费一次请求，又让用户在还没做任何选择时就看到一张空表。
+ *
+ * 代价是空表格从两种成因变成三种（还没查 / 窗口缺期 / 口径下确实没命中），三者含义完全
+ * 不同却长得一样。所以 `hasQueried` 同时管住三处：条数显隐、dirty 标签、空状态文案。
+ * 少任何一处，「还没查」都会伪装成「今天没有增长词」。
  */
 export default function GrowthMarketPage() {
   const actionRef = useRef<ActionType>();
@@ -38,7 +46,16 @@ export default function GrowthMarketPage() {
   const [missing, setMissing] = useState<string[]>([]);
   const [total, setTotal] = useState(0);
 
-  const dirty = JSON.stringify(draft) !== appliedSig;
+  /**
+   * 是否已经查过一次。`appliedSig` 只在 `apply()` 里被写非空值，所以它就是这个判据。
+   * 首屏不自动查询，故它开局为假，管住下面三处（见文件头注释）。
+   */
+  const hasQueried = appliedSig !== '';
+  /**
+   * 「条件已修改」提示。**没查过就不提示**——首屏生效态本来就是空的，判据必然为真，
+   * 而那时用户一个条件都没改，那句话是错的；该看的引导是表格空状态里那句「点立即查询」。
+   */
+  const dirty = hasQueried && JSON.stringify(draft) !== appliedSig;
 
   const apply = (next: { site?: string; date?: string | null }) => {
     appliedRef.current = next;
@@ -57,10 +74,12 @@ export default function GrowthMarketPage() {
     getSites()
       .then(setSites)
       .catch(() => undefined);
-    // 首屏拉完作用域立即查一次，用户不必先点一下才看到数据
-    reloadScope()
-      .then((s) => apply({ site: s.site, date: s.latest_date }))
-      .catch(() => undefined);
+    // 首屏**只拉作用域**（站点、可选日期、判定口径）——它们是选择器与口径说明条渲染的
+    // 前提，不拉的话用户连日期都选不了。榜单本身不查，等用户点「立即查询」。
+    //
+    // 表格在挂载时仍会调一次 request，但 `appliedRef.current` 是 null，那里直接返回
+    // 空结果、不发请求（见 request 开头）。
+    reloadScope().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -127,10 +146,22 @@ export default function GrowthMarketPage() {
         options={false}
         dateFormatter="string"
         pagination={{ pageSize: 50, showSizeChanger: true }}
+        // 空表格有三种含义（还没查 / 窗口缺期 / 口径下没命中），这里区分第一种。
+        // 缺期那种由上面的 Alert 承担。
+        locale={
+          hasQueried
+            ? undefined
+            : { emptyText: '选好站点与锚定日后，点「立即查询」查看榜单' }
+        }
         headerTitle={
-          <Typography.Text type="secondary">
-            持续增长词：<Typography.Text strong>{total.toLocaleString()}</Typography.Text>
-          </Typography.Text>
+          // 没查过就不显示条数。显示「持续增长词：0」会被读成「今天没有增长词」，
+          // 而实际是还没查——这一屏的空结果本就有两种正当成因，再混进第三种，
+          // 用户没有任何办法分辨。
+          hasQueried ? (
+            <Typography.Text type="secondary">
+              持续增长词：<Typography.Text strong>{total.toLocaleString()}</Typography.Text>
+            </Typography.Text>
+          ) : undefined
         }
         request={async (params, sort) => {
           const applied = appliedRef.current;
