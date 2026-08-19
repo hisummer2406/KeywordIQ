@@ -41,7 +41,12 @@ async function renderWith(rows: ReturnType<typeof row>[]) {
       </App>,
     );
   });
+  // 等**行落到 DOM**，不是等请求被调用。下面的用例随后用同步查询找行内按钮，
+  // 而"请求发出去了"与"结果渲染完了"之间隔着一次状态更新——负载下这中间会被切开。
   await waitFor(() => expect(fetchImportBatches).toHaveBeenCalled());
+  if (rows.length) {
+    await screen.findByText(rows[0].file_name as string);
+  }
 }
 
 /**
