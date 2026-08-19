@@ -694,6 +694,13 @@ export default function AnalysisPage() {
         // 勾选若干行后可批量「加入词库」。**选中状态不进会话快照**：它是一次性的界面
         // 状态，切走再切回清空是预期行为，因此这一项不需要动 CACHE_VERSION。
         rowSelection={{
+          // 选择列必须显式给宽：它不给宽度时 colgroup 里是空值，而 `scroll.x` 那边
+          // 已经按 48 把它算进去了，两处对不上就是横向多出/少掉一截。
+          //
+          // **注意别照搬"给了 scroll.x 就会切 fixed 布局"那句话**：实测这个 antd 版本
+          // 下本表始终是 `table-layout: auto`（加选择列之前也是），列宽仍只是建议值。
+          // 这是既有行为、不是本次改动引入的，另案处理。
+          columnWidth: SELECTION_COLUMN_WIDTH,
           selectedRowKeys: selectedKeywordIds,
           onChange: (keys) => setSelectedKeywordIds(keys as number[]),
         }}
