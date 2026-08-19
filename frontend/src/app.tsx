@@ -64,6 +64,11 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
     clearToken();
     // 分析屏的会话缓存与令牌同生共死：同一标签页内换账号登录，绝不能看到上一个
     // 用户的查询条件与结果行。
+    //
+    // **用户保存的默认条件（savedMode.ts）不在这里清，这不是漏掉的。** 两者面对同一个
+    // 串账号风险，但解法不同：会话快照是**无主的单份**，只能靠清；保存的条件按 userId
+    // 分键，乙登录读的是乙的键，天然看不见甲的。而清掉它会让「下次登录还是这组」当场
+    // 不成立——那正是那个功能的全部意义。
     clearSnapshot();
     await setInitialState((s) => ({ ...s, currentUser: undefined, name: undefined }));
     history.push(LOGIN_PATH);

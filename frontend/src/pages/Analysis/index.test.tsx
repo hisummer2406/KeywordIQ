@@ -2,18 +2,31 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const { accessState, searchAnalysis, getScope, getCategories, getBrands, getSites, exportAnalysis } =
-  vi.hoisted(() => ({
-    accessState: { canExport: true },
-    searchAnalysis: vi.fn(),
-    getScope: vi.fn(),
-    getCategories: vi.fn(),
-    getBrands: vi.fn(),
-    getSites: vi.fn(),
-    exportAnalysis: vi.fn(),
-  }));
+const {
+  accessState,
+  userState,
+  searchAnalysis,
+  getScope,
+  getCategories,
+  getBrands,
+  getSites,
+  exportAnalysis,
+} = vi.hoisted(() => ({
+  accessState: { canExport: true },
+  /** 当前登录用户。保存的默认条件按 id 分键，改这里就等于换账号。 */
+  userState: { currentUser: { id: 1 } as { id: number } | undefined },
+  searchAnalysis: vi.fn(),
+  getScope: vi.fn(),
+  getCategories: vi.fn(),
+  getBrands: vi.fn(),
+  getSites: vi.fn(),
+  exportAnalysis: vi.fn(),
+}));
 
-vi.mock('@umijs/max', () => ({ useAccess: () => accessState }));
+vi.mock('@umijs/max', () => ({
+  useAccess: () => accessState,
+  useModel: () => ({ initialState: userState }),
+}));
 vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories, getBrands, exportAnalysis }));
 vi.mock('@/services/upload', () => ({ getSites }));
 
@@ -76,6 +89,10 @@ describe('分析查询屏', () => {
     // 用例的挂载都被当成「切走再切回」——初始化整段跳过，断言看到的是一屏空数据，
     // 而报错信息（找不到某个按钮）完全指不到这个原因。
     clearSnapshot();
+    // 保存的默认条件在 localStorage 里，同样是跨用例存活的。不清的话前一个用例存的
+    // 那组会成为后面每个用例的初始条件，症状与快照没清一模一样、同样指不到原因。
+    window.localStorage.clear();
+    userState.currentUser = { id: 1 };
     accessState.canExport = true;
     getSites.mockResolvedValue([
       { code: 'US', name_zh: '美国', domain: 'amazon.com' },
@@ -292,6 +309,200 @@ describe('分析查询屏', () => {
     });
   });
 
+  /**
+   * 保存的默认条件（对标卖家精灵「保存当前模式」）。
+   *
+   * 这组守的是**三级优先级**：会话快照 > 保存的条件 > 内置默认。三者搞混的后果各不
+   * 相同且都难归因——保存项穿透快照，用户离开前调的条件被几天前保存的顶掉；保存项没
+   * 盖住内置默认，用户保存了却没生效、还以为自己没点到按钮。
+   */
+  describe('保存的默认条件', () => {
+    const KEY = (userId: number) => `keywordiq.analysis.savedMode.v1.${userId}`;
+
+    /** 直接往 localStorage 塞一份保存项，模拟「上次登录存过」。 */
+    const seedSaved = (userId: number, over?: Record<string, unknown>) =>
+      window.localStorage.setItem(
+        KEY(userId),
+        JSON.stringify({
+          version: 1,
+          site: 'DE',
+          view: 'DAY',
+          filters: {
+            categories: [],
+            ranking: {},
+            change: {},
+            clickShare: {},
+            conversionShare: {},
+            isNew: undefined,
+            brands: [],
+            productTitle: '',
+          },
+          sort: { field: 'current_ranking', dir: 'asc' },
+          ...over,
+        }),
+      );
+
+    const saveButton = () => screen.getByRole('button', { name: /保存当前模式/ });
+
+    it('没保存过时按内置默认初始化，不显示「我的默认」', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      expect(searchAnalysis.mock.calls[0][0]).toMatchObject({ site: 'US', is_new: true });
+      expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
+    });
+
+    it('保存过时按保存的作用域解析并显示「我的默认」', async () => {
+      seedSaved(1, { site: 'DE' });
+
+      await renderSettled(false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+
+      // 首屏问的是保存的站点，不是默认站点
+      expect(getScope.mock.calls[0][0]).toBe('DE');
+      expect(await screen.findByText('我的默认')).toBeInTheDocument();
+    });
+
+    it('保存的筛选盖过内置默认（存的是「全部」就不该变回「只看新词」）', async () => {
+      seedSaved(1);
+
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      expect(searchAnalysis.mock.calls[0][0].is_new).toBeUndefined();
+    });
+
+    /**
+     * 保存项**不得穿透会话快照**。切走再切回是「接着刚才干」，不是「重新开始」——
+     * 让保存项在这里生效，等于把用户离开前调的条件换成他几天前存的那组。
+     */
+    it('有会话快照时保存项不参与，且一个请求都不发', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      seedSaved(1, { site: 'DE' }); // 快照已在，此刻才出现的保存项不该被采用
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false);
+      await settle();
+
+      expect(getScope).not.toHaveBeenCalled();
+      expect(searchAnalysis).not.toHaveBeenCalled();
+      expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
+    });
+
+    it('换个账号登录看不到别人保存的条件', async () => {
+      seedSaved(1, { site: 'DE' });
+      userState.currentUser = { id: 2 };
+
+      await renderSettled(false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+
+      expect(getScope.mock.calls[0][0]).toBeUndefined(); // 默认站点，不是甲的 DE
+      expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
+    });
+
+    it('版本不匹配就丢弃，按内置默认初始化', async () => {
+      seedSaved(1, { site: 'DE', version: 99 });
+
+      await renderSettled(false);
+      await waitFor(() => expect(getScope).toHaveBeenCalled());
+
+      expect(getScope.mock.calls[0][0]).toBeUndefined();
+      expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
+      expect(window.localStorage.getItem(KEY(1))).toBeNull(); // 坏数据顺手删掉
+    });
+
+    /**
+     * 站点下线：后端对非法站点报错且不回退（既有约定），前端必须自己兜，并且**说出来**。
+     * 静默回退比报错更糟——用户以为在看自己保存的站点，实际在看另一个。
+     */
+    it('保存的站点已下线时回退默认站点、清掉保存项并明示', async () => {
+      seedSaved(1, { site: 'ZZ' });
+      getScope.mockImplementation(async (site?: string) => {
+        if (site === 'ZZ') throw new Error('站点不存在');
+        return {
+          site: 'US',
+          view: 'DAY',
+          latest_date: '2026-07-18',
+          available_dates: ['2026-07-18', '2026-07-17'],
+        };
+      });
+
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      expect(searchAnalysis.mock.calls[0][0]).toMatchObject({ site: 'US' });
+      expect(window.localStorage.getItem(KEY(1))).toBeNull();
+      expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
+      expect(await screen.findByText(/保存的站点已下线/)).toBeInTheDocument();
+    });
+
+    it('点「保存当前模式」把生效条件写进 localStorage', async () => {
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      await act(async () => {
+        fireEvent.click(saveButton());
+      });
+
+      const stored = JSON.parse(window.localStorage.getItem(KEY(1))!);
+      expect(stored).toMatchObject({ version: 1, site: 'US', view: 'DAY' });
+      expect(stored.filters.isNew).toBe(true);
+      // 检索词不入库：一次性查找不是「常看的模式」
+      expect(stored.filters.q).toBeUndefined();
+    });
+
+    /**
+     * 存的必须是用户**看到过结果**的那组。草稿改了没点「开始筛选」就存，下次登录进屏
+     * 看到的东西他不认识。
+     */
+    it('有未生效改动时拒绝保存', async () => {
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      // 改草稿但不点「开始筛选」
+      fireEvent.change(screen.getByPlaceholderText(/输入 ASIN 或关键词/), {
+        target: { value: 'coffee' },
+      });
+      await act(async () => {
+        fireEvent.click(saveButton());
+      });
+
+      expect(window.localStorage.getItem(KEY(1))).toBeNull();
+      expect(await screen.findByText(/请先点「开始筛选」/)).toBeInTheDocument();
+    });
+
+    it('还没查询成功时保存按钮禁用', async () => {
+      getScope.mockResolvedValue({
+        site: 'US',
+        view: 'DAY',
+        latest_date: null,
+        available_dates: [],
+      });
+
+      await renderSettled();
+      await settle();
+
+      expect(saveButton()).toBeDisabled();
+    });
+
+    it('「重置条件」连带删除保存项', async () => {
+      seedSaved(1);
+
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      expect(screen.getByText('我的默认')).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /重置条件/ }));
+      });
+
+      expect(window.localStorage.getItem(KEY(1))).toBeNull();
+      expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
+    });
+  });
+
   it('进屏解析作用域并把三元组带进首次查询', async () => {
     await renderSettled();
 
@@ -416,7 +627,9 @@ describe('分析查询屏', () => {
       await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
     });
 
-    await waitFor(() => expect(getScope).toHaveBeenCalledWith('DE', 'DAY'));
+    // 第三个参数是 { skipErrorHandler }，只在首屏按保存的站点乐观请求时才为真，
+    // 这里不关心它的取值
+    await waitFor(() => expect(getScope).toHaveBeenCalledWith('DE', 'DAY', expect.anything()));
     // 带上新站点的最新日期：类目计数按 (站点, 周期, 日期) 分片，与筛选同粒度。
     // 少这个日期就会取到别的日期的计数，用户对不上「下拉说多少 / 筛出来多少」。
     expect(getCategories).toHaveBeenCalledWith('DE', 'DAY', '2026-07-16');
