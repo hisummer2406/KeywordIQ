@@ -134,6 +134,8 @@ describe('分析查询屏', () => {
         site: 'US',
         view: 'DAY',
         date: '2026-07-18',
+        // 默认筛选是「只看新词」——首屏回答的是「今天有哪些新词」
+        is_new: true,
       });
     });
 
@@ -178,6 +180,115 @@ describe('分析查询屏', () => {
       expect(screen.getByText(/还没有导入任何数据/)).toBeInTheDocument();
       // 用「搜索结果：」带冒号的形式，否则会匹配到过滤区标题「搜索结果过滤」
       expect(screen.queryByText(/搜索结果：/)).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * 默认筛选是「只看新词」——用户进这一屏最常问的第一个问题是「今天有哪些新词」。
+   *
+   * 三条边界都要守住：控件显示与实际发出的条件一致（否则用户以为系统漏筛了）、
+   * 会话快照优先于默认值（用户主动关掉的筛选不该被默认值覆盖回去）、切视图不动筛选。
+   */
+  describe('默认只看新词', () => {
+    /**
+     * 新词那组按钮按 `value` 定位，不按可见文字：Row 的标签「新词」与选项「新词」文字
+     * 相同，`getByText` 会撞上两个。
+     *
+     * **必须用 JS 的 `===` 比对，不能用 `[value="all"]` 属性选择器**：jsdom 里属性值
+     * 匹配是大小写不敏感的，`[value="all"]` 会选中行集合开关那组的 `ALL`——而它默认就是
+     * 选中态，断言「全部未被选中」于是失败，报错却完全指不到选错了控件。
+     */
+    const isNewOption = (value: 'all' | 'true' | 'false') =>
+      Array.from(document.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
+        .find((radio) => radio.value === value)!
+        .closest('label')!;
+
+    /**
+     * 选中与否看 antd 的 `-checked` 类名，**不看原生 `input.checked`**。
+     *
+     * 这一屏两组 Radio.Group（行集合 ALL/LISTED/DROPPED、新词 all/true/false）在 jsdom 里
+     * 被当成**同一个原生 radio 组**——实测在检索框里打个字，行集合的 `ALL` 就自己变成
+     * 未选中；点新词的「全部」反而让 `ALL` 回到选中、把新词的「新词」顶掉。原生 checked
+     * 在这里根本不描述界面显示的是什么，而类名由 React props 渲染，才是真的。
+     */
+    const isNewChecked = (value: 'all' | 'true' | 'false') =>
+      isNewOption(value).classList.contains('ant-radio-button-wrapper-checked');
+
+    /** 点外层 label：input 被 antd 藏了，直接点它不会触发 Radio.Group 的 onChange。 */
+    const clickIsNew = (value: 'all' | 'true' | 'false') =>
+      fireEvent.click(isNewOption(value));
+
+    const searchBox = () => screen.getByPlaceholderText(/输入 ASIN 或关键词/);
+
+    it('首屏新词控件就显示为「新词」', async () => {
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      expect(isNewChecked('true')).toBe(true);
+      expect(isNewChecked('all')).toBe(false);
+    });
+
+    /**
+     * 默认带筛选的直接后果：首屏就走带筛选路径，掉榜行不在结果内。`is_new` 在
+     * `FILTER_KEYS` 里，所以那句提示自动成立——不额外加判断，也不能让它漏掉：
+     * 用户看到的会是「进来就没有掉榜词」，而没有任何东西解释为什么。
+     */
+    it('首屏就提示本次结果不含掉榜行（默认带筛选的直接后果）', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      expect(await screen.findByText(/本次结果不含掉榜行/)).toBeInTheDocument();
+    });
+
+    it('「重置条件」回到默认（只看新词）而非清空，且不动检索框', async () => {
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      fireEvent.change(searchBox(), { target: { value: 'coffee' } });
+      clickIsNew('all');
+      await waitFor(() => expect(isNewChecked('all')).toBe(true));
+
+      fireEvent.click(screen.getByRole('button', { name: /重置条件/ }));
+
+      await waitFor(() => expect(isNewChecked('true')).toBe(true));
+      expect(searchBox()).toHaveValue('coffee');
+    });
+
+    it('用户关掉新词筛选后切走再切回，复原的是「全部」而不是默认值', async () => {
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      clickIsNew('all');
+      await act(async () => {
+        fireEvent.click(applyFilters());
+      });
+      await waitFor(() => expect(searchAnalysis.mock.calls.at(-1)![0].is_new).toBeUndefined());
+
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false); // 第二次挂载 = 切回来。快照连 filterOpen 一起复原，
+      // 过滤区已是展开态，再点「展开过滤条件」会找不到按钮
+      await settle();
+
+      expect(searchAnalysis).not.toHaveBeenCalled(); // 快照那条路：一个请求都不发
+      expect(isNewChecked('all')).toBe(true);
+    });
+
+    it('切到周视图时新词筛选原样保留', async () => {
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      // 视图是 antd Select，得先开下拉再点选项
+      await act(async () => {
+        fireEvent.mouseDown(document.querySelector('.scope-bar__view .ant-select-selector')!);
+      });
+      await act(async () => {
+        fireEvent.click(await screen.findByTitle('按周'));
+      });
+      await settle();
+
+      expect(isNewChecked('true')).toBe(true);
     });
   });
 
