@@ -4,6 +4,7 @@ import {
   FilterOutlined,
   ReloadOutlined,
   SaveOutlined,
+  StarOutlined,
   UpOutlined,
 } from '@ant-design/icons';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
@@ -22,6 +23,7 @@ import {
   type View,
 } from '@/services/analysis';
 import { getSites, type SiteOption } from '@/services/upload';
+import AddToLibraryModal from './AddToLibraryModal';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
@@ -53,9 +55,22 @@ const FILTER_KEYS = [
   'is_new',
 ] as const satisfies readonly (keyof SearchBody)[];
 
+/**
+ * ProTable 的复选框列宽。它不在 columns 里，但照样占横向空间——不算进 `scroll.x`
+ * 的表现是最右边那一列被挤扁（列宽必须实测，见 columns.ts 的说明）。
+ */
+const SELECTION_COLUMN_WIDTH = 48;
+
 export default function AnalysisPage() {
   const access = useAccess();
   const actionRef = useRef<ActionType>();
+
+  /**
+   * 勾选的结果行，用于批量加入词库。**一次性状态，不进会话快照**：切走再切回清空是
+   * 预期行为，也因此这一项不需要动 CACHE_VERSION。
+   */
+  const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
+  const [libraryModalOpen, setLibraryModalOpen] = useState(false);
 
   /**
    * 挂载时读一次快照。它同时决定两件事：各 ref 的初值，以及**这次是「复原」还是
@@ -675,7 +690,13 @@ export default function AnalysisPage() {
         // 给定总宽 → AntD 切到 table-layout: fixed，列上的 width 才真正生效。
         // 不给的话是 auto 布局，width 只是建议值，浏览器按内容抢宽度——表现为
         // "同样写 130px 的两列渲染出来不一样宽"。窗口比总宽窄时横向滚动。
-        scroll={{ x: totalColumnWidth(appliedView) }}
+        scroll={{ x: totalColumnWidth(appliedView) + SELECTION_COLUMN_WIDTH }}
+        // 勾选若干行后可批量「加入词库」。**选中状态不进会话快照**：它是一次性的界面
+        // 状态，切走再切回清空是预期行为，因此这一项不需要动 CACHE_VERSION。
+        rowSelection={{
+          selectedRowKeys: selectedKeywordIds,
+          onChange: (keys) => setSelectedKeywordIds(keys as number[]),
+        }}
         // 筛选全部在上面的过滤区，表格不再自带条件表单
         search={false}
         // 空表格有两种含义，必须说清是哪一种（见 scopeHasNoDates 的注释）
@@ -704,6 +725,19 @@ export default function AnalysisPage() {
                 onClick={onExport}
               >
                 导出 CSV
+              </Button>
+            )}
+            {/*
+              加入词库只在选中若干行后出现——没选行时它是个点了没有意义的按钮。
+              掉榜行同样可选：它有 keyword_id，而「掉出去了想继续盯」正是加入词库
+              最典型的动机。
+            */}
+            {access.canViewToolbox && selectedKeywordIds.length > 0 && (
+              <Button
+                icon={<StarOutlined />}
+                onClick={() => setLibraryModalOpen(true)}
+              >
+                加入词库（{selectedKeywordIds.length}）
               </Button>
             )}
             {/*
@@ -817,6 +851,17 @@ export default function AnalysisPage() {
             确定
           </Button>,
         ]}
+      />
+
+      <AddToLibraryModal
+        open={libraryModalOpen}
+        // 站点取**生效作用域**而非草稿：草稿切了站点但没查时，表格里仍是上一个站点的行，
+        // 可选分组必须跟着数据走，否则会把 US 的词加进 DE 的分组（服务端会拒，但那是
+        // 一次本可避免的失败）。
+        site={appliedRef.current?.site}
+        keywordIds={selectedKeywordIds}
+        onClose={() => setLibraryModalOpen(false)}
+        onAdded={() => setSelectedKeywordIds([])}
       />
     </PageContainer>
   );
