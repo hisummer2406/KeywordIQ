@@ -3,11 +3,12 @@ import {
   DownloadOutlined,
   FilterOutlined,
   ReloadOutlined,
+  SaveOutlined,
   UpOutlined,
 } from '@ant-design/icons';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
-import { useAccess } from '@umijs/max';
+import { useAccess, useModel } from '@umijs/max';
 import { Alert, Button, Card, Col, Row, Select, Space, Tooltip, Typography, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -26,6 +27,7 @@ import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
 import { buildColumns, totalColumnWidth } from './columns';
 import { defaultFilters, toSearchBody, type ScopeDraft } from './filters';
+import { clearSavedMode, readSavedMode, writeSavedMode } from './savedMode';
 import { readSnapshot, sameRequest, writeSlot, type RequestKey } from './stateCache';
 import { useCachedState } from './useCachedState';
 
@@ -63,9 +65,31 @@ export default function AnalysisPage() {
   const [initialSnapshot] = useState(() => readSnapshot());
   const restored = initialSnapshot !== null;
 
-  // 草稿态：用户正在编辑
-  const [scope, setScope] = useCachedState('scope', { view: 'DAY' } as ScopeDraft);
-  const [filters, setFilters] = useCachedState('filters', defaultFilters);
+  const { initialState } = useModel('@@initialState');
+  const userId = initialState?.currentUser?.id;
+
+  /**
+   * 用户保存的默认条件，挂载时同步读一次（读 localStorage 不发请求）。
+   *
+   * **只在没有会话快照时才读**：有快照就是「切走再切回」，那条路整段跳过初始化，保存的
+   * 条件不该插进来——否则用户离开前调的条件会被他几天前保存的那组顶掉。
+   *
+   * 惰性 useState 保证整个生命周期只读一次。之后被清除（重置、站点失效）时用
+   * `setSavedApplied(false)` 撤掉「我的默认」标记，不重读。
+   */
+  const [saved] = useState(() => (restored ? null : readSavedMode(userId)));
+  /** 本次进屏是否确实按保存的条件初始化了——「我的默认」标记的判据。 */
+  const [savedApplied, setSavedApplied] = useState(saved !== null);
+
+  // 草稿态：用户正在编辑。初值优先用保存的条件，没有才落到内置默认（三级优先级的 2 与 3；
+  // 第 1 级是快照，由 useCachedState 自己承担——有快照时下面这些初值根本不会被采用）。
+  const [scope, setScope] = useCachedState(
+    'scope',
+    () => ({ site: saved?.site, view: saved?.view ?? 'DAY' }) as ScopeDraft,
+  );
+  const [filters, setFilters] = useCachedState('filters', () =>
+    saved ? { ...saved.filters, q: '' } : defaultFilters(),
+  );
 
   // 生效态：表格 request 实际读的那份。用 ref 承载，供 request 闭包读取。
   const appliedRef = useRef<SearchBody | null>(initialSnapshot?.applied ?? null);
@@ -92,10 +116,10 @@ export default function AnalysisPage() {
   const totalRef = useRef(initialSnapshot?.total ?? 0);
   const needsTotalRef = useRef(initialSnapshot?.needsTotal ?? true);
   const [pendingRebuild, setPendingRebuild] = useCachedState('pendingRebuild', false);
-  const [sortDraft, setSortDraft] = useCachedState('sortDraft', {
-    field: 'current_ranking',
-    dir: 'asc' as 'asc' | 'desc',
-  });
+  const [sortDraft, setSortDraft] = useCachedState(
+    'sortDraft',
+    () => saved?.sort ?? { field: 'current_ranking', dir: 'asc' as 'asc' | 'desc' },
+  );
   const appliedSortRef = useRef(initialSnapshot?.appliedSort ?? sortDraft);
 
   /**
@@ -260,8 +284,58 @@ export default function AnalysisPage() {
    * 「全部」，多一次点击。
    *
    * `q` 保留：重置的是过滤区，作用域栏的检索框不归它管。
+   *
+   * **连带删除用户保存的默认条件**，使下次登录回到内置默认——否则用户重置完，下次登录
+   * 又会回到那组他刚刚明确不要的条件。按需求方要求**不做二次确认**；已知代价是这个删除
+   * 不可撤销，而这个按钮看起来只是改改表单。
+   *
+   * 只改筛选，**不动站点/视图/排序**：它长在过滤区里，去改作用域栏的东西很意外。所以
+   * 重置后界面上站点仍是保存过的那个，但存储里那条已经没了。
    */
-  const resetFilters = () => setFilters((current) => ({ ...defaultFilters(), q: current.q }));
+  const resetFilters = () => {
+    setFilters((current) => ({ ...defaultFilters(), q: current.q }));
+    clearSavedMode(userId);
+    setSavedApplied(false);
+  };
+
+  /**
+   * 把**当下生效的**条件存为「我的默认」。
+   *
+   * 存的必须是用户**已经看到过结果**的那组，不能是草稿：草稿改了没点「开始筛选」就保存，
+   * 存下的是一组他自己都没见过结果的条件，下次登录进屏看到的东西他不认识。
+   *
+   * 实现上不另存一份「生效时的 FilterDraft」，而是**在 `dirty` 时拒绝保存**——`draftSig`
+   * 由 `toSearchBody(scope, filters)` 得出，作用域与筛选都在里面，所以 `dirty` 为假就
+   * 等价于「草稿 === 生效」，此刻的 `filters` 就是生效的那份。这样既不必新增状态，也不必
+   * 动会话快照的形状（那要 `CACHE_VERSION` +1）。
+   *
+   * 不存日期（永远取最新一期）、不存检索词（一次性查找不是「常看的模式」），见 savedMode.ts。
+   */
+  const saveCurrentMode = () => {
+    const applied = appliedRef.current;
+    // 站点为空就无从复原作用域，不存半份。按钮此时已禁用，这里是双保险
+    if (!applied?.site) return;
+    if (dirty) {
+      message.warning('有未生效的条件，请先点「开始筛选」，再保存你看到的这组');
+      return;
+    }
+    // q 不入库：检索词是一次性查找，不是「常看的模式」。解构剥掉它，`void` 是为了让
+    // lint 看到这个变量确实被「用」了（本项目没开 ignoreRestSiblings）
+    const { q, ...savableFilters } = filters;
+    void q;
+    const ok = writeSavedMode(userId, {
+      site: applied.site,
+      view: applied.view,
+      filters: savableFilters,
+      sort: appliedSortRef.current,
+    });
+    if (ok) {
+      setSavedApplied(true);
+      message.success('已保存为你的默认条件，下次登录进来就是这组');
+    } else {
+      message.error('保存失败：浏览器不允许写入本地存储');
+    }
+  };
 
   /**
    * 重拉类目选项。**日期也是选项口径的一部分**——统计按 (站点, 周期, 日期) 分片，
@@ -292,20 +366,71 @@ export default function AnalysisPage() {
    * 原样带进下一次查询——界面上一个勾都没有，表格却查不出数据，正是这里要避免的
    * 那种不可见条件。
    */
-  const reloadScopeMeta = async (nextSite: string | undefined, nextView: View) => {
-    const s = await getScope(nextSite, nextView);
+  const reloadScopeMeta = async (
+    nextSite: string | undefined,
+    nextView: View,
+    opts?: { keepCategories?: boolean; skipErrorHandler?: boolean },
+  ) => {
+    const s = await getScope(nextSite, nextView, { skipErrorHandler: opts?.skipErrorHandler });
     setScopeLoaded(true);
     setAvailableDates(s.available_dates);
     setScope({ site: s.site, view: nextView, date: s.latest_date });
-    // brands 一并清：品牌筛选面板暂时下线，但字段仍在模型里，留着不清会成为
-    // 一个界面上看不见却在生效的条件
-    setFilters((f) => ({ ...f, categories: [], brands: [] }));
-    if (appliedRef.current) {
-      appliedRef.current = { ...appliedRef.current, categories: undefined, brands: undefined };
-      writeSlot({ applied: appliedRef.current });
+    /**
+     * `keepCategories` 只有首屏按**保存的作用域**初始化时才为真。
+     *
+     * 清类目的理由是「作用域变了，旧站点的类目在新站点下可能不存在」——那说的是用户
+     * 主动换站点。而首屏这次不是「变化」，作用域从一开始就是保存的那个，连同类目一起
+     * 存的；照常清掉等于让「保存类目」这件事静默失效，用户存了却每次进屏都没有。
+     */
+    if (!opts?.keepCategories) {
+      // brands 一并清：品牌筛选面板暂时下线，但字段仍在模型里，留着不清会成为
+      // 一个界面上看不见却在生效的条件
+      setFilters((f) => ({ ...f, categories: [], brands: [] }));
+      if (appliedRef.current) {
+        appliedRef.current = { ...appliedRef.current, categories: undefined, brands: undefined };
+        writeSlot({ applied: appliedRef.current });
+      }
     }
     reloadCategories(s.site, nextView, s.latest_date);
     return s;
+  };
+
+  /**
+   * 解析首屏用哪个作用域与哪份筛选。
+   *
+   * 没有保存项时就是老路：默认站点 + 按天 + 内置默认筛选。
+   *
+   * 有保存项时**乐观**拿保存的站点去问 `/scope`：站点若已从启用清单移除，后端报错
+   * （「非法站点报错不回退」是既有约定，`DEFAULT_SITE` 只用于未传站点的情况）。这里
+   * 捕获后回退到默认站点、丢掉失效的保存项、并**自行提示**——那次调用带了
+   * `skipErrorHandler`，全局错误提示不会出声，不自己说就成了静默降级：用户以为在看
+   * 自己保存的站点，实际在看另一个。
+   *
+   * 之所以不先 `getSites()` 校验再发：那把首屏两个并行请求变成串行，多一个往返，
+   * 而站点下线是罕见事件——不值得让每次进屏都变慢。
+   */
+  const resolveInitialScope = async () => {
+    if (!saved) {
+      const s = await reloadScopeMeta(undefined, 'DAY');
+      return { scope: s, filters: defaultFilters(), view: 'DAY' as View };
+    }
+    try {
+      const s = await reloadScopeMeta(saved.site, saved.view, {
+        keepCategories: true,
+        skipErrorHandler: true,
+      });
+      return { scope: s, filters: { ...saved.filters, q: '' }, view: saved.view };
+    } catch {
+      clearSavedMode(userId);
+      setSavedApplied(false);
+      // 草稿也要跟着回到内置默认：保存项已作废，界面上却还显示着它的筛选与排序，
+      // 用户会以为那组条件仍在生效
+      setFilters(defaultFilters());
+      setSortDraft({ field: 'current_ranking', dir: 'asc' });
+      message.warning('你保存的站点已下线，已切回默认站点。保存的条件已清除。');
+      const s = await reloadScopeMeta(undefined, 'DAY');
+      return { scope: s, filters: defaultFilters(), view: 'DAY' as View };
+    }
   };
 
   useEffect(() => {
@@ -334,13 +459,15 @@ export default function AnalysisPage() {
     // `setScope` 写过，而 setState 是异步的，此刻读到的还是初值（date 为空），
     // 组装出来的条件会被 request 开头那道 `!body?.date` 守卫挡掉——表现是首屏静悄悄
     // 地什么都不查，和改动前一模一样，且没有任何报错。
-    reloadScopeMeta(undefined, 'DAY')
-      .then((s) => {
+    //
+    // 用户保存过条件时，作用域改用保存的站点与视图，筛选与排序取保存的那份；日期仍是
+    // 该作用域的最新一期（保存项从不存日期）。
+    resolveInitialScope()
+      .then((resolved) => {
+        if (!resolved) return;
+        const { scope: s, filters: initialFilters, view } = resolved;
         if (!s.latest_date) return; // 该站点一期数据都没有，不发请求
-        const body = toSearchBody(
-          { site: s.site, view: 'DAY', date: s.latest_date },
-          defaultFilters(),
-        );
+        const body = toSearchBody({ site: s.site, view, date: s.latest_date }, initialFilters);
         apply(body, JSON.stringify(body));
       })
       .catch(() => undefined);
@@ -402,6 +529,7 @@ export default function AnalysisPage() {
           scope={scope}
           q={filters.q}
           dirty={dirty}
+          savedApplied={savedApplied}
           onScopeChange={onScopeChange}
           onQChange={(q) => setFilters((f) => ({ ...f, q }))}
           onSubmit={submitScope}
@@ -484,9 +612,17 @@ export default function AnalysisPage() {
             </Row>
             {/* 负 margin 让这条分隔线铺满卡片宽度，左右两个值必须等于 body 的 paddingInline
                 （见上面 styles），改了那边这里要跟着改，否则线到不了卡片边缘。 */}
+            {/* 负 margin 让这条分隔线铺满卡片宽度，左右两个值必须等于 body 的 paddingInline
+                （见上面 styles），改了那边这里要跟着改，否则线到不了卡片边缘。
+
+                **上下留白要对称**，而下方的留白由**两层**共同构成：这里的 `padding-bottom`
+                加上 Card body 自己的 12px。原来错在底部那个 `-12px` 负 margin——它把卡片
+                的下内边距整个抵消掉，按钮下方只剩 4px，而上方有 16px，肉眼就是歪的。
+                去掉负 margin 后 4 + 12 + 1(边框) = 17px，与上方的 17px 相等（实测值，
+                不是推算：这一屏的像素问题只信 getBoundingClientRect）。 */}
             <div
               style={{
-                margin: '20px -24px -12px',
+                margin: '20px -24px 0',
                 padding: '16px 0 4px',
                 borderTop: '1px solid #f0f0f0',
                 textAlign: 'center',
@@ -498,6 +634,24 @@ export default function AnalysisPage() {
               <Button icon={<ReloadOutlined />} style={{ marginLeft: 12 }} onClick={resetFilters}>
                 重置条件
               </Button>
+              {/* 作用域没有可查日期、一次都没查成时禁用：那时没有「当下生效的条件」可存，
+                  存下去是一份空条件 */}
+              <Tooltip
+                title={
+                  appliedRef.current?.site
+                    ? '下次登录进来默认就是这组条件（不含日期与检索词）'
+                    : '还没有查询结果，先查一次再保存'
+                }
+              >
+                <Button
+                  icon={<SaveOutlined />}
+                  style={{ marginLeft: 12 }}
+                  disabled={!appliedRef.current?.site}
+                  onClick={saveCurrentMode}
+                >
+                  保存当前模式
+                </Button>
+              </Tooltip>
             </div>
           </>
         )}

@@ -1,4 +1,4 @@
-import { Button, Input, Select, Space, Tag, Typography } from 'antd';
+import { Button, Input, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import type { SiteOption } from '@/services/upload';
 import { detectSearchKind, type ScopeDraft } from './filters';
 import { formatSiteLabel } from './siteLabel';
@@ -26,6 +26,13 @@ export interface ScopeBarProps {
   q: string;
   /** 草稿与生效条件不一致——存在未生效的改动 */
   dirty: boolean;
+  /**
+   * 本次进屏是否按用户保存的条件初始化。
+   *
+   * 不标出来的话，用户无从判断眼前这组条件是自己保存的还是系统给的，也就不知道保存
+   * 到底生效没有——保存项因形状过期或站点下线被丢弃时尤其如此。
+   */
+  savedApplied?: boolean;
   loading?: boolean;
   onScopeChange: (next: ScopeDraft) => void;
   onQChange: (next: string) => void;
@@ -38,6 +45,7 @@ export default function ScopeBar({
   scope,
   q,
   dirty,
+  savedApplied,
   loading,
   onScopeChange,
   onQChange,
@@ -103,6 +111,13 @@ export default function ScopeBar({
         </Button>
       </Space.Compact>
       {/* 显式触发的代价是可能对着新条件读旧数据，这个提示是那份代价的必要补偿 */}
+      {savedApplied && (
+        <div className="scope-bar__saved">
+          <Tooltip title="这组条件来自你保存的默认。点过滤区的「重置条件」可以清除它">
+            <Tag color="blue">我的默认</Tag>
+          </Tooltip>
+        </div>
+      )}
       {dirty && (
         <div className="scope-bar__dirty">
           <Tag color="orange">存在未生效条件，请点击对应的查询或筛选按钮</Tag>

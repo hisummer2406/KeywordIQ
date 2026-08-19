@@ -79,6 +79,13 @@
   text-align: center;
 }
 
+// 与 dirty 提示同样占满整行居中：两者可能同时出现（用了保存的条件，又改了没查），
+// 各占一行不互相挤
+.scope-bar__saved {
+  flex: 0 0 100%;
+  text-align: center;
+}
+
 @media (max-width: 768px) {
   .scope-bar__query {
     display: grid !important;

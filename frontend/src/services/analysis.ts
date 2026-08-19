@@ -122,10 +122,23 @@ export async function searchAnalysis(body: SearchBody) {
   return request<SearchResponse>('/api/analysis/search', { method: 'POST', data: body });
 }
 
-export async function getScope(site: string | undefined, view: View) {
+/**
+ * 作用域元数据（可用日期与最新一期）。
+ *
+ * `skipErrorHandler` 供**调用方自己兜底**的场景使用：首屏拿用户保存的站点乐观发一次，
+ * 站点若已从启用清单移除，后端报错（非法站点不回退是既有约定），前端捕获后回退到默认
+ * 站点。那种情况下全局错误提示必须闭嘴——否则用户会同时看到一个红色报错和一句
+ * 「已切回默认站点」，自相矛盾。**跳过之后调用方必须自行呈现**。
+ */
+export async function getScope(
+  site: string | undefined,
+  view: View,
+  opts?: { skipErrorHandler?: boolean },
+) {
   return request<ScopeInfo>('/api/analysis/scope', {
     method: 'GET',
     params: { view, ...(site ? { site } : {}) },
+    skipErrorHandler: opts?.skipErrorHandler,
   });
 }
 
