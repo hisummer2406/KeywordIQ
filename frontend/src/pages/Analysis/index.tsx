@@ -36,7 +36,9 @@ import { useCachedState } from './useCachedState';
  * 表格重渲染时就会读到尚未生效的条件，「当前显示的是哪组条件」无法从状态里读出来，
  * 导出（复用最近一次生效的查询体）也会跟着漂移。
  *
- * 查询显式触发；例外只有两类，各有理由：
+ * 条件改动显式触发查询；例外有三类，各有理由：
+ * - **首屏**：拉完作用域后按默认作用域自动查一次。这一屏是主力数据屏，用户进来就是要
+ *   看数据的。延迟到点击才查的是持续增长市场屏，不是这一屏
  * - 排序 / 翻页 / 每页条数：作用于已确定的结果集，不是「条件」，走 ProTable 自身的 request
  * - 站点 / 视图改变：立即重拉日期与类目清单（小表查询），但不重查表格——否则用户会在
  *   一份属于上一个站点的日期清单里做选择
@@ -78,6 +80,11 @@ export default function AnalysisPage() {
   // 导出中的状态**不进缓存**：它描述的是一次正在进行的请求，而请求随组件一起没了。
   // 缓存它会让用户切回来看到一个永远转下去的按钮。
   const [exporting, setExporting] = useState(false);
+  /**
+   * 作用域元数据是否已经取回。**不进缓存**：复原路径不调 `reloadScopeMeta`，但快照里
+   * 的 `availableDates` 本就是取回过的，故初值直接跟着 `restored` 走。
+   */
+  const [scopeLoaded, setScopeLoaded] = useState(restored);
   const [filterOpen, setFilterOpen] = useCachedState('filterOpen', false);
   const [resultTotal, setResultTotal] = useCachedState('resultTotal', 0);
   // 总数缓存与"下次要重算"的标记。ProTable 的 request 同时承担翻页与条件变更两种触发，
@@ -156,17 +163,33 @@ export default function AnalysisPage() {
    * 是否已经查过一次。`appliedSig` 只在 `apply()` 里被写非空值，所以它就是这个判据，
    * 不用再养一个独立标记。
    *
-   * 用途是把「还没查」和「查出来 0 行」在界面上分开——两者都是空表格，但一个是等待
-   * 用户动作、另一个是条件太严。不分开的话用户会以为系统弄丢了数据。
+   * 首屏自动查询之后，它只剩两个用途：**结果条数的显隐**与「有未生效改动」提示的前置。
+   * 已经不再是空表格文案的判据——那件事交给 `scopeHasNoDates`（见下）。
+   *
+   * 条数仍然跟着它而不是跟着 `scopeHasNoDates`：用户切到一个没有数据的站点时表格**不**
+   * 重查（这是既有约定），屏上仍是上一个站点的行，那时条数必须继续显示，因为它描述的
+   * 正是那批还在屏上的行。
    */
   const hasQueried = appliedSig !== '';
+
+  /**
+   * 当前作用域一期数据都没有。这是首屏自动查询之后「空表格」唯一还剩的非零行成因——
+   * 没有日期可查，`request` 开头那道 `!body?.date` 守卫会直接返回空、连请求都不发。
+   *
+   * 必须与「查出来是 0 行」分开：显示「搜索结果：0」会被读成条件把行筛没了，用户会去
+   * 排查筛选条件，而真正的原因是这个站点根本没导过数据。
+   *
+   * `scopeLoaded` 这道前置是为了压掉挂载那一瞬——那时 `availableDates` 还是初值空数组，
+   * 不加前置会先闪一下「还没有导入任何数据」再出数据，而那句话在当时是错的。
+   */
+  const scopeHasNoDates = scopeLoaded && availableDates.length === 0;
 
   const draftBody = useMemo(() => toSearchBody(scope, filters), [scope, filters]);
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
   /**
-   * 「有未生效改动」提示。**没查过就不提示**——首屏生效态本来就是空的，判据必然为真，
-   * 而那时用户一个条件都没改，「存在未生效条件」这句话是错的。此时该看的引导是表格
-   * 空状态里那句「点立即查询」，两处一起出现还重复。
+   * 「有未生效改动」提示。**没查过就不提示**——那时生效态是空的，判据必然为真，而用户
+   * 一个条件都没改，「存在未生效条件」这句话是错的。首屏自动查询之后这一刻通常只是
+   * 作用域还没取回的那一瞬，但站点无数据时会一直停在这个状态，前置不能去掉。
    */
   const dirty = hasQueried && draftSig !== appliedSig;
 
@@ -255,6 +278,7 @@ export default function AnalysisPage() {
    */
   const reloadScopeMeta = async (nextSite: string | undefined, nextView: View) => {
     const s = await getScope(nextSite, nextView);
+    setScopeLoaded(true);
     setAvailableDates(s.available_dates);
     setScope({ site: s.site, view: nextView, date: s.latest_date });
     // brands 一并清：品牌筛选面板暂时下线，但字段仍在模型里，留着不清会成为
@@ -272,20 +296,32 @@ export default function AnalysisPage() {
     // 从缓存复原：整段初始化跳过，一个请求都不发。表格那次 request 会命中短路分支，
     // 拿缓存行渲染。**只跳过挂载初始化**——用户动作触发的请求（改站点/视图重拉
     // scope 与 categories、点「立即查询」）一律照旧。
+    //
+    // 这道闸必须留在最前面：自动查询写在它之后，才能继承「有缓存就整段跳过」的语义。
+    // 顺序反过来会让每次切回都多查一次。
     if (restored) return;
     getSites()
       .then(setSites)
       .catch(() => undefined);
-    // 首屏**只拉作用域元数据**（站点、可选日期、类目），不查数据表。
+    // 首屏拉完作用域元数据后**立即按默认作用域查一次**——这一屏是主力数据屏，用户
+    // 进来就是要看数据的，让他先点一下才出数据是多余的一步。默认作用域（默认站点 +
+    // 按天 + 最新一期 + 无筛选）恰恰是最常看的那一组，且无筛选路径的总数直接读
+    // `site_data_stats`（O(1)），是这一屏最便宜的一种查询。
     //
-    // 拉的这三样都是小表，且是选择器渲染的前提——不拉的话用户连日期都选不了。
-    // 数据表那一次查询才是贵的（周报最坏近 1 秒），而进屏时的默认条件多半不是用户
-    // 想看的那组：他进来就是要改站点/日期/筛选的。先查一次等于必然浪费一次。
-    // 所以表格留空，等用户点「立即查询」。
-    //
-    // 表格在挂载时仍会调一次 request，但 `appliedRef.current` 是 null，那里直接返回
-    // 空结果、不发请求（见 request 开头）。
-    reloadScopeMeta(undefined, 'DAY').catch(() => undefined);
+    // **须由 `reloadScopeMeta` 返回的 `s` 组装条件，不能读 `scope` 状态**：它刚被
+    // `setScope` 写过，而 setState 是异步的，此刻读到的还是初值（date 为空），
+    // 组装出来的条件会被 request 开头那道 `!body?.date` 守卫挡掉——表现是首屏静悄悄
+    // 地什么都不查，和改动前一模一样，且没有任何报错。
+    reloadScopeMeta(undefined, 'DAY')
+      .then((s) => {
+        if (!s.latest_date) return; // 该站点一期数据都没有，不发请求
+        const body = toSearchBody(
+          { site: s.site, view: 'DAY', date: s.latest_date },
+          emptyFilters(),
+        );
+        apply(body, JSON.stringify(body));
+      })
+      .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -466,11 +502,11 @@ export default function AnalysisPage() {
         scroll={{ x: totalColumnWidth(appliedView) }}
         // 筛选全部在上面的过滤区，表格不再自带条件表单
         search={false}
-        // 空表格有两种含义，必须说清是哪一种（见 hasQueried 的注释）
+        // 空表格有两种含义，必须说清是哪一种（见 scopeHasNoDates 的注释）
         locale={
-          hasQueried
-            ? undefined
-            : { emptyText: '选好站点、视图与日期后，点「立即查询」查看数据' }
+          scopeHasNoDates
+            ? { emptyText: '该站点在当前视图下还没有导入任何数据' }
+            : undefined
         }
         // 页码与每页条数由 ProTable 自己管，这里只给初值——复原时给回离开前那一页，
         // 否则表格会从第 1 页起请求，短路判定（含页码）随即失配，白跑一次查询。
