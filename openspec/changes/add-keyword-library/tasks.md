@@ -1,47 +1,48 @@
 ## 1. 数据模型与迁移
 
-- [ ] 1.1 写 `app/table/toolbox/library_model.py`：`KeywordGroup`、`KeywordGroupItem`
+- [x] 1.1 写 `app/table/toolbox/library_model.py`：`KeywordGroup`、`KeywordGroupItem`
       两个 SQLAlchemy 2.0 模型（`Mapped` / `mapped_column`），外键与唯一约束按 design 决策 1；
       `site` 列注释取 `column_comments.SITE_COLUMN_COMMENT`
-- [ ] 1.2 两张表登记进 `migration_scope.py` 的 `V2_TABLES`（漏登会让 autogenerate 静默看不见）
-- [ ] 1.3 `uv run alembic revision --autogenerate -m "词库分组与条目"`，人工核对 DDL 带
+- [x] 1.2 两张表登记进 `migration_scope.py` 的 `V2_TABLES`（漏登会让 autogenerate 静默看不见）
+- [x] 1.3 `uv run alembic revision --autogenerate -m "词库分组与条目"`，人工核对 DDL 带
       `schema='analysis'`、外键 `ON DELETE CASCADE` 正确、downgrade 能干净删表
-- [ ] 1.4 `uv run alembic upgrade head` 后跑
+- [x] 1.4 `uv run alembic upgrade head` 后跑
       `pytest test/test_v2_integration.py::test_models_match_migrated_schema`，
       要求 autogenerate 产出**空**结果（列注释一字不差）
-- [ ] 1.5 两个上限加进 `config.py`（`LIBRARY_MAX_GROUPS_PER_SITE=20`、
+- [x] 1.5 两个上限加进 `config.py`（`LIBRARY_MAX_GROUPS_PER_SITE=20`、
       `LIBRARY_MAX_ITEMS_PER_GROUP=500`）并同步 `.env.example`（含单位与理由）
 
 ## 2. 查询层复用（先重构，单独一个提交）
 
-- [ ] 2.1 把 `analysis_crud._base_query` 里的列投影抽成公共函数 `fact_row_columns(fact)`，
+- [x] 2.1 把 `analysis_crud._base_query` 里的列投影抽成公共函数 `fact_row_columns(fact)`，
       `_base_query` 改为引用它，**不改变任何 SQL 语义**
-- [ ] 2.2 跑既有查询回归（`pytest test/ -q` + 有真库时的
+- [x] 2.2 跑既有查询回归（`pytest test/ -q` + 有真库时的
       `test_site_scoped_query_integration.py`），确认抽取前后结果一致
 
 ## 3. 后端：分组与条目
 
-- [ ] 3.1 `library_schemas.py`：分组的增删改查、条目批量增删、盯盘查询与作用域的
+- [x] 3.1 `library_schemas.py`：分组的增删改查、条目批量增删、盯盘查询与作用域的
       Pydantic v2 请求/响应模型（盯盘响应走 ProTable 契约 `{data,total,success}` + 作用域回显）
-- [ ] 3.2 `library_crud.py`：分组 CRUD 与条目批量增删的语句（条目写入用
+- [x] 3.2 `library_crud.py`：分组 CRUD 与条目批量增删的语句（条目写入用
       `ON CONFLICT (group_id, keyword_id) DO NOTHING`，回传实际新增行数）
-- [ ] 3.3 `library_service.py`：站点一致性校验、两个上限的判定（超限抛 422、整批不写）、
+- [x] 3.3 `library_service.py`：站点一致性校验、两个上限的判定（超限抛 422、整批不写）、
       同名冲突（409）、非本人分组（404）；失败一律抛 `APIError` 子类
-- [ ] 3.4 `library_api.py`：分组四个端点 + 条目两个端点，全部
+- [x] 3.4 `library_api.py`：分组四个端点 + 条目两个端点，全部
       `Depends(simple_auth.require_permission(TOOLBOX_VIEW))` + 当前用户，路由挂在
       `/api/toolbox/library`；在 `main.py` 注册
-- [ ] 3.5 单元测试 `test/test_keyword_library_unit.py`：上限判定、跨站点加词被拒、
-      重复加词幂等、非本人分组 404（不连库，纯服务层）
+- [x] 3.5 单元测试 `test/test_keyword_library_unit.py`（不连库）：作用域解析、行整形的
+      三态与 NULL 处理、盯盘语句形状、请求 schema 白名单。**上限判定、幂等、跨用户隔离
+      挪到了 4.4 的集成测试**——它们要真的写库才有意义，用假会话去演只是在测那个假会话
 
 ## 4. 后端：盯盘查询
 
-- [ ] 4.1 `library_crud` 增盯盘语句：由条目表驱动、两个 LEFT JOIN（事实表 + `fact_dropped`）、
+- [x] 4.1 `library_crud` 增盯盘语句：由条目表驱动、两个 LEFT JOIN（事实表 + `fact_dropped`）、
       状态三段序 + 排序白名单（走势与历史排名字段不许排序）
-- [ ] 4.2 `library_service` 增 `watch` 与 `get_scope`：站点取自分组不由请求传入；
+- [x] 4.2 `library_service` 增 `watch` 与 `get_scope`：站点取自分组不由请求传入；
       可选日期集读 `site_data_stats`；分页 `total` 取条目数
-- [ ] 4.3 分页后补走势与历史排名，复用 `fetch_trends` / `shape_trends`，
+- [x] 4.3 分页后补走势与历史排名，复用 `fetch_trends` / `shape_trends`，
       **`on`/`view` 必传**（漏传会画出天 8 点 / 周 13 点且不报错）
-- [ ] 4.4 集成测试 `test/test_keyword_library_integration.py`（`TEST_DATABASE_URL` gate）：
+- [x] 4.4 集成测试 `test/test_keyword_library_integration.py`（`TEST_DATABASE_URL` gate）：
       在榜 / 掉榜 / 无数据三种状态各出现一行、排序时后两者恒在末尾、走势点数按视图正确、
       满员分组（500 条）跑一次盯盘查询
 

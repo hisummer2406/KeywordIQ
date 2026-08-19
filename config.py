@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     GROWTH_MIN_RANK_GAIN: int = 10000     # 累计净增名次下限（不含），rank(d-6) - rank(d)
     GROWTH_MIN_DAILY_RATE: float = 0.10   # 每个日环比的下限（含），0.10 = 10%
 
+    # 词库（工具箱 · 我的词库）的规模上限。两个都是**拒绝式**上限：超限返回 422 且整批
+    # 不写，不静默截断——截断后的清单与用户以为存进去的不是同一份，而他无从察觉。
+    #
+    # 每组条目数还有第二重身份：**它是盯盘查询的规模保证**。那条查询由条目表驱动、
+    # LEFT JOIN 事实表与掉榜表，最坏情况是上限这么多行的嵌套循环（两侧都走现成索引：
+    # idx_fact_{daily,weekly}_keyword_history 与 fact_dropped 的主键）。上调它就是在
+    # 放大那条查询的最坏代价，改之前先重测。
+    LIBRARY_MAX_GROUPS_PER_SITE: int = 20   # 每用户每站点的分组数上限
+    LIBRARY_MAX_ITEMS_PER_GROUP: int = 500  # 每分组的关键词条数上限
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
@@ -188,6 +198,15 @@ class Settings(BaseSettings):
         # 至少 2 期才产生得出一个日环比；1 期时「持续增长」无从谈起。
         if value < 2:
             raise ValueError("GROWTH_WINDOW_DAYS 至少为 2（少于两期算不出日环比）")
+        return value
+
+    @field_validator("LIBRARY_MAX_GROUPS_PER_SITE", "LIBRARY_MAX_ITEMS_PER_GROUP")
+    @classmethod
+    def _validate_library_caps(cls, value: int) -> int:
+        # 0 或负数会让「加入词库」这个功能整体不可用，而失败信息是「超出上限」——
+        # 与真的攒满了长得一样，看不出是配置写错。
+        if value < 1:
+            raise ValueError("词库上限至少为 1（配成 0 会让加入词库永远失败，且看不出是配置问题）")
         return value
 
     @field_validator("GROWTH_MIN_RANK_GAIN")
