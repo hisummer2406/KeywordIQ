@@ -1,6 +1,6 @@
 from typing import ClassVar
 
-from pydantic import ConfigDict, field_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 from app.site_registry import UnknownSiteError, normalize_site_code, normalize_site_codes
@@ -83,6 +83,50 @@ class Settings(BaseSettings):
     # Admin配置密钥：
     # python -c "import secrets; print(secrets.token_urlsafe(32))"
     ADMIN_SECRET_KEY: str
+
+    # 钉钉单点登录（直连钉钉开放平台的企业内部应用，OAuth2 授权码流程）。
+    #
+    # **这套不是 OIDC，尽管授权参数里的 scope 叫 openid。** 钉钉换回来的是 accessToken，
+    # 没有 id_token、没有 JWKS、没有 discovery 端点，因此接不上任何 OIDC 依赖方库。
+    # 而且 /v1.0/contact/users/me 只给个人身份（unionId、nick），拿企业内 userid 与在职
+    # 状态还要**另一套**企业 accessToken 去调通讯录接口——所以这里是两套凭证共用一组 AppKey。
+    #
+    # 关闭时 SSO 端点一律 404、登录页不显示钉钉按钮，本地开发与 CI 都跑在这个状态。
+    # （路由始终注册、由端点自己判定——配置是启动期读入的，条件注册并不会让开关
+    #   变得可热切换，只会让这段行为测不到。）
+    SSO_ENABLED: bool = False
+    DINGTALK_APP_KEY: str = ""       # 企业内部应用的 AppKey，同时作为授权 URL 的 client_id
+    DINGTALK_APP_SECRET: str = ""    # 只在服务端持有，绝不出现在前端产物、响应体或日志里
+    SSO_REDIRECT_URI: str = ""       # 指向 SPA 的 /sso/callback，须与钉钉后台登记的重定向 URL 一致
+    # 首次扫码建档时赋予的角色码。**不从钉钉部门/职位映射**——那会让「谁能导入数据」
+    # 取决于通讯录怎么编排。默认 analyst：能查询导出，不能导入。
+    #
+    # 这里只校验非空；它是否真的存在于 role 表要连库，由启动期检查负责（见 main.py）。
+    SSO_DEFAULT_ROLE_CODE: str = "analyst"
+
+    @model_validator(mode="after")
+    def _validate_sso_credentials(self) -> "Settings":
+        """开启 SSO 却缺凭证 → 启动即失败。
+
+        宁可起不来，也不要带着一个「配了但不生效」的 SSO 开关跑起来：那种状态下管理员
+        以为单点登录已经开了，员工扫完码回来却看到一个说不清的错误，而配置文件看上去
+        完全正常。这与 user:manage 那个「勾了也不生效」的权限点是同一类问题。
+        """
+        if not self.SSO_ENABLED:
+            return self
+
+        missing = [
+            name
+            for name in ("DINGTALK_APP_KEY", "DINGTALK_APP_SECRET", "SSO_REDIRECT_URI")
+            if not getattr(self, name).strip()
+        ]
+        if missing:
+            raise ValueError(
+                f"SSO_ENABLED=true 时以下配置项不能为空：{'、'.join(missing)}"
+            )
+        if not self.SSO_DEFAULT_ROLE_CODE.strip():
+            raise ValueError("SSO_ENABLED=true 时 SSO_DEFAULT_ROLE_CODE 不能为空")
+        return self
 
     # 数据库连接池配置。
     #
