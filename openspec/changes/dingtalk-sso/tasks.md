@@ -72,20 +72,20 @@
 
 ## 7. 前端
 
-- [ ] 7.1 `services/auth.ts` 新增 `ssoStatus` / `ssoAuthorizeUrl` / `ssoCallback`
-- [ ] 7.2 从 `pages/Login/index.tsx` 抽出 `useLoginRedirect`（等待 `currentUser` 落位
+- [x] 7.1 `services/auth.ts` 新增 `ssoStatus` / `ssoAuthorizeUrl` / `ssoCallback`
+- [x] 7.2 从 `pages/Login/index.tsx` 抽出 `useLoginRedirect`（等待 `currentUser` 落位
       再跳转的那段竞态修复），登录页改为使用它。**不得复制成两份**
-- [ ] 7.3 登录页加「钉钉登录」按钮，按 `ssoStatus` 显隐；关闭时不发授权地址请求
-- [ ] 7.4 新增 `pages/SsoCallback/` 与路由 `/sso/callback`（`layout: false`、不挂 access
+- [x] 7.3 登录页加「钉钉登录」按钮，按 `ssoStatus` 显隐；关闭时不发授权地址请求
+- [x] 7.4 新增 `pages/SsoCallback/` 与路由 `/sso/callback`（`layout: false`、不挂 access
       守卫），处理三条路径：`?error=` / `?authCode=` / 参数缺失
-- [ ] 7.5 `pages/User/` 增加「显示名」与「来源」（本地 / 钉钉）两列，
+- [x] 7.5 `pages/User/` 增加「显示名」与「来源」（本地 / 钉钉）两列，
       `user_schemas` 与 `serialize_user` 相应透出字段
-- [ ] 7.6 vitest：登录页按钮按 status 显隐；SsoCallback 三条路径各一例
+- [x] 7.6 vitest：登录页按钮按 status 显隐；SsoCallback 三条路径各一例
       （`pnpm test`）
 
 ## 8. 运维脚本与验收
 
-- [ ] 8.1 `scripts/check_dingtalk_sso.py`：打印授权 URL 供人工扫码，随后逐步跑通
+- [x] 8.1 `scripts/check_dingtalk_sso.py`：打印授权 URL 供人工扫码，随后逐步跑通
       authCode → userAccessToken → users/me → 企业 accessToken → getbyunionid →
       v2/user/get，逐项断言，退出码非 0 即有项未通过
 - [x] 8.2 CLAUDE.md 的「Authentication & Authorization」一节补写 SSO：直连钉钉而非 OIDC、
@@ -143,14 +143,20 @@
   抬到 5000ms），以及 `renderSettled` 只 `await` 一个 act 周期就用同步 `getByRole`
   断言（**未修**，要改测试本身，且分析屏正被其他变更改动）。它会随机拦下提交门禁。
 
-  **阻塞原因**：需要钉钉开发者后台的管理员权限才能建企业内部应用、取得
-  AppKey/AppSecret 并配置重定向 URL 与通讯录读取权限。已向人事申请，等待授权。
+- **2026-08-19（收尾）**：PR #45 合并进 v2（`791e65c`），两条 CI 均绿。
+  worktree 与分支已按 start-change 清理（三条核对全空）。**34/35，只剩 8.4。**
 
-  **解除阻塞后从第 1 组开始。** 第 1～5 组（配置、数据模型、迁移、错误契约、
-  SSO 服务骨架、本地登录边界）其实**不依赖真实凭证**，钉钉的 HTTP 一律 mock，
-  真要提前推进可以先做这五组；只有第 8 组的 `check_dingtalk_sso.py` 与真机扫码
-  验收必须等凭证到位。
+  合并是安全的：`SSO_ENABLED` 默认 `false`，此时登录页不显示钉钉按钮、SSO 端点一律
+  404，线上行为与合并前完全一致。开关要等 8.4 验收通过再打开。
 
-  **worktree 与分支有意保留**（`~/.claude-worktrees/dingtalk-sso` /
-  `change/dingtalk-sso`）——按 start-change 的判据，分支还在即变更还活着，
-  不是孤儿，请勿清理。
+  **8.4 需要的前置**（都在钉钉开发者后台，本仓库做不了）：建企业内部应用 → 取
+  AppKey/AppSecret → 在「开发配置 > 安全设置」登记重定向 URL（必须与 `SSO_REDIRECT_URI`
+  完全一致）→ 开通讯录个人信息读权限。之后跑 `uv run python scripts/check_dingtalk_sso.py`
+  逐项验证，再真机扫一次码。
+
+  **验收通过前不要归档本变更**——本仓库的惯例是人工验收通过后才归档并同步规格
+  （见 `remember-search-conditions` 的历史）。
+
+  另：合并当天 v2 曾因 PR #42 引入的 unhandled rejection 红了约 5 小时，由并行会话的
+  PR #47 修复（三个组件的异步事件处理器都缺 catch）。本变更的 CI 红过一次就是这个原因，
+  与 SSO 代码无关。
