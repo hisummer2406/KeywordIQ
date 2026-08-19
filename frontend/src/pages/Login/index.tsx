@@ -1,9 +1,10 @@
-import { LockOutlined, UserOutlined } from '@ant-design/icons';
+import { DingtalkOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
 import { LoginFormPage, ProConfigProvider, ProFormText } from '@ant-design/pro-components';
-import { history, useModel } from '@umijs/max';
-import { App } from 'antd';
+import { App, Button, Divider } from 'antd';
 import { useEffect, useState } from 'react';
-import { login } from '@/services/auth';
+import { useLoginRedirect } from '@/hooks/useLoginRedirect';
+import { login, ssoAuthorizeUrl, ssoStatus } from '@/services/auth';
+import { hardRedirect } from '@/utils/redirect';
 import { setToken } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
 import loginBg from '@/assets/login-bg.svg';
@@ -15,35 +16,50 @@ import './index.less';
  */
 export default function LoginPage() {
   const { message } = App.useApp();
-  const { initialState, refresh } = useModel('@@initialState');
-  const [redirectTo, setRedirectTo] = useState<string | null>(null);
-  const currentUser = initialState?.currentUser;
+  const { finishLogin } = useLoginRedirect();
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+  const [ssoPending, setSsoPending] = useState(false);
 
   /**
-   * 跳转要等到 initialState 真的带上 currentUser 之后才发生。
+   * 探测 SSO 是否可用，决定要不要渲染钉钉按钮。
    *
-   * `await refresh()` 返回，只说明刷新动作发起了，不代表 React 已经把新的 initialState
-   * 提交并重渲染。紧跟着 push 过去，ProLayout 的 onPageChange 与 access 判定读到的都还是
-   * 旧值：前者判成未登录、把人推回 /login（表现为"登录成功后闪回登录页"），后者判成无
-   * 权限、渲染 403。谁先谁后取决于渲染时机，所以时好时坏、慢机器更容易中。
-   *
-   * 用 effect 把"跳转"挂在 currentUser 到位这个事实上，竞态就不存在了——effect 在提交
-   * 之后才跑，此时守卫与权限判定读到的必然是同一份新状态。
+   * 探测失败按「不可用」处理：用户还有密码登录这条路，为一次探测弹红条只会让他困惑。
+   * 这也是为什么 `ssoStatus` 声明了 skipErrorHandler——静默是显式的，兜底在这里。
    */
   useEffect(() => {
-    if (redirectTo && currentUser) {
-      history.push(redirectTo);
+    let alive = true;
+    ssoStatus()
+      .then((res) => {
+        if (alive) setSsoEnabled(Boolean(res?.enabled));
+      })
+      .catch(() => {
+        if (alive) setSsoEnabled(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const handleSsoLogin = async () => {
+    setSsoPending(true);
+    try {
+      const { url } = await ssoAuthorizeUrl();
+      // 整页跳转：目标是钉钉外域，history.push 只会在自己的路由表里找不到而落到 404。
+      hardRedirect(url);
+    } catch {
+      // 取地址失败由全局 errorHandler 呈现（这个调用没有 skipErrorHandler）。
+      setSsoPending(false);
     }
-  }, [redirectTo, currentUser]);
+  };
+
 
   const handleSubmit = async (values: API.LoginParams) => {
     try {
       const res = await login(values);
       setToken(res.token);
-      await refresh();
       message.success('登录成功');
-      const redirect = new URLSearchParams(history.location.search).get('redirect');
-      setRedirectTo(redirect || '/analysis');
+      // 跳转的竞态处理在 useLoginRedirect 里，与钉钉回调屏共用同一份。
+      await finishLogin('/analysis');
     } catch (e: any) {
       // login() 显式声明了 skipErrorHandler（凭证错误不该弹全局提示），因此这里必须
       // 自己呈现——「显式跳过」与「必须自行呈现」是一对，缺一就回到了静默吞错误。
@@ -67,6 +83,24 @@ export default function LoginPage() {
           title="海眸系统"
           subTitle="Amazon 搜索词数据分析平台"
           onFinish={handleSubmit as any}
+          actions={
+            ssoEnabled ? (
+              <>
+                <Divider plain style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>
+                  其他登录方式
+                </Divider>
+                <Button
+                  block
+                  size="large"
+                  icon={<DingtalkOutlined />}
+                  loading={ssoPending}
+                  onClick={handleSsoLogin}
+                >
+                  钉钉登录
+                </Button>
+              </>
+            ) : null
+          }
         >
           <ProFormText
             name="username"

@@ -79,6 +79,28 @@ export default function UserPage() {
   const columns: ProColumns<UserRow>[] = [
     { title: '用户名', dataIndex: 'user_name', ellipsis: true },
     {
+      title: '显示名',
+      dataIndex: 'display_name',
+      search: false,
+      ellipsis: true,
+      // 本地账号大多没有显示名，用占位符而不是空白——空单元格会被读成「数据没取到」。
+      render: (_, r) => r.display_name || <span style={{ color: 'rgba(0,0,0,.25)' }}>—</span>,
+    },
+    {
+      title: '来源',
+      dataIndex: 'external_idp',
+      search: false,
+      width: 90,
+      // 两者的可管理性不同：本地账号能改密码，钉钉账号没有密码可改，停用是唯一手段。
+      // 不做「已绑定/未绑定」——账号只按 unionId 匹配，从来不存在「绑定」这个动作。
+      render: (_, r) =>
+        r.external_idp === 'dingtalk' ? (
+          <Tag color="cyan">钉钉</Tag>
+        ) : (
+          <Tag>本地</Tag>
+        ),
+    },
+    {
       title: '角色',
       dataIndex: 'role_id',
       search: false,
