@@ -741,6 +741,9 @@ export default function AnalysisPage() {
             */}
             {access.canViewToolbox && selectedKeywordIds.length > 0 && (
               <Button
+                // 实心：它只在勾选之后才出现，是那一刻用户唯一要做的动作，
+                // 与常驻的「导出 CSV」不同级。
+                type="primary"
                 icon={<StarOutlined />}
                 onClick={() => setLibraryModalOpen(true)}
               >
