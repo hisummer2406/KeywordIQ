@@ -19,6 +19,7 @@ import shlex
 import socket
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # 后端改动的判定路径。alembic/ 也算：迁移写错会让整个部署起不来。
@@ -53,6 +54,42 @@ def run(cmd: list[str], cwd: Path, env: dict | None = None, timeout: int = CHECK
         )
         return 124, f"超时（{timeout}s）未结束，已终止。\n{partial}".strip()
     return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def run_checks(
+    checks: list[tuple[str, list[str], Path, dict]],
+) -> list[tuple[str, list[str], str]]:
+    """并发跑全部检查，返回失败项 ``(名称, 命令, 输出末尾)``，**顺序与传入顺序一致**。
+
+    **并发不是为了省 CPU，是为了省等待。** 这些检查互不依赖：ruff/eslint/tsc 只读源码，
+    pytest 与 vitest 跑在各自的进程里。串行时墙钟是各条之和（前端约 36 秒 = eslint 2.9
+    + tsc 5.4 + vitest 28），并发后是最慢那条（约 28 秒）；前后端都改时省得更多——
+    后端那 6 秒完全被前端的 28 秒盖住。
+
+    **返回顺序必须稳定。** 按完成先后排的话，同一份改动两次提交会得到不同顺序的报告，
+    读的人无从判断"这次和上次是不是同一批失败"。所以按传入顺序重排。
+
+    并发度就是检查条数（最多 5 条），不设上限：它们本来就各自吃满多核（vitest 按核心数
+    起 worker、pytest 也有并行），再叠一层限流只会让最慢那条更慢，而墙钟由它决定。
+    """
+    if not checks:
+        return []
+
+    results: dict[int, tuple[int, str]] = {}
+    with ThreadPoolExecutor(max_workers=len(checks)) as pool:
+        futures = {
+            pool.submit(run, cmd, cwd, env): index
+            for index, (_, cmd, cwd, env) in enumerate(checks)
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+
+    failures = []
+    for index, (name, cmd, _, _) in enumerate(checks):
+        code, out = results[index]
+        if code != 0:
+            failures.append((name, cmd, "\n".join(out.splitlines()[-40:])))
+    return failures
 
 
 def staged_files(repo: Path, command: str) -> list[str]:
@@ -262,12 +299,7 @@ def main() -> None:
         checks.append(("tsc", ["pnpm", "tsc"], fe, {}))
         checks.append(("vitest", ["pnpm", "test"], fe, {}))
 
-    failures: list[str] = []
-    for name, cmd, cwd, env in checks:
-        code, out = run(cmd, cwd, env)
-        if code != 0:
-            tail = "\n".join(out.splitlines()[-40:])
-            failures.append(f"### {name} 失败（{' '.join(cmd)}）\n{tail}")
+    failures = [f"### {name} 失败（{' '.join(cmd)}）\n{tail}" for name, cmd, tail in run_checks(checks)]
 
     if failures:
         deny(
