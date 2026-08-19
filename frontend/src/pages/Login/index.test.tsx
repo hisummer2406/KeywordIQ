@@ -3,10 +3,22 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from 'antd';
 
-const { pushMock, refreshMock, loginMock, historyState, modelStore } = vi.hoisted(() => ({
+const {
+  pushMock,
+  refreshMock,
+  loginMock,
+  ssoStatusMock,
+  ssoAuthorizeUrlMock,
+  hardRedirectMock,
+  historyState,
+  modelStore,
+} = vi.hoisted(() => ({
   pushMock: vi.fn(),
   refreshMock: vi.fn(),
   loginMock: vi.fn(),
+  ssoStatusMock: vi.fn(),
+  ssoAuthorizeUrlMock: vi.fn(),
+  hardRedirectMock: vi.fn(),
   historyState: { search: '' },
   // initialState 的替身：refresh() 往里写 currentUser 并通知订阅者重渲染，
   // 复现真实运行时"刷新→提交→重渲染"这条链路。登录页的跳转正是挂在这条链路末端的。
@@ -34,7 +46,12 @@ vi.mock('@umijs/max', async () => {
     },
   };
 });
-vi.mock('@/services/auth', () => ({ login: loginMock }));
+vi.mock('@/services/auth', () => ({
+  login: loginMock,
+  ssoStatus: ssoStatusMock,
+  ssoAuthorizeUrl: ssoAuthorizeUrlMock,
+}));
+vi.mock('@/utils/redirect', () => ({ hardRedirect: hardRedirectMock }));
 
 import LoginPage from '@/pages/Login';
 import { getToken } from '@/utils/token';
@@ -62,6 +79,8 @@ describe('登录屏', () => {
     vi.clearAllMocks();
     historyState.search = '';
     loginMock.mockResolvedValue({ token: 'jwt-abc' });
+    // 默认关闭 SSO：既有的密码登录用例不该因为多了一个入口而变化。
+    ssoStatusMock.mockResolvedValue({ enabled: false, provider_name: '钉钉' });
     modelStore.currentUser = undefined;
     modelStore.listeners.clear();
     // 默认：refresh 之后 initialState 带回当前用户（真实成功路径）
@@ -140,5 +159,50 @@ describe('登录屏', () => {
 
     await waitFor(() => expect(screen.getByText('请输入用户名')).toBeInTheDocument());
     expect(loginMock).not.toHaveBeenCalled();
+  });
+
+  describe('钉钉登录入口', () => {
+    it('SSO 关闭时不显示钉钉按钮', async () => {
+      ssoStatusMock.mockResolvedValue({ enabled: false, provider_name: '钉钉' });
+      renderLogin();
+
+      await waitFor(() => expect(ssoStatusMock).toHaveBeenCalled());
+      expect(screen.queryByRole('button', { name: /钉钉/ })).not.toBeInTheDocument();
+    });
+
+    it('SSO 开启时显示钉钉按钮', async () => {
+      ssoStatusMock.mockResolvedValue({ enabled: true, provider_name: '钉钉' });
+      renderLogin();
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /钉钉/ })).toBeInTheDocument(),
+      );
+    });
+
+    it('点击钉钉登录：取授权地址并整页跳转过去', async () => {
+      ssoStatusMock.mockResolvedValue({ enabled: true, provider_name: '钉钉' });
+      ssoAuthorizeUrlMock.mockResolvedValue({ url: 'https://login.dingtalk.com/oauth2/auth?x=1' });
+      renderLogin();
+
+      const button = await screen.findByRole('button', { name: /钉钉/ });
+      await userEvent.setup().click(button);
+
+      await waitFor(() =>
+        expect(hardRedirectMock).toHaveBeenCalledWith(
+          'https://login.dingtalk.com/oauth2/auth?x=1',
+        ),
+      );
+      // 授权地址是外域，必须整页跳转；用 history.push 只会在 SPA 内找不到这条路由。
+      expect(pushMock).not.toHaveBeenCalled();
+    });
+
+    it('status 查询失败时按钮不出现，且不影响密码登录', async () => {
+      ssoStatusMock.mockRejectedValue(new Error('boom'));
+      renderLogin();
+
+      await waitFor(() => expect(ssoStatusMock).toHaveBeenCalled());
+      expect(screen.queryByRole('button', { name: /钉钉/ })).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText('用户名')).toBeInTheDocument();
+    });
   });
 });

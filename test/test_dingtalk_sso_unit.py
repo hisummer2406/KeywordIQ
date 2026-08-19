@@ -678,3 +678,43 @@ class TestSsoStartupRoleCheck(unittest.TestCase):
         from app.auth.sso_service import assert_default_role_exists
 
         asyncio.run(assert_default_role_exists(self._FakeDb(3)))
+
+
+class TestUserListExposesAccountSource(unittest.TestCase):
+    """用户管理列表要能分辨账号来源。
+
+    本地账号能改密码、SSO 账号没有密码可改（停用是唯一手段），管理员必须看得出区别。
+    """
+
+    def test_list_schema_carries_display_name_and_source(self):
+        from app.user.user_schemas import UserCenterList
+
+        fields = UserCenterList.model_fields
+
+        self.assertIn("display_name", fields)
+        self.assertIn("external_idp", fields)
+
+    def test_serialize_user_carries_display_name_and_source(self):
+        from app.auth.simple_auth import serialize_user
+        from app.user.user_model import UserCenter
+
+        user = UserCenter(
+            id=1, user_name="zhangsan", display_name="张三", hashed_pwd=None,
+            is_active=True, is_super=False, external_idp="dingtalk", external_id="u1",
+        )
+
+        payload = serialize_user(user)
+
+        self.assertEqual(payload["display_name"], "张三")
+        self.assertEqual(payload["external_idp"], "dingtalk")
+
+    def test_local_account_reports_no_external_idp(self):
+        """本地账号的来源是 None，前端据此显示「本地」。"""
+        from app.auth.simple_auth import serialize_user
+        from app.user.user_model import UserCenter
+
+        payload = serialize_user(
+            UserCenter(id=2, user_name="admin", hashed_pwd="x", is_active=True, is_super=True)
+        )
+
+        self.assertIsNone(payload["external_idp"])
