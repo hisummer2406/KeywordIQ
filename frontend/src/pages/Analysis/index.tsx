@@ -11,7 +11,7 @@ import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useAccess, useModel } from '@umijs/max';
 import { Alert, Button, Card, Col, Row, Select, Space, Tooltip, Typography, message } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   exportAnalysis,
   getCategories,
@@ -79,6 +79,29 @@ export default function AnalysisPage() {
    */
   const [initialSnapshot] = useState(() => readSnapshot());
   const restored = initialSnapshot !== null;
+
+  /**
+   * 组件是否还挂着，以及**卸载后不再写快照**的那道闸。
+   *
+   * 与 `useCachedState` 里那道同源同因：快照是模块级的、活过组件一生，而下面几处
+   * `persist` 都可能被迟到的响应调用（最典型的是 ProTable `request` 里那次——用户切走时
+   * 列表请求还在飞）。放任它写，用户切回来看到的是自己已经离开的那次查询的结果。
+   *
+   * **一律走 `persist`，不要直接调 `writeSlot`。** 快照非空这一件事本身就会让下次挂载
+   * 走复原短路、整段跳过初始化，所以漏掉任何一处的代价不是"少存了一个字段"，而是
+   * "凭空多出一次复原"。
+   */
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const persist = useCallback((patch: Parameters<typeof writeSlot>[0]) => {
+    if (!mounted.current) return;
+    writeSlot(patch);
+  }, []);
 
   const { initialState } = useModel('@@initialState');
   const userId = initialState?.currentUser?.id;
@@ -190,7 +213,7 @@ export default function AnalysisPage() {
       if (queued) return;
       queued = true;
       requestAnimationFrame(() => {
-        writeSlot({ scrollY: window.scrollY });
+        persist({ scrollY: window.scrollY });
         queued = false;
       });
     };
@@ -252,7 +275,7 @@ export default function AnalysisPage() {
   const apply = (body: SearchBody, sig: string) => {
     appliedRef.current = body;
     needsTotalRef.current = true;
-    writeSlot({ applied: body, needsTotal: true });
+    persist({ applied: body, needsTotal: true });
     setAppliedSig(sig);
     setAppliedView(body.view);
     actionRef.current?.reload(true);
@@ -403,7 +426,7 @@ export default function AnalysisPage() {
       setFilters((f) => ({ ...f, categories: [], brands: [] }));
       if (appliedRef.current) {
         appliedRef.current = { ...appliedRef.current, categories: undefined, brands: undefined };
-        writeSlot({ applied: appliedRef.current });
+        persist({ applied: appliedRef.current });
       }
     }
     reloadCategories(s.site, nextView, s.latest_date);
@@ -819,7 +842,7 @@ export default function AnalysisPage() {
           setPendingRebuild(res.pending_rebuild === true);
           const rows = res.data ?? [];
           // 把「这次请求是什么 + 拿回了什么」一并落进快照，供下次挂载短路
-          writeSlot({ lastRequest: key, rows, total, needsTotal: needsTotalRef.current });
+          persist({ lastRequest: key, rows, total, needsTotal: needsTotalRef.current });
           markDataReady();
           return { data: rows, total, success: res.success !== false };
         }}
@@ -853,7 +876,7 @@ export default function AnalysisPage() {
             type="primary"
             onClick={() => {
               appliedSortRef.current = sortDraft;
-              writeSlot({ appliedSort: sortDraft });
+              persist({ appliedSort: sortDraft });
               actionRef.current?.reload(true);
             }}
           >

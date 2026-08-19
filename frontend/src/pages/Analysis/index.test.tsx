@@ -38,7 +38,7 @@ vi.mock('@/services/upload', () => ({ getSites }));
 vi.mock('@/services/library', () => ({ listGroups, createGroup, addItems }));
 
 import AnalysisPage from '@/pages/Analysis';
-import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
+import { clearSnapshot, readSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
 
 /**
  * 渲染并把进屏时的异步 effect（作用域解析）跑完，避免 act 警告淹没真实失败。
@@ -46,13 +46,24 @@ import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
  * **不替你点「立即查询」**：首屏会按默认作用域自动查一次，渲染完就已经是「查过一次」
  * 的状态，下面绝大多数用例断言的正是这之后的行为。替它再点一次会让请求数多一次，
  * 「首屏是否自动查」的用例也就永远为真、测不出回归。
+ *
+ * 展开按钮用 `findByRole` 等出来而不是同步 `getByRole`：一轮 `await act` 只保证微任务
+ * 队列被抽干，链路里但凡有一步走宏任务（定时器、rAF）就还没走完（实测：mock 改成
+ * `setTimeout` 之后，一轮 act 结束时 `getCategories` 与 `searchAnalysis` 都还没被调用）。
+ *
+ * **但别把这里当成偶发失败的解药。** 那个按钮是无条件渲染的，不依赖任何请求落定——
+ * 拿"所有请求永不 resolve"验证过，它照样在。所以这行改的是"名不副实"，真正让整批用例
+ * 随机翻红的是模块级快照被迟到的响应写脏，修在 `useCachedState` 与 `index.tsx` 的
+ * `persist` 里，回归见本文件「切走再切回」那一组的最后一条。
  */
 async function renderSettled(expandFilters = true) {
   await act(async () => {
     render(<AnalysisPage />);
   });
+  // 只在要展开时才等这个按钮：复原路径（expandFilters=false）下快照连 filterOpen 一起
+  // 带回来，过滤区已是展开态，按钮写的是「隐藏过滤条件」——无条件等它会等到超时。
   if (expandFilters) {
-    fireEvent.click(screen.getByRole('button', { name: /展开过滤条件/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /展开过滤条件/ }));
   }
 }
 
@@ -982,6 +993,37 @@ describe('分析查询屏', () => {
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
       expect(getSites).toHaveBeenCalled();
       expect(getScope).toHaveBeenCalled();
+    });
+
+    /**
+     * 卸载之后迟到的响应不得写快照。
+     *
+     * 这是本文件里唯一一条不为界面行为、而为**测试可信度**存在的用例。快照是模块级的、
+     * 跨用例存活：上一个用例切走时还在飞的请求若在下一个用例的 `clearSnapshot()` 之后
+     * 落地，就会把整份草稿写回来（实测一次 `getSites` 迟到即写回 7 个键）。下一个用例
+     * 挂载时读到非空快照，于是走复原短路、一个请求都不发——一批与改动毫无关系的用例
+     * 随机翻红，且每次翻红的都不是同一批，单独跑那个文件又永远是绿的。
+     *
+     * 生产上同一个机制的表现是：用户切走时那次查询的结果，在他切回来时冒出来。
+     */
+    it('切走之后迟到的响应不写快照（否则下一次挂载会凭空走复原短路）', async () => {
+      let release: (v: unknown) => void = () => {};
+      getSites.mockReturnValue(
+        new Promise((r) => {
+          release = r;
+        }),
+      );
+
+      render(<AnalysisPage />);
+      cleanup(); // 用户切走 / 上一个用例结束
+      clearSnapshot();
+
+      await act(async () => {
+        release([{ code: 'US', name: '美国', domain: 'amazon.com' }]);
+        await Promise.resolve();
+      });
+
+      expect(readSnapshot()).toBeNull();
     });
   });
 
