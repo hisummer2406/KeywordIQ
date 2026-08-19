@@ -89,7 +89,7 @@ class AnalysisSearchRequest(BaseModel):
     is_new: bool | None = Field(None, description="是否本周期新词")
 
 
-class _FactRowBase(BaseModel):
+class FactRowBase(BaseModel):
     """两视图共有的事实字段（来自 fact_daily / fact_weekly + 前三商品维度）。
 
     三个商品槽位与点击量名次一一对应。某个槽位在源报表中缺失时，该组字段为空
@@ -160,11 +160,11 @@ class _FactRowBase(BaseModel):
     )
 
 
-class DayRowItem(_FactRowBase):
+class DayRowItem(FactRowBase):
     """天视图行。趋势渲染 7 点，历史参照点为昨天 / 3 天前 / 7 天前。"""
 
 
-class WeekRowItem(_FactRowBase):
+class WeekRowItem(FactRowBase):
     """周视图行。趋势渲染 12 点，历史参照点为上周 / 4 周前 / 12 周前。"""
 
 
