@@ -154,14 +154,26 @@ MUST NOT 由外部身份源决定谁拥有它。超级管理员仍只能由 `scr
 `GET /api/auth/sso/status` 取得 `{enabled, provider_name}` 决定显隐，MUST NOT 靠
 「请求授权地址拿到失败响应」来推断——那会让每次进入登录页都发出一个注定失败的请求。
 
+SSO 路由 SHALL **始终注册**，关闭时由端点自身答复 `sso.disabled`（404）。按开关条件注册
+路由并不能让它变得可热切换（配置是启动期读入的），只会让这段行为无法被测试覆盖。
+
 `SSO_ENABLED=true` 时，`DINGTALK_APP_KEY`、`DINGTALK_APP_SECRET`、`SSO_REDIRECT_URI`
-缺任一项，或 `SSO_DEFAULT_ROLE_CODE` 不存在于角色表，SHALL 导致**启动失败**。
-配了却不生效的 SSO 开关，其症状是员工扫完码回来看到一个说不清的错误。
+缺任一项 SHALL 导致**启动失败**（配置层判定）；`SSO_DEFAULT_ROLE_CODE` 不存在于角色表
+同样 SHALL 导致启动失败（启动期判定，需连库）。配了却不生效的 SSO 开关，其症状是员工
+扫完码回来看到一个说不清的错误。
+
+但角色检查 MUST NOT 因**数据库不可达**而中断启动——那种情况由既有的连接检查按记日志
+处理。为一个配置校验让应用在数据库抖动时起不来，比这个配置错本身更糟。
 
 #### Scenario: 关闭时登录页只有密码表单
 
 - **WHEN** `SSO_ENABLED=false`，用户打开登录页
 - **THEN** 页面不出现钉钉登录按钮，且不发出授权地址请求
+
+#### Scenario: 关闭时直接调用端点得到明确答复
+
+- **WHEN** `SSO_ENABLED=false`，直接请求 `GET /api/auth/sso/authorize-url`
+- **THEN** 返回 404、错误码 `sso.disabled`，而不是「碰巧没有这条路由」的通用 404
 
 #### Scenario: 开启但配置不全则拒绝启动
 
@@ -199,6 +211,7 @@ MUST NOT 出现在响应体中。
 | `sso.not_employee` | 403 | 不在本企业通讯录内 |
 | `sso.account_disabled` | 403 | 账号已被停用 |
 | `sso.provider_unavailable` | 503 | 钉钉服务不可达或超时 |
+| `sso.disabled` | 404 | 本部署未开启 SSO（端点被直接调用）|
 
 `sso.provider_unavailable` 单独用 503 而非 500，是为了让「钉钉挂了」与「我们的代码炸了」
 能分别设定告警策略，与既有的数据库不可用同属基础设施类。
