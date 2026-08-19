@@ -48,6 +48,9 @@ export default function AddToLibraryModal({ open, site, keywordIds, onClose, onA
       setGroups((list) => [...list, created]);
       setGroupId(created.group_id);
       setNewName('');
+    } catch {
+      // 失败提示由 app.tsx 的 errorHandler 唯一出口负责，这里只保留输入内容供重试。
+      // **catch 不能省**：见 onOk 上的说明。
     } finally {
       setLoading(false);
     }
@@ -62,6 +65,14 @@ export default function AddToLibraryModal({ open, site, keywordIds, onClose, onA
       message.success(`已加入 ${result.added} 个词${existedText}`);
       onAdded();
       onClose();
+    } catch {
+      // 失败提示由 app.tsx 的 errorHandler 唯一出口负责；这里只保证弹窗不关、选中不清，
+      // 用户可以直接重试。
+      //
+      // **这个 catch 不是可有可无的。** antd 的 Modal 不消费 onOk 的返回值（React 的
+      // 事件处理器同样不消费），所以少了它，这个 async 函数的拒绝没有任何人接——
+      // 浏览器里是一条 unhandled rejection，vitest 里则是「用例全绿但进程退出码非 0」，
+      // 后者会拦下所有人的前端提交，且报错指向测试文件而不是这里。
     } finally {
       setLoading(false);
     }

@@ -94,6 +94,30 @@ describe('导入历史屏', () => {
     await waitFor(() => expect(fetchImportBatches).toHaveBeenCalled());
   });
 
+  /**
+   * 断言的是"重导失败之后界面停在哪"，同时是**未处理拒绝的哨兵**：`handleRetry` 的返回值
+   * 没有人消费（Button 的 onClick 不消费 promise），一旦 catch 被删掉，拒绝就没人接——
+   * vitest 会让整个进程退出码非 0，而用例仍然全绿，那种红最难归因。
+   */
+  it('重导失败时不谎报成功、不刷新列表，按钮回到可点', async () => {
+    await renderWith([row()]);
+    retryImportBatch.mockRejectedValue(new Error('boom'));
+
+    const btn = retryButtonIn('DE_热门搜索词_简单_Week_2026_07_13.csv');
+    fetchImportBatches.mockClear();
+    await act(async () => {
+      await userEvent.click(btn!);
+    });
+
+    await waitFor(() => expect(retryImportBatch).toHaveBeenCalledWith(1));
+    // 失败提示由 app.tsx 的全局出口负责，这一屏只需不谎报、不刷新
+    expect(screen.queryByText(/已触发重导/)).toBeNull();
+    expect(fetchImportBatches).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(retryButtonIn('DE_热门搜索词_简单_Week_2026_07_13.csv')).toBeEnabled(),
+    );
+  });
+
   it('失败但原始文件未留存的行：重导置灰，不给一个点下去必然报错的按钮', async () => {
     await renderWith([row({ source_retained: false })]);
 
