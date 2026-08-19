@@ -816,8 +816,13 @@ ruff 根本看不见它。`git commit -a` 与 `git commit -- <路径>` 提交的
 | 改动范围 | 跑什么 | 耗时 |
 |---|---|---|
 | `app/` `scripts/` `test/` `alembic/` 及顶层 `.py` | `ruff check .` + `pytest test/ -q` | ~5s |
-| `frontend/` | `pnpm lint` + `pnpm tsc` + `pnpm test` | ~15s |
+| `frontend/` | `pnpm lint` + `pnpm tsc` + `pnpm test` | ~30s（其中 vitest 占 ~28s） |
 | 只有文档 / `openspec/` | 放行 | — |
+
+**这些检查并发跑**（`run_checks`），墙钟是最慢那条而不是各条之和：前后端都改时实测
+从 51 秒降到 42 秒。省不到"总和减最大值"那么多，因为它们要抢 CPU——vitest 本来就按
+核心数起 worker，旁边再跑 pytest 会把它自己拖慢几秒。**失败报告按传入顺序排，不按完成
+顺序**：否则同一份改动两次提交会得到不同顺序的报告，读的人无从判断是不是同一批失败。
 
 本地 `keywordiq_test` 连得上时会自动带上 `TEST_DATABASE_URL` 解开集成测试，连不上就
 只跑单元部分（不因此拒绝提交，CI 有真库兜底）。判据是**真连一次库**而不是探端口——

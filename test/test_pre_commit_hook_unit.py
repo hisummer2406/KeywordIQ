@@ -61,6 +61,76 @@ def test_timeout_is_reported_as_failure_not_a_hang(hook, monkeypatch):
     assert "超时" in out
 
 
+def test_checks_run_concurrently_not_one_after_another(hook, monkeypatch):
+    """并发是这条改动的全部意义——串行回去不会有任何检查失败，只是又慢回去。
+
+    用"同时在跑的条数"作判据，不用总耗时：后者在负载高的机器上会假红。
+    """
+    import threading
+
+    live = 0
+    peak = 0
+    guard = threading.Lock()
+    gate = threading.Barrier(3, timeout=10)
+
+    def fake_run(cmd, cwd, env=None, timeout=None):
+        nonlocal live, peak
+        with guard:
+            live += 1
+            peak = max(peak, live)
+        # 三条都到齐才放行；串行实现会在这里超时
+        gate.wait()
+        with guard:
+            live -= 1
+        return 0, ""
+
+    monkeypatch.setattr(hook, "run", fake_run)
+    checks = [(f"c{i}", ["cmd", str(i)], Path("."), {}) for i in range(3)]
+    assert hook.run_checks(checks) == []
+    assert peak == 3, f"检查没有并发跑（同时在跑的峰值只有 {peak}）"
+
+
+def test_failures_keep_input_order_not_completion_order(hook, monkeypatch):
+    """报告顺序必须只由传入顺序决定。
+
+    按完成先后排的话，同一份改动两次提交会得到不同顺序的报告，读的人无从判断
+    「这次和上次是不是同一批失败」。这里让先提交的那条故意最后完成。
+    """
+    import time
+
+    def fake_run(cmd, cwd, env=None, timeout=None):
+        if cmd == ["slow"]:
+            time.sleep(0.2)
+            return 1, "慢的失败了"
+        return 1, "快的失败了"
+
+    monkeypatch.setattr(hook, "run", fake_run)
+    checks = [
+        ("慢", ["slow"], Path("."), {}),
+        ("快", ["fast"], Path("."), {}),
+    ]
+    assert [name for name, _, _ in hook.run_checks(checks)] == ["慢", "快"]
+
+
+def test_only_failing_checks_are_reported(hook, monkeypatch):
+    """通过的检查不该出现在报告里，否则失败会被淹没。"""
+    monkeypatch.setattr(
+        hook, "run", lambda cmd, cwd, env=None, timeout=None: (0, "") if cmd == ["ok"] else (1, "炸了")
+    )
+    checks = [
+        ("好的", ["ok"], Path("."), {}),
+        ("坏的", ["bad"], Path("."), {}),
+    ]
+    failures = hook.run_checks(checks)
+    assert [name for name, _, _ in failures] == ["坏的"]
+    assert "炸了" in failures[0][2]
+
+
+def test_no_checks_is_not_an_error(hook):
+    """没有可跑的检查（只改了文档）不该炸在线程池上。"""
+    assert hook.run_checks([]) == []
+
+
 def test_postgres_up_requires_the_test_database(hook, monkeypatch):
     """端口通不等于测试库在。本机跑着别的 PostgreSQL 时端口一样是通的。"""
     monkeypatch.setattr(hook, "_port_open", lambda *a, **k: True)
