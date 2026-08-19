@@ -130,6 +130,12 @@ CODE_ANALYSIS_EXPORT_TOO_LARGE: Final = "analysis.export_too_large"
 CODE_TOOLBOX_SCOPE_INVALID: Final = "toolbox.scope_invalid"
 CODE_TOOLBOX_SORT_INVALID: Final = "toolbox.sort_invalid"
 
+# 词库（工具箱 · 我的词库）
+CODE_LIBRARY_GROUP_NOT_FOUND: Final = "library.group_not_found"
+CODE_LIBRARY_GROUP_DUPLICATE: Final = "library.group_duplicate"      # 同站点下重名
+CODE_LIBRARY_LIMIT_EXCEEDED: Final = "library.limit_exceeded"        # 分组数/条目数超上限
+CODE_LIBRARY_KEYWORD_MISMATCH: Final = "library.keyword_mismatch"    # 词不属于分组的站点
+
 # 导入与对象存储
 CODE_UPLOAD_IMPORT_REJECTED: Final = "upload.import_rejected"
 CODE_UPLOAD_OSS_NOT_READY: Final = "upload.oss_not_ready"
