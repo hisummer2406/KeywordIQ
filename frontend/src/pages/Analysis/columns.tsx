@@ -267,12 +267,13 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
 /**
  * 列宽合计，供表格的 `scroll.x` 使用。
  *
- * **不给 `scroll.x` 的话，AntD 用 `table-layout: auto`，列上的 `width` 只是建议值**——
- * 浏览器按内容多少重新分配，于是同样写 130px 的类目与品牌会渲染成两个宽度（类目名长，
- * 抢到更多）。给了确定总宽才切到 `table-layout: fixed`，`width` 才真正生效。
+ * **列宽真正生效靠的是 `tableLayout="fixed"`，不是 `scroll.x`。** rc-table 升级后
+ * 「给了 scroll.x 就切 fixed」不再成立（见 #43），表格退回 auto 布局时 `width` 只是
+ * 建议值——浏览器按内容分配，同样写 130px 的类目与品牌会渲染成两个宽度（类目名长，
+ * 抢到更多）。两处都要给：`tableLayout` 决定 width 生不生效，`scroll.x` 决定窗口
+ * 不够宽时是横向滚动还是把列压扁。
  *
- * 由列定义算出而不是写死：加列或改宽时自动同步，否则总宽与实际列宽对不上，
- * 差额又会被分摊回各列，等于回到 auto 的老问题。
+ * 由列定义算出而不是写死：加列或改宽时自动同步，否则总宽与实际列宽对不上。
  */
 export function totalColumnWidth(view: View): number {
   return buildColumns(view).reduce((sum, col) => sum + (Number(col.width) || 0), 0);

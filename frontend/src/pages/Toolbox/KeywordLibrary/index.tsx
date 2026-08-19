@@ -193,6 +193,8 @@ export default function KeywordLibraryPage() {
         search={false}
         options={false}
         dateFormatter="string"
+        // 与分析屏同因，见 #43：不显式给 tableLayout，列宽只是建议值。
+        tableLayout="fixed"
         scroll={{ x: watchTableWidth(view) }}
         pagination={{ pageSize: 50, showSizeChanger: true }}
         rowSelection={{
