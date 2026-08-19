@@ -91,11 +91,13 @@ describe('进屏即查', () => {
     expect(watchGroup.mock.calls[0][0]).toMatchObject({ group_id: 1 });
   });
 
-  it('顶栏的分组选择器带站点与条目数', async () => {
-    // 这一屏没有站点选择器，站点只能从这个标签里读到——漏掉站点，用户就无从判断
+  it('分组管理区列出分组，带站点与词数', async () => {
+    // 这一屏没有站点选择器，站点只能从分组上读到——漏掉站点，用户就无从判断
     // 表格里的排名属于哪个市场。
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('US · 主推词（3）')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
+    expect(screen.getByText('US')).toBeTruthy();
+    expect(screen.getByText('3')).toBeTruthy();
   });
 
   it('站点由分组决定，界面写明这一点', async () => {
@@ -182,7 +184,7 @@ describe('空状态', () => {
     // 「这个分组还没有词」在没有分组时是错的：它把用户引向去加词，而他缺的是先建组。
     listGroups.mockResolvedValue([]);
     await renderSettled();
-    await waitFor(() => expect(screen.getByText(/点「管理分组」新建一个/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/先在上面新建一个分组/)).toBeTruthy());
     expect(screen.queryByText(/这个分组还没有词/)).toBeNull();
   });
 });
@@ -196,14 +198,17 @@ describe('入库入口不在这一屏', () => {
   });
 });
 
-describe('顶栏形态', () => {
-  it('主屏不再常驻分组面板，管理动作收在弹窗入口后面', async () => {
-    // 侧栏形态下盯盘表格有近 400px 被裁进横向滚动（1920 视口实测），
-    // 而分组一览换不来这个代价。
+describe('横向宽度', () => {
+  it('分组管理区横铺在表格上方，不做侧栏', async () => {
+    // 侧栏形态下盯盘表格有近 400px 被裁进横向滚动（1920 视口实测）。分组一览有价值，
+    // 但代价必须落在纵向：纵向可以滚，横向被裁掉的列是找不回来的。
     await renderSettled();
-    await waitFor(() => expect(screen.getByRole('button', { name: /管理分组/ })).toBeTruthy());
-    // 管理动作只在弹窗里出现，主屏上不该有重命名/删除按钮
-    expect(screen.queryByTitle('重命名')).toBeNull();
-    expect(screen.queryByTitle('删除分组')).toBeNull();
+    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
+
+    const bar = screen.getByText('主推词').closest('.ant-card') as HTMLElement;
+    const table = document.querySelector('.ant-table') as HTMLElement;
+    // 管理区与表格是上下两块（同一个父容器里的兄弟节点），不是左右分栏
+    expect(bar.contains(table)).toBe(false);
+    expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy();
   });
 });
