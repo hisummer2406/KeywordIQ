@@ -91,10 +91,11 @@ describe('进屏即查', () => {
     expect(watchGroup.mock.calls[0][0]).toMatchObject({ group_id: 1 });
   });
 
-  it('分组列表带条目数', async () => {
+  it('顶栏的分组选择器带站点与条目数', async () => {
+    // 这一屏没有站点选择器，站点只能从这个标签里读到——漏掉站点，用户就无从判断
+    // 表格里的排名属于哪个市场。
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
-    expect(screen.getByText('(3)')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('US · 主推词（3）')).toBeTruthy());
   });
 
   it('站点由分组决定，界面写明这一点', async () => {
@@ -177,17 +178,11 @@ describe('空状态', () => {
     await waitFor(() => expect(screen.getByText(/还没有导入任何数据/)).toBeTruthy());
   });
 
-  it('一个分组都没有时列表给出空提示', async () => {
-    listGroups.mockResolvedValue([]);
-    await renderSettled();
-    await waitFor(() => expect(screen.getByText('还没有分组')).toBeTruthy());
-  });
-
   it('一个分组都没有时，表格说的是「先建一个分组」而不是「这个分组还没有词」', async () => {
     // 「这个分组还没有词」在没有分组时是错的：它把用户引向去加词，而他缺的是先建组。
     listGroups.mockResolvedValue([]);
     await renderSettled();
-    await waitFor(() => expect(screen.getByText(/先在左边新建一个分组/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/点「管理分组」新建一个/)).toBeTruthy());
     expect(screen.queryByText(/这个分组还没有词/)).toBeNull();
   });
 });
@@ -195,8 +190,20 @@ describe('空状态', () => {
 describe('入库入口不在这一屏', () => {
   it('界面上没有新增关键词的入口', async () => {
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
-    // 「新建」是建分组，不是加词；不应出现任何加词/粘贴录入的按钮
+    await waitFor(() => expect(screen.getByText(/由分组决定/)).toBeTruthy());
+    // 「管理分组」管的是分组，不是词；不应出现任何加词/粘贴录入的按钮
     expect(screen.queryByRole('button', { name: /加词|添加关键词|粘贴/ })).toBeNull();
+  });
+});
+
+describe('顶栏形态', () => {
+  it('主屏不再常驻分组面板，管理动作收在弹窗入口后面', async () => {
+    // 侧栏形态下盯盘表格有近 400px 被裁进横向滚动（1920 视口实测），
+    // 而分组一览换不来这个代价。
+    await renderSettled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /管理分组/ })).toBeTruthy());
+    // 管理动作只在弹窗里出现，主屏上不该有重命名/删除按钮
+    expect(screen.queryByTitle('重命名')).toBeNull();
+    expect(screen.queryByTitle('删除分组')).toBeNull();
   });
 });
