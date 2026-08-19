@@ -33,6 +33,18 @@ export default defineConfig({
     { path: '/', redirect: '/analysis' },
     { name: '登录', path: '/login', component: './Login', layout: false },
     {
+      // 钉钉扫码后由钉钉 302 回这里。**不挂 access 守卫**：此刻还没有令牌，挂了就
+      // 永远进不来。也不套 ProLayout——它是一个过场屏，不该出现顶栏与菜单。
+      //
+      // 重定向 URL 在钉钉开发者后台登记的必须是这条地址（SSO_REDIRECT_URI 与它一致），
+      // 且 nginx 需让它走 SPA 的 history fallback（现有配置已经如此）。
+      name: '钉钉登录回调',
+      path: '/sso/callback',
+      component: './SsoCallback',
+      layout: false,
+      hideInMenu: true,
+    },
+    {
       name: 'ABA数据选品',
       path: '/analysis',
       component: './Analysis',
