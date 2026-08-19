@@ -60,13 +60,23 @@ export default function GroupBar({
         onChanged(draft.groupId);
       }
       setDraft(null);
+    } catch {
+      // 失败提示由 app.tsx 的 errorHandler 唯一出口负责，这里只保留草稿供重试
+      // （重名是这条路径最常见的失败，输入框留着才改得动）。
+      // **catch 不能省**：Button 的 onClick 不消费返回的 promise，少了它就是一条
+      // unhandled rejection——浏览器里进控制台，vitest 里让整个进程退出码非 0。
     } finally {
       setBusy(false);
     }
   };
 
   const remove = async (group: KeywordGroup) => {
-    await onDelete(group);
+    try {
+      await onDelete(group);
+    } catch {
+      // 同上：删除失败时不通知主屏刷新（分组还在），提示交给全局出口。
+      return;
+    }
     // 不指定选中项：删掉的可能正是当前分组，交给主屏回落到第一个。
     onChanged();
   };

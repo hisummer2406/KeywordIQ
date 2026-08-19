@@ -117,6 +117,41 @@ describe('分组管理区', () => {
     expect(onChanged).toHaveBeenCalledWith();
   });
 
+  /**
+   * 失败路径的两条。断言的是"失败之后界面停在哪"，但它们同时是**未处理拒绝的哨兵**：
+   * 这两个 handler 的返回值没有任何人消费（Button 的 onClick、Popconfirm 的 onConfirm），
+   * 一旦有人把 `submit` / `remove` 里的 catch 删掉，拒绝就没人接——vitest 会把它算成
+   * unhandled error，让整个进程退出码非 0，而用例本身仍然全绿。那种红最难归因，
+   * 所以这里留了两条会走到拒绝的路径。
+   */
+  it('新建失败时保留草稿、不通知主屏——重名是最常见的失败，输入框留着才改得动', async () => {
+    const { onCreate, onChanged } = setup();
+    onCreate.mockRejectedValue(new Error('已有同名分组'));
+
+    fireEvent.click(screen.getByRole('button', { name: /新建分组/ }));
+    fireEvent.change(screen.getByPlaceholderText(/分组名/), { target: { value: '重名的组' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+    });
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue('重名的组')).toBeTruthy();
+  });
+
+  it('删除失败时不通知主屏——分组还在，刷新只会让它闪一下又回来', async () => {
+    const { onDelete, onChanged } = setup();
+    onDelete.mockRejectedValue(new Error('boom'));
+
+    fireEvent.click(screen.getByTitle('删除「主推词」'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /删\s*除/ }));
+    });
+
+    await waitFor(() => expect(onDelete).toHaveBeenCalled());
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
   it('一个分组都没有时给出下一步该做什么', async () => {
     setup([]);
     expect(screen.getByText(/还没有分组/)).toBeTruthy();
