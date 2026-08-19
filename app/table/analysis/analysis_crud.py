@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session, aliased
@@ -66,8 +66,13 @@ SORTABLE_FIELDS = frozenset(
 _DEFAULT_ORDER = "current_ranking"
 
 
-def _fact_and_datecol(view: str):
-    """按视图返回 (事实表模型, 日期列)。"""
+def fact_and_datecol(view: str):
+    """按视图返回 (事实表模型, 日期列)。
+
+    公开给词库盯盘用。**分区列名两表不同**（日报 ``report_date``、周报
+    ``report_date_week``），照着日报的列名写周报查询会直接报 ``UndefinedColumn``，
+    所以任何跨视图的查询都该从这里取列，而不是自己写列名。
+    """
     if view == "WEEK":
         return FactWeekly, FactWeekly.report_date_week
     return FactDaily, FactDaily.report_date
@@ -151,66 +156,116 @@ def shape_dropped_rows(rows) -> list[dict[str, Any]]:
     return [dict(r._mapping) | {"is_dropped": True} for r in rows]
 
 
-def _base_query(site: str, view: str, on: date):
-    """作用域恒定的 base query：单站点单日期切片 JOIN 维度。
+class FactRowDims(NamedTuple):
+    """一行结果所需的维度别名。
+
+    调用方各建一组（``new_fact_row_dims()``），再交给 ``fact_metric_columns`` 与
+    ``join_fact_row_dims``。三者必须拿同一组，否则 SELECT 里引用的别名不在 FROM 里。
+    """
+
+    p2: Any
+    p3: Any
+    b1: Any
+    b2: Any
+    b3: Any
+    g1: Any
+    g2: Any
+    g3: Any
+
+
+def new_fact_row_dims() -> FactRowDims:
+    return FactRowDims(
+        p2=aliased(DimProduct),
+        p3=aliased(DimProduct),
+        b1=aliased(DimBrand),
+        b2=aliased(DimBrand),
+        b3=aliased(DimBrand),
+        g1=aliased(DimCategory),
+        g2=aliased(DimCategory),
+        g3=aliased(DimCategory),
+    )
+
+
+def fact_metric_columns(fact, dims: FactRowDims) -> list:
+    """一行结果的**指标列**（不含 keyword_id / keyword 这两个身份列）。
+
+    **这份投影只有这一处定义**，分析查询屏与词库盯盘屏共用。两屏若各写一份，分叉不会
+    报错——表现是同一个词在两屏显示不同的值，而没有任何测试会指向这里。身份列留给调用方
+    自己给：分析屏从事实表取，词库盯盘从条目表取（那边事实行可能整行为空）。
 
     三个商品槽位的关联方式**刻意不对称**：top1 用未取别名的 ``DimProduct``，top2/top3
     各用一个 alias。因为 ``_apply_filters`` 里剩余的商品维度筛选（ASIN、标题、份额）都写在
     ``DimProduct`` 上，这样一来 alias 对筛选代码**不可见**——想让它们扩散到第二、第三名，
     必须显式改 ``_apply_filters`` 去引用 alias。口径由此是结构事实，而不是一条后来者会
     无意打破的约定。
-
-    **品牌与类目不走这个结构**：它们是关键词级的独立排行，直接挂在事实表的六个引用列上，
-    筛选是"前三任一命中"（见 ``_apply_filters``），与商品槽位无关。
     """
-    fact, date_col = _fact_and_datecol(view)
-    p2 = aliased(DimProduct)
-    p3 = aliased(DimProduct)
-    b1, b2, b3 = (aliased(DimBrand) for _ in range(3))
-    g1, g2, g3 = (aliased(DimCategory) for _ in range(3))
+    return [
+        fact.current_ranking.label("current_ranking"),
+        fact.previous_ranking.label("previous_ranking"),
+        fact.ranking_change.label("ranking_change"),
+        fact.is_new.label("is_new"),
+        DimProduct.asin.label("top1_asin"),
+        DimProduct.title.label("top1_title"),
+        fact.top1_click_share.label("top1_click_share"),
+        fact.top1_conversion_share.label("top1_conversion_share"),
+        dims.p2.asin.label("top2_asin"),
+        dims.p2.title.label("top2_title"),
+        fact.top2_click_share.label("top2_click_share"),
+        fact.top2_conversion_share.label("top2_conversion_share"),
+        dims.p3.asin.label("top3_asin"),
+        dims.p3.title.label("top3_title"),
+        fact.top3_click_share.label("top3_click_share"),
+        fact.top3_conversion_share.label("top3_conversion_share"),
+        # 关键词级的前三品牌与前三类目，名次由列位置承载
+        dims.b1.name.label("top1_brand"),
+        dims.b2.name.label("top2_brand"),
+        dims.b3.name.label("top3_brand"),
+        dims.g1.name.label("top1_category"),
+        dims.g2.name.label("top2_category"),
+        dims.g3.name.label("top3_category"),
+    ]
+
+
+def join_fact_row_dims(stmt, fact, dims: FactRowDims):
+    """把 ``fact_metric_columns`` 引用到的维度表按主键 LEFT JOIN 进来。
+
+    全部是按主键的外连接：每页几十行即几十次主键探查，相对事实表的分区扫描可忽略；
+    且这些 alias 只出现在 SELECT 与 JOIN 条件里、不进 WHERE，故不改变既有执行计划。
+
+    **品牌与类目不走商品槽位那套结构**：它们是关键词级的独立排行，直接挂在事实表的六个
+    引用列上，筛选是"前三任一命中"（见 ``_apply_filters``），与商品槽位无关。
+    """
+    return (
+        stmt.join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
+        .join(dims.p2, dims.p2.product_id == fact.top2_product_id, isouter=True)
+        .join(dims.p3, dims.p3.product_id == fact.top3_product_id, isouter=True)
+        .join(dims.b1, dims.b1.brand_id == fact.top1_brand_id, isouter=True)
+        .join(dims.b2, dims.b2.brand_id == fact.top2_brand_id, isouter=True)
+        .join(dims.b3, dims.b3.brand_id == fact.top3_brand_id, isouter=True)
+        .join(dims.g1, dims.g1.category_id == fact.top1_category_id, isouter=True)
+        .join(dims.g2, dims.g2.category_id == fact.top2_category_id, isouter=True)
+        .join(dims.g3, dims.g3.category_id == fact.top3_category_id, isouter=True)
+    )
+
+
+def _base_query(site: str, view: str, on: date):
+    """作用域恒定的 base query：单站点单日期切片 JOIN 维度。
+
+    列投影与维度关联由 ``fact_metric_columns`` / ``join_fact_row_dims`` 提供，与词库盯盘屏
+    共用同一份——两屏各写一份的话，分叉的表现是同一个词在两屏显示不同的值，且不报错。
+    """
+    fact, date_col = fact_and_datecol(view)
+    dims = new_fact_row_dims()
     stmt = (
         select(
             fact.keyword_id.label("keyword_id"),
             DimKeyword.keyword.label("keyword"),
-            fact.current_ranking.label("current_ranking"),
-            fact.previous_ranking.label("previous_ranking"),
-            fact.ranking_change.label("ranking_change"),
-            fact.is_new.label("is_new"),
-            DimProduct.asin.label("top1_asin"),
-            DimProduct.title.label("top1_title"),
-            fact.top1_click_share.label("top1_click_share"),
-            fact.top1_conversion_share.label("top1_conversion_share"),
-            p2.asin.label("top2_asin"),
-            p2.title.label("top2_title"),
-            fact.top2_click_share.label("top2_click_share"),
-            fact.top2_conversion_share.label("top2_conversion_share"),
-            p3.asin.label("top3_asin"),
-            p3.title.label("top3_title"),
-            fact.top3_click_share.label("top3_click_share"),
-            fact.top3_conversion_share.label("top3_conversion_share"),
-            # 关键词级的前三品牌与前三类目，名次由列位置承载
-            b1.name.label("top1_brand"),
-            b2.name.label("top2_brand"),
-            b3.name.label("top3_brand"),
-            g1.name.label("top1_category"),
-            g2.name.label("top2_category"),
-            g3.name.label("top3_category"),
+            *fact_metric_columns(fact, dims),
         )
         .select_from(fact)
         .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
-        .join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
-        # 按 dim_product 主键关联，每页几十行即几十次主键探查，相对事实表的分区扫描可忽略。
-        # 两个 alias 只出现在 SELECT 与 JOIN 条件里、不进 WHERE，故不改变既有执行计划。
-        .join(p2, p2.product_id == fact.top2_product_id, isouter=True)
-        .join(p3, p3.product_id == fact.top3_product_id, isouter=True)
-        .join(b1, b1.brand_id == fact.top1_brand_id, isouter=True)
-        .join(b2, b2.brand_id == fact.top2_brand_id, isouter=True)
-        .join(b3, b3.brand_id == fact.top3_brand_id, isouter=True)
-        .join(g1, g1.category_id == fact.top1_category_id, isouter=True)
-        .join(g2, g2.category_id == fact.top2_category_id, isouter=True)
-        .join(g3, g3.category_id == fact.top3_category_id, isouter=True)
-        .where(fact.site == site, date_col == on)
     )
+    stmt = join_fact_row_dims(stmt, fact, dims).where(fact.site == site, date_col == on)
     return stmt, fact
 
 
@@ -221,7 +276,7 @@ def _count_base_query(site: str, view: str, on: date):
     的关联对"有多少行"毫无贡献（LEFT JOIN 主键不改变行数），带上就是纯粹的开销。
     筛选条件引用的维度在两条路径上完全一致，故 ``_apply_filters`` 两边通用。
     """
-    fact, date_col = _fact_and_datecol(view)
+    fact, date_col = fact_and_datecol(view)
     stmt = (
         select(fact.keyword_id.label("keyword_id"))
         .select_from(fact)
@@ -425,7 +480,7 @@ def slice_has_brand_data_stmt(site: str, view: str, on: date):
     只探 top1：某个关键词可能确实只有一个品牌，但一整个切片不可能所有关键词的第一品牌
     都为空——除非它还没重导过。
     """
-    fact, date_col = _fact_and_datecol(view)
+    fact, date_col = fact_and_datecol(view)
     return (
         select(fact.keyword_id)
         .where(fact.site == site, date_col == on, fact.top1_brand_id.isnot(None))
