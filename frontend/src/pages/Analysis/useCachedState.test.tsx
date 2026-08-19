@@ -56,6 +56,26 @@ describe('useCachedState', () => {
     expect(calls).toBe(1);
   });
 
+  /**
+   * 迟到的响应不该再写快照。
+   *
+   * 快照是模块级的、活过组件一生，而 `set` 会被用户切走之后才落地的请求调用。放任它写，
+   * 生产上是"切回来看到自己已经离开的那次查询的状态"；测试里更凶——快照跨用例存活，
+   * 上一个用例的迟到响应会在下一个用例的 `clearSnapshot()` **之后**把值写回来，
+   * 下一个用例挂载时读到非空快照就走复原短路、一个请求都不发。表现是一批与改动毫无
+   * 关系的用例随机翻红，且每次翻红的都不是同一批。
+   */
+  it('卸载之后 set 不再写快照——迟到的响应不能污染下一次挂载', () => {
+    const { result, unmount } = renderHook(() => useCachedState('appliedSig', ''));
+    const setter = result.current[1];
+    unmount();
+    clearSnapshot();
+
+    act(() => setter('迟到的值'));
+
+    expect(readSnapshot()).toBeNull();
+  });
+
   it('清空快照后回到初值', () => {
     const first = renderHook(() => useCachedState('appliedSig', 'fallback'));
     act(() => first.result.current[1]('sig-1'));
