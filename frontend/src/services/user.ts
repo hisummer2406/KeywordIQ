@@ -6,6 +6,10 @@ import { request } from '@umijs/max';
 export interface UserRow {
   id: number;
   user_name: string;
+  /** 展示名。SSO 账号取自身份源姓名；本地账号通常为空。 */
+  display_name: string | null;
+  /** 账号来源。null = 本地账号（可用密码登录）；'dingtalk' = 钉钉扫码自动建档。 */
+  external_idp: string | null;
   is_active: boolean;
   is_super: boolean;
   role_id: number | null;

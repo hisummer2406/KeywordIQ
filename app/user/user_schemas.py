@@ -65,6 +65,10 @@ class UserCenterList(BaseModel):
 
     id: int
     user_name: str
+    # 展示名与来源：让管理员一眼分得清哪些账号是钉钉扫码自动建的、哪些是本地建的。
+    # 二者的可管理性不同——本地账号能改密码，SSO 账号没有密码可改。
+    display_name: str | None = None
+    external_idp: str | None = None
     is_active: bool
     is_super: bool
     role_id: int | None = None

@@ -151,6 +151,14 @@ CODE_USER_DUPLICATE_NAME: Final = "user.duplicate_name"
 CODE_USER_NOT_FOUND: Final = "user.not_found"
 CODE_USER_SUPER_PROTECTED: Final = "user.super_protected"
 
+# 钉钉单点登录
+CODE_SSO_STATE_INVALID: Final = "sso.state_invalid"
+CODE_SSO_CODE_INVALID: Final = "sso.code_invalid"
+CODE_SSO_NOT_EMPLOYEE: Final = "sso.not_employee"
+CODE_SSO_ACCOUNT_DISABLED: Final = "sso.account_disabled"
+CODE_SSO_PROVIDER_UNAVAILABLE: Final = "sso.provider_unavailable"
+CODE_SSO_DISABLED: Final = "sso.disabled"
+
 # 基础设施与兜底
 CODE_DB_UNAVAILABLE: Final = "db.unavailable"
 CODE_DB_ERROR: Final = "db.error"
