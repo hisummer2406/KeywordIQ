@@ -88,9 +88,9 @@
 - [ ] 8.1 `scripts/check_dingtalk_sso.py`：打印授权 URL 供人工扫码，随后逐步跑通
       authCode → userAccessToken → users/me → 企业 accessToken → getbyunionid →
       v2/user/get，逐项断言，退出码非 0 即有项未通过
-- [ ] 8.2 CLAUDE.md 的「Authentication & Authorization」一节补写 SSO：直连钉钉而非 OIDC、
+- [x] 8.2 CLAUDE.md 的「Authentication & Authorization」一节补写 SSO：直连钉钉而非 OIDC、
       账号只按 unionId 匹配的理由、`is_super` 恒假、本地登录的逃生通道定位
-- [ ] 8.3 全量回归：`uv run pytest test/`（含 `TEST_DATABASE_URL` 解开的集成部分）
+- [x] 8.3 全量回归：`uv run pytest test/`（含 `TEST_DATABASE_URL` 解开的集成部分）
       与 `pnpm lint && pnpm tsc && pnpm test` 全绿
 - [ ] 8.4 人工验收：`SSO_ENABLED=false` 时密码登录不受影响；置 true 后真机扫码走通一次；
       用离职账号或通讯录外账号验证被拒
@@ -125,8 +125,23 @@
   `UndefinedColumnError` **硬失败**而不是跳过，把提交门禁整个拦住——而那是「环境没
   准备好」不是「代码错了」。
 
-  **剩下的两项都要真实凭证**：8.2（CLAUDE.md，可做，但要先把 v2 合进来免得撞
-  CLAUDE.md 的冲突）、8.3/8.4（全量回归与真机扫码验收）。
+- **2026-08-19（续三）**：合并 origin/v2（词库变更已进主线），8.2 与 8.3 完成（34/35）。
+
+  合并后出现**两个 alembic head**（本迁移与词库迁移都从 `f2a3b4c5d6e7` 分叉），
+  `alembic upgrade head` 会直接报 Multiple head revisions。已把本迁移重挂到
+  `84424d8024bc` 之后串成线性，理由写在迁移里。**在全新库上重跑了一次**整条链
+  （旧验证库的链条已经不同，重跑绿了不算数）：604 passed / 1 skipped，含词库测试、
+  SSO 集成测试与模型-迁移比对。
+
+  **只剩 8.4 人工验收**，需要钉钉开发者后台管理员权限：建企业内部应用、取
+  AppKey/AppSecret、登记重定向 URL、开通讯录读权限，然后跑
+  `scripts/check_dingtalk_sso.py` 并真机扫码一次。
+
+  另记一个**与本变更无关的既有缺陷**：全量 `pnpm test` 偶发失败（分析查询屏与导入
+  历史屏，每次挑中的用例都不一样），单独跑那些文件永远是绿的。已确认在干净 v2 上同样
+  发生。两类成因：`findBy*` 的 1000ms 默认超时在满负载下不够（已把 `asyncUtilTimeout`
+  抬到 5000ms），以及 `renderSettled` 只 `await` 一个 act 周期就用同步 `getByRole`
+  断言（**未修**，要改测试本身，且分析屏正被其他变更改动）。它会随机拦下提交门禁。
 
   **阻塞原因**：需要钉钉开发者后台的管理员权限才能建企业内部应用、取得
   AppKey/AppSecret 并配置重定向 URL 与通讯录读取权限。已向人事申请，等待授权。

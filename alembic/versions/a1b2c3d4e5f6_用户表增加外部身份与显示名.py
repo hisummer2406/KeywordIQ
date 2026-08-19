@@ -1,7 +1,7 @@
 """用户表增加外部身份与显示名，口令散列放宽为可空
 
 Revision ID: a1b2c3d4e5f6
-Revises: f2a3b4c5d6e7
+Revises: 84424d8024bc
 Create Date: 2026-08-19
 
 钉钉单点登录（变更 dingtalk-sso，issue #36）的数据模型部分。普通表加列，
@@ -36,7 +36,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a1b2c3d4e5f6"
-down_revision: Union[str, None] = "f2a3b4c5d6e7"
+# 重挂到 84424d8024bc 之后：本迁移与并行会话的词库迁移都从 f2a3b4c5d6e7 分叉，合并后
+# 成了两个 head，`alembic upgrade head` 会直接报「Multiple head revisions are present」。
+# 两条迁移之间没有实质依赖（一个动 user_center，一个建词库表），串成线性即可。
+down_revision: Union[str, None] = "84424d8024bc"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
