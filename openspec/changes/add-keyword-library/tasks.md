@@ -71,6 +71,6 @@
 
 - [x] 7.1 CLAUDE.md 增词库一节：两张表、行集合由条目决定（与分析屏相反）、两个上限、
       入库入口唯一、不新增权限点
-- [ ] 7.2 `uv run pytest test/ -q` + `pnpm lint && pnpm tsc && pnpm test` 全绿
+- [x] 7.2 `uv run pytest test/ -q` + `pnpm lint && pnpm tsc && pnpm test` 全绿
 - [ ] 7.3 人工验收：建组 → 分析屏加词 → 盯盘看三种状态 → 删组
-- [ ] 7.4 按路径提交、开 PR（`--base v2`，带变更 id、`Refs #37`、spec delta 文件清单）
+- [x] 7.4 按路径提交、开 PR（`--base v2`，带变更 id、`Refs #37`、spec delta 文件清单）
