@@ -63,6 +63,10 @@ export default function ImportHistoryPage() {
       // 失败提示由 app.tsx 的 errorHandler 唯一出口负责，这里只管成功路径
       message.success('已触发重导，稍后可在列表中看到新的批次');
       actionRef.current?.reload();
+    } catch {
+      // 失败提示同样由那个唯一出口负责；这里只保证不谎报成功、不刷新列表。
+      // **catch 不能省**：Button 的 onClick 不消费返回的 promise，少了它就是一条
+      // unhandled rejection——vitest 会因此让整个进程退出码非 0（用例却全绿）。
     } finally {
       setRetrying(null);
     }
