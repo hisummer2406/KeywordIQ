@@ -128,7 +128,7 @@ ABA 是词级数据，运营真正要的是"品类机会"。对关键词做分�
 
 ### P1：Agent 化 —— 对标 Business Research
 
-这是 Accio 最值得抄的产品形态，而非它的功能清单：
+这是 Accio 最值得抄的产品形态，而非它的功能清单（**完整设计见第 8 节**）：
 
 - 把现有 15+ 筛选维度封装成 **function calling 工具集**（本质是把 `AnalysisSearchRequest` 的字段暴露给模型），做"自然语言 → 结构化查询"。运营说"帮我找美国站厨房类目下、周排名 5000 以内、Top3 点击份额低于 30% 的上升词"，系统直接给结果。
 - 在查询结果之上生成**选品简报**：机会词清单 + 竞争格局 + 风险提示 + 建议动作，支持导出（对标 Accio 的结构化实时报告）。
@@ -152,7 +152,124 @@ Accio 缺需求侧证据，我们缺供给侧货源。若后续接入 1688/供�
 
 ---
 
-## 8. 不确定性与后续核实建议
+## 8. Agent 化设计要点（对标 Business Research 的落地方案）
+
+第 7 节的 P1 只给了方向，本节是具体设计。核心判断：**Accio 对我们的价值不在功能清单，在它证明了"数据 → 结论 → 动作"这条链路的产品形态成立。**
+
+### 8.1 前提：Agent 化的顺序不能倒
+
+Accio 能 Agent 化，是因为它下面有供应商库 + 商品库这个**可执行的底座** —— Agent 说"找这家厂"，底下真有动作可做。
+
+KeywordIQ 目前底下只有一张原始 ABA 大表。**如果直接在上面套聊天框，Agent 只能把表格行念一遍，产出就是"一个更花哨的搜索框"** —— 这是最容易踩的坑。
+
+因此顺序必须是：**先做 P0 机会评分（不含任何 LLM）→ 再做 Agent。**
+`opportunity_score`、Top3 点击份额之和、品牌垄断度、趋势斜率算出来之后，Agent 才有"观点"可讲 ——
+"这个词头部集中度只有 18%，且 Top3 无同品牌，是可切入的分散词"有信息量；
+"这个词日排名 3200"没有。
+
+### 8.2 工具面：不做 text-to-SQL
+
+**明确排除给模型开放裸 SQL 通道。** 在 2C4G 的 RDS + 200 并发读场景下，一条模型生成的全表扫描就足以拖垮生产库，且无法审计、无法拦截。
+
+正确做法是 **3–5 个窄口径专用工具**，本质是把现有 service 层原样暴露：
+
+| 工具 | 复用现有实现 |
+|------|--------------|
+| `search_keywords(...)` | `AnalysisSearchRequest` + 现有 `/search` |
+| `get_categories()` | 现有 `/categories`，避免模型臆造类目名 |
+| `rank_opportunities(...)` | P0 机会分榜单（读物化视图） |
+| `get_keyword_trend(keyword)` | `ranking_trend_day` 的 7 日 JSONB |
+| `export_report(...)` | 生成选品简报 / Excel |
+
+**关键省事点**：工具的 `input_schema` 不必手写，可由 `AnalysisSearchRequest.model_json_schema()` 生成 ——
+模型产出的参数天然能被现有 Pydantic 校验接住；再配 `strict: true` + `additionalProperties: false`，
+可保证 `tool_use.input` 严格符合 schema。排序字段继续走现有 `ALLOWED_ANALYSIS_ORDER_FIELDS` 白名单。
+**Agent 全程不接触 SQL 字符串。**
+
+### 8.3 形态选型：Tool Runner
+
+| 方案 | 结论 |
+|------|------|
+| Managed Agents（Anthropic 托管循环 + 沙箱容器） | ❌ 过度设计：数据在自有 RDS，工具是内部服务，不需要沙箱 |
+| 手写 agent loop | ❌ 无谓的维护成本 |
+| **Claude API + Tool Runner** | ✅ 只写工具函数，SDK 跑循环，per-turn hook 可做审批 / 日志 / 成本拦截 |
+| Claude Agent SDK | ❌ 那是编码型 Agent 的库，与本场景无关 |
+
+FastAPI 项目必须走异步路径（`@beta_async_tool` + `AsyncAnthropic`），否则直接违反项目"重任务不得运行在事件循环上"的约束：
+
+```python
+from anthropic import AsyncAnthropic, beta_async_tool
+
+client = AsyncAnthropic()
+
+@beta_async_tool
+async def search_keywords(...) -> str:
+    """按多维条件检索 ABA 搜索词。..."""
+    # 走独立只读 session，强制 LIMIT，不复用请求 session
+
+runner = client.beta.messages.tool_runner(
+    model="claude-opus-5",
+    max_tokens=16000,
+    thinking={"type": "adaptive"},
+    output_config={"effort": "medium"},
+    tools=[search_keywords, get_categories, rank_opportunities],
+    messages=[...],
+)
+```
+
+高并发场景安装 `anthropic[aiohttp]` 并使用 `DefaultAioHttpClient`。
+
+### 8.4 成本控制：绕开 Accio 的坑
+
+Accio 最集中的差评是"3 个 RFQ 一天烧光 credit"。我们的结构比它有利：
+**system prompt（字段语义 + 类目黑名单 + 业务规则）与工具定义是完全稳定的前缀**，
+200 名运营反复查询同一批内容，prompt caching 命中率会很高，缓存读约为 0.1x 成本。
+
+- 稳定内容放前面，用户问题放在最后一个 cache breakpoint 之后。
+- **禁止在 system prompt 中放 `datetime.now()`、UUID 等易变内容** —— 这是缓存静默失效最常见的原因。
+- 上线后以 `usage.cache_read_input_tokens` 验证；长期为 0 说明前缀被破坏。
+- 日常查询解析用 `output_config: {"effort": "medium"}`（更少工具调用、更少铺垫），报告生成再上 `high`。
+- 简报类长输出用 `.stream()` + `get_final_message()` 避免 HTTP 超时；生成走后台任务，不在请求内同步等待。
+- 追加护栏：单用户调用频率限制、`count_tokens` 预估、相同筛选条件的简报结果缓存复用。
+
+API 注意事项（避免沿用过时写法）：Opus 5 上 `budget_tokens` 已移除（传入返回 400），
+extended thinking 一律用 `thinking={"type": "adaptive"}`；assistant prefill 已不支持，
+需要控制输出格式请用 structured outputs。
+
+### 8.5 输出形态：抄"结构化"，不是"会聊天"
+
+Accio 的 Business Research 是"输入宽泛目标 → 输出结构化报告"，关键词是**结构化**。
+用 `output_config: {"format": ...}` 把简报字段固定下来（机会词清单 / 竞争格局 / 风险提示 / 建议动作），
+才能做到前端稳定渲染、结果入库、与历史版本对比。让模型自由输出 markdown 是后期最难维护的选择。
+
+### 8.6 把 Accio 的短板当验收标准
+
+| Accio 的问题 | 我们的验收要求 |
+|--------------|----------------|
+| 没有供应商比价工作台，决策最后一公里仍靠手工 | Agent 给出结论后**必须落回可继续手工筛选的表格视图**；人机交接点设计不好，运营会绕过 Agent |
+| 营销文案生成通用平庸 | 不做文案生成，只做有独家数据优势的判断（哪个词值得做） |
+| 学习曲线 3–4 小时 | 用户是 200 名运营专员而非技术人员，入口必须是**预设问题模板**（"本周暴涨词""低垄断度机会词"）+ 一句话补充，而不是教人写 prompt |
+| 定价与消耗不透明 | 即便是内部系统，也要有可见的 token / 调用用量看板 |
+
+### 8.7 分期路线
+
+| 阶段 | 内容 | 是否依赖 LLM |
+|------|------|--------------|
+| Phase 0 | 机会评分 + 榜单（物化视图，导入收尾刷新） | 否 |
+| Phase 1 | Tool Runner + 3 个只读工具 + 结构化选品简报 | 是 |
+| Phase 2 | 多轮追问与会话记忆，用 context editing 控制上下文增长 | 是 |
+
+### 8.8 工程红线（对应 `CLAUDE.md`）
+
+- LLM 调用为长耗时 I/O，必须异步，**不得阻塞事件循环**；报告生成走后台任务 + 轮询/推送。
+- 工具执行使用独立的只读数据库 session，强制 `LIMIT`，不复用请求 session 承载长任务；注意连接数总量不得逼近 RDS 400 上限。
+- 模型产出的查询参数必须经过现有 Pydantic 校验与 `ALLOWED_ANALYSIS_ORDER_FIELDS` 白名单，禁止拼接裸 SQL。
+- 新增模块（建议 `app/agent/`）遵循 model / crud / service / api 分层；表与视图变更走 Alembic，目标 schema 为 `analysis`。
+- 新增配置项（`ANTHROPIC_API_KEY`、模型名、effort、频率限制等）同步更新 `.env.example`，注明单位与安全默认值。
+
+---
+
+## 9. 不确定性与后续核实建议
 
 1. 官网未能直接访问，**功能细节（实际报告字段、图表形式、Agent 编排 UI）为二手信息**，建议人工注册 Free 账号实测 Business Research 的输出结构，这是对标 P1 的关键输入。
 2. 价格与 credit 额度来自第三方评测站，Accio 定价被普遍描述为"不透明"，可能已变动。
