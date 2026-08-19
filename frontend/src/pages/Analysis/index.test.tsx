@@ -1066,4 +1066,36 @@ describe('分析查询屏', () => {
       expect(addButton()).toBeNull();
     });
   });
+
+  /**
+   * 列宽能不能生效，取决于表格用的是 `table-layout: fixed` 还是 `auto`。
+   *
+   * 这条守的是**升级导致的无声退化**：rc-table 早期版本里「给了 `scroll.x` 就切 fixed」
+   * 成立，7.54 之后不再成立（判据只剩：显式 tableLayout / 固定列 / scroll.y 或粘性头 /
+   * 某列开 ellipsis）。退化时没有任何报错，只是列宽悄悄变回建议值——实测关键词列 220
+   * 渲染成 247、表格 1578 撑到 1792。见 #43。
+   *
+   * 断言落在**渲染出来的 table 元素**上而不是 props：props 只能证明我们传了什么，
+   * 证明不了 rc-table 最终采信了什么。
+   */
+  describe('结果表格的列宽必须真正生效', () => {
+    it('表格用 fixed 布局，不是 auto', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      const table = document.querySelector('.ant-table table') as HTMLTableElement;
+      expect(table).toBeTruthy();
+      expect(table.style.tableLayout).toBe('fixed');
+    });
+
+    it('每一列都带宽度，包括复选框列', async () => {
+      // 少一列没宽度，fixed 布局下它就吃掉全部富余，其余列反而被压
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      const cols = Array.from(document.querySelectorAll('.ant-table table colgroup col'));
+      expect(cols.length).toBeGreaterThan(1);
+      expect(cols.every((col) => (col as HTMLElement).style.width !== '')).toBe(true);
+    });
+  });
 });
