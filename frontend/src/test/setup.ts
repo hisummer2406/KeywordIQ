@@ -1,6 +1,22 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+
+/**
+ * 抬高 `findBy*` / `waitFor` 的等待上限（默认 1000ms）。
+ *
+ * **这不是在放宽断言**——等的是同一件事，只是允许它在负载下慢一点到。
+ *
+ * 全量跑 27 个 jsdom + antd 文件时 vitest 按核心数并行，单个重文件（分析查询屏 48 个
+ * 用例）要跑 45 秒以上。平时 200ms 渲染完的表格在这种争抢下轻易超过 1 秒，于是
+ * `findByText` 超时——本地单独跑那个文件永远是绿的，表现为随机拦下提交门禁。
+ *
+ * **范围要说清楚**：这只覆盖走 `findBy*` / `waitFor` 的用例。同一批偶发失败里还有
+ * 另一类与它无关——`renderSettled` 那种只 `await` 一个 act 周期、随后用同步
+ * `getByRole` 断言的写法，等的不是某个条件成立，负载下首屏请求还没落定就断言了。
+ * 那一类要改测试本身，不是调这里的超时。
+ */
+configure({ asyncUtilTimeout: 5000 });
 
 // antd 的响应式栅格与 ProComponents 会读 matchMedia，jsdom 没有实现，必须补。
 Object.defineProperty(window, 'matchMedia', {

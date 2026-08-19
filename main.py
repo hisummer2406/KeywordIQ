@@ -101,6 +101,22 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("❌ 异步数据库连接测试失败")
 
+    # SSO 的默认角色必须真的存在，否则建出来的账号权限是空集——进每个页面都 403，
+    # 而管理员看到的是「这人明明登录成功了」。只在**能确定角色不存在**时中断启动；
+    # 数据库连不上走上面那个连接检查的记日志路径，不为一个配置校验让应用起不来。
+    if settings.SSO_ENABLED:
+        from app.auth.sso_service import assert_default_role_exists
+        from database import AsyncSessionFactory
+
+        try:
+            async with AsyncSessionFactory() as db:
+                await assert_default_role_exists(db)
+            logger.info("✅ SSO 默认角色检查通过: %s", settings.SSO_DEFAULT_ROLE_CODE)
+        except RuntimeError:
+            raise
+        except Exception:
+            logger.exception("⚠️ SSO 默认角色检查未能完成（数据库不可达？），跳过")
+
     # 排队批次接手：导入串行，抢不到锁的批次留在 QUEUED，靠它在锁释放后接手。
     # 没有它 QUEUED 就是个死标签——界面显示「队列中」，实际没有任何东西会回头看它。
     drainer: asyncio.Task | None = None
