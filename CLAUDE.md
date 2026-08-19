@@ -694,6 +694,51 @@ THREAD_POOL_LIMIT=32
 - **Tests**: Unit tests should not require a live PostgreSQL instance; database/import tests may require `.env` and should use small fixtures rather than real production CSV files. New tests must be collectable by `pytest` and must not reference deleted or experimental module paths. Bug fixes should include a focused regression test when behavior can be reproduced locally.
 - **Configuration and local data**: Keep `.env.example` in sync when adding new settings, including units and safe local defaults. Do not commit `uploads/`, `logs/`, temporary split files, or real customer/search-report CSV data.
 
+## 流程重量：先问，别默认最重
+
+**开工先问一句这件事要多重，默认取最轻的那档。** 三档：
+
+| 档位 | 做什么 | 适用 |
+|---|---|---|
+| **直接做** | 不写 spec、不建 worktree，改完跑相关测试就提交 | 改样式、修一处逻辑、补一个测试 |
+| **先对齐再做** | **一次**问清关键决策，复述一遍就动手；不写 spec | 需求有分叉但形态清楚 |
+| **完整流程** | openspec 四件套 + worktree + PR | 新子系统、改契约、要长期留档的决策 |
+
+判据是**这个决策以后还要不要被翻出来看**，不是改动大小。「账号按 unionId 还是 userid 匹配」
+值得留档（改错了没有任何报错），「登录页加个按钮」不值得。
+
+### 为什么要有这条
+
+2026-08-19 的钉钉 SSO 变更（issue #36）事后统计：生产代码 949 行、测试 1106 行、
+**我写的散文 1366 行**（openspec 672 + 提交信息 337 + CLAUDE.md 100 + PR/issue 正文 257）。
+散文比代码多。
+
+原因不是哪一步做错了，而是**默认把所有重流程叠满**：brainstorming 判成 architectural →
+完整问答 + 方案对比 + 分段设计 → openspec 四份产物 → start-change 建 worktree 装依赖 →
+TDD 逐函数红绿 → 每次提交跑全量门禁。每层单独看都合理，叠起来是写第一行代码之前先过一小时。
+而这个判断全程由 agent 做，人没有机会说「不用这么重」。
+
+### 四条具体约束
+
+1. **澄清问题一次问完。** 一个 `AskUserQuestion` 最多带 4 个问题，**不要串行问 4 轮**——
+   每轮都是一次完整的人机往返。superpowers 的 brainstorming skill 规定「一次一个问题」，
+   这条与它冲突时**以本文件为准**（用户指令优先于 skill）。
+
+2. **篇幅按「反事实是否显然」定，不要一律拉满。** 本文件这种「每条都解释不这么做会怎样」
+   的密度，是给**会被反复翻阅的约定**用的。一次性脚本、测试辅助函数、`catch` 这类改动
+   不需要。提交信息 3–5 行说清「改了什么、为什么」即可；只有当「为什么这么写」不显然、
+   且写错了不会报错时，才值得展开。
+
+3. **先验前提，再设计。** 有没有那个租户 / 权限 / 数据源 / 收不收费——先问或先查。
+   SSO 那次先按 IDMesh + OIDC 出了完整方案，事后才发现收费情况查不实，整段推翻重做。
+   同理排查缺陷时**先读失败的用例源码，再提假设**：看见 `findByText` 超时就去调超时，
+   改完还是红，回头才发现那条用例用的是同步 `getByRole`，跟超时无关。
+
+4. **测试按影响面跑，全量只在提交前一次。** 前端全量约 97 秒且随用例数增长；
+   `pnpm test src/pages/Login` 是 7 秒。`pnpm exec vitest related <file>` 走真实模块图，
+   对叶子文件能省 9 倍——但 `.umirc.ts` / `vitest.config.ts` / `src/test/setup.ts` 这类
+   **不在模块图里却影响所有测试**的文件它会匹配出 0 个，那种必须跑全量。
+
 ## 并行会话：一个变更一个 worktree
 
 **这个仓库经常同时有多个会话在干活。** 默认假设不是「只有我一个人」。
