@@ -47,14 +47,25 @@ export interface FilterDraft {
   include?: Include;
 }
 
-export const emptyFilters = (): FilterDraft => ({
+/**
+ * 筛选草稿的默认值——**进屏看到的**与**「重置」清成的**是同一份。
+ *
+ * `isNew: true` 是默认值而不是空值：用户进这一屏最常问的第一个问题是「今天有哪些
+ * 新词」，不是「今天的榜单长什么样」。首屏自动查询用的也是这一份，两者必须同源，
+ * 否则会出现表格里是新词、而筛选控件显示「全部」的错位。
+ *
+ * 这个函数从前叫 `emptyFilters`。带上 `isNew: true` 之后那个名字与事实相反，而
+ * 它正被测试当作「中性基线」使用——名不副实的工厂函数会被下一个人当空值直接用。
+ * 要真正的中性值请显式写 `{ ...defaultFilters(), isNew: undefined }`。
+ */
+export const defaultFilters = (): FilterDraft => ({
   q: '',
   categories: [],
   ranking: {},
   change: {},
   clickShare: {},
   conversionShare: {},
-  isNew: undefined,
+  isNew: true,
   brands: [],
   productTitle: '',
 });

@@ -25,7 +25,7 @@ import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
 import { buildColumns, totalColumnWidth } from './columns';
-import { emptyFilters, toSearchBody, type ScopeDraft } from './filters';
+import { defaultFilters, toSearchBody, type ScopeDraft } from './filters';
 import { readSnapshot, sameRequest, writeSlot, type RequestKey } from './stateCache';
 import { useCachedState } from './useCachedState';
 
@@ -65,7 +65,7 @@ export default function AnalysisPage() {
 
   // 草稿态：用户正在编辑
   const [scope, setScope] = useCachedState('scope', { view: 'DAY' } as ScopeDraft);
-  const [filters, setFilters] = useCachedState('filters', emptyFilters);
+  const [filters, setFilters] = useCachedState('filters', defaultFilters);
 
   // 生效态：表格 request 实际读的那份。用 ref 承载，供 request 闭包读取。
   const appliedRef = useRef<SearchBody | null>(initialSnapshot?.applied ?? null);
@@ -219,8 +219,16 @@ export default function AnalysisPage() {
     actionRef.current?.reload(true);
   };
 
+  /**
+   * 作用域栏的「立即查询」：只把作用域三元组与检索词设为生效，筛选沿用已生效那份。
+   *
+   * `scopeOnly` 里的筛选值通常被下面 `...appliedRef.current` 整个盖掉，**唯独
+   * `appliedRef.current` 为 null 时（还没查过任何一次就直接点这里）会被整体采用**。
+   * 那种情况下它带的正是 `defaultFilters()` 的默认筛选，也正是想要的行为——所以这里
+   * 并非与默认值无关的调用点，改默认值时这条路径跟着变。
+   */
   const submitScope = () => {
-    const scopeOnly = toSearchBody(scope, { ...emptyFilters(), q: filters.q });
+    const scopeOnly = toSearchBody(scope, { ...defaultFilters(), q: filters.q });
     const body: SearchBody = {
       ...(appliedRef.current ?? scopeOnly),
       site: scopeOnly.site,
@@ -245,7 +253,15 @@ export default function AnalysisPage() {
     apply(body, JSON.stringify(body));
   };
 
-  const resetFilters = () => setFilters((current) => ({ ...emptyFilters(), q: current.q }));
+  /**
+   * 「重置」清成**默认**（含只看新词），不是清成全不筛。界面因此没有一键回到「全部词」
+   * 的入口——那需要第二个按钮「恢复默认」，与「重置」语义相近，用户得先分辨差别才能
+   * 选对，正是「一个筛选维度恰好一个入口」要避免的形态。想看全量榜单就把新词开关拨到
+   * 「全部」，多一次点击。
+   *
+   * `q` 保留：重置的是过滤区，作用域栏的检索框不归它管。
+   */
+  const resetFilters = () => setFilters((current) => ({ ...defaultFilters(), q: current.q }));
 
   /**
    * 重拉类目选项。**日期也是选项口径的一部分**——统计按 (站点, 周期, 日期) 分片，
@@ -304,9 +320,15 @@ export default function AnalysisPage() {
       .then(setSites)
       .catch(() => undefined);
     // 首屏拉完作用域元数据后**立即按默认作用域查一次**——这一屏是主力数据屏，用户
-    // 进来就是要看数据的，让他先点一下才出数据是多余的一步。默认作用域（默认站点 +
-    // 按天 + 最新一期 + 无筛选）恰恰是最常看的那一组，且无筛选路径的总数直接读
-    // `site_data_stats`（O(1)），是这一屏最便宜的一种查询。
+    // 进来就是要看数据的，让他先点一下才出数据是多余的一步。默认作用域是默认站点 +
+    // 按天 + 最新一期 + **默认筛选（只看新词）**，回答的是「今天有哪些新词」。
+    //
+    // 筛选必须用 `defaultFilters()`，与初始草稿同源——若这里改用别的值，表格显示的
+    // 就不是筛选控件所声称的那组条件。
+    //
+    // 带筛选有两个后果，都是既有语义、不是本屏特例：总数走 `count_filtered` 精确
+    // 实算而非 `site_data_stats` 的 O(1) 预存值（日报实测约 168ms）；**掉榜行不在
+    // 结果内**——它们在锚定期没有行可与筛选匹配。
     //
     // **须由 `reloadScopeMeta` 返回的 `s` 组装条件，不能读 `scope` 状态**：它刚被
     // `setScope` 写过，而 setState 是异步的，此刻读到的还是初值（date 为空），
@@ -317,7 +339,7 @@ export default function AnalysisPage() {
         if (!s.latest_date) return; // 该站点一期数据都没有，不发请求
         const body = toSearchBody(
           { site: s.site, view: 'DAY', date: s.latest_date },
-          emptyFilters(),
+          defaultFilters(),
         );
         apply(body, JSON.stringify(body));
       })
