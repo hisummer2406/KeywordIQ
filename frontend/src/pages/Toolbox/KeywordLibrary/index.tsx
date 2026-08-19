@@ -1,29 +1,31 @@
-import { SettingOutlined } from '@ant-design/icons';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { Button, Card, Popconfirm, Radio, Select, Space, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import type { View } from '@/services/analysis';
 import {
+  createGroup,
+  deleteGroup,
   getLibraryScope,
   listGroups,
   removeItems,
+  renameGroup,
   watchGroup,
   type KeywordGroup,
   type LibraryWatchRow,
 } from '@/services/library';
 import { getSites, type SiteOption } from '@/services/upload';
-import ManageGroupsModal from './ManageGroupsModal';
+import GroupBar from './GroupBar';
 import { SELECTION_COLUMN_WIDTH, buildWatchColumns, watchTableWidth } from './columns';
 import { toSortParams } from './sort';
 
 /**
  * 我的词库：把关心的词攒成清单，之后打开就看这批词今天排到第几、掉没掉。
  *
- * **分组入口在顶栏，不在侧边。** 盯盘表格要 1688px，而侧栏形态下右侧只剩 1292px
- * （1920 视口实测），近 400px 被裁进横向滚动——分组一览换不来这个代价。何况分组在这一屏
- * **正是作用域**（它决定站点），与视图/期次同属一类，摆在顶栏才是它的身份。管理动作
- * （新建/重命名/删除）收进「管理分组」弹窗，那是低频操作，不该常驻占宽。
+ * **分组管理是表格上方独立的一块，不是侧栏。** 这一屏的横向是稀缺资源：表格要 1688px，
+ * 1920 视口下整屏也只有 1584px 可用；侧栏形态曾把可视区压到 1292px，近 400px 被裁进横向
+ * 滚动（实测）。改成横铺的一块之后，分组一览仍在（一眼看到有哪些清单、各有多少词），
+ * 代价换成了纵向的几行——纵向可以滚，横向被裁掉的列是找不回来的。
  *
  * **进屏即查**（与持续增长市场屏相反）。判据是空表格的含义：增长榜的空表有三种成因
  * （没查 / 窗口缺期 / 口径下无命中），必须先让用户做选择；而盯盘的空表都与"还没做选择"
@@ -42,7 +44,6 @@ export default function KeywordLibraryPage() {
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [groups, setGroups] = useState<KeywordGroup[]>([]);
   const [activeId, setActiveId] = useState<number | undefined>();
-  const [manageOpen, setManageOpen] = useState(false);
 
   const [view, setView] = useState<View>('DAY');
   const [dates, setDates] = useState<string[]>([]);
@@ -101,7 +102,7 @@ export default function KeywordLibraryPage() {
     actionRef.current?.reload(true);
   };
 
-  /** 弹窗里增删改之后：重拉分组，选中指定的那个（删掉当前分组时回落到第一个）。 */
+  /** 分组增删改之后：重拉分组，选中指定的那个（删掉当前分组时回落到第一个）。 */
   const onGroupsChanged = async (preferId?: number) => {
     const next = await reloadGroups(preferId ?? activeId);
     if (next) await reloadScope(next.group_id, view);
@@ -125,30 +126,26 @@ export default function KeywordLibraryPage() {
    * 用户引向「去加词」，而他真正缺的是先建一个组。
    */
   const emptyText = !active
-    ? '还没有分组。点「管理分组」新建一个，再到「ABA数据选品」把关心的词加进来'
+    ? '还没有分组。先在上面新建一个分组，再到「ABA数据选品」把关心的词加进来'
     : scopeHasNoDates
       ? '这个站点还没有导入任何数据，暂时无法盯盘'
       : '这个分组还没有词。到「ABA数据选品」勾选结果行，点「加入词库」即可加入';
 
   return (
     <PageContainer title="我的词库">
-      <Card size="small" styles={{ body: { padding: 12 } }}>
+      <GroupBar
+        groups={groups}
+        sites={sites}
+        activeId={activeId}
+        onSelect={switchGroup}
+        onChanged={onGroupsChanged}
+        onCreate={createGroup}
+        onRename={renameGroup}
+        onDelete={(group) => deleteGroup(group.group_id)}
+      />
+
+      <Card size="small" style={{ marginTop: 12 }} styles={{ body: { padding: 12 } }}>
         <Space wrap>
-          <Select
-            style={{ width: 260 }}
-            value={activeId}
-            placeholder="选择分组"
-            onChange={switchGroup}
-            notFoundContent="还没有分组"
-            options={groups.map((group) => ({
-              // 标签带上站点：分组绑定站点，而这一屏没有站点选择器，站点只能从这里读到。
-              label: `${group.site} · ${group.name}（${group.item_count}）`,
-              value: group.group_id,
-            }))}
-          />
-          <Button icon={<SettingOutlined />} onClick={() => setManageOpen(true)}>
-            管理分组
-          </Button>
           <Radio.Group
             value={view}
             onChange={(e) => switchView(e.target.value as View)}
@@ -172,7 +169,7 @@ export default function KeywordLibraryPage() {
           />
           {active && (
             <Typography.Text type="secondary">
-              站点 {active.site}（由分组决定）· 共 {active.item_count} 个词
+              {active.name} · 站点 {active.site}（由分组决定）· 共 {active.item_count} 个词
             </Typography.Text>
           )}
           {selected.length > 0 && (
@@ -221,14 +218,6 @@ export default function KeywordLibraryPage() {
             success: res.success !== false,
           };
         }}
-      />
-
-      <ManageGroupsModal
-        open={manageOpen}
-        groups={groups}
-        sites={sites}
-        onClose={() => setManageOpen(false)}
-        onChanged={onGroupsChanged}
       />
     </PageContainer>
   );
