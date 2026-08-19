@@ -55,6 +55,14 @@ export default defineConfig({
           component: './Toolbox/GrowthMarket',
           icon: 'RiseOutlined',
         },
+        {
+          // 词库与增长榜同属工具箱、同一个权限点（toolbox:view）。排在增长榜之后、
+          // 两个占位屏之前：前两者有真实数据，占位屏还没有。
+          name: '我的词库',
+          path: '/toolbox/library',
+          component: './Toolbox/KeywordLibrary',
+          icon: 'Star',
+        },
         // 下面两个是占位屏：仓库里没有任何专利/商标数据，页面明确写着「数据源尚未接入」，
         // 不发请求、无后端端点。菜单位置先占住，各自另立变更。
         {

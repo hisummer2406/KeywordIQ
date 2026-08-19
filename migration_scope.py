@@ -34,6 +34,8 @@ V2_TABLES = frozenset(
         "role",
         "permission",
         "role_permission",
+        "keyword_group",
+        "keyword_group_item",
     }
 )
 

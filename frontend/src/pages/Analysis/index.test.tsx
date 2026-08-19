@@ -11,8 +11,11 @@ const {
   getBrands,
   getSites,
   exportAnalysis,
+  listGroups,
+  createGroup,
+  addItems,
 } = vi.hoisted(() => ({
-  accessState: { canExport: true },
+  accessState: { canExport: true, canViewToolbox: true },
   /** 当前登录用户。保存的默认条件按 id 分键，改这里就等于换账号。 */
   userState: { currentUser: { id: 1 } as { id: number } | undefined },
   searchAnalysis: vi.fn(),
@@ -21,6 +24,9 @@ const {
   getBrands: vi.fn(),
   getSites: vi.fn(),
   exportAnalysis: vi.fn(),
+  listGroups: vi.fn(),
+  createGroup: vi.fn(),
+  addItems: vi.fn(),
 }));
 
 vi.mock('@umijs/max', () => ({
@@ -29,6 +35,7 @@ vi.mock('@umijs/max', () => ({
 }));
 vi.mock('@/services/analysis', () => ({ searchAnalysis, getScope, getCategories, getBrands, exportAnalysis }));
 vi.mock('@/services/upload', () => ({ getSites }));
+vi.mock('@/services/library', () => ({ listGroups, createGroup, addItems }));
 
 import AnalysisPage from '@/pages/Analysis';
 import { clearSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
@@ -94,6 +101,12 @@ describe('分析查询屏', () => {
     window.localStorage.clear();
     userState.currentUser = { id: 1 };
     accessState.canExport = true;
+    accessState.canViewToolbox = true;
+    listGroups.mockResolvedValue([
+      { group_id: 7, site: 'US', name: '主推词', item_count: 3,
+        created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z' },
+    ]);
+    addItems.mockResolvedValue({ added: 1, existed: 0, item_count: 4 });
     getSites.mockResolvedValue([
       { code: 'US', name_zh: '美国', domain: 'amazon.com' },
       { code: 'DE', name_zh: '德国', domain: 'amazon.de' },
@@ -969,6 +982,88 @@ describe('分析查询屏', () => {
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
       expect(getSites).toHaveBeenCalled();
       expect(getScope).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * 加入词库：分析屏是**唯一**的入库入口，所以这几条守的是「入口在、且指向对的分组」。
+   */
+  describe('加入词库', () => {
+    /** 行复选框。第 0 个是表头的全选，行的从 1 开始。 */
+    const rowCheckbox = () => screen.getAllByRole('checkbox')[1];
+    const addButton = () => screen.queryByRole('button', { name: /加入词库/ });
+
+    it('没勾行时不显示入口', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      expect(addButton()).toBeNull();
+    });
+
+    it('勾选后出现入口并带上条数', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      fireEvent.click(rowCheckbox());
+
+      await waitFor(() => expect(addButton()).toBeTruthy());
+      expect(addButton()!.textContent).toContain('1');
+    });
+
+    it('弹窗只列当前生效站点的分组', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      fireEvent.click(rowCheckbox());
+      await waitFor(() => expect(addButton()).toBeTruthy());
+
+      await act(async () => {
+        fireEvent.click(addButton()!);
+      });
+
+      await waitFor(() => expect(listGroups).toHaveBeenCalledWith('US'));
+    });
+
+    it('加入成功后清空选中，入口随之消失', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      fireEvent.click(rowCheckbox());
+      await waitFor(() => expect(addButton()).toBeTruthy());
+      await act(async () => {
+        fireEvent.click(addButton()!);
+      });
+      await waitFor(() => expect(listGroups).toHaveBeenCalled());
+
+      // antd 会在两个汉字之间插一个空格（「加 入」），所以名字要留出空白位；
+      // 又因为工具栏那个「加入词库」也匹配，必须限定在弹窗内找。
+      await act(async () => {
+        const dialog = screen.getByRole('dialog');
+        fireEvent.click(within(dialog).getByRole('button', { name: /^加\s*入$/ }));
+      });
+
+      await waitFor(() => expect(addItems).toHaveBeenCalledWith(7, [1]));
+      await waitFor(() => expect(addButton()).toBeNull());
+    });
+
+    it('切走再切回，选中状态清空（它不进会话快照）', async () => {
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      fireEvent.click(rowCheckbox());
+      await waitFor(() => expect(addButton()).toBeTruthy());
+
+      cleanup();
+      await renderSettled(false);
+      await settle();
+
+      expect(addButton()).toBeNull();
+    });
+
+    it('没有工具箱权限就没有这个入口', async () => {
+      accessState.canViewToolbox = false;
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      fireEvent.click(rowCheckbox());
+      await settle();
+
+      expect(addButton()).toBeNull();
     });
   });
 });
