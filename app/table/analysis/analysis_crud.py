@@ -315,8 +315,11 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
             or_(fact.top1_category_id.in_(ids), fact.top2_category_id.in_(ids),
                 fact.top3_category_id.in_(ids))
         )
+    # ASIN 是精确码，**等值匹配**：走 `uq_dim_product_asin` 唯一索引，不需要 trgm。
+    # 大小写与空白已由请求模型规范化（见 AnalysisSearchRequest._normalise_asin），
+    # 这里不再兜一遍——两处各规范一次，改动时漏掉一处就会静默分叉。
     if req.asin:
-        stmt = stmt.where(DimProduct.asin.ilike(f"%{req.asin}%"))
+        stmt = stmt.where(DimProduct.asin == req.asin)
     if req.product_title:
         stmt = stmt.where(DimProduct.title.ilike(f"%{req.product_title}%"))
     if req.ranking_min is not None:
