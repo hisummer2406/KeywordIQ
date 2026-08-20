@@ -11,7 +11,7 @@
 from datetime import date as _Date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 View = Literal["DAY", "WEEK"]
 Include = Literal["ALL", "LISTED", "DROPPED"]
@@ -57,8 +57,17 @@ class AnalysisSearchRequest(BaseModel):
 
     # 子串筛选（走维度表 trgm 索引）
     keyword: str | None = Field(None, description="关键词子串")
-    asin: str | None = Field(None, description="ASIN 子串（top1 商品）")
     product_title: str | None = Field(None, description="标题子串（top1 商品）")
+
+    # **ASIN 是精确码，等值匹配**（不是子串筛选）。界面上它只能从顶部检索框输入，而那里
+    # 只有整串匹配 `^B0[A-Z0-9]{8}$` 才路由到这个字段——片段本来就到不了后端。据此
+    # `dim_product` 上的 asin GIN trgm 索引（生产 409 MB，每次导入的每一行写入都要维护）
+    # 已删除，等值匹配走 `uq_dim_product_asin` 唯一索引。见 issue #49。
+    #
+    # **不校验格式，只规范化。** ASIN 并非一律 `B0` 开头——德国站的图书 ASIN 就是 ISBN-10
+    # （见前端 productImage.ts 的实测注释）。前端那条正则是「走哪个字段」的路由启发式，
+    # 不是合法性规则；拿它当校验会把真实存在的商品拒在门外，而查不到的正确表现是零行。
+    asin: str | None = Field(None, description="ASIN 精确码（top1 商品），大小写不敏感")
 
     # 品牌与类目：**精确多选，前三任一命中**。语义是「这个词的前三品牌里有 X」。
     #
@@ -87,6 +96,23 @@ class AnalysisSearchRequest(BaseModel):
 
     # 布尔筛选
     is_new: bool | None = Field(None, description="是否本周期新词")
+
+    @field_validator("asin")
+    @classmethod
+    def _normalise_asin(cls, v: str | None) -> str | None:
+        """去空白、转大写；全空白视同没填。
+
+        放在请求模型而不是 CRUD 里，是为了让 ``/search`` 与 ``/export`` 共用同一份口径
+        ——两处用不同规则匹配同一个 ASIN，表现是「导出的行数与表里看到的不一样」，
+        没人会想到去查大小写。
+
+        全空白必须落回 ``None``：等值匹配下空串一行都不命中，而旧的 ``ILIKE '%%'``
+        匹配所有行。原样传下去用户会得到一张空表，且看不出是自己少填了什么。
+        """
+        if v is None:
+            return None
+        cleaned = v.strip().upper()
+        return cleaned or None
 
 
 class FactRowBase(BaseModel):

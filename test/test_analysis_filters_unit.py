@@ -45,3 +45,29 @@ def test_category_exact_is_gone():
     )
     assert not hasattr(req, "category_exact")
     assert request_has_filters(req) is False
+
+
+# --------------------------------------------------------------------------
+# ASIN 是精确码：等值匹配 + 规范化（issue #49）
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("given", ["b0slot00001", "  B0SLOT00001  ", "B0slot00001"])
+def test_asin_is_normalised_to_upper(given):
+    """大小写与首尾空白在请求模型里抹平。
+
+    等值匹配区分大小写，而检索框的判定正则带 ``/i``、用户还常从别处粘贴带空格的串。
+    规范化放在模型里而不是 CRUD 里，是为了让 ``/search`` 与 ``/export`` 共用同一份
+    ——导出与列表用不同口径匹配同一个 ASIN，是那种没人会想到去查的错。
+    """
+    assert _req(asin=given).asin == "B0SLOT00001"
+
+
+def test_blank_asin_is_dropped():
+    """全空白视同没填。
+
+    旧的 ``ILIKE '%%'`` 对空串匹配所有行，等值匹配则一行都不命中——空串若原样传下去，
+    用户会得到一张空表且看不出是自己少填了什么。
+    """
+    assert _req(asin="   ").asin is None
+    assert request_has_filters(_req(asin="   ")) is False
