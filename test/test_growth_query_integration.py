@@ -204,17 +204,23 @@ async def test_窗口完整时缺期列表为空(db):
     assert resp.missing_dates == []
 
 
-async def test_作用域端点回传口径(db):
+async def test_作用域端点回传口径(db, monkeypatch):
+    """端点如实回传**当前配置**的三个阈值。
+
+    故意钉成非默认值再断言：若照默认值断言字面量 7 / 10000 / 0.10，端点把这三个数写死
+    也照样绿，而这条用例要守的恰恰是「不写死」——界面据此拼口径说明条，两份副本一旦分叉，
+    用户看到的口径就不是后端实际用的那个，且没有任何地方会报错。
+    """
     await _seed_stats(db)
+    monkeypatch.setattr(settings, "GROWTH_WINDOW_DAYS", 5)
+    monkeypatch.setattr(settings, "GROWTH_MIN_RANK_GAIN", 12345)
+    monkeypatch.setattr(settings, "GROWTH_MIN_DAILY_RATE", 0.07)
 
     scope = await service.get_scope(db, SITE)
 
     assert scope.latest_date == ANCHOR
     assert scope.available_dates[0] == ANCHOR
-    # 界面据此拼口径说明条；前端不得硬编码这三个数
-    assert scope.window_days == 7
-    assert scope.min_rank_gain == 10000
-    assert scope.min_daily_rate == 0.10
+    assert (scope.window_days, scope.min_rank_gain, scope.min_daily_rate) == (5, 12345, 0.07)
 
 
 async def test_非法站点报错不回退(db):
