@@ -86,17 +86,34 @@
 
 ## 5. 前端
 
-- [ ] 5.1 `services/competitor.ts`：分组、关注记录、预览、确认的请求函数
-- [ ] 5.2 `frontend/src/access.ts` 加 `canViewCompetitor: has('competitor:view')`
-- [ ] 5.3 `frontend/.umirc.ts` 新增顶层菜单项 `/competitor`（照 `/analysis` 的单页顶层
-      模式，非工具箱式二级菜单）
-- [ ] 5.4 `pages/Competitor/`：分组管理区（表格上方横向排布）+ 主表格（卖家、站点、
-      分组、状态固定「待建立基线」、`priority`）+ 配额条「已关注 N / 3000」
-- [ ] 5.5 「添加卖家」入口（textarea 批量粘贴）与「导入书签」入口（文件上传），两者
-      都先调用 preview 展示结果（新增/已存在/解析失败列表 + 候选分组），用户确认后
-      才调 commit；解析失败列表逐条展示原文与原因
-- [ ] 5.6 vitest：预览结果展示、配额超限提示、append/replace_group 两种模式的界面
-      文案区分
+- [x] 5.1 `services/competitor.ts`：分组、关注记录、预览、确认的请求函数（预览走
+      `FormData`，不设 `requestType`，umi 的底层 request 对 `FormData` 实例直接透传）
+- [x] 5.2 `frontend/src/access.ts` 加 `canViewCompetitor: has('competitor:view')`
+- [x] 5.3 `frontend/.umirc.ts` 新增顶层菜单项 `/competitor`（照 `/analysis` 的单页顶层
+      模式，非工具箱式二级菜单；排在工具箱之后、数据上传之前——同属「看数据」一类）
+- [x] 5.4 `pages/Competitor/`：分组管理区（`GroupBar.tsx`，表格上方横向排布，含恒定的
+      「全部关注」伪分组）+ 主表格（`columns.tsx`：状态、卖家、站点、分组下拉、
+      `priority`、近 7 日上新数占位「待接入」、关注时间、备注、取消关注）+ 配额条
+      「已关注 N / 3000」
+- [x] 5.5 `ImportModal.tsx`：「添加卖家」（textarea 批量粘贴）与「导入书签」
+      （文件上传）共用一个弹窗、两个 tab，都先调用 preview 展示结果（新增/已存在/
+      解析失败列表 + 候选分组 + 抽样），用户确认 append/replace_group 模式后才调
+      commit；解析失败列表逐条展示原文与原因
+- [x] 5.6 vitest：`index.test.tsx`（8 例，进屏即查/配额条/分组区/状态占位/空状态/
+      导入入口）+ `ImportModal.test.tsx`（5 例，预览结果展示、候选分组、
+      append/replace_group 文案区分、预览失败留在输入步不崩溃）。全绿，全量前端
+      `pnpm tsc && pnpm lint && pnpm test`（35 files / 337 tests）与后端
+      `TEST_DATABASE_URL=... uv run pytest test/ -q`（654 passed, 1 skipped）均过
+- [x] 5.7（补）修复 `ImportModal.tsx`/`index.tsx` 里 `runPreview`/`runCommit`/
+      `onChangeGroup`/`onRemove` 缺失的 `catch`——Button `onClick`、Select `onChange`、
+      Popconfirm `onConfirm` 都不消费返回的 promise，失败请求会成为 unhandled
+      rejection（对照 `KeywordLibrary/GroupBar.tsx` 已有注释记录的同一条约定
+      发现）；`ImportModal.tsx` 顺带把废弃的 `destroyOnClose` 改成 `destroyOnHidden`
+- [x] 5.8（补）浏览器手测：起临时 dev server（后端 8010 / 前端 8011，`.env.local`
+      覆盖代理目标，未占用主仓的 8000/8001）+ 迁移 `keywordiq_v2_dev`（与主仓共享，
+      测完已用 API 清空建的测试分组与关注记录）。验证过：登录后顶栏出现「竞对监控」、
+      建组持久化、预览/确认整条链路（含 marketplaceID 缺失回落 `fallback_site`、
+      `/stores/` 链接正确拒绝并说明原因）、表格渲染状态/占位列正确
 
 ## 6. 文档与收尾
 

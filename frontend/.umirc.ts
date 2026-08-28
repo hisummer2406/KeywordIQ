@@ -92,6 +92,17 @@ export default defineConfig({
       ],
     },
     {
+      // 独立顶层菜单,不挂在工具箱下——competitor:view 是独立权限点(design.md 决策 6/8)。
+      // 单页顶层模式,照 /analysis,不是工具箱那种二级菜单结构。排在工具箱之后、数据上传
+      // 之前:同属"看数据"一类,与工具箱相邻;上传是"喂数据",按既有约定排在选品/工具箱
+      // 之后（见下方数据上传节点的注释）。
+      name: '竞对监控',
+      path: '/competitor',
+      component: './Competitor',
+      icon: 'EyeOutlined',
+      access: 'canViewCompetitor',
+    },
+    {
       // 「数据上传」是一级菜单，两个子屏走左侧二级菜单（layout: 'mix' + splitMenus，
       // 见 src/app.tsx）。二者同属一个权限点 upload:import——能导入的人才需要查导入
       // 历史、才有资格重导，故 access 挂在父级即可，子项继承。
