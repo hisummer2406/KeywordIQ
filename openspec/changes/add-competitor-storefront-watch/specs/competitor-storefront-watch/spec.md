@@ -38,6 +38,12 @@ marketplace)`），MUST NOT 携带账号属性——同一卖家被多个用户�
 - **WHEN** 用户已有名为「头部竞对」的分组，再次以同名建组
 - **THEN** 返回 409，错误信息说明该用户下已有同名分组
 
+#### Scenario: 删除分组不取消关注
+
+- **WHEN** 用户删除一个含 50 个卖家关注记录的分组
+- **THEN** 分组被删除，但这 50 条关注记录仍然存在，仅 `group_id` 变为空（未分组），
+  用户仍然关注着这些卖家
+
 ### Requirement: SellerRefParser 从多种输入形态提取卖家标识
 
 系统 SHALL 提供一个不依赖数据库的纯函数解析器，从用户粘贴的文本或书签 HTML 中提取
@@ -71,6 +77,17 @@ marketplace)`），MUST NOT 携带账号属性——同一卖家被多个用户�
 
 - **WHEN** 输入一条不带 `marketplaceID` 参数、域名为 `amazon.co.uk` 的链接
 - **THEN** 站点识别为 `GB`（不是 `UK`）
+
+#### Scenario: 裸 ID 需要显式指定默认站点
+
+- **WHEN** 用户粘贴一个裸卖家 ID，且预览请求未提供 `fallback_site`
+- **THEN** 该条判为解析失败，原因说明「裸卖家 ID 不带站点信息，需要指定默认站点」，
+  MUST NOT 静默归入某个默认站点
+
+#### Scenario: 提供 fallback_site 后裸 ID 可解析
+
+- **WHEN** 用户粘贴一个裸卖家 ID，且预览请求提供 `fallback_site=US`
+- **THEN** 该条解析为该卖家 ID + `US`
 
 ### Requirement: 导入走预览再确认两步，不允许一次性直接落库
 

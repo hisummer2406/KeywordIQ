@@ -36,6 +36,10 @@ V2_TABLES = frozenset(
         "role_permission",
         "keyword_group",
         "keyword_group_item",
+        "competitor_seller",
+        "user_seller_group",
+        "user_seller_watch",
+        "competitor_watch_preview",
     }
 )
 
