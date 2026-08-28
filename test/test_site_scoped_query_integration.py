@@ -490,6 +490,56 @@ async def test_brand_filter_matches_any_of_top_three(db):
     assert resp.total == 0
 
 
+async def test_asin_filter_is_exact_not_substring(db):
+    """ASIN 按等值匹配，片段不再命中。
+
+    这是一次**有意的能力收窄**（issue #49）：ASIN 只能从顶部检索框输入，而那里只有整串
+    匹配 ``^B0[A-Z0-9]{8}$`` 才会路由到这个字段——片段本来就到不了后端。换来的是
+    ``dim_product`` 上 409 MB 的 asin GIN trgm 索引可以删掉；它由每次导入的每一行写入
+    维护，而等值匹配走 ``uq_dim_product_asin`` 唯一索引就够。
+
+    片段那条断言是本变更唯一能与旧行为区分开的：只测整串命中的话，``ILIKE '%...%'``
+    也照样绿。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    hit, resp = await _row_for(db, kids["kw-full"], asin="B0SLOT00001")
+    assert hit is not None
+    assert resp.total == 2  # kw-full 与 kw-partial 共用同一个第一名商品
+
+    miss, resp = await _row_for(db, kids["kw-full"], asin="SLOT0000")
+    assert miss is None
+    assert resp.total == 0
+
+
+async def test_asin_filter_accepts_lower_case_input(db):
+    """小写输入照样命中——规范化在请求模型里做。
+
+    检索框的判定正则带 ``/i``，小写整串同样被路由到 asin 字段，而等值匹配区分大小写。
+    漏掉规范化的表现是「明明是正确的 ASIN 却查不到」，而界面上没有任何东西提示大小写
+    要紧——旧的 ``ILIKE`` 把这件事隐含地办了。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    hit, _ = await _row_for(db, kids["kw-full"], asin="b0slot00001")
+    assert hit is not None
+
+
+async def test_asin_filter_still_only_considers_first_slot(db):
+    """既有语义未变：只匹配点击量第一名的槽位（第二名的 ASIN 筛不到，见 issue #8）。
+
+    钉在这里是为了让「精确匹配」与「只看第一名」两件事分开：改成等值之后若有人报
+    「搜某个 ASIN 查不到词」，这条用例说明那是槽位口径的老问题，不是本次收窄造成的。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    miss, _ = await _row_for(db, kids["kw-full"], asin="B0SLOT00002")
+    assert miss is None
+
+
 async def test_share_filter_only_considers_first_slot(db):
     """份额区间只看第一名：第二名 30% 落在 20~40 区间内，但该行仍不该被选中。"""
     await db.run_sync(_seed)

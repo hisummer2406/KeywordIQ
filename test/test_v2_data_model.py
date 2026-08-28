@@ -409,16 +409,20 @@ class TestDimensionStructure:
                        if hasattr(c, "columns") and c.name}
         assert constraints.get("uq_dim_product_asin") == ["asin"]
 
-    def test_all_searchable_product_fields_have_trigram(self):
-        """商品维度上可子串搜索的字段都要有 trigram 索引，全在维度表。
+    def test_only_title_carries_a_trigram_index(self):
+        """商品维度上**只有 title** 做子串搜索，因此只有它需要 trigram。
 
-        曾经是 title/brand/category/asin 四个。品牌与类目已移出商品维度——它们是关键词级
-        的排行项，在商品上没有数据来源——故这里只剩 title 与 asin 两个真属性。
-        品牌与类目改为精确多选，走各自的 stats 物化视图，不再需要 trgm。
+        曾经是 title/brand/category/asin 四个。品牌与类目已移出商品维度（它们是关键词级
+        的排行项，在商品上没有数据来源），改为精确多选走各自的 stats 物化视图。
+
+        asin 是最后移出的一个：它是精确码，筛选改为等值匹配后走 ``uq_dim_product_asin``
+        唯一索引即可（issue #49）。这条断言是**反向**的——写成"asin 也要有 trgm"时，
+        谁顺手把索引加回来都不会有任何地方报错，而它由每次导入的每一行写入维护，
+        在生产上是 409 MB。
         """
         names = {idx.name for idx in DimProduct.__table__.indexes}
-        for field in ("title", "asin"):
-            assert f"idx_dim_product_{field}_trgm" in names, f"缺少 {field} 的子串搜索索引"
+        assert "idx_dim_product_title_trgm" in names, "标题是子串搜索字段，必须有 trgm"
+        assert "idx_dim_product_asin_trgm" not in names, "asin 是精确码，不该有 trgm 索引"
 
     def test_facts_declare_no_foreign_keys(self):
         """事实表刻意不建外键：批量灌入时每行一次外键检查是纯粹的导入税，

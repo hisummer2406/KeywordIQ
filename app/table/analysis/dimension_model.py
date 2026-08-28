@@ -95,12 +95,15 @@ class DimProduct(Base):
 
     __table_args__ = (
         UniqueConstraint("asin", name="uq_dim_product_asin"),
-        # 界面对 title / asin 做子串 ILIKE 搜索（沿用 V1）。落在这张几百万行的维度表上，
-        # 事实表不背任何搜索索引。
+        # 界面对 title 做子串 ILIKE 搜索。落在这张几百万行的维度表上，事实表不背任何
+        # 搜索索引。
+        #
+        # **asin 上没有 trgm，且不要加回来**：它是精确码，筛选按等值匹配走上面那个唯一
+        # 约束。曾经有一个 `idx_dim_product_asin_trgm`，生产上 409 MB，而 GIN 索引由每次
+        # 导入的每一行写入维护——一份日报约 120 万个 ASIN 提及都要过它一遍。删除它是
+        # issue #49 的第一项；回归见 test_v2_data_model.test_only_title_carries_a_trigram_index。
         Index("idx_dim_product_title_trgm", "title", postgresql_using="gin",
               postgresql_ops={"title": _TRGM}),
-        Index("idx_dim_product_asin_trgm", "asin", postgresql_using="gin",
-              postgresql_ops={"asin": _TRGM}),
         {"comment": "商品维度（ASIN → 标题）。SCD Type 1：变化时原地覆盖，不留历史版本。"},
     )
 
