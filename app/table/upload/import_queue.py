@@ -20,6 +20,7 @@ import logging
 
 from starlette.concurrency import run_in_threadpool
 
+from app.table.competitor.watch_service import purge_expired_previews
 from app.table.upload import oss_client
 from app.table.upload.import_service import drain_import_queue, reap_stale_uploads
 from app.table.upload.import_source import ImportSource, OSSObjectSource
@@ -45,6 +46,19 @@ def oss_object_size(object_key: str) -> int | None:
         return oss_client.stat_object(object_key)
     except OSSObjectNotFound:
         return None
+
+
+def _purge_expired_competitor_previews() -> None:
+    """清理过期的竞对导入预览暂存行（``competitor_watch_preview``）。
+
+    这是本轮询任务顺带接管的第二件"短期状态清理"工作，与回收超时直传批次同一条道理：
+    预览表替代了引入 Redis，过期行需要一个"回头看它"的地方，而不是新开一个定时器。
+    异常同样就地吞掉，不连累排队接手。
+    """
+    try:
+        purge_expired_previews()
+    except Exception:
+        logger.exception("清理过期竞对预览时出错，本轮跳过")
 
 
 def _reap_stale_uploads() -> None:
@@ -80,6 +94,9 @@ async def run_queue_drainer(interval_seconds: int) -> None:
             # 先回收超时的直传批次再抽队列：回收会把「传完了但没触发导入」的批次置为
             # QUEUED，同一轮里紧接着就能被抽走，不必多等一个间隔。
             await run_in_threadpool(_reap_stale_uploads)
+            # 与导入队列无关，顺带清理过期的竞对预览行——同一个轮询任务，两件事都是
+            # "短期状态需要有人回头看它"。
+            await run_in_threadpool(_purge_expired_competitor_previews)
             batch = await run_in_threadpool(
                 drain_import_queue, source_factory=oss_source_factory
             )

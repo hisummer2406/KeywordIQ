@@ -80,6 +80,12 @@ user_seller_watch      UNIQUE(user_id, seller_id, marketplace)
 收藏的同一卖家合并成一条 watch，重复次数计入 `priority`。多标签（一个卖家同时属于多个
 分组）属 YAGNI，需要时加关联表，不影响已有数据。
 
+**删除分组不删除关注关系，只解除归属**（`group_id` 外键 `ON DELETE SET NULL`）。这与
+`keyword_group`/`keyword_group_item`（删组连带删条目）不同：那边的条目除了归属关系
+不携带其他状态，删组等于用户明确表示"这批词不要了"；这里的 watch 是"我在盯这个卖家"
+这件事本身，分组只是归类标签，删分组不代表用户想取消关注——用户想取消关注会直接删除
+watch。误删一个分组不该连带丢失关注关系。
+
 ### 2. 预览结果存数据库表，不引入 Redis
 
 ```
@@ -114,8 +120,10 @@ SELLER_ID_RE = re.compile(r'^A[A-Z0-9]{11,19}$')  # 基于 2657 个实测样本�
 | `/stores/Brand/page/UUID` | **拒绝**，明确提示「品牌店铺页无法提取卖家 ID」 |
 | `/dp/B0XXXXXXX` | **拒绝**，明确提示「商品详情页无法提取卖家 ID」 |
 
-站点识别：优先取 `marketplaceID` 查询参数（`ATVPDKIKX0DER`→`US`、`A1F83G8C2ARO7`→`GB`、
-`A1PA6795UKMFR9`→`DE`，经 `site_registry` 校验合法性），缺失时回落到域名 tld
+站点识别：优先取 `marketplaceID` 查询参数（`ATVPDKIKX0DER`→`US`、`A1F83G8C2ARO7P`→`GB`、
+`A1PA6795UKMFR9`→`DE`——issue #56 原文这里少写了 `GB` 那个 ID 末尾的 `P`，已用真实书签
+文件核实并订正，`site_registry` 只做站点码合法性校验，marketplaceID 映射表是解析器
+本地常量），缺失时回落到域名 tld
 （`amazon.com`→`US`、`amazon.co.uk`→`GB`、`amazon.de`→`DE`）——97% 的书签 URL 带
 `ds=` 会话签名参数、早已失效，**从不据此重建请求，只提取 `seller_id` + `marketplace`
 两个值**，展示用的链接由模板 `https://www.amazon.{tld}/s?i=merchant-items&me={seller_id}
@@ -123,6 +131,13 @@ SELLER_ID_RE = re.compile(r'^A[A-Z0-9]{11,19}$')  # 基于 2657 个实测样本�
 
 两种拒绝形态不是静默丢弃：预览响应的 `unparsable` 列表带原始文本 + 拒绝原因，界面逐条
 展示，用户可以自己判断要不要手动去找这些卖家的 ID。
+
+**裸 ID 与站点信息缺失的链接需要 `fallback_site` 兜底。** 裸 ID 天生不带站点信息；
+链接缺 `marketplaceID` 参数且域名也无法识别站点时同理。`preview` 接口接受一个可选的
+`fallback_site` 字段（用户在「添加卖家」界面上选定），解析时优先用链接自带的站点信息，
+拿不到才用这个兜底；两者都没有则该条判为解析失败（`REJECT_BARE_ID_NEEDS_SITE` /
+`REJECT_SITE_UNKNOWN`），**不猜测默认站点**——与 `site_registry.normalize_site_code`
+的既定纪律一致（非法/缺失站点报错不回退）。
 
 单元测试不连库，参照 `import_source.py` 里文件名解析器的纯函数测试写法；测试样本取自
 `docs/bookmarks_2026_8_18(1).html` 的抽样（不整份入库，只挑边界情形：12/13/14 位 ID
