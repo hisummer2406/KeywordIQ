@@ -41,7 +41,7 @@ def _super():
 def test_permission_codes_from_role():
     op = _operator()
     assert op.permission_codes == {
-        "analysis:view", "analysis:export", "upload:import", "toolbox:view",
+        "analysis:view", "analysis:export", "upload:import", "keyword:view",
         "competitor:view",
     }
     assert op.role_code == "operator"
@@ -144,7 +144,7 @@ def test_serialize_user_shape():
         # 角色展示名与 role 表同源，前端据此显示身份，不自建 code → 中文名的映射
         "role_name": "operator",
         "permissions": [
-            "analysis:export", "analysis:view", "competitor:view", "toolbox:view",
+            "analysis:export", "analysis:view", "competitor:view", "keyword:view",
             "upload:import",
         ],
         "is_active": True,
@@ -177,9 +177,32 @@ def test_role_permission_matrix_matches_spec():
     # 矩阵与 design 决策 4b 一致
     assert P.ROLES["admin"][1] == set(P.PERMISSIONS.keys())
     assert P.ROLES["operator"][1] == {
-        "analysis:view", "analysis:export", "upload:import", "toolbox:view",
+        "analysis:view", "analysis:export", "upload:import", "keyword:view",
         "competitor:view",
     }
     assert P.ROLES["analyst"][1] == {
-        "analysis:view", "analysis:export", "toolbox:view", "competitor:view",
+        "analysis:view", "analysis:export", "keyword:view", "competitor:view",
     }
+
+
+def test_工具箱权限点已随菜单重构消失():
+    """回归：`toolbox:view` 改名 `keyword:view`（变更 restructure-top-nav）。
+
+    改名靠一条 UPDATE 迁移落库，而 `role_permission` 按 permission.id 关联、不动。
+    若哪天有人把旧码加回来，会出现两个覆盖范围重叠的权限点，而重叠处谁生效取决于
+    端点各自挂了哪个——这种错不会报错，只会让某些人莫名 403。
+    """
+    assert "toolbox:view" not in P.PERMISSIONS
+    assert P.PERMISSIONS["keyword:view"] == "查看关键词工具"
+    # 三个内置角色都持有它：本次改名不改变任何人的可见范围
+    for role in ("admin", "operator", "analyst"):
+        assert "keyword:view" in P.ROLES[role][1]
+
+
+def test_侵权查询没有权限点():
+    """外观专利与全球商标库没有后端端点，罩着它们的权限点对它们不生效。
+
+    等接上数据源、有了真实端点再新增——那时是加法，不会留下失效的历史勾选
+    （`user:manage` 就是那样变成「勾了也不生效」的复选框的）。
+    """
+    assert not [c for c in P.PERMISSIONS if c.startswith(("ip:", "patent:", "trademark:"))]

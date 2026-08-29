@@ -57,10 +57,10 @@ V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型�
 | `dim_product` | 商品维度，`asin` 唯一；SCD Type 1（不留历史版本） |
 | `fact_daily` / `fact_weekly` | 事实表，按期次日期月度 RANGE 分区 + 按 `site` 二级 LIST 分区。**分区列名两表不同**：日报是 `report_date`，周报是 `report_date_week`——照着日报的列名写周报查询会直接报 `UndefinedColumn` |
 | `fact_dropped` | 掉榜词表，按 `anchor_date` 月度 RANGE 分区，**只有一级、没有站点子分区**（站点是普通索引列）。它是差集不是全量，比事实表小一到两个数量级，二级分区的裁剪收益抵不上分区数翻倍的代价 |
-| `fact_growth` | 持续增长词表（工具箱），同样按 `anchor_date` 月度 RANGE、无站点子分区。**只有日报**，故没有 `period_type` 列 |
+| `fact_growth` | 持续增长词表（关键词工具），同样按 `anchor_date` 月度 RANGE、无站点子分区。**只有日报**，故没有 `period_type` 列 |
 | `site_data_stats` | 按站点/周期/期次的行数（`row_count` 在榜 + `dropped_count` 掉榜），服务分页总数与日期选择器 |
 | `import_batch` | 导入批次记录 |
-| `keyword_group` / `keyword_group_item` | 词库：用户自建的关键词清单（工具箱 · 我的词库）。普通表，不分区、不参与保留清理、不被导入写入 |
+| `keyword_group` / `keyword_group_item` | 词库：用户自建的关键词清单（关键词工具 · 我的词库）。普通表，不分区、不参与保留清理、不被导入写入 |
 
 分区表的注册表是 `partitioning.PARTITIONED_TABLES`（表名 → `PartitionScheme(date_column, site_subpartition)`）——「这张表分不分站点」只有这一处答案，`ensure_fact_partitions` 与
 `retention_service` 都读它，新增分区表登记进去即自动纳入建分区与按月 `DROP`。
@@ -145,7 +145,7 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
   `test/test_site_scoped_query_integration.py`（`TEST_DATABASE_URL` gate）。
 - 演示数据：`scripts/seed_demo_data.py`（连续 7 天 + 对齐周报，让走势可见，仅本地）。
 
-**工具箱 · 持续增长市场（`/api/toolbox/growth/*`，权限点 `toolbox:view`）**：近 7 天名次
+**关键词工具 · 持续增长市场（`/api/keyword/growth/*`，权限点 `keyword:view`）**：近 7 天名次
 持续前进的关键词榜。命中口径三条同时成立——窗口内每期都在榜、累计净增 `rank(d-6) − rank(d)`
 > `GROWTH_MIN_RANK_GAIN`、6 个日环比全部 ≥ `GROWTH_MIN_DAILY_RATE`。五条要点：
 
@@ -167,7 +167,7 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
   会被读成今天没有增长词）、**不显示「条件已修改」标签**（用户一个条件都没改，那句话是
   错的）、**空状态提示去点「立即查询」**。少任何一处，缺陷就伪装成一条正常的空榜单。
 
-**工具箱 · 我的词库（`/api/toolbox/library/*`，权限点同为 `toolbox:view`）**：用户自建的
+**关键词工具 · 我的词库（`/api/keyword/library/*`，权限点同为 `keyword:view`）**：用户自建的
 关键词清单，把关心的词攒起来长期盯排名。两张普通表 `keyword_group`（分组）/
 `keyword_group_item`（条目），不分区、不参与保留清理、不被导入路径写入。六条要点：
 
@@ -196,9 +196,35 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 事实行的列投影由 `analysis_crud.fact_metric_columns` 提供，**两屏共用一份**；复制第二份
 不会报错，表现是同一个词在两屏显示不同的值。
 
-「外观专利」「全球商标库」只是占位屏：仓库里没有任何专利/商标数据，**不发请求、无后端
-端点**。四个二级菜单共用 `toolbox:view` 一个权限点——给没有端点的屏各开一个权限点，就是
-再造一遍 `user:manage` 那种「勾了也不生效」的复选框。
+## 顶栏菜单：按数据域命名，不设按排除法命名的容器
+
+顶栏五项，顺序固定：**ABA数据选品 → 关键词工具 → 竞对监控 → 侵权查询 → 数据上传**
+（前四项「看数据」，上传是唯一「喂数据」的，排最后）。路由与菜单在
+`frontend/src/routes.ts`——它从 `.umirc.ts` 抽出来单独成文件是为了**可测**
+（`src/routes.test.ts`；直接 import `.umirc.ts` 会经 `@umijs/max` 拽进 esbuild，
+jsdom 下启动即崩）。
+
+**新增一级菜单的判据是「它读哪个数据域」，没有一项匹配就新开一个。** 这里曾有一个叫
+「工具箱」的一级菜单，定义是「不属于选品主线的其他东西」——名字说的是它不是什么，
+因而不给新功能提供任何归属判据：下一个功能只能问「它像不像已经在里面的那些」，而那个
+问题没有答案。它最后装了四个屏，两个读 ABA 事实表、两个读根本不存在的专利/商标库；
+竞对监控没有放进去，就是它已经没有原则的证据。已拆成「关键词工具」与「侵权查询」两项。
+
+**单页顶层（`/analysis`、`/competitor`）不得加二级菜单。** 布局是 `layout: 'mix'` +
+`splitMenus`，顶层节点一有子项就长出约 208px 的左侧栏。按数据域，增长榜与词库本该并进
+`ABA数据选品`，正是这条否决了它——分析查询屏是全产品最宽的表，横向裁掉的列找不回来
+（与「我的词库」「竞对监控」两屏拒绝侧栏形态的是同一笔账）。
+
+**侵权查询（`/ip`，外观专利 + 全球商标库）只是占位屏**：仓库里没有任何专利/商标数据，
+**不发请求、无后端端点**。因此它**没有权限点**，只要求已登录——给没有端点的屏开权限点，
+就是再造一遍 `user:manage` 那种「勾了也不生效」的复选框。接上数据源、有了真实端点再加，
+那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有 access」的整齐而补一个。
+
+把它放进顶栏是自觉取舍：产品最空的一块因此成了最显眼的一块，换来的是「这块在做」这个
+路线图信号可见。
+
+旧地址 `/toolbox`、`/toolbox/growth`、`/toolbox/library` 保留重定向；两个占位屏的旧地址
+**不留**——没有人会去书签一个写着「数据源尚未接入」的屏。
 
 ## 竞对监控（`/api/competitor/*`，权限点 `competitor:view`）
 
@@ -251,7 +277,7 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 重复执行的问题）。书签文件约 2MB，同步读进内存即可，**不走 OSS 直传那一套**——那是给 GB 级
 CSV 准备的，用在这里是过度设计。
 
-**权限点 `competitor:view` 是独立的，不复用 `toolbox:view`。** 与「外观专利」那种占位屏
+**权限点 `competitor:view` 是独立的，不复用 `keyword:view`。** 与「外观专利」那种占位屏
 相反，这一屏有真实端点、真实数据、且每个用户的关注池互相独立，是一个可以真正被授予或
 不授予的能力。私有性靠每条查询里的 `user_id`，别人的分组/关注/预览一律 **404 而非 403**。
 
@@ -283,7 +309,7 @@ app/
 ├── table/
 │   ├── analysis/      # V2 查询层（model, crud, service, api + retention/partitioning）
 │   ├── search/        # 查询请求/响应 schemas
-│   ├── toolbox/       # 工具箱查询层（持续增长市场 growth_crud/service/api/schemas）
+│   ├── keyword/       # 关键词工具查询层（增长榜 growth_* + 词库 library_*）
 │   │                  # 模型 fact_growth 寄居在 analysis/fact_model.py——分区、保留、
 │   │                  # 导入收尾都在那个域内，登记一处即被三处接管
 │   └── upload/        # OSS 直传凭证 + 三段式导入（oss_client / import_source / importer / import_service）
@@ -416,7 +442,8 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`、
   `require_super`）。
 - **RBAC**：`role`/`permission`/`role_permission`（M2M），`user_center.role_id`（每用户一角色）。
-  权限点只有四个：`analysis:view`/`analysis:export`/`upload:import`/`toolbox:view`；内置角色
+  权限点只有五个：`analysis:view`/`analysis:export`/`upload:import`/`keyword:view`/
+  `competitor:view`；内置角色
   admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
   is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。
 - **用户管理是「不可授予」的能力，不走权限点**：`/api/user/*` 五个端点一律

@@ -9,7 +9,7 @@ import {
   searchGrowth,
   type GrowthRow,
   type GrowthScopeInfo,
-} from '@/services/toolbox';
+} from '@/services/keyword';
 import { getSites, type SiteOption } from '@/services/upload';
 import { buildColumns } from './columns';
 import { formatCriteria, formatMissingDates, toSortParams } from './criteria';

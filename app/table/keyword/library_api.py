@@ -1,10 +1,10 @@
-"""工具箱 · 我的词库 API。瘦控制器：调 service，异常交给全局处理器。
+"""关键词工具 · 我的词库 API。瘦控制器：调 service，异常交给全局处理器。
 
 - 分组：`GET/POST /library/groups`、`PATCH/DELETE /library/groups/{id}`
 - 条目：`POST/DELETE /library/groups/{id}/items`（批量，幂等）
 - 盯盘：`POST /library/watch`、`GET /library/groups/{id}/scope`
 
-全部挂 `toolbox:view`——词库管理的是用户自己的私有清单，「禁止某人管理自己的收藏夹」
+全部挂 `keyword:view`——词库管理的是用户自己的私有清单，「禁止某人管理自己的收藏夹」
 不是会真实发生的授权需求，为它新增权限点只会得到一个全员常开的复选框（`user:manage`
 踩过这个坑）。**没有全局鉴权中间件**，漏挂依赖就是裸奔的。
 
@@ -15,10 +15,10 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.permissions import TOOLBOX_VIEW
+from app.auth.permissions import KEYWORD_VIEW
 from app.auth.simple_auth import simple_auth
-from app.table.toolbox import library_service as service
-from app.table.toolbox.library_schemas import (
+from app.table.keyword import library_service as service
+from app.table.keyword.library_schemas import (
     GroupCreateRequest,
     GroupOut,
     GroupRenameRequest,
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 library_router = APIRouter()
 
-_require_view = simple_auth.require_permission(TOOLBOX_VIEW)
+_require_view = simple_auth.require_permission(KEYWORD_VIEW)
 
 
 @library_router.get("/library/groups", response_model=list[GroupOut])

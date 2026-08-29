@@ -8,7 +8,7 @@ const { searchGrowth, getGrowthScope, getSites } = vi.hoisted(() => ({
 }));
 
 vi.mock('@umijs/max', () => ({ useAccess: () => ({}) }));
-vi.mock('@/services/toolbox', () => ({ searchGrowth, getGrowthScope }));
+vi.mock('@/services/keyword', () => ({ searchGrowth, getGrowthScope }));
 vi.mock('@/services/upload', () => ({ getSites }));
 
 import GrowthMarketPage from './index';

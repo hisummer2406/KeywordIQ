@@ -17,11 +17,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.errors import (
+    CODE_KEYWORD_SCOPE_INVALID,
     CODE_LIBRARY_GROUP_DUPLICATE,
     CODE_LIBRARY_GROUP_NOT_FOUND,
     CODE_LIBRARY_KEYWORD_MISMATCH,
     CODE_LIBRARY_LIMIT_EXCEEDED,
-    CODE_TOOLBOX_SCOPE_INVALID,
     BadRequestError,
     ConflictError,
     NotFoundError,
@@ -29,8 +29,8 @@ from app.common.errors import (
 )
 from app.site_registry import UnknownSiteError, normalize_site_code
 from app.table.analysis import analysis_crud
-from app.table.toolbox import library_crud as crud
-from app.table.toolbox.library_schemas import (
+from app.table.keyword import library_crud as crud
+from app.table.keyword.library_schemas import (
     GroupCreateRequest,
     GroupOut,
     GroupRenameRequest,
@@ -90,11 +90,11 @@ def _duplicate_name_or_reraise(exc: IntegrityError, detail: str) -> GroupDuplica
 class LibraryScopeError(UnprocessableError):
     """作用域参数非法（站点未登记、期次无数据/越界）→ 422。
 
-    **不复用分析屏的 `ScopeError`**：错误码按域划分，工具箱的失败报成 `analysis.*` 会让
+    **不复用分析屏的 `ScopeError`**：错误码按域划分，关键词工具的失败报成 `analysis.*` 会让
     排障时按码筛日志把两条完全不同的路径混在一起（growth 也是这么分的）。
     """
 
-    code = CODE_TOOLBOX_SCOPE_INVALID
+    code = CODE_KEYWORD_SCOPE_INVALID
     message = "查询作用域不合法"
 
 
