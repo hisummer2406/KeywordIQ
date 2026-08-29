@@ -19,6 +19,9 @@ UPLOAD_IMPORT: Final = "upload:import"
 # 数据源、也没有端点可挂，那样的权限点就是「勾了也不生效」的复选框，与被移除的
 # `user:manage` 同类。等它们真有端点时再拆，届时拆分是加法，不会留下失效的历史勾选。
 TOOLBOX_VIEW: Final = "toolbox:view"
+# 竞对监控是独立数据域（自己的表、自己的用户隔离逻辑），不塞进 TOOLBOX_VIEW——每个用户的
+# 关注池互相独立，不是「全体共用一个开关」的授权粒度，与 ANALYSIS_VIEW 等同一档次。
+COMPETITOR_VIEW: Final = "competitor:view"
 
 # code -> 中文名
 PERMISSIONS: Final[dict[str, str]] = {
@@ -26,13 +29,17 @@ PERMISSIONS: Final[dict[str, str]] = {
     ANALYSIS_EXPORT: "导出分析数据",
     UPLOAD_IMPORT: "上传/导入数据",
     TOOLBOX_VIEW: "查看工具箱",
+    COMPETITOR_VIEW: "查看竞对监控",
 }
 
 # ---- 内置角色 ----  code -> (中文名, 权限集合)
 ROLES: Final[dict[str, tuple[str, set[str]]]] = {
     "admin": ("超级管理员", set(PERMISSIONS.keys())),
-    "operator": ("运营", {ANALYSIS_VIEW, ANALYSIS_EXPORT, UPLOAD_IMPORT, TOOLBOX_VIEW}),
-    "analyst": ("分析师", {ANALYSIS_VIEW, ANALYSIS_EXPORT, TOOLBOX_VIEW}),
+    "operator": (
+        "运营",
+        {ANALYSIS_VIEW, ANALYSIS_EXPORT, UPLOAD_IMPORT, TOOLBOX_VIEW, COMPETITOR_VIEW},
+    ),
+    "analyst": ("分析师", {ANALYSIS_VIEW, ANALYSIS_EXPORT, TOOLBOX_VIEW, COMPETITOR_VIEW}),
 }
 
 # is_super 回填映射（见 design 决策 4b：保住老用户上传能力）

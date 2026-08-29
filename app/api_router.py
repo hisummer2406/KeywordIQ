@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.auth.auth_api import auth_router
 from app.table.analysis.analysis_api import analysis_router
+from app.table.competitor.watch_api import competitor_router
 from app.table.toolbox.growth_api import toolbox_router
 from app.table.toolbox.library_api import library_router
 from app.table.upload.upload_api import upload_router
@@ -39,6 +40,12 @@ api_router.include_router(
     upload_router,
     prefix="/upload",
     tags=["数据上传"]
+)
+
+api_router.include_router(
+    competitor_router,
+    prefix="/competitor",
+    tags=["竞对监控"]
 )
 
 api_router.include_router(
