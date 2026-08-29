@@ -136,6 +136,13 @@ CODE_LIBRARY_GROUP_DUPLICATE: Final = "library.group_duplicate"      # 同站点
 CODE_LIBRARY_LIMIT_EXCEEDED: Final = "library.limit_exceeded"        # 分组数/条目数超上限
 CODE_LIBRARY_KEYWORD_MISMATCH: Final = "library.keyword_mismatch"    # 词不属于分组的站点
 
+# 竞对监控（关注清单）
+CODE_COMPETITOR_GROUP_NOT_FOUND: Final = "competitor.group_not_found"
+CODE_COMPETITOR_GROUP_DUPLICATE: Final = "competitor.group_duplicate"      # 同用户下重名
+CODE_COMPETITOR_LIMIT_EXCEEDED: Final = "competitor.limit_exceeded"        # 关注总数/单批解析数超上限
+CODE_COMPETITOR_PREVIEW_NOT_FOUND: Final = "competitor.preview_not_found"  # token 不存在/不属于当前用户
+CODE_COMPETITOR_PREVIEW_EXPIRED: Final = "competitor.preview_expired"
+
 # 导入与对象存储
 CODE_UPLOAD_IMPORT_REJECTED: Final = "upload.import_rejected"
 CODE_UPLOAD_OSS_NOT_READY: Final = "upload.oss_not_ready"

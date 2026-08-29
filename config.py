@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     LIBRARY_MAX_GROUPS_PER_SITE: int = 20   # 每用户每站点的分组数上限
     LIBRARY_MAX_ITEMS_PER_GROUP: int = 500  # 每分组的关键词条数上限
 
+    # 竞对监控（关注清单）的规模上限，同样是**拒绝式**：超限在预览阶段即返回 422，
+    # 不进入可确认状态，不静默截断。
+    COMPETITOR_MAX_WATCH_PER_USER: int = 3000    # 每用户的关注总数上限
+    COMPETITOR_MAX_IMPORT_BATCH: int = 5000      # 单次预览可解析的条数上限
+    # 预览结果的暂存时长。够运营看完预览再点确认，又不至于让废弃的预览行长期占位——
+    # 过期行由 import_queue.py 的轮询循环顺带清理，不新开定时器。
+    COMPETITOR_PREVIEW_TTL_SECONDS: int = 600    # 10 分钟
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
@@ -251,6 +259,20 @@ class Settings(BaseSettings):
         # 与真的攒满了长得一样，看不出是配置写错。
         if value < 1:
             raise ValueError("词库上限至少为 1（配成 0 会让加入词库永远失败，且看不出是配置问题）")
+        return value
+
+    @field_validator("COMPETITOR_MAX_WATCH_PER_USER", "COMPETITOR_MAX_IMPORT_BATCH")
+    @classmethod
+    def _validate_competitor_caps(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("竞对监控上限至少为 1（配成 0 会让添加卖家永远失败，且看不出是配置问题）")
+        return value
+
+    @field_validator("COMPETITOR_PREVIEW_TTL_SECONDS")
+    @classmethod
+    def _validate_competitor_preview_ttl(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("COMPETITOR_PREVIEW_TTL_SECONDS 至少为 1（配成 0 会让预览还没显示就过期）")
         return value
 
     @field_validator("GROWTH_MIN_RANK_GAIN")
