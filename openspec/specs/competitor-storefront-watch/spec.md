@@ -137,18 +137,6 @@ MUST NOT 等到确认阶段才失败，MUST NOT 静默截断。
 - **WHEN** 用户已关注 2990 个卖家，上传的书签会新增 50 个
 - **THEN** 预览接口返回错误，说明关注总数将超过上限，不进入可确认状态
 
-### Requirement: 权限点独立于工具箱
-
-竞对监控功能 SHALL 使用独立权限点 `competitor:view`，MUST NOT 复用 `toolbox:view`
-——每个用户的关注池互相独立，不是工具箱式的「全体共用一个开关」的授权粒度。
-
-`competitor:view` SHALL 授予内置角色 admin、operator、analyst。
-
-#### Scenario: 未授权用户访问
-
-- **WHEN** 一个只有 `analysis:view` 权限的用户请求竞对监控的任意端点
-- **THEN** 返回 403
-
 ### Requirement: 分组管理不得占用主表格的横向宽度
 
 分组的选择与管理 SHALL 摆在主表格**上方**的独立区域，MUST NOT 做成与表格并排的侧栏
@@ -170,4 +158,17 @@ MUST NOT 等到确认阶段才失败，MUST NOT 静默截断。
 - **WHEN** 用户刚关注一个卖家
 - **THEN** 该行状态显示「待建立基线」，「近 7 日上新数」列显示占位符而非 0 或空白
   数字（0 会被读成"没有新品"，占位符才准确表达"这个指标还没有数据来源"）
+
+### Requirement: 权限点独立，不与关键词工具共用
+
+竞对监控功能 SHALL 使用独立权限点 `competitor:view`，MUST NOT 复用 `keyword:view`
+或任何其他一级菜单的权限点——每个用户的关注池互相独立，不是「全体共用一个开关」的
+授权粒度。
+
+`competitor:view` SHALL 授予内置角色 admin、operator、analyst。
+
+#### Scenario: 未授权用户访问
+
+- **WHEN** 一个只有 `analysis:view` 权限的用户请求竞对监控的任意端点
+- **THEN** 返回 403
 
