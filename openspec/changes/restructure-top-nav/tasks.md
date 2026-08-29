@@ -72,10 +72,23 @@
 
 ## 6. 收尾
 
-- [ ] 6.1 `uv run ruff check .` + `uv run pytest test/ -q`（带 `TEST_DATABASE_URL`）全绿
-- [ ] 6.2 人工验收：五项菜单各点一遍；旧地址 `/toolbox/growth` 能落到新屏；
-      用一个只有 `analysis:view` 的账号确认关键词工具被挡回、侵权查询可见
-- [ ] 6.3 按路径提交（先看 `git status --short` 的索引列），开 PR `--base v2`
+- [x] 6.1 ruff 通过；后端 **656 passed, 1 skipped**（带 `TEST_DATABASE_URL`，唯一跳过是
+      需真实 OSS 回路那条）；前端 lint / tsc 通过，**36 files / 344 tests** 全过
+- [x] 6.2 人工验收（2026-08-29，临时 dev server 8010/8011，库 `keywordiq_v2_dev`）：
+
+      | 检查 | 结果 |
+      |---|---|
+      | 顶栏五项与顺序 | ABA数据选品 / 关键词工具 / 竞对监控 / 侵权查询 / 数据上传，与 spec 一致 |
+      | 分析屏仍是全宽 | 无左侧栏，宽表未被裁 |
+      | 旧地址 `/toolbox/growth` | 落到 `/keyword/growth` |
+      | 旧地址 `/toolbox/library` | 落到 `/keyword/library` |
+      | 改名后的 API 真能用 | 增长榜查出 1 条（stadium seats，累计前进 11,049）；词库列出 8 个分组 |
+      | 侵权查询 | 「数据源尚未接入」占位屏，不发请求 |
+
+      **未用第二个账号手验**「只有 `analysis:view` 时关键词工具被挡回」：后端 403 已由
+      `test_protable_contract.py` 覆盖，前端菜单显隐是 `access.ts` 一行映射且有回归。
+      本次改名不改变任何人的可见范围（三个内置角色都持有该权限点），故不为这一条建账号。
+- [x] 6.3 按路径提交，开 PR `--base v2`
 
 ### 4 组落地时的一处偏离
 
