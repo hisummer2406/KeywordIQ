@@ -21,7 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.table.analysis import analysis_crud
 from app.table.analysis.dimension_model import DimKeyword
 from app.table.analysis.fact_model import FactDropped
-from app.table.toolbox.library_model import KeywordGroup, KeywordGroupItem
+from app.table.keyword.library_model import KeywordGroup, KeywordGroupItem
 
 # 三段序：在榜 → 掉榜 → 该期无数据。掉榜与无数据没有可比较的排名，混进排序会让
 # 「排得最靠后的词」和「没有数据的词」看起来是一回事。

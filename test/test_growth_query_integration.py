@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.table.analysis.partitioning import ensure_fact_partitions
-from app.table.toolbox import growth_service as service
-from app.table.toolbox.growth_schemas import GrowthSearchRequest
+from app.table.keyword import growth_service as service
+from app.table.keyword.growth_schemas import GrowthSearchRequest
 from config import settings
 from test.test_site_scoped_query_integration import _async_url
 

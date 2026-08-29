@@ -126,11 +126,10 @@ CODE_RESOURCE_CONFLICT: Final = "resource.conflict"
 CODE_ANALYSIS_SCOPE_INVALID: Final = "analysis.scope_invalid"
 CODE_ANALYSIS_EXPORT_TOO_LARGE: Final = "analysis.export_too_large"
 
-# 工具箱
-CODE_TOOLBOX_SCOPE_INVALID: Final = "toolbox.scope_invalid"
-CODE_TOOLBOX_SORT_INVALID: Final = "toolbox.sort_invalid"
+# 关键词工具（增长榜与词库共用——两屏的作用域解析是同一套站点/期次判定）
+CODE_KEYWORD_SCOPE_INVALID: Final = "keyword.scope_invalid"
 
-# 词库（工具箱 · 我的词库）
+# 词库（关键词工具 · 我的词库）
 CODE_LIBRARY_GROUP_NOT_FOUND: Final = "library.group_not_found"
 CODE_LIBRARY_GROUP_DUPLICATE: Final = "library.group_duplicate"      # 同站点下重名
 CODE_LIBRARY_LIMIT_EXCEEDED: Final = "library.limit_exceeded"        # 分组数/条目数超上限

@@ -10,9 +10,9 @@ from datetime import date
 
 import pytest
 
-from app.table.toolbox import growth_crud as crud
-from app.table.toolbox import growth_service as service
-from app.table.toolbox.growth_schemas import GrowthSearchRequest
+from app.table.keyword import growth_crud as crud
+from app.table.keyword import growth_service as service
+from app.table.keyword.growth_schemas import GrowthSearchRequest
 
 
 def test_窗口含锚定日本身():

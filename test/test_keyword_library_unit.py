@@ -11,9 +11,9 @@ from datetime import UTC, date, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.table.toolbox import library_crud as crud
-from app.table.toolbox import library_service as service
-from app.table.toolbox.library_schemas import (
+from app.table.keyword import library_crud as crud
+from app.table.keyword import library_service as service
+from app.table.keyword.library_schemas import (
     ItemsRequest,
     LibraryWatchRow,
     WatchRequest,
@@ -46,9 +46,9 @@ def test_传了不在可选集里的日期报错():
         service._resolve_date(date(2026, 1, 1), [date(2026, 7, 15)])
 
 
-def test_作用域错误码归工具箱域不归分析域():
-    """错误码按域划分：工具箱的失败报成 analysis.* 会让按码筛日志把两条路径混在一起。"""
-    assert service.LibraryScopeError.code.startswith("toolbox.")
+def test_作用域错误码归关键词工具域不归分析域():
+    """错误码按域划分：关键词工具的失败报成 analysis.* 会让按码筛日志把两条路径混在一起。"""
+    assert service.LibraryScopeError.code.startswith("keyword.")
 
 
 # ---------- 行整形：三态与 NULL ----------
@@ -169,7 +169,7 @@ def test_排序字段不在白名单直接报参数错误():
 def test_走势与历史排名不可排序():
     from typing import get_args
 
-    from app.table.toolbox.library_schemas import LibrarySortField
+    from app.table.keyword.library_schemas import LibrarySortField
 
     fields = set(get_args(LibrarySortField))
     assert not fields & {"trend", "trend_dates", "history"}
