@@ -91,37 +91,37 @@ def test_user_table_requires_auth():
     assert r.status_code in (401, 403)
 
 
-def test_toolbox_growth_requires_auth():
+def test_growth_requires_auth():
     """工具箱端点同样必须自带鉴权依赖——没有全局中间件兜底，漏挂即裸奔。"""
-    import app.table.toolbox.growth_api as growth_api_mod
+    import app.table.keyword.growth_api as growth_api_mod
 
     app = FastAPI()
     register_error_handlers(app)
-    app.include_router(growth_api_mod.toolbox_router, prefix="/api/toolbox")
+    app.include_router(growth_api_mod.growth_router, prefix="/api/keyword")
     client = TestClient(app)
 
-    assert client.post("/api/toolbox/growth/search", json={}).status_code in (401, 403)
-    assert client.get("/api/toolbox/growth/scope").status_code in (401, 403)
+    assert client.post("/api/keyword/growth/search", json={}).status_code in (401, 403)
+    assert client.get("/api/keyword/growth/scope").status_code in (401, 403)
 
 
-def test_toolbox_growth_rejects_unlisted_sort_field(monkeypatch):
+def test_growth_rejects_unlisted_sort_field(monkeypatch):
     """排序白名单之外的字段按参数不合法拒绝，不静默回落到默认排序。
 
     回落会让用户以为自己按某列排了序、看到的却是另一种顺序——而列表本身照常返回 200，
     没有任何地方会提示他排序没生效。
     """
-    import app.table.toolbox.growth_api as growth_api_mod
+    import app.table.keyword.growth_api as growth_api_mod
     from app.auth.simple_auth import simple_auth
     from database import get_async_db
 
     app = FastAPI()
     register_error_handlers(app)
-    app.include_router(growth_api_mod.toolbox_router, prefix="/api/toolbox")
+    app.include_router(growth_api_mod.growth_router, prefix="/api/keyword")
     app.dependency_overrides[get_async_db] = lambda: None
     app.dependency_overrides[simple_auth.get_current_user] = _super_user
     client = TestClient(app)
 
-    r = client.post("/api/toolbox/growth/search", json={"orderBy": "keyword"})
+    r = client.post("/api/keyword/growth/search", json={"orderBy": "keyword"})
 
     # 422：白名单挡在 schema 的 Literal 上，走的是参数校验这一路（与全站一致）
     assert r.status_code == 422

@@ -18,8 +18,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.table.toolbox import library_service as service
-from app.table.toolbox.library_schemas import (
+from app.table.keyword import library_service as service
+from app.table.keyword.library_schemas import (
     GroupCreateRequest,
     GroupRenameRequest,
     WatchRequest,

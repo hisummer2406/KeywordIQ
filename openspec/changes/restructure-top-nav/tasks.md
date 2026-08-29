@@ -19,27 +19,29 @@
 
 ## 2. 后端：权限点改名 `toolbox:view` → `keyword:view`
 
-- [ ] 2.1 `app/auth/permissions.py`：`TOOLBOX_VIEW` → `KEYWORD_VIEW = "keyword:view"`，
+- [x] 2.1 `app/auth/permissions.py`：`TOOLBOX_VIEW` → `KEYWORD_VIEW = "keyword:view"`，
       中文名「查看关键词工具」，三个内置角色的集合同步；注释改写为「为什么是容器级共用点、
       为什么不逐屏拆」，并说明它与被删除的 `user:manage` 不是一回事（这个是真执行的）
-- [ ] 2.2 Alembic 迁移：`UPDATE analysis.permission SET code, name WHERE code='toolbox:view'`，
+- [x] 2.2 Alembic 迁移：`UPDATE analysis.permission SET code, name WHERE code='toolbox:view'`，
       降级反向 UPDATE。**不动 `role_permission`**（它按 `permission.id` 关联，见 design 决策 3），
       并在迁移 docstring 里写明这一点，免得下一个人以为漏了
-- [ ] 2.3 `growth_api.py` / `library_api.py` 的 `require_permission` 换成新常量
-- [ ] 2.4 测试：`test_rbac_auth_unit.py` 与 `test_protable_contract.py` 里的权限码断言更新；
+- [x] 2.3 `growth_api.py` / `library_api.py` 的 `require_permission` 换成新常量
+- [x] 2.4 测试：`test_rbac_auth_unit.py` 与 `test_protable_contract.py` 里的权限码断言更新；
       新增一条回归——三个内置角色都持有 `keyword:view`，且系统中不再存在 `toolbox:view`
-- [ ] 2.5 迁移可回滚性：`alembic upgrade head && alembic downgrade -1 && alembic upgrade head`
+- [x] 2.5 迁移可回滚性：`alembic upgrade head && alembic downgrade -1 && alembic upgrade head`
       在 `keywordiq_test` 上跑通
 
 ## 3. 后端：API 前缀与包改名（**可整组砍掉**，见 design 决策 5）
 
-- [ ] 3.1 `app/table/toolbox/` → `app/table/keyword/`，模块 docstring 同步
-- [ ] 3.2 `app/api_router.py` 的前缀 `/api/toolbox` → `/api/keyword`
+- [x] 3.1 `app/table/toolbox/` → `app/table/keyword/`，模块 docstring 同步
+- [x] 3.2 `app/api_router.py` 的前缀 `/api/toolbox` → `/api/keyword`
 - [ ] 3.3 `frontend/src/services/toolbox.ts` → `keyword.ts`，请求路径同步；`library.ts` 的路径同步
-- [ ] 3.4 后端测试里的端点路径全量更新（`test_growth_query_*`、`test_keyword_library_*`、
+- [x] 3.4 后端测试里的端点路径全量更新（`test_growth_query_*`、`test_keyword_library_*`、
       `test_protable_contract.py`）
-- [ ] 3.5 若本组被砍：在 `app/table/toolbox/__init__.py` 写明它服务的是「关键词工具」菜单，
-      并在 CLAUDE.md 里记下这处已知分叉
+- [x] 3.5 不适用——本组未被砍掉，不存在前缀分叉，无需记录
+- [x] 3.6 顺带：`CODE_TOOLBOX_SCOPE_INVALID` → `CODE_KEYWORD_SCOPE_INVALID`
+      （`keyword.scope_invalid`，两屏共用），并删掉 `CODE_TOOLBOX_SORT_INVALID`——
+      它自声明起就无人引用（非法排序早已由 schema 的 Literal 挡在参数校验层）
 
 ## 4. 前端：菜单结构
 
