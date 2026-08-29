@@ -11,10 +11,10 @@ from datetime import date, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.errors import CODE_TOOLBOX_SCOPE_INVALID, UnprocessableError
+from app.common.errors import CODE_KEYWORD_SCOPE_INVALID, UnprocessableError
 from app.site_registry import UnknownSiteError, normalize_site_code
-from app.table.toolbox import growth_crud as crud
-from app.table.toolbox.growth_schemas import (
+from app.table.keyword import growth_crud as crud
+from app.table.keyword.growth_schemas import (
     GrowthRowItem,
     GrowthScopeInfo,
     GrowthSearchRequest,
@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 class GrowthScopeError(UnprocessableError):
     """作用域参数非法（站点未登记、日期无数据/越界）→ 422。
 
-    独立于分析屏的 `ScopeError`：错误码按域划分，工具箱的失败不该报成 `analysis.*`
+    独立于分析屏的 `ScopeError`：错误码按域划分，关键词工具的失败不该报成 `analysis.*`
     ——排障时按码筛日志会把两条完全不同的路径混在一起。
     """
 
-    code = CODE_TOOLBOX_SCOPE_INVALID
+    code = CODE_KEYWORD_SCOPE_INVALID
     message = "查询作用域不合法"
 
 

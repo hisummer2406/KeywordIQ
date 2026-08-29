@@ -761,7 +761,7 @@ export default function AnalysisPage() {
               掉榜行同样可选：它有 keyword_id，而「掉出去了想继续盯」正是加入词库
               最典型的动机。
             */}
-            {access.canViewToolbox && selectedKeywordIds.length > 0 && (
+            {access.canViewKeyword && selectedKeywordIds.length > 0 && (
               <Button
                 // 实心：它只在勾选之后才出现，是那一刻用户唯一要做的动作，
                 // 与常驻的「导出 CSV」不同级。

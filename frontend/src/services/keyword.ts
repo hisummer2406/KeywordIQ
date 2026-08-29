@@ -1,7 +1,7 @@
 import { request } from '@umijs/max';
 
 /**
- * 工具箱 · 持续增长市场。
+ * 关键词工具 · 持续增长市场。
  *
  * 作用域只有「站点 + 锚定日」两维，**没有视图**——只有日报有「连续 7 天」这个概念。
  */
@@ -58,14 +58,14 @@ export interface GrowthScopeInfo {
 }
 
 export async function searchGrowth(body: GrowthSearchBody) {
-  return request<GrowthSearchResponse>('/api/toolbox/growth/search', {
+  return request<GrowthSearchResponse>('/api/keyword/growth/search', {
     method: 'POST',
     data: body,
   });
 }
 
 export async function getGrowthScope(site?: string) {
-  return request<GrowthScopeInfo>('/api/toolbox/growth/scope', {
+  return request<GrowthScopeInfo>('/api/keyword/growth/scope', {
     method: 'GET',
     params: site ? { site } : {},
   });

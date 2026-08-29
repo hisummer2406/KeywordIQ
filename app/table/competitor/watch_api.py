@@ -6,7 +6,7 @@
 - 导入两步流：`POST /competitor/watch/preview`（`multipart/form-data`，粘贴文本或文件
   二选一）、`POST /competitor/watch/commit`
 
-全部挂独立权限点 `competitor:view`——不复用 `toolbox:view`，每个用户的关注池互相独立。
+全部挂独立权限点 `competitor:view`——不复用 `keyword:view`，每个用户的关注池互相独立。
 **没有全局鉴权中间件**，漏挂依赖就是裸奔的。`current_user` 同时是归属判据：service 层
 每一条查询都带它，私有性不靠界面不展示。
 """

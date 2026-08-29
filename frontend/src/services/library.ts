@@ -2,7 +2,7 @@ import { request } from '@umijs/max';
 import type { AnalysisRow, View } from './analysis';
 
 /**
- * 工具箱 · 我的词库。
+ * 关键词工具 · 我的词库。
  *
  * **分组绑定站点**：站点在建组时定死，之后所有请求的站点都由 group_id 决定——盯盘屏
  * 因此没有站点选择器，否则会出现「选了 DE 却在看 US 分组」这种自相矛盾的状态。
@@ -72,34 +72,34 @@ export interface ItemsAddResult {
 }
 
 export async function listGroups(site?: string) {
-  return request<KeywordGroup[]>('/api/toolbox/library/groups', {
+  return request<KeywordGroup[]>('/api/keyword/library/groups', {
     method: 'GET',
     params: site ? { site } : {},
   });
 }
 
 export async function createGroup(site: string, name: string) {
-  return request<KeywordGroup>('/api/toolbox/library/groups', {
+  return request<KeywordGroup>('/api/keyword/library/groups', {
     method: 'POST',
     data: { site, name },
   });
 }
 
 export async function renameGroup(groupId: number, name: string) {
-  return request<KeywordGroup>(`/api/toolbox/library/groups/${groupId}`, {
+  return request<KeywordGroup>(`/api/keyword/library/groups/${groupId}`, {
     method: 'PATCH',
     data: { name },
   });
 }
 
 export async function deleteGroup(groupId: number) {
-  return request<{ success: boolean }>(`/api/toolbox/library/groups/${groupId}`, {
+  return request<{ success: boolean }>(`/api/keyword/library/groups/${groupId}`, {
     method: 'DELETE',
   });
 }
 
 export async function addItems(groupId: number, keywordIds: number[]) {
-  return request<ItemsAddResult>(`/api/toolbox/library/groups/${groupId}/items`, {
+  return request<ItemsAddResult>(`/api/keyword/library/groups/${groupId}/items`, {
     method: 'POST',
     data: { keyword_ids: keywordIds },
   });
@@ -107,20 +107,20 @@ export async function addItems(groupId: number, keywordIds: number[]) {
 
 export async function removeItems(groupId: number, keywordIds: number[]) {
   return request<{ removed: number; item_count: number }>(
-    `/api/toolbox/library/groups/${groupId}/items`,
+    `/api/keyword/library/groups/${groupId}/items`,
     { method: 'DELETE', data: { keyword_ids: keywordIds } },
   );
 }
 
 export async function getLibraryScope(groupId: number, view: View) {
-  return request<LibraryScopeInfo>(`/api/toolbox/library/groups/${groupId}/scope`, {
+  return request<LibraryScopeInfo>(`/api/keyword/library/groups/${groupId}/scope`, {
     method: 'GET',
     params: { view },
   });
 }
 
 export async function watchGroup(body: WatchBody) {
-  return request<WatchResponse>('/api/toolbox/library/watch', {
+  return request<WatchResponse>('/api/keyword/library/watch', {
     method: 'POST',
     data: body,
   });

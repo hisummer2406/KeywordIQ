@@ -254,7 +254,7 @@ describe('分析查询屏 · 切走再切回与结果表格', () => {
     });
 
     it('没有工具箱权限就没有这个入口', async () => {
-      accessState.canViewToolbox = false;
+      accessState.canViewKeyword = false;
       await renderSettled(false);
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
       fireEvent.click(rowCheckbox());
