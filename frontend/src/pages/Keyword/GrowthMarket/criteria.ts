@@ -1,4 +1,4 @@
-import type { GrowthScopeInfo, GrowthSortField } from '@/services/toolbox';
+import type { GrowthScopeInfo, GrowthSortField } from '@/services/keyword';
 
 /** 纯函数：口径文案、缺期文案、排序参数转换。无状态、不发请求，直接用 vitest 测。 */
 

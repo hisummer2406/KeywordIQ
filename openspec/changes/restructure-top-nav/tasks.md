@@ -35,7 +35,7 @@
 
 - [x] 3.1 `app/table/toolbox/` → `app/table/keyword/`，模块 docstring 同步
 - [x] 3.2 `app/api_router.py` 的前缀 `/api/toolbox` → `/api/keyword`
-- [ ] 3.3 `frontend/src/services/toolbox.ts` → `keyword.ts`，请求路径同步；`library.ts` 的路径同步
+- [x] 3.3 `frontend/src/services/toolbox.ts` → `keyword.ts`，请求路径同步；`library.ts` 的路径同步
 - [x] 3.4 后端测试里的端点路径全量更新（`test_growth_query_*`、`test_keyword_library_*`、
       `test_protable_contract.py`）
 - [x] 3.5 不适用——本组未被砍掉，不存在前缀分叉，无需记录
@@ -45,29 +45,30 @@
 
 ## 4. 前端：菜单结构
 
-- [ ] 4.1 `frontend/.umirc.ts`：顶栏五项按新顺序重排；`工具箱` 节点改为 `关键词工具`
-      （`/keyword`，两个子项）；新增 `侵权查询`（`/ip`，两个子项，`access: 'isLogin'`）。
-      父路由各自 redirect 到第一个子项
-- [ ] 4.2 旧地址重定向：`/toolbox`、`/toolbox/growth`、`/toolbox/library` 三条，`hideInMenu`；
+- [x] 4.1 `frontend/.umirc.ts`：顶栏五项按新顺序重排；`工具箱` 节点改为 `关键词工具`
+      （`/keyword`，两个子项）；新增 `侵权查询`（`/ip`，两个子项）。父路由各自 redirect
+      到第一个子项。**落地时 `侵权查询` 干脆不写 `access`**（原计划写 `'isLogin'`）：
+      外层 ProLayout 本就要求已登录，多写一个只会让人以为那里有一道额外的闸
+- [x] 4.2 旧地址重定向：`/toolbox`、`/toolbox/growth`、`/toolbox/library` 三条，`hideInMenu`；
       两个占位屏不留（design 决策 4）
-- [ ] 4.3 路由注释重写：现在的注释在解释「工具箱装什么」，要换成解释新的分组判据
+- [x] 4.3 路由注释重写：现在的注释在解释「工具箱装什么」，要换成解释新的分组判据
       （按数据域命名）、以及**为什么关键词工具没有并进选品**（侧栏宽度，design 决策 2）
-- [ ] 4.4 `frontend/src/access.ts`：`canViewToolbox` → `canViewKeyword`（`keyword:view`）；
+- [x] 4.4 `frontend/src/access.ts`：`canViewToolbox` → `canViewKeyword`（`keyword:view`）；
       侵权查询不加权限工厂项，直接用 `isLogin`，并注释说明为什么不给它权限点
-- [ ] 4.5 页面目录：`pages/Toolbox/{GrowthMarket,KeywordLibrary}` → `pages/Keyword/`，
+- [x] 4.5 页面目录：`pages/Toolbox/{GrowthMarket,KeywordLibrary}` → `pages/Keyword/`，
       `pages/Toolbox/{DesignPatent,Trademark,PendingDataSource.tsx}` → `pages/IP/`；
       import 路径与 `.umirc.ts` 的 component 同步
-- [ ] 4.6 前端测试：现有用例里的路径与权限码更新（`pages/Analysis/sessionAndTable.test.tsx`
+- [x] 4.6 前端测试：现有用例里的路径与权限码更新（`pages/Analysis/sessionAndTable.test.tsx`
       引用了 toolbox），新增一条断言顶栏五项的顺序与名字
-- [ ] 4.7 `pnpm lint && pnpm tsc && pnpm test` 全绿
+- [x] 4.7 `pnpm lint && pnpm tsc && pnpm test` 全绿
 
 ## 5. 文档
 
-- [ ] 5.1 CLAUDE.md：「工具箱 · 持续增长市场」「工具箱 · 我的词库」两节改名并更新端点路径；
+- [x] 5.1 CLAUDE.md：「工具箱 · 持续增长市场」「工具箱 · 我的词库」两节改名并更新端点路径；
       占位屏那段改写为独立的「侵权查询」说明；权限点清单从四个改为对应的新集合
-- [ ] 5.2 CLAUDE.md 新增一句话记下**顶栏分组判据**（按数据域命名，不设按排除法命名的容器），
+- [x] 5.2 CLAUDE.md 新增一句话记下**顶栏分组判据**（按数据域命名，不设按排除法命名的容器），
       否则下一个新功能又会面对「它属于哪儿」这个没有答案的问题
-- [ ] 5.3 `.env.example` 核对（本变更不新增配置项，确认无需改动即可）
+- [x] 5.3 `.env.example` 核对（本变更不新增配置项，确认无需改动即可）
 
 ## 6. 收尾
 
@@ -75,3 +76,11 @@
 - [ ] 6.2 人工验收：五项菜单各点一遍；旧地址 `/toolbox/growth` 能落到新屏；
       用一个只有 `analysis:view` 的账号确认关键词工具被挡回、侵权查询可见
 - [ ] 6.3 按路径提交（先看 `git status --short` 的索引列），开 PR `--base v2`
+
+### 4 组落地时的一处偏离
+
+4.6 原计划直接在测试里 import `.umirc.ts`，**做不到**：那条链经 `@umijs/max` 拽进
+esbuild，jsdom 下启动即抛「your JavaScript environment is broken」（jsdom 的 TextEncoder
+产出的不是真 Uint8Array）。改成把 routes 数组抽成 `frontend/src/routes.ts`，`.umirc.ts`
+import 它。副作用是好的：菜单结构从此可测，而它原本是**改错了不会有任何地方报错**的那类
+东西。已用 `max setup` 核对 umi 生成的 `.umi/core/route.tsx` 与预期一致。
