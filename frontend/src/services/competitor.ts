@@ -5,7 +5,7 @@ import { request } from '@umijs/max';
  * 页不在本变更范围——这里只有分组、关注关系、预览/确认两步导入。
  *
  * 与我的词库（`services/library.ts`）的关键差异：**分组不绑定站点**（同一分组可以混
- * US/UK/DE），所以没有 `site` 选择器驱动查询；主表格改由 `group_id`（可空，缺省查全部
+ * US/GB/DE），所以没有 `site` 选择器驱动查询；主表格改由 `group_id`（可空，缺省查全部
  * 关注）驱动。
  */
 

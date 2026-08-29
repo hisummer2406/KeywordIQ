@@ -9,7 +9,7 @@ import type { CompetitorGroup } from '@/services/competitor';
  * 主表格的横向宽度」）。
  *
  * **与词库 GroupBar 的关键差异：不绑定站点。** 分组这里只是运营自己的归类习惯，一个分组
- * 内允许出现 US/UK/DE 混合的卖家（design.md 决策 1）。因此新建分组没有站点选择，也没有
+ * 内允许出现 US/GB/DE 混合的卖家（design.md 决策 1）。因此新建分组没有站点选择，也没有
  * `activeId=undefined`（"全部关注"）之外的隐含约束。
  *
  * `activeId === undefined` 是一个恒定存在、不可删除的伪分组「全部关注」，不在 `groups`
@@ -156,7 +156,7 @@ export default function GroupBar({
         />
         {draft?.mode === 'create' && (
           <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-            分组不绑定站点,同一个分组里可以混着放 US/UK/DE 各站点的卖家。
+            分组不绑定站点,同一个分组里可以混着放 US/GB/DE 各站点的卖家。
           </Typography.Paragraph>
         )}
       </Modal>
