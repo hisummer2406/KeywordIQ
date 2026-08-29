@@ -19,12 +19,16 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     canViewAnalysis: has('analysis:view'),
     canExport: has('analysis:export'),
     canUpload: has('upload:import'),
-    // 工具箱下全部屏幕共用一个权限点。外观专利与全球商标库尚无数据源与端点，
-    // 各给一个权限点就成了「勾了也不生效」的复选框。
-    canViewToolbox: has('toolbox:view'),
-    // 独立权限点,不复用 toolbox:view——每个用户的关注池互相独立,不是"全体共用一个开关"
+    // 「关键词工具」下两屏（持续增长市场、我的词库）共用的容器级权限点。不给两屏各开一个
+    // ——词库管理的是用户自己的私有清单，「禁止某人管理自己的收藏夹」不是真实的授权需求。
+    canViewKeyword: has('keyword:view'),
+    // 独立权限点,不复用 keyword:view——每个用户的关注池互相独立,不是"全体共用一个开关"
     // 的授权粒度(design.md 决策 6)。
     canViewCompetitor: has('competitor:view'),
+    //「侵权查询」（外观专利 / 全球商标库）**故意没有权限工厂项**，路由直接用 isLogin。
+    // 它们没有后端端点，罩着它们的权限点对它们不生效，就成了「勾了也不生效」的复选框
+    // （`user:manage` 正是这样被删掉的）。接上数据源、有了真实端点再加——那时是加法，
+    // 不会留下失效的历史勾选。别为了「每个菜单都有权限项」的整齐而补一个。
     // 只认 is_super，不认 admin 角色码——把角色码也算进来，等于让「谁能管用户」
     // 变成一件改角色配置就能改变的事，而这正是收紧要排除的
     canManageUsers: isSuper,

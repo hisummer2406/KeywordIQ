@@ -1,7 +1,7 @@
 import type { ProColumns } from '@ant-design/pro-components';
 import { Typography } from 'antd';
 import TrendSparkline from '@/components/TrendSparkline';
-import type { GrowthRow } from '@/services/toolbox';
+import type { GrowthRow } from '@/services/keyword';
 import { formatPercent } from './criteria';
 
 /**
