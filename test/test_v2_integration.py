@@ -183,7 +183,7 @@ def test_models_match_migrated_schema(conn):
     # 注册到 Base.metadata 的。漏掉就是一份空 metadata，比对结果会是「库里每张表都多余」
     # ——一屏 remove_table，看起来像天塌了，实际只是没导入。
     from app.table.analysis import dimension_model, fact_model  # noqa: F401
-    from app.table.competitor import seller_model, watch_model  # noqa: F401
+    from app.table.competitor import seller_model, store_model, watch_model  # noqa: F401
     from app.table.keyword import library_model  # noqa: F401
     from app.table.upload import import_batch_model  # noqa: F401
     from app.user import user_model  # noqa: F401
