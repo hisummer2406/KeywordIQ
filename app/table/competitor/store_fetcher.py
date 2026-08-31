@@ -430,6 +430,20 @@ async def _sleep_between_requests(delay_ms: int) -> None:
         await asyncio.sleep(delay_ms / 1000)
 
 
+async def probe_store_meta(
+    client: httpx.AsyncClient, domain: str, *, retry_backoff_seconds: float = _RETRY_BACKOFF_SECONDS
+) -> ParsedStoreMeta:
+    """探测一个站点的 ``/meta.json``，用于加入站点时判定它是不是 Shopify。
+
+    与 ``fetch_store`` 里那次 meta 拉取的区别在**失败的处置**：这里失败即拒绝加入
+    （抛异常），那里失败只是沿用库中既有信息。加入时就判定，是为了不让「不受支持的
+    站点」以「抓取失败」的面目出现——用户会去重试、去等，而不是去换一个站点。
+    """
+    return parse_store_meta(
+        await _get_text(client, f"https://{domain}/meta.json", backoff_seconds=retry_backoff_seconds)
+    )
+
+
 async def fetch_store(
     client: httpx.AsyncClient,
     domain: str,

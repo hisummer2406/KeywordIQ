@@ -2,7 +2,7 @@
 
 Revision ID: a29e42df072d
 Revises: b3c4d5e6f7a8
-Create Date: 2026-09-01 01:16:35.875562
+Create Date: 2026-09-01 01:33:41.961477
 
 """
 from typing import Sequence, Union
@@ -23,13 +23,15 @@ def upgrade() -> None:
     op.create_table('competitor_store',
     sa.Column('domain', sa.String(length=255), nullable=False, comment='规范化后的站点域名（去协议/www/端口/路径），如 leteimall.com'),
     sa.Column('platform', sa.String(length=16), server_default='SHOPIFY', nullable=False, comment='建站平台。当前只实现 SHOPIFY，非 Shopify 站点在加入时即被拒绝'),
+    sa.Column('name', sa.String(length=255), nullable=True, comment='店铺名，取自 /meta.json；界面显示用，域名仍是主键'),
     sa.Column('currency', sa.String(length=8), nullable=True, comment='ISO 币种码，取自 /meta.json。价格数字本身不带币种，缺它则跨店比价无意义'),
     sa.Column('country', sa.String(length=8), nullable=True, comment='商户所在国家码，取自 /meta.json'),
     sa.Column('shop_id', sa.BigInteger(), nullable=True, comment='Shopify 店铺 id，取自 /meta.json'),
     sa.Column('myshopify_domain', sa.String(length=255), nullable=True, comment='稳定身份：商户换自定义域名时它不变，可据此发现「同一家店换了域名」'),
     sa.Column('ships_to_countries', postgresql.ARRAY(sa.String(length=8)), nullable=True, comment='可配送国家码列表，取自 /meta.json'),
     sa.Column('products_json_ok', sa.Boolean(), server_default='true', nullable=False, comment='/products.json 是否可用。false = 商户关闭了端点，是其选择而非故障，须与抓取失败分开展示'),
-    sa.Column('last_fetch_at', sa.DateTime(timezone=True), nullable=True, comment='上次拉取时刻。「到点了没」的唯一判据，NULL 表示从未拉取过'),
+    sa.Column('last_fetch_at', sa.DateTime(timezone=True), nullable=True, comment='上次拉取**尝试**的时刻（不是上次成功）。「到点了没」的唯一判据，NULL 表示从未拉取'),
+    sa.Column('first_fetch_at', sa.DateTime(timezone=True), nullable=True, comment='首刷时刻。**上新流的判据**：first_seen_at > first_fetch_at 才是上新——首刷那批商品是「我们刚开始看」不是「今天上新」，没有这一列就无从区分'),
     sa.Column('catalog_complete', sa.Boolean(), server_default='false', nullable=False, comment='上次目录拉取是否完整。**下架判定的唯一前提**，不完整时只做并集写入、绝不判下架'),
     sa.Column('rank_ok', sa.Boolean(), server_default='false', nullable=False, comment='上次畅销榜解析是否成功。与 catalog_complete 相互独立，一方失败不阻止另一方写入'),
     sa.Column('last_fetch_status', sa.String(length=24), nullable=True, comment='上次拉取结果：OK / INCOMPLETE / FAILED / NO_CATALOG_API'),

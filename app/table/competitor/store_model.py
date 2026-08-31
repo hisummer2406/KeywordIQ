@@ -82,6 +82,9 @@ class CompetitorStore(Base):
         server_default="SHOPIFY",
         comment="建站平台。当前只实现 SHOPIFY，非 Shopify 站点在加入时即被拒绝",
     )
+    name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="店铺名，取自 /meta.json；界面显示用，域名仍是主键"
+    )
     currency: Mapped[str | None] = mapped_column(
         String(8),
         nullable=True,
@@ -111,7 +114,15 @@ class CompetitorStore(Base):
     last_fetch_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
-        comment="上次拉取时刻。「到点了没」的唯一判据，NULL 表示从未拉取过",
+        comment="上次拉取**尝试**的时刻（不是上次成功）。「到点了没」的唯一判据，NULL 表示从未拉取",
+    )
+    first_fetch_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "首刷时刻。**上新流的判据**：first_seen_at > first_fetch_at 才是上新——"
+            "首刷那批商品是「我们刚开始看」不是「今天上新」，没有这一列就无从区分"
+        ),
     )
     catalog_complete: Mapped[bool] = mapped_column(
         Boolean,

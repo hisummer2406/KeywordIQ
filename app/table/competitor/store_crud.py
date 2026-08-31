@@ -6,7 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import NamedTuple
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,9 @@ from app.table.competitor.store_model import (
     CompetitorStorePrice,
     CompetitorStoreProduct,
     CompetitorStoreRank,
+    UserStoreWatch,
 )
+from app.table.competitor.watch_model import UserSellerGroup
 
 
 class PriceSnapshot(NamedTuple):
@@ -85,8 +87,13 @@ def update_store_status(
     rank_ok: bool,
     error: str | None,
     failed: bool,
+    first_fetch_at: datetime | None = None,
 ) -> None:
-    """回写拉取状态。``consecutive_failures`` 累加或清零，界面据此说「连续 N 次失败」。"""
+    """回写拉取状态。``consecutive_failures`` 累加或清零，界面据此说「连续 N 次失败」。
+
+    ``first_fetch_at`` 只在首刷时传，且用 ``COALESCE`` 保护——它一旦落定就不该被改动，
+    改了会让首刷那批商品突然涌进上新流。
+    """
     values: dict[str, object] = {
         "last_fetch_status": status,
         "catalog_complete": catalog_complete,
@@ -95,6 +102,8 @@ def update_store_status(
         "last_error": error,
         "consecutive_failures": (CompetitorStore.consecutive_failures + 1) if failed else 0,
     }
+    if first_fetch_at is not None:
+        values["first_fetch_at"] = func.coalesce(CompetitorStore.first_fetch_at, first_fetch_at)
     session.execute(
         update(CompetitorStore).where(CompetitorStore.domain == domain).values(**values)
     )
@@ -234,3 +243,167 @@ def listed_product_ids(session: Session, domain: str) -> set[int]:
         )
     ).scalars()
     return set(rows)
+
+
+# ---------------------------------------------------------------------------
+# 读取路径（异步）
+#
+# 与上面的写入路径分开：写入在后台轮询任务里、是批量的，用同步会话（与导入路径一致）；
+# 读取在请求里、是并发的，用异步会话（与本仓库其余查询层一致）。两者共用同一批模型，
+# 但不共用会话类型——混用会让后台任务占住异步池，而那个池是给查询与鉴权的。
+# ---------------------------------------------------------------------------
+
+
+def _new_in_7d_expr(days: int = 7):
+    """近 N 日上架数。
+
+    **按 ``published_at`` 而不是 ``first_seen_at``**——用户问的是「这家店最近一周上了
+    多少新品」，那是数据源给的事实。按 ``first_seen_at`` 算的话，一个刚纳入监控的站点
+    会把整个存量目录报成「近 7 日上新」。
+    """
+    return (
+        select(func.count())
+        .select_from(CompetitorStoreProduct)
+        .where(
+            CompetitorStoreProduct.domain == CompetitorStore.domain,
+            CompetitorStoreProduct.delisted_at.is_(None),
+            CompetitorStoreProduct.published_at
+            > func.now() - text(f"interval '{days} days'"),
+        )
+        .correlate(CompetitorStore)
+        .scalar_subquery()
+    )
+
+
+def _listed_count_expr():
+    return (
+        select(func.count())
+        .select_from(CompetitorStoreProduct)
+        .where(
+            CompetitorStoreProduct.domain == CompetitorStore.domain,
+            CompetitorStoreProduct.delisted_at.is_(None),
+        )
+        .correlate(CompetitorStore)
+        .scalar_subquery()
+    )
+
+
+def watched_stores_stmt(user_id: int, *, group_id: int | None, ungrouped_only: bool):
+    """当前用户关注的独立站。``user_id`` 是硬条件——私有性不靠界面不展示。"""
+    stmt = (
+        select(
+            CompetitorStore,
+            UserStoreWatch.group_id,
+            UserStoreWatch.note,
+            UserStoreWatch.created_at.label("watched_at"),
+            UserSellerGroup.name.label("group_name"),
+            _listed_count_expr().label("product_count"),
+            _new_in_7d_expr().label("new_in_7d"),
+        )
+        .join(UserStoreWatch, UserStoreWatch.domain == CompetitorStore.domain)
+        .outerjoin(UserSellerGroup, UserSellerGroup.group_id == UserStoreWatch.group_id)
+        .where(UserStoreWatch.user_id == user_id)
+    )
+    if ungrouped_only:
+        stmt = stmt.where(UserStoreWatch.group_id.is_(None))
+    elif group_id is not None:
+        stmt = stmt.where(UserStoreWatch.group_id == group_id)
+    return stmt
+
+
+def watched_domains_stmt(user_id: int):
+    return select(UserStoreWatch.domain).where(UserStoreWatch.user_id == user_id)
+
+
+def _latest_price_stmt(domain: str):
+    """每个商品的当前价：取该商品所有变体里 ``observed_at`` 最大的那条。"""
+    return (
+        select(
+            CompetitorStorePrice.product_id,
+            CompetitorStorePrice.price,
+            CompetitorStorePrice.compare_at_price,
+            CompetitorStorePrice.available,
+        )
+        .where(CompetitorStorePrice.domain == domain)
+        .distinct(CompetitorStorePrice.product_id)
+        .order_by(CompetitorStorePrice.product_id, CompetitorStorePrice.observed_at.desc())
+        .subquery()
+    )
+
+
+def products_stmt(domain: str, *, include: str, new_only: bool, days: int = 7):
+    price = _latest_price_stmt(domain)
+    rank = (
+        select(CompetitorStoreRank.product_id, CompetitorStoreRank.rank)
+        .where(CompetitorStoreRank.domain == domain)
+        .distinct(CompetitorStoreRank.product_id)
+        .order_by(CompetitorStoreRank.product_id, CompetitorStoreRank.captured_on.desc())
+        .subquery()
+    )
+    stmt = (
+        select(
+            CompetitorStoreProduct,
+            price.c.price,
+            price.c.compare_at_price,
+            price.c.available,
+            rank.c.rank.label("latest_rank"),
+        )
+        .outerjoin(price, price.c.product_id == CompetitorStoreProduct.product_id)
+        .outerjoin(rank, rank.c.product_id == CompetitorStoreProduct.product_id)
+        .where(CompetitorStoreProduct.domain == domain)
+    )
+    if include == "LISTED":
+        stmt = stmt.where(CompetitorStoreProduct.delisted_at.is_(None))
+    elif include == "DELISTED":
+        stmt = stmt.where(CompetitorStoreProduct.delisted_at.is_not(None))
+    if new_only:
+        stmt = stmt.where(
+            CompetitorStoreProduct.published_at > func.now() - text(f"interval '{days} days'")
+        )
+    return stmt
+
+
+def new_arrivals_stmt(user_id: int, *, days: int):
+    """上新流：**排除首刷那批**。
+
+    判据是 ``first_seen_at > first_fetch_at``——首刷时两者相等，故首刷那批天然被排除。
+    没有 ``first_fetch_at`` 这一列就无从区分「刚开始看」与「今天上新」，表现是新纳入
+    一个站点当天涌出几百条假上新。
+    """
+    return (
+        select(
+            CompetitorStoreProduct,
+            CompetitorStore.name.label("store_name"),
+        )
+        .join(CompetitorStore, CompetitorStore.domain == CompetitorStoreProduct.domain)
+        .join(UserStoreWatch, UserStoreWatch.domain == CompetitorStoreProduct.domain)
+        .where(
+            UserStoreWatch.user_id == user_id,
+            CompetitorStore.first_fetch_at.is_not(None),
+            CompetitorStoreProduct.first_seen_at > CompetitorStore.first_fetch_at,
+            CompetitorStoreProduct.first_seen_at > func.now() - text(f"interval '{days} days'"),
+        )
+        .order_by(CompetitorStoreProduct.first_seen_at.desc())
+    )
+
+
+def price_history_stmt(domain: str, product_id: int):
+    return (
+        select(CompetitorStorePrice)
+        .where(
+            CompetitorStorePrice.domain == domain,
+            CompetitorStorePrice.product_id == product_id,
+        )
+        .order_by(CompetitorStorePrice.observed_at)
+    )
+
+
+def rank_history_stmt(domain: str, product_id: int):
+    return (
+        select(CompetitorStoreRank.captured_on, CompetitorStoreRank.rank)
+        .where(
+            CompetitorStoreRank.domain == domain,
+            CompetitorStoreRank.product_id == product_id,
+        )
+        .order_by(CompetitorStoreRank.captured_on)
+    )

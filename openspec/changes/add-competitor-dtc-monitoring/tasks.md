@@ -125,17 +125,35 @@
 
 ## 5. API
 
-- [ ] 5.1 `store_schemas.py`：站点增删查、关注记录（ProTable 契约 `{data,total,success}`）、
-      商品列表、上新流、价格历史、名次走势
-- [ ] 5.2 `store_api.py` 端点，全部 `Depends(simple_auth.require_permission(COMPETITOR_VIEW))`，
-      **不新增权限点**；挂 `/api/competitor`，跨用户一律 404 而非 403
-- [ ] 5.3 上新流端点合并两类来源，每条带来源标记与时间语义字段（独立站=上架于，
-      Amazon=发现于）；分页必填、有默认时间窗、不返回全表
-- [ ] 5.4 业务错误一律抛 `app/common/errors.py` 的 `APIError` 子类，API 层不做
-      try/except 转译；非 Shopify 站点显式拒绝并说明原因
-- [ ] 5.5 集成测试 `test/test_dtc_store_integration.py`（`TEST_DATABASE_URL` gate）：
-      首刷历史立即可查但上新流为空、第二次拉取的新品进流、价格变更序列正确、
-      不完整拉取不判下架、跨用户不可见、删组不取消关注（两类成员都验）
+- [x] 5.0（补，写 API 时发现）**`competitor_store` 加 `first_fetch_at` 与 `name` 两列。**
+      前者是「首刷不进上新流」这条 spec 在库里的判据——原先只在 `apply_fetch_result` 的
+      返回值里报 0，查询侧无从区分首刷那批与后来的新品，表现是新纳入一个站点当天涌出
+      几百条假上新。它用 `COALESCE` 保护，一旦落定不再改动。
+      **顺带把「近 7 日上新数」的口径定为按 `published_at` 而非 `first_seen_at`**——
+      用户问的是「这家店最近一周上了多少新品」，那是数据源给的事实；按 `first_seen_at`
+      算的话，刚纳入的站点会把整个存量目录报成近 7 日上新。迁移已按含这两列重新生成
+- [x] 5.1 `store_schemas.py`：站点增改查、商品清单、上新流、价格与名次历史。
+      列表一律 ProTable 契约 `{data,total,success}`，分页必填且 `per_page` 有上限。
+      `ProductListResponse` / `ProductHistoryResponse` **随行返回 `currency`**——价格数字
+      不带币种，分开取迟早会拿 A 店的币种显示 B 店的价格
+- [x] 5.2 `store_api.py` 七个端点，全部 `Depends(require_permission(COMPETITOR_VIEW))`，
+      **不新增权限点**；挂 `/api/competitor`（与卖家关注同前缀——它们是同一件事的两类
+      对象，不是两个功能域），`app/api_router.py` 已注册。跨用户一律 404 而非 403
+- [x] 5.3 上新流端点 `POST /new-arrivals`：当前只有独立站一类来源，但**响应形状已按
+      两类来源设计**——每行带 `source` 与 `time_kind`（独立站 `PUBLISHED`「上架于」，
+      Amazon 接入后 `DISCOVERED`「发现于」）。分页必填、有默认时间窗、不返回全表
+- [x] 5.4 业务错误一律抛 `APIError` 子类，API 层不做 try/except 转译。
+      **非 Shopify 站点在「加入」这一步就拒绝，不留到第一次拉取**——否则它会以
+      「抓取失败」的面目出现，用户会去重试、去等，而不是去换一个站点。
+      「站点打不开」与「不是 Shopify」是两条不同的拒绝理由
+- [x] 5.5 集成测试 `test_dtc_store_api_integration.py` **13 例**（`TEST_DATABASE_URL`
+      gate）：域名规范化、币种回写、新站状态是「从未拉取」而非「拉取失败」、非 Shopify
+      与打不开两种拒绝、粘贴亚马逊链接给出去处、重复关注 409、两个用户共享同一站点主体
+      但互不可见、跨用户三个入口全 404、取关不删站点与数据、**上新流排除首刷那批**、
+      **近 7 日上新数首刷当天即准确**、商品清单带币种、`include` 是行集合维度、
+      **分组可同时装卖家与独立站**。
+      测试用假 transport 替换 `_store_client`（换 client 而不是换 `probe_store_meta`，
+      让探测逻辑本身也被测到；顺带避开真实 client 会读环境里的 SOCKS 代理设置）
 
 ## 6. 前端
 
