@@ -276,7 +276,8 @@ def test_名次解析失败不影响商品与价格入库(db):
 # ---------- 站点状态与认领 ----------
 
 
-def test_meta_成功时回写币种(db):
+def test_meta_成功时回写店名与币种(db):
+    """店名也要回写——商户改店名后界面得跟着变，且直接建行（不经 add_store）时它是空的。"""
     meta = ParsedStoreMeta(
         shop_id=1,
         name="X",
@@ -288,9 +289,11 @@ def test_meta_成功时回写币种(db):
     )
     _apply(db, _outcome([_product(1)], meta=meta), first=True)
 
-    assert db.execute(
-        text("SELECT currency FROM analysis.competitor_store WHERE domain=:d"), {"d": DOMAIN}
-    ).scalar() == "GBP"
+    row = db.execute(
+        text("SELECT name, currency FROM analysis.competitor_store WHERE domain=:d"),
+        {"d": DOMAIN},
+    ).one()
+    assert (row.name, row.currency) == ("X", "GBP")
 
 
 def test_meta_失败时不清空库里既有币种(db):
