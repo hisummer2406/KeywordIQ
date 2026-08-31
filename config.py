@@ -73,6 +73,17 @@ class Settings(BaseSettings):
     # 过期行由 import_queue.py 的轮询循环顺带清理，不新开定时器。
     COMPETITOR_PREVIEW_TTL_SECONDS: int = 600    # 10 分钟
 
+    # 独立站监控的拉取参数。拉取挂在 import_queue.py 已有的轮询循环上，按站点行的
+    # last_fetch_at 状态列认领到期站点，不新开定时器。
+    DTC_FETCH_INTERVAL_HOURS: int = 24   # 同一站点两次拉取的最小间隔
+    # 翻页上限。**撞上它必须判为不完整、不做下架判定**——否则某站商品数超过上限时，
+    # 超出的部分会被安静地判成下架。实测最大的站 1241 个商品、5 页，离上限很远。
+    DTC_MAX_PAGES: int = 40              # 40 页 × 250 = 一万个商品
+    # 畅销榜只存前 N 名：第 300 名与第 800 名的差别没有信息量，存全量会让名次表膨胀
+    # 5~10 倍。实测每页 20 个商品，取前 100 名要翻 5 页。
+    DTC_RANK_TOP_N: int = 100
+    DTC_REQUEST_DELAY_MS: int = 400      # 同一站点两次请求的最小间隔（毫秒）
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
@@ -273,6 +284,20 @@ class Settings(BaseSettings):
     def _validate_competitor_preview_ttl(cls, value: int) -> int:
         if value < 1:
             raise ValueError("COMPETITOR_PREVIEW_TTL_SECONDS 至少为 1（配成 0 会让预览还没显示就过期）")
+        return value
+
+    @field_validator("DTC_FETCH_INTERVAL_HOURS", "DTC_MAX_PAGES", "DTC_RANK_TOP_N")
+    @classmethod
+    def _validate_dtc_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("DTC_* 拉取参数至少为 1（配成 0 会让拉取永不进行或永远判不完整）")
+        return value
+
+    @field_validator("DTC_REQUEST_DELAY_MS")
+    @classmethod
+    def _validate_dtc_delay(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("DTC_REQUEST_DELAY_MS 不能为负")
         return value
 
     @field_validator("GROWTH_MIN_RANK_GAIN")

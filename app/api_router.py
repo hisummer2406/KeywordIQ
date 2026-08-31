@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.auth.auth_api import auth_router
 from app.table.analysis.analysis_api import analysis_router
+from app.table.competitor.store_api import store_router
 from app.table.competitor.watch_api import competitor_router
 from app.table.keyword.growth_api import growth_router
 from app.table.keyword.library_api import library_router
@@ -45,6 +46,14 @@ api_router.include_router(
 
 api_router.include_router(
     competitor_router,
+    prefix="/competitor",
+    tags=["竞对监控"]
+)
+
+# 独立站监控与卖家关注同挂 /competitor 前缀、同一个权限点——它们是同一件事的两类对象，
+# 不是两个功能域。
+api_router.include_router(
+    store_router,
     prefix="/competitor",
     tags=["竞对监控"]
 )

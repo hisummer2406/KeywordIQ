@@ -40,6 +40,14 @@ V2_TABLES = frozenset(
         "user_seller_group",
         "user_seller_watch",
         "competitor_watch_preview",
+        # 独立站监控。五张普通表——**不要再登记进 partitioning.PARTITIONED_TABLES**：
+        # 那会让保留清理按 HOT_WINDOW_MONTHS 把价格与名次历史整月 DROP，而这两样越长越
+        # 值钱；那个窗口是为八亿行的 ABA 事实表定的。
+        "competitor_store",
+        "competitor_store_product",
+        "competitor_store_price",
+        "competitor_store_rank",
+        "user_store_watch",
     }
 )
 

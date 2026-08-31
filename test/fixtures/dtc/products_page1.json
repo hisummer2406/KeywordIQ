@@ -1,0 +1,511 @@
+{
+ "products": [
+  {
+   "id": 15291839217917,
+   "title": "✏️🔧 50% OFF! Oil-Based Waterproof Tire Marker Pen – 12 vibrant colors, waterproof & fade‑resistant. Perfect for tires, metal, glass & DIY crafts – bold marks that last! 🎨🚗",
+   "handle": "oil-based-waterproof-tire-paint-marker",
+   "body_html": "<p class=\"MsoNormal\"><span style=\"color: rgb(255, 128, 0);\"><b>FEATURES</b></span><span></span></p>\n<p class=\"MsoNormal\"…（fixture 截断）",
+   "published_at": "2026-08-19T09:58:02+08:00",
+   "created_at": "2026-08-19T09:58:02+08:00",
+   "updated_at": "2026-09-01T01:01:29+08:00",
+   "vendor": "leteimall",
+   "product_type": "Car Accessories",
+   "tags": [],
+   "variants": [
+    {
+     "id": 71160774328573,
+     "title": "Black / BUY 1 / Without Car-Wiping Towel",
+     "option1": "Black",
+     "option2": "BUY 1",
+     "option3": "Without Car-Wiping Towel",
+     "sku": "LN12251538HEIA1",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46750926078205,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260807184705_3fb4623da72f4bb78d74fc6c6f7cd868_2410fefd-e797-462d-ad3c-fb20dcd41164.jpg?v=1787104682",
+      "position": 7
+     },
+     "available": true,
+     "price": "10.99",
+     "grams": 0,
+     "compare_at_price": "21.98",
+     "position": 1,
+     "product_id": 15291839217917,
+     "created_at": "2026-08-19T09:58:02+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71183218671869,
+     "title": "Black / BUY 1 / 🔥With Car-Wiping Towel(2PCS)🎁",
+     "option1": "Black",
+     "option2": "BUY 1",
+     "option3": "🔥With Car-Wiping Towel(2PCS)🎁",
+     "sku": "LN12251538HEIA1+LN10261994*2",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": null,
+     "available": true,
+     "price": "15.99",
+     "grams": 0,
+     "compare_at_price": "21.98",
+     "position": 2,
+     "product_id": 15291839217917,
+     "created_at": "2026-08-25T09:41:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71164468527357,
+     "title": "Black / 🔥BUY 2 Get 1 Free / Without Car-Wiping Towel",
+     "option1": "Black",
+     "option2": "🔥BUY 2 Get 1 Free",
+     "option3": "Without Car-Wiping Towel",
+     "sku": "LN12251538HEIA1*3",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": null,
+     "available": true,
+     "price": "19.99",
+     "grams": 0,
+     "compare_at_price": "39.98",
+     "position": 3,
+     "product_id": 15291839217917,
+     "created_at": "2026-08-20T14:21:47+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71183218704637,
+     "title": "Black / 🔥BUY 2 Get 1 Free / 🔥With Car-Wiping Towel(2PCS)🎁",
+     "option1": "Black",
+     "option2": "🔥BUY 2 Get 1 Free",
+     "option3": "🔥With Car-Wiping Towel(2PCS)🎁",
+     "sku": "LN12251538HEIA1*3+LN10261994*2",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": null,
+     "available": true,
+     "price": "24.99",
+     "grams": 0,
+     "compare_at_price": "21.98",
+     "position": 4,
+     "product_id": 15291839217917,
+     "created_at": "2026-08-25T09:41:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71164468560125,
+     "title": "Black / 🔥🔥BUY 3 Get 2 Free / Without Car-Wiping Towel",
+     "option1": "Black",
+     "option2": "🔥🔥BUY 3 Get 2 Free",
+     "option3": "Without Car-Wiping Towel",
+     "sku": "LN12251538HEIA1*5",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": null,
+     "available": true,
+     "price": "24.99",
+     "grams": 0,
+     "compare_at_price": "49.98",
+     "position": 5,
+     "product_id": 15291839217917,
+     "created_at": "2026-08-20T14:21:47+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71183218737405,
+     "title": "Black / 🔥🔥BUY 3 Get 2 Free / 🔥With Car-Wiping Towel(2PCS)🎁",
+     "option1": "Black",
+     "option2": "🔥🔥BUY 3 Get 2 Free",
+     "option3": "🔥With Car-Wiping Towel(2PCS)🎁",
+     "sku": "LN12251538HEIA1*5+LN10261994*2",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": null,
+     "available": true,
+     "price": "29.99",
+     "grams": 0,
+     "compare_at_price": "21.98",
+     "position": 6,
+     "product_id": 15291839217917,
+     "created_at": "2026-08-25T09:41:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    }
+   ],
+   "images": [
+    {
+     "id": 46750925881597,
+     "created_at": "2026-08-19T09:58:02+08:00",
+     "position": 1,
+     "updated_at": "2026-08-19T09:58:02+08:00",
+     "product_id": 15291839217917,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/1606542032994ee0a86bf90388b36e28_2211069a-26df-49d0-b67f-cb2320052ea3.png?v=1787104682",
+     "width": 1254,
+     "height": 1254
+    },
+    {
+     "id": 46750925914365,
+     "created_at": "2026-08-19T09:58:02+08:00",
+     "position": 2,
+     "updated_at": "2026-08-19T09:58:02+08:00",
+     "product_id": 15291839217917,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/2d0c3a77d3e8436fadf999eb7af7f0a7_9ec9e459-d3ba-4505-a640-d5cbab511033.png?v=1787104682",
+     "width": 1254,
+     "height": 1254
+    }
+   ],
+   "options": [
+    {
+     "name": "Color",
+     "position": 1,
+     "values": [
+      "Black",
+      "Red",
+      "Blue",
+      "Green",
+      "Yellow",
+      "Purple",
+      "Orange",
+      "Coffee",
+      "White",
+      "Gold",
+      "Silver",
+      "Pink"
+     ]
+    },
+    {
+     "name": "BUY MORE SAVE MORE",
+     "position": 2,
+     "values": [
+      "BUY 1",
+      "🔥BUY 2 Get 1 Free",
+      "🔥🔥BUY 3 Get 2 Free",
+      "🏆Most Popular 12 PCS/1 Set",
+      "🏆ALL 12 color/1 Set"
+     ]
+    },
+    {
+     "name": "Great Value Add-ons",
+     "position": 3,
+     "values": [
+      "Without Car-Wiping Towel",
+      "🔥With Car-Wiping Towel(2PCS)🎁"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 15308716441853,
+   "title": "🧺 Laundry Hair Catcher Balls – Remove Pet Hair & Lint While You Wash 🐾",
+   "handle": "hair-filter-lt",
+   "body_html": "<p><strong><span style=\"color: #e67e23;\">FEATURES</span></strong></p>\n<p><strong>360-DEGREE ACTIVE FILTRATION - </strong…（fixture 截断）",
+   "published_at": "2026-08-31T18:03:45+08:00",
+   "created_at": "2026-08-31T18:03:45+08:00",
+   "updated_at": "2026-09-01T01:01:29+08:00",
+   "vendor": "let",
+   "product_type": "Houseware & Kitchen",
+   "tags": [
+    "111"
+   ],
+   "variants": [
+    {
+     "id": 71214753284349,
+     "title": "pink",
+     "option1": "pink",
+     "option2": null,
+     "option3": null,
+     "sku": "LE80552499FEN",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46920236859645,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831170700_fe3ae1a55376644d434e334f8ac27199_22a746d2-6f45-4dd5-b87b-42dfa4715b44.png?v=1788170625",
+      "position": 11
+     },
+     "available": true,
+     "price": "21.98",
+     "grams": 0,
+     "compare_at_price": "39.98",
+     "position": 1,
+     "product_id": 15308716441853,
+     "created_at": "2026-08-31T18:03:45+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71214753317117,
+     "title": "blue",
+     "option1": "blue",
+     "option2": null,
+     "option3": null,
+     "sku": "LE80552499LAN",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46920236826877,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831170658_1ccb7fc00cd86f6b311453bbe7a58521_97ff816a-0791-4011-8a94-a79af6419a5c.png?v=1788170625",
+      "position": 10
+     },
+     "available": true,
+     "price": "21.98",
+     "grams": 0,
+     "compare_at_price": "39.98",
+     "position": 2,
+     "product_id": 15308716441853,
+     "created_at": "2026-08-31T18:03:45+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    }
+   ],
+   "images": [
+    {
+     "id": 46920236531965,
+     "created_at": "2026-08-31T18:03:45+08:00",
+     "position": 1,
+     "updated_at": "2026-08-31T18:03:45+08:00",
+     "product_id": 15308716441853,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831170636_7ffc3e09b5db213df605c184b442fed2_e26889ae-f692-49da-8571-82f0e08d564c.jpg?v=1788170625",
+     "width": 800,
+     "height": 800
+    },
+    {
+     "id": 46920236564733,
+     "created_at": "2026-08-31T18:03:45+08:00",
+     "position": 2,
+     "updated_at": "2026-08-31T18:03:45+08:00",
+     "product_id": 15308716441853,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831170638_4027b170209ccaa3c694b2c49639c3a9_0ae0458d-295c-4fbb-8ea1-300ba39d9399.jpg?v=1788170625",
+     "width": 800,
+     "height": 800
+    }
+   ],
+   "options": [
+    {
+     "name": "Color",
+     "position": 1,
+     "values": [
+      "pink",
+      "blue"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 15197340860669,
+   "title": "🏆 Last Day Special Price $19.99 ! 🚘 Automotive Headlamp Restoration Fluid, blurring enhanced crystalline coating refurbisher",
+   "handle": "coating-resdh",
+   "body_html": "<h5><img src=\"https://cdn.wshopon.com/image/2022/07/c320da6ef2f0aebd98ca60236ca14974ebe2cb3aa1775d3e4dfdfe91130f4cc8.png…（fixture 截断）",
+   "published_at": "2026-08-06T19:08:01+08:00",
+   "created_at": "2026-08-06T19:08:01+08:00",
+   "updated_at": "2026-09-01T01:01:29+08:00",
+   "vendor": "leteimall",
+   "product_type": "Car Accessories",
+   "tags": [
+    "111"
+   ],
+   "variants": [
+    {
+     "id": 71003212710141,
+     "title": "1 Set",
+     "option1": "1 Set",
+     "option2": null,
+     "option3": null,
+     "sku": "LN30301994",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46602504896765,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20251126153617_6d4bfd0c931a4dc31a42944ec07b6c91_e833ea77-8264-4115-879a-44775968db4c.jpg?v=1786014481",
+      "position": 9
+     },
+     "available": true,
+     "price": "19.99",
+     "grams": 0,
+     "compare_at_price": "39.98",
+     "position": 1,
+     "product_id": 15197340860669,
+     "created_at": "2026-08-06T19:08:01+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    }
+   ],
+   "images": [
+    {
+     "id": 46602504634621,
+     "created_at": "2026-08-06T19:08:01+08:00",
+     "position": 1,
+     "updated_at": "2026-08-06T19:08:01+08:00",
+     "product_id": 15197340860669,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20251126153612_04c1e7af78f42c25873b6171f54d649e_e94d3a18-081a-4573-b444-f0ef3bd93da7.jpg?v=1786014481",
+     "width": 800,
+     "height": 800
+    },
+    {
+     "id": 46602504667389,
+     "created_at": "2026-08-06T19:08:01+08:00",
+     "position": 2,
+     "updated_at": "2026-08-06T19:08:01+08:00",
+     "product_id": 15197340860669,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/3dc06c9a2a75e5c5c07b9960702cd545_9b885a82-6042-47d5-b716-028a9bc1aada.png?v=1786014481",
+     "width": 2048,
+     "height": 2048
+    }
+   ],
+   "options": [
+    {
+     "name": "Buy more save more!",
+     "position": 1,
+     "values": [
+      "1 Set"
+     ]
+    }
+   ]
+  },
+  {
+   "id": 15308973342973,
+   "title": "🍽️ 2-in-1 Microwave Food Cover – Splash Guard & Leftover Storage Lid ✨",
+   "handle": "micro-wave-lt",
+   "body_html": "<p><span style=\"color: #e67e23;\"><strong>FEATURES</strong></span></p>\n<p><strong>2-IN-1 MICROWAVE COVER - </strong>Helps…（fixture 截断）",
+   "published_at": "2026-08-31T19:55:33+08:00",
+   "created_at": "2026-08-31T19:55:33+08:00",
+   "updated_at": "2026-09-01T01:01:29+08:00",
+   "vendor": "lt",
+   "product_type": "Houseware & Kitchen",
+   "tags": [
+    "111"
+   ],
+   "variants": [
+    {
+     "id": 71215080636669,
+     "title": "Red",
+     "option1": "Red",
+     "option2": null,
+     "option3": null,
+     "sku": "LE12250618RED",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46921637462269,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831195454_ca9d20146fb5bac7b898ed1767d24249_0e0bde36-e174-4331-baa1-c7c17525db04.jpg?v=1788177333",
+      "position": 10
+     },
+     "available": true,
+     "price": "18.98",
+     "grams": 0,
+     "compare_at_price": "37.95",
+     "position": 1,
+     "product_id": 15308973342973,
+     "created_at": "2026-08-31T19:55:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71215080669437,
+     "title": "Blue",
+     "option1": "Blue",
+     "option2": null,
+     "option3": null,
+     "sku": "LE12250618LAN",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46921637527805,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831195454_398e6b31138e71881605b8a3500462c1_b4bcec9f-184e-4842-a718-5943e87a8593.jpg?v=1788177333",
+      "position": 12
+     },
+     "available": true,
+     "price": "18.98",
+     "grams": 0,
+     "compare_at_price": "37.95",
+     "position": 2,
+     "product_id": 15308973342973,
+     "created_at": "2026-08-31T19:55:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71215080702205,
+     "title": "Green",
+     "option1": "Green",
+     "option2": null,
+     "option3": null,
+     "sku": "LE12250618HUG",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46921637495037,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831195454_9bb4adea51c5706d47c01350c0e2794b_726bec4f-b8c8-4c13-a00c-48cfa491f217.jpg?v=1788177333",
+      "position": 11
+     },
+     "available": true,
+     "price": "18.98",
+     "grams": 0,
+     "compare_at_price": "37.95",
+     "position": 3,
+     "product_id": 15308973342973,
+     "created_at": "2026-08-31T19:55:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    },
+    {
+     "id": 71215080734973,
+     "title": "Grey",
+     "option1": "Grey",
+     "option2": null,
+     "option3": null,
+     "sku": "LE12250618HUI",
+     "requires_shipping": true,
+     "taxable": false,
+     "featured_image": {
+      "id": 46921637429501,
+      "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831195453_2dcaa45af76411da7c94e063ecbd4cd7_7ad015c5-6100-43d9-9247-268210ba9079.jpg?v=1788177333",
+      "position": 9
+     },
+     "available": true,
+     "price": "18.98",
+     "grams": 0,
+     "compare_at_price": "37.95",
+     "position": 4,
+     "product_id": 15308973342973,
+     "created_at": "2026-08-31T19:55:33+08:00",
+     "updated_at": "2026-09-01T01:01:29+08:00"
+    }
+   ],
+   "images": [
+    {
+     "id": 46921637167357,
+     "created_at": "2026-08-31T19:55:33+08:00",
+     "position": 1,
+     "updated_at": "2026-08-31T19:55:33+08:00",
+     "product_id": 15308973342973,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831195449_ec8260c4ae1ffa339394b7a28aebf333_31715070-7ce0-4c0c-8411-e2418900a40f.jpg?v=1788177333",
+     "width": 1024,
+     "height": 1024
+    },
+    {
+     "id": 46921637200125,
+     "created_at": "2026-08-31T19:55:33+08:00",
+     "position": 2,
+     "updated_at": "2026-08-31T19:55:33+08:00",
+     "product_id": 15308973342973,
+     "variant_ids": [],
+     "src": "https://cdn.shopify.com/s/files/1/0722/9784/0893/files/spp_shopify20260831195450_8d31937e8afc9ad639f694ab913ef52c_326d619a-472b-424b-a647-cc0140316aad.jpg?v=1788177333",
+     "width": 1024,
+     "height": 1024
+    }
+   ],
+   "options": [
+    {
+     "name": "Color",
+     "position": 1,
+     "values": [
+      "Red",
+      "Blue",
+      "Green",
+      "Grey"
+     ]
+    }
+   ]
+  }
+ ]
+}
