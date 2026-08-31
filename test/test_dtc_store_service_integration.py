@@ -306,6 +306,28 @@ def test_meta_失败时不清空库里既有币种(db):
     ).scalar() == "USD"
 
 
+def test_首刷落定_first_fetch_at_且此后不再改动(db):
+    """上新流靠 first_fetch_at 把首刷那批排除在外，它一旦落定就不能被改。
+
+    改了的表现是首刷那批商品突然涌进上新流——几百条「今天上新」，而没有任何地方会报错。
+    """
+    _apply(db, _outcome([_product(1)]), first=True)
+    first = db.execute(
+        text("SELECT first_fetch_at FROM analysis.competitor_store WHERE domain=:d"),
+        {"d": DOMAIN},
+    ).scalar()
+    assert first == NOW
+
+    # 后续拉取不传 first_fetch_at；即使误传，COALESCE 也保住既有值
+    _apply(db, _outcome([_product(1)]), now=NOW + timedelta(days=1))
+    _apply(db, _outcome([_product(1)]), first=True, now=NOW + timedelta(days=2))
+
+    assert db.execute(
+        text("SELECT first_fetch_at FROM analysis.competitor_store WHERE domain=:d"),
+        {"d": DOMAIN},
+    ).scalar() == NOW
+
+
 def test_认领只取到期站点且当场推进拉取时刻(db):
     """last_fetch_at 记的是「上次尝试」——不推进的话，一个坏掉的站点会把轮询占满。"""
     assert store_crud.claim_due_store(db, interval_hours=24, now=NOW) == DOMAIN
