@@ -1,0 +1,21 @@
+{
+ "id": 84683653408,
+ "name": "Blessrich",
+ "city": "Changsha",
+ "province": "Hunan",
+ "country": "CN",
+ "currency": "GBP",
+ "domain": "blessrich.com",
+ "url": "https://blessrich.com",
+ "myshopify_domain": "07d525-3.myshopify.com",
+ "description": "（fixture 截断）",
+ "ships_to_countries": [
+  "GB",
+  "IE"
+ ],
+ "money_format": "£{{amount}}",
+ "published_collections_count": 10,
+ "published_products_count": 1241,
+ "shopify_pay_enabled_card_brands": [],
+ "offers_shop_pay_installments": false
+}

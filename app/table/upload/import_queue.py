@@ -20,6 +20,7 @@ import logging
 
 from starlette.concurrency import run_in_threadpool
 
+from app.table.competitor.store_service import refresh_due_store
 from app.table.competitor.watch_service import purge_expired_previews
 from app.table.upload import oss_client
 from app.table.upload.import_service import drain_import_queue, reap_stale_uploads
@@ -79,6 +80,27 @@ def _reap_stale_uploads() -> None:
         logger.exception("回收超时直传批次时出错，本轮跳过")
 
 
+async def _refresh_due_dtc_store() -> bool:
+    """拉取一个到期的独立站，返回本轮是否真的拉了一个。
+
+    这是本轮询任务接管的第三件工作。挂在这里而不是新开定时器，与前两件同一条道理：
+    「到点了没」由 ``competitor_store.last_fetch_at`` 这个状态列判定，进程重启、多 worker
+    或崩溃后都不失效；进程内计时器会，而失效的表现是「再也不更新了」，没有任何东西会
+    回头看它。
+
+    **注意它不走 ``run_in_threadpool``**：拉取是网络 IO，直接 await 在事件循环上，只有
+    内部的数据库写入才进线程池。那 32 条线程（``config.THREAD_POOL_LIMIT``）与 bcrypt
+    登录、CSV 导出、同步后台导入共用，一家店抓 8 秒就占住一条线程 8 秒。
+
+    异常同样就地吞掉，不连累排队接手。
+    """
+    try:
+        return await refresh_due_store() is not None
+    except Exception:
+        logger.exception("拉取到期独立站时出错，本轮跳过")
+        return False
+
+
 async def run_queue_drainer(interval_seconds: int) -> None:
     """周期性接手排队批次，直到被取消。
 
@@ -103,6 +125,10 @@ async def run_queue_drainer(interval_seconds: int) -> None:
             if batch is not None:
                 logger.info("排队批次已接手完成 %s: 状态=%s", batch.file_name, batch.status)
                 continue  # 队列里可能还有，接着抽
+            # 排队为空时才拉独立站：导入是用户在等的事，拉取不是，让路给前者。
+            # 拉到了就立刻再来一轮，好让积压的站点连着排空（与上面接手批次同一形态）。
+            if await _refresh_due_dtc_store():
+                continue
         except asyncio.CancelledError:
             raise
         except Exception:
