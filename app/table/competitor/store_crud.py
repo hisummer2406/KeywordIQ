@@ -68,6 +68,7 @@ def update_store_meta(session: Session, domain: str, meta: ParsedStoreMeta) -> N
         update(CompetitorStore)
         .where(CompetitorStore.domain == domain)
         .values(
+            name=meta.name,
             currency=meta.currency,
             country=meta.country,
             shop_id=meta.shop_id,
