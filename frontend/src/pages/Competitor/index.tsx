@@ -1,6 +1,6 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
-import { Button, Card, Progress, Space, Typography, message } from 'antd';
+import { Button, Card, Progress, Space, Tabs, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   createGroup,
@@ -16,17 +16,25 @@ import {
 import { getSites, type SiteOption } from '@/services/upload';
 import GroupBar from './GroupBar';
 import ImportModal from './ImportModal';
+import NewArrivalsTab from './NewArrivalsTab';
+import StoreTab from './StoreTab';
 import { buildWatchColumns } from './columns';
 
 /**
- * 竞对监控 · 关注清单（issue #56 P0）。只有这一份清单——分组、导入、状态跟踪；
- * 数据获取层（浏览器插件/Keepa）与「今日上新」页不在本变更范围，见 design.md。
+ * 竞对监控。三个 tab：亚马逊卖家（issue #56 P0）、独立站（Shopify 监控）、上新流。
+ *
+ * **分 tab 而不是并进一张表**：两类对象能拿到的字段几乎不重叠——独立站有上架时间、
+ * 变体与币种、没有任何销量；Amazon 卖家有 BSR 与评价数、拿不到上架时间。硬合成一张
+ * 表会让一半的列对另一类恒为空。
+ *
+ * **分 tab 而不是加二级菜单**：`/competitor` 是单页顶层，布局是 `layout: 'mix'` +
+ * `splitMenus`，顶层节点一有子项就长出约 208px 的左侧栏，把表格横向挤掉。
+ *
+ * **`GroupBar` 在 tab 之外，因为分组是两类共用的**（同一张 `user_seller_group`）——
+ * 分组是纯标签，不该因成员类型分裂成两套体系。
  *
  * **进屏即查**（与「持续增长市场」屏相反、与「我的词库」屏一致）：这一屏的空表格恒与
  * "还没做选择"无关——行集合就是用户自己的关注清单。
- *
- * **没有站点选择器**：分组不绑定站点（与词库屏的关键差异），主表格改由 `group_id`
- * （可空,undefined 表示"全部关注"）驱动。
  */
 export default function CompetitorPage() {
   const actionRef = useRef<ActionType>();
@@ -101,8 +109,8 @@ export default function CompetitorPage() {
 
   const quotaPercent = maxWatch > 0 ? Math.round((watchCount / maxWatch) * 100) : 0;
 
-  return (
-    <PageContainer title="竞对监控">
+  const sellerTab = (
+    <>
       <Card size="small" styles={{ body: { padding: 12 } }}>
         <Space align="center" size="large">
           <Typography.Text>
@@ -122,19 +130,6 @@ export default function CompetitorPage() {
           </Button>
         </Space>
       </Card>
-
-      <div style={{ marginTop: 12 }}>
-        <GroupBar
-          groups={groups}
-          activeId={activeGroupId}
-          totalWatchCount={watchCount}
-          onSelect={switchGroup}
-          onChanged={onGroupsChanged}
-          onCreate={createGroup}
-          onRename={renameGroup}
-          onDelete={(group) => deleteGroup(group.group_id)}
-        />
-      </div>
 
       <ProTable<WatchRow>
         style={{ marginTop: 12 }}
@@ -173,6 +168,41 @@ export default function CompetitorPage() {
         sites={sites}
         onClose={() => setImportOpen(false)}
         onImported={onImported}
+      />
+    </>
+  );
+
+  return (
+    <PageContainer title="竞对监控">
+      <GroupBar
+        groups={groups}
+        activeId={activeGroupId}
+        totalWatchCount={watchCount}
+        onSelect={switchGroup}
+        onChanged={onGroupsChanged}
+        onCreate={createGroup}
+        onRename={renameGroup}
+        onDelete={(group) => deleteGroup(group.group_id)}
+      />
+
+      <Tabs
+        style={{ marginTop: 12 }}
+        defaultActiveKey="sellers"
+        items={[
+          { key: 'sellers', label: '亚马逊卖家', children: sellerTab },
+          {
+            key: 'stores',
+            label: '独立站',
+            children: (
+              <StoreTab
+                groups={groups}
+                activeGroupId={activeGroupId}
+                onGroupsChanged={reloadGroups}
+              />
+            ),
+          },
+          { key: 'arrivals', label: '上新流', children: <NewArrivalsTab /> },
+        ]}
       />
     </PageContainer>
   );
