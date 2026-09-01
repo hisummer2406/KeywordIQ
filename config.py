@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     # 预览结果的暂存时长。够运营看完预览再点确认，又不至于让废弃的预览行长期占位——
     # 过期行由 import_queue.py 的轮询循环顺带清理，不新开定时器。
     COMPETITOR_PREVIEW_TTL_SECONDS: int = 600    # 10 分钟
+    # 采集端单次上报的条目数上限。一页店铺搜索结果约 48~60 个品，留三倍余量。
+    # **超限整批拒绝（422），不截断**——截断后的记录与"这家店只有这些品"在数据上完全一致，
+    # 事后无法分辨；而超限本身恰恰说明采集端手上的条目比它送出的多。
+    COMPETITOR_MAX_REPORT_ITEMS: int = 200       # 单次 ASIN 上报的条目数上限
 
     # 独立站监控的拉取参数。拉取挂在 import_queue.py 已有的轮询循环上，按站点行的
     # last_fetch_at 状态列认领到期站点，不新开定时器。
@@ -272,7 +276,11 @@ class Settings(BaseSettings):
             raise ValueError("词库上限至少为 1（配成 0 会让加入词库永远失败，且看不出是配置问题）")
         return value
 
-    @field_validator("COMPETITOR_MAX_WATCH_PER_USER", "COMPETITOR_MAX_IMPORT_BATCH")
+    @field_validator(
+        "COMPETITOR_MAX_WATCH_PER_USER",
+        "COMPETITOR_MAX_IMPORT_BATCH",
+        "COMPETITOR_MAX_REPORT_ITEMS",
+    )
     @classmethod
     def _validate_competitor_caps(cls, value: int) -> int:
         if value < 1:
