@@ -1,8 +1,8 @@
 """竞对卖家在售 ASIN 与上报记录
 
-Revision ID: ba67eac57b82
+Revision ID: ec4b6e130f5f
 Revises: a29e42df072d
-Create Date: 2026-09-01 22:49:28.697853
+Create Date: 2026-09-01 23:12:52.084392
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'ba67eac57b82'
+revision: str = 'ec4b6e130f5f'
 down_revision: Union[str, None] = 'a29e42df072d'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -24,7 +24,7 @@ def upgrade() -> None:
     sa.Column('report_id', sa.BigInteger(), autoincrement=True, nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False, comment='→ user_center.id，上报者；写共享层的授权判据落在他的关注关系上'),
     sa.Column('request_id', sa.String(length=64), nullable=False, comment='客户端生成的幂等键；按 (user_id, request_id) 唯一，重发命中即回放原记录不新增'),
-    sa.Column('request_hash', sa.String(length=64), nullable=False, comment='请求摘要（sha256 十六进制），只覆盖 seller_id + site + 规范化去重排序后的 ASIN 集合。命中幂等键后比对：一致才回放，不一致返 409——防止同键被复用于另一次上报而静默吞掉'),
+    sa.Column('request_hash', sa.String(length=64), nullable=False, comment='请求摘要（sha256 十六进制），覆盖 seller_id + site + 规范化去重排序后的 ASIN 集合 + captured_at + ship_to_region + page_context（标题与图片除外）。命中幂等键后比对：一致才回放，不一致返 409——防止同键被复用于另一次上报而静默吞掉'),
     sa.Column('seller_id', sa.String(length=24), nullable=False, comment='→ competitor_seller.seller_id'),
     sa.Column('site', sa.String(length=8), nullable=False, comment='ISO 3166-1 alpha-2 大写站点码（英国用 GB 不用 UK），取值由应用层站点清单约束'),
     sa.Column('reported_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False, comment='服务端受理时刻；界面的「最近采集于」取本列的最大值'),

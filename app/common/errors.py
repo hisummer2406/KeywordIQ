@@ -141,6 +141,10 @@ CODE_COMPETITOR_GROUP_DUPLICATE: Final = "competitor.group_duplicate"      # 同
 CODE_COMPETITOR_LIMIT_EXCEEDED: Final = "competitor.limit_exceeded"        # 关注总数/单批解析数超上限
 CODE_COMPETITOR_PREVIEW_NOT_FOUND: Final = "competitor.preview_not_found"  # token 不存在/不属于当前用户
 CODE_COMPETITOR_PREVIEW_EXPIRED: Final = "competitor.preview_expired"
+# 采集端上报：这两个码是给**插件作者**看的，不是给终端用户看的——它们要能指出"你的选择器
+# 取错了元素"或"你复用了幂等键"。
+CODE_COMPETITOR_SELLER_NOT_WATCHED: Final = "competitor.seller_not_watched"
+CODE_COMPETITOR_IDEMPOTENCY_KEY_REUSED: Final = "competitor.idempotency_key_reused"
 
 # 导入与对象存储
 CODE_UPLOAD_IMPORT_REJECTED: Final = "upload.import_rejected"

@@ -7,6 +7,9 @@
 > 2026-09-01 第二轮修订（复核意见）：幂等键补 `request_hash`（防同键异体被静默吞掉）；
 > 「已暂停」**代码真的删掉了**——上一轮只改了 spec，§4.2 当时仍是 `[ ]`，而 issue 回复
 > 却说成已删，这是勾选与说明不一致的反面教材。§1 与 §4.2 已按修订后重做。
+> 2026-09-01 第三轮（复核意见）：摘要范围**改为把 `captured_at`/`ship_to_region`/
+> `page_context` 纳入**（原先排除，理由「重读 DOM 后重试会撞假 409」站不住——那不是重试）；
+> §2 上报端点与 §5.1–5.4 已实现并跑通，含真实数据库集成验收（786 passed）。
 
 ## 1. 数据模型与迁移
 
@@ -30,34 +33,40 @@
       建表顺序是 report 在前、**不出现** `PARTITION BY`（迁移 `ba67eac57b82`）
 - [x] 1.5 `uv run alembic upgrade head`；对迁移后的库再跑一次 autogenerate 探针，产出为
       空（`upgrade()` 只有 `pass`），探针文件已删除
-- [ ] 1.6 在测试库上跑 `test_v2_integration.py::test_models_match_migrated_schema`
+- [x] 1.6 在测试库上跑 `test_v2_integration.py::test_models_match_migrated_schema` —— 通过。
+      **顺带修了一个真缺陷**：该用例逐个 import 模型模块（与 `alembic/env.py` 同样靠 import
+      的副作用注册进 `Base.metadata`），`asin_model` 漏在名单外，表现是 autogenerate 反过来
+      要 DROP 这两张新表。登记进 `V2_TABLES` 只让它对 `include_object` 可见，**不等于
+      被 import 到 metadata**——两件事都要做
 
 ## 2. 上报端点
 
-- [ ] 2.1 `asin_schemas.py`：`AsinReportRequest`（`request_id` **必填** / `seller_id` /
+- [x] 2.1 `asin_schemas.py`：`AsinReportRequest`（`request_id` **必填** / `seller_id` /
       `site` / `captured_at` 可选 / `ship_to_region` / `page_context` / `items[]`）与
       `AsinReportResponse`（`report_id` / `accepted` / `new_asins` / `baseline_established` /
       `duplicate_of` / `rejected[]` 逐条附原因）。条数上限用 Pydantic 约束，超限即 422；
       ASIN 统一大写去空白、请求内去重；标题/图片/页面上下文超长**截断不拒绝**
-- [ ] 2.2 `asin_crud.py`：`compute_request_hash`（纯函数：sha256 over
+- [x] 2.2 `asin_crud.py`：`compute_request_hash`（纯函数：sha256 over
       `seller_id` + `site` + 规范化去重排序后的 ASIN 集合，**不含 `request_id`**、
       不含审计与展示字段）、`insert_report_stmt`（`ON CONFLICT (user_id, request_id) DO
       NOTHING ... RETURNING`，未返回即命中重复，回查原行并比对 `request_hash`）、`insert_asins_stmt`
       （`ON CONFLICT DO NOTHING ... RETURNING asin`，带 `first_report_id`，不更新
       `first_seen_at` 与已落定属性）、`update_report_counts_stmt`（回填 `new_count`）、
-      `set_baseline_stmt`（`COALESCE(baseline_at, :now)`——一旦落定不再改动）、
-      `watched_seller_stmt`
-- [ ] 2.3 `asin_service.py`：写入顺序 **report → ASIN（`RETURNING` 出新增数）→ 回填
+      `set_baseline_stmt`（**实现用 `WHERE baseline_at IS NULL` 而非
+      `SET = COALESCE(...)`**：保证等价，但常态下根本不写——后者每次上报都 UPDATE 一行、
+      标死旧元组、重写索引，而 99% 的上报是「基线早就有了」；且「本次是否落定」由
+      `RETURNING` 有没有出行免费得到）、`watched_seller_stmt`
+- [x] 2.3 `asin_service.py`：写入顺序 **report → ASIN（`RETURNING` 出新增数）→ 回填
       `new_count` → 落基线**，同一事务提交；时间一律取服务端事务时间，`captured_at` 只
       落库不参与判定；卖家不在**上报者本人**的 `user_seller_watch` 中则整个请求拒绝并
       附原因；命中幂等键且摘要一致则回放原记录（`duplicate_of`），不新增、不推进
       「最近采集于」；**摘要不一致则抛 409 `competitor.idempotency_key_reused`**，
       不写入也不回放
-- [ ] 2.4 `asin_api.py`：`POST /api/competitor/asin-reports`，挂
+- [x] 2.4 `asin_api.py`：`POST /api/competitor/asin-reports`，挂
       `Depends(require_permission(COMPETITOR_VIEW))`，`user_id` 一律取自令牌；
       命中重复**且摘要一致**返 200 而非 409（返错误码会让采集端继续重试）；
       **摘要不一致才返 409**；注册进 `main.py` 的路由
-- [ ] 2.5 新增配置 `COMPETITOR_MAX_REPORT_ITEMS`（默认 200）到 `config.py` 与
+- [x] 2.5 新增配置 `COMPETITOR_MAX_REPORT_ITEMS`（默认 200）到 `config.py` 与
       `.env.example`（带单位与理由，`test_conventions.py` 会比对）
 
 ## 3. 上新流合并两类来源
@@ -87,23 +96,28 @@
 
 ## 5. 测试
 
-- [ ] 5.1 单元：上报服务的硬约束——未关注卖家整个请求拒绝且附原因、条数超限整批不写、
-      单条格式非法逐条拒且其余照写、重复上报不新增行且 `first_seen_at` 不变、基线只在
-      首次落定（`uv run pytest test/`）
-- [ ] 5.2 单元：`user_id` 只取自令牌——请求体里塞 `user_id` 不生效
-- [ ] 5.3 单元：幂等键三种情况都要覆盖——**同键同体**返 200 + `duplicate_of`、上报记录数
-      不变、「最近采集于」不推进；**同键异体**（换卖家或换 ASIN 集合）返 409
-      `competitor.idempotency_key_reused` 且一条不写；**跨用户同键**互不影响。
-      另加一条：同键、ASIN 集合相同但 `captured_at`/标题有出入时**不许**返 409
-- [ ] 5.4 单元：`captured_at` 偏移（早于基线/晚于现在）都不影响判定，`first_seen_at`
-      仍取服务端时间
-- [ ] 5.5 集成（`TEST_DATABASE_URL` gate）：首次上报不产生上新条目、第二次上报的新 ASIN
-      产生条目、`first_report_id` 指向正确的那次上报、两来源合并后翻页无重复无遗漏
+- [x] 5.1 上报服务的硬约束。`test_competitor_asin_unit.py`（24 项，不连库：schema 上限、
+      ASIN 规范化/去重/逐条拒、摘要字段边界）+ `test_competitor_asin_integration.py`
+      （17 项，真库：未关注卖家整批拒、重复上报不新增行且 `first_seen_at` 不变、
+      标题只在首次落定、`first_report_id` 指向正确的那次上报）
+- [x] 5.2 `user_id` 只取自令牌——`test_请求体里的user_id被无视`。schema 用
+      `extra="ignore"` 而非 `forbid`：后者把它变成 422，反而暗示「这个字段是被认识的」
+- [x] 5.3 幂等四态，全部是真库行为测试（不是 spec 描述）：**同键同体**回放、上报记录数
+      不变、「最近采集于」不推进；**同键异体**（换 ASIN 集合 / 换卖家 / 换 `captured_at`）
+      三条各一个用例，均返 409 且一条不写；**跨用户同键**互不影响；**只有标题不同**仍按
+      重放处理（展示属性不进摘要）
+- [x] 5.4 `captured_at` 偏移不影响判定、`first_seen_at` 仍取服务端时间；且
+      `competitor_seller_asin` 表上根本没有 `captured_at` 列（断言列名单）
+- [~] 5.5 集成：首次上报不产生上新条目 ✅、`first_report_id` 指向正确 ✅、
+      **跨事务下第二次上报的新品严格晚于基线** ✅（单独的 committing 夹具——夹具那个外层
+      事务里 `now()` 恒定，这条只有真提交才验得到，而它错了不会报错、只表现为"上新流永远
+      是空的"）。**「两来源合并后翻页无重复无遗漏」待 §3 落地**
 - [ ] 5.6 前端：卖家行两态显示（占位符 vs 真实 0）、「近 7 日新发现」措辞、
       上新流 AMAZON 行的「发现于」措辞（`pnpm test src/pages/Competitor`）。
       「状态里没有已暂停」那条已随 4.2 落地
-- [ ] 5.7 全量回归：`uv run pytest test/`（含集成部分）与
-      `pnpm lint && pnpm tsc && pnpm test` 全绿
+- [~] 5.7 全量回归（本轮）：`TEST_DATABASE_URL=... uv run pytest test/` →
+      **786 passed, 1 skipped**（唯一的 skip 是 OSS 真实回路，需 `TEST_OSS_*`，与本变更无关）；
+      `ruff` 通过。§3/§4 落地后需再跑一次，含前端全量
 
 ## 6. 文档与收尾
 
