@@ -1,6 +1,7 @@
 """独立站监控 API。瘦控制器：调 service，异常交给全局处理器。
 
-- 站点：`POST /competitor/stores`（加入）、`POST /competitor/stores/list`（清单，
+- 站点：`POST /competitor/stores`（加入）、`POST /competitor/stores/batch`（批量加入），
+  `POST /competitor/stores/list`（清单，
   POST 因为请求体含分页/过滤）、`PATCH /competitor/stores/{domain}`、
   `DELETE /competitor/stores/{domain}`
 - 商品：`POST /competitor/store-products`、
@@ -29,6 +30,8 @@ from app.table.competitor.store_schemas import (
     ProductListRequest,
     ProductListResponse,
     StoreAddRequest,
+    StoreBatchAddRequest,
+    StoreBatchAddResponse,
     StoreListRequest,
     StoreListResponse,
     StoreOut,
@@ -55,6 +58,25 @@ async def add_store(
     否则它会以「抓取失败」的面目出现，用户会去重试、去等，而不是去换一个站点。
     """
     return await service.add_store(db, user.id, req)
+
+
+@store_router.post("/stores/batch", response_model=StoreBatchAddResponse)
+async def add_stores_batch(
+    req: StoreBatchAddRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user=Depends(_require_view),
+) -> StoreBatchAddResponse:
+    """一次加入多个独立站，**一步完成**，无预览确认。
+
+    判据是这个操作可不可逆：加错了取关一次点击、已抓到的数据还留着。卖家侧的两步流是
+    为 `replace_group` 那种破坏性操作、以及「2657 条来自书签、用户不知道里面有什么」
+    设计的，这里两条都不成立。
+
+    响应把每一条输入归入已加入 / 已关注 / 拒绝三段，**拒绝逐条附原因**——只报
+    「N 条失败」等于让用户自己去猜是哪几条、为什么。全部被拒时请求仍返回 200：
+    那不是错误，是「这一批都不受支持」这个事实。
+    """
+    return await service.add_stores_batch(db, user.id, req)
 
 
 @store_router.post("/stores/list", response_model=StoreListResponse)

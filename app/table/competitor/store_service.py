@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -44,6 +45,8 @@ from app.table.competitor.store_schemas import (
     STATUS_NEVER_FETCHED,
     STATUS_NO_CATALOG_API,
     STATUS_OK,
+    BatchAddedItem,
+    BatchRejectedItem,
     NewArrivalOut,
     NewArrivalRequest,
     NewArrivalResponse,
@@ -54,6 +57,8 @@ from app.table.competitor.store_schemas import (
     ProductOut,
     RankPointOut,
     StoreAddRequest,
+    StoreBatchAddRequest,
+    StoreBatchAddResponse,
     StoreListRequest,
     StoreListResponse,
     StoreOut,
@@ -292,13 +297,17 @@ async def _probe_shopify(domain: str) -> ParsedStoreMeta:
     async with _store_client() as client:
         try:
             return await probe_store_meta(client, domain)
+        except (MetaParseError, httpx.HTTPStatusError) as exc:
+            # **HTTPStatusError 归到「不是 Shopify」而不是「打不开」**：服务器答复了，
+            # 只是那个路径上没有 meta——最典型的就是任何非 Shopify 站点对 /meta.json
+            # 返回 404。归进「无法访问」的表现是用户对着一个好好的站点反复重试。
+            raise BadRequestError(
+                STORE_NOT_SHOPIFY, log_detail=f"{domain} 不是 Shopify：{exc}"
+            ) from exc
         except httpx.HTTPError as exc:
+            # 到这里才是真的够不着：超时、DNS 解析不了、连接被拒。
             raise BadRequestError(
                 STORE_UNREACHABLE, log_detail=f"{domain} meta 探测失败：{exc}"
-            ) from exc
-        except MetaParseError as exc:
-            raise BadRequestError(
-                STORE_NOT_SHOPIFY, log_detail=f"{domain} 的 meta 形状不符：{exc}"
             ) from exc
 
 
@@ -351,6 +360,137 @@ async def add_store(db: AsyncSession, user_id: int, req: StoreAddRequest) -> Sto
         if row.domain == domain:
             return row
     raise NotFoundError(STORE_NOT_WATCHED)  # pragma: no cover - 刚写入必然存在
+
+
+# 并发探测的上限。串行几十条是分钟级、必然超时；无上限并发对着几十个不同站点同时发
+# 请求，既容易被当成异常流量，也会让本机连接数失控。8 条并发下，200 条的最坏耗时约
+# 25 秒，仍在一次请求可承受的范围内——这正是本能力不需要异步任务的原因。
+_BATCH_PROBE_CONCURRENCY = 8
+
+
+async def add_stores_batch(
+    db: AsyncSession, user_id: int, req: StoreBatchAddRequest
+) -> StoreBatchAddResponse:
+    """一次加入多个独立站，**一步完成**，返回逐条结果。
+
+    不做预览 + 确认两步流。判据是这个操作可不可逆：卖家侧那套存在的理由是
+    ``replace_group`` 会清空整组重建、且 2657 条来自书签文件用户不知道里面有什么；
+    这里两条都不成立——用户粘的是自己知道的域名，加错了取关一次点击且数据还留着。
+
+    结果按**输入行**组织而不是按站点：被拒绝的条目根本得不到域名，只能用原文回指。
+    """
+    rejected: list[BatchRejectedItem] = []
+
+    # 逐行规范化。复用单条路径那一份，**不另写**——两份分叉的表现是「单个粘贴能进，
+    # 放进批量里同样的链接却被拒」。
+    normalized: dict[str, str] = {}  # 规范化域名 -> 首次出现的原文
+    for raw in req.domains:
+        if not raw or not raw.strip():
+            continue
+        try:
+            domain = normalize_store_domain(raw)
+        except BadRequestError as exc:
+            rejected.append(BatchRejectedItem(input=raw, reason=exc.message))
+            continue
+        normalized.setdefault(domain, raw)  # 同批重复只处理一次
+
+    if not normalized:
+        return StoreBatchAddResponse(added=[], already_watched=[], rejected=rejected)
+
+    watched_now = set(
+        (
+            await db.execute(
+                select(UserStoreWatch.domain).where(
+                    UserStoreWatch.user_id == user_id,
+                    UserStoreWatch.domain.in_(normalized.keys()),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    watched_count = await db.scalar(
+        select(func.count()).select_from(UserStoreWatch).where(UserStoreWatch.user_id == user_id)
+    )
+    to_add = [d for d in normalized if d not in watched_now]
+    # 超限**整批拒绝不截断**——截断会让用户以为全部加进去了。
+    if watched_count + len(to_add) > settings.COMPETITOR_MAX_WATCH_PER_USER:
+        raise UnprocessableError(
+            f"这批会让关注的独立站超过上限 {settings.COMPETITOR_MAX_WATCH_PER_USER} 个，"
+            f"已关注 {watched_count} 个、这批新增 {len(to_add)} 个。整批未写入。"
+        )
+
+    probed = await _probe_many(to_add)
+
+    added: list[BatchAddedItem] = []
+    for domain in to_add:
+        raw = normalized[domain]
+        outcome = probed[domain]
+        if isinstance(outcome, str):  # 拒绝原因
+            rejected.append(BatchRejectedItem(input=raw, reason=outcome))
+            continue
+        await db.execute(
+            pg_insert(CompetitorStore)
+            .values(
+                domain=domain,
+                platform="SHOPIFY",
+                name=outcome.name,
+                currency=outcome.currency,
+                country=outcome.country,
+                shop_id=outcome.shop_id,
+                myshopify_domain=outcome.myshopify_domain,
+                ships_to_countries=list(outcome.ships_to_countries) or None,
+            )
+            .on_conflict_do_nothing(index_elements=["domain"])
+        )
+        await db.execute(
+            pg_insert(UserStoreWatch).values(
+                user_id=user_id, domain=domain, group_id=req.group_id, note=None
+            )
+        )
+        added.append(
+            BatchAddedItem(
+                input=raw, domain=domain, name=outcome.name, currency=outcome.currency
+            )
+        )
+
+    await db.commit()
+
+    existing_rows = [
+        BatchAddedItem(input=normalized[d], domain=d, name=None, currency=None)
+        for d in normalized
+        if d in watched_now
+    ]
+    return StoreBatchAddResponse(
+        added=added, already_watched=existing_rows, rejected=rejected
+    )
+
+
+async def _probe_many(domains: list[str]) -> dict[str, ParsedStoreMeta | str]:
+    """并发探测一批域名。返回 meta 或**拒绝原因字符串**。
+
+    所有条目共用同一个 ``AsyncClient``（连接池复用），并发数由信号量限死。
+    """
+    if not domains:
+        return {}
+    semaphore = asyncio.Semaphore(_BATCH_PROBE_CONCURRENCY)
+
+    async with _store_client() as client:
+
+        async def _one(domain: str) -> tuple[str, ParsedStoreMeta | str]:
+            async with semaphore:
+                try:
+                    return domain, await probe_store_meta(client, domain)
+                except (MetaParseError, httpx.HTTPStatusError):
+                    # 服务器答复了、只是没有 meta = 不是 Shopify。与单条路径同一分类，
+                    # 两边分叉会让同一个站点在两条入口得到不同的拒绝理由。
+                    return domain, STORE_NOT_SHOPIFY
+                except httpx.HTTPError:
+                    return domain, STORE_UNREACHABLE
+
+        results = await asyncio.gather(*(_one(d) for d in domains))
+    return dict(results)
 
 
 async def list_stores(
