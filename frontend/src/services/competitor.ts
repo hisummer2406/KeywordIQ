@@ -34,6 +34,18 @@ export interface WatchRow {
   note: string | null;
   status: WatchStatus;
   created_at: string;
+
+  /**
+   * 近 7 日新发现数。**null 表示该卖家还没有基线（从未被采集过），必须显示占位符而不是
+   * 0**——0 会被读成「这家店没有新发现」，而事实是「这个卖家还没有数据来源」。有基线时
+   * 是真实条数（含 0，此时 0 的含义才是「已采集范围内没有新发现」）。
+   *
+   * MUST NOT 读作「上新数」：被动采集证明不了商品何时上架，只能证明"我们何时见到"。
+   */
+  new_discoveries_7d: number | null;
+  /** 最近一次被采集的时刻，无上报时为 null。「很久没采过」与「确实没有新发现」在界面上
+   * 长得一模一样，必须同屏展示它并在陈旧时提示。 */
+  last_reported_at: string | null;
 }
 
 export interface WatchListBody {
