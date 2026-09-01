@@ -14,6 +14,28 @@ import './index.less';
  * 登录屏。登录并入 SPA 路由（替代 /admin/login）。
  * 真实登录接口在阶段二落地；此处已按最终形态接好 login()，接口就绪即可用。
  */
+/**
+ * 登录失败的文案。**按失败类型分开说，不能一律归成「账号或密码错误」**：
+ * 「服务挂了」与「你输错了」要求用户做的动作完全相反——前者该等恢复或找运维，后者该
+ * 重输密码。把前者说成后者，用户只会一遍遍试密码（将来若加了失败锁定，这一条会直接
+ * 变成把自己锁出去）。这不是假想：曾因 devServer 代理端口配错，连试五次密码、又去核对
+ * 种子脚本口令和库里的散列，最后才从代理日志里看出请求根本没到后端（issue #58）。
+ *
+ * 判据是**有没有拿到响应**，不是有没有 message。网络失败、超时都没有 response；
+ * nginx 502 这类有 response 但响应体不是统一错误契约，此时同样不能落到凭证文案上。
+ * 有契约 message 就直接展示——按错误契约，那句话本就是面向用户的。
+ */
+export function loginErrorMessage(e: any): string {
+  // 没有响应 = 请求压根没到后端（连接被拒、DNS、超时、跨域被拦）
+  if (!e?.response) return '无法连接服务器，请检查网络后重试';
+
+  const status = e.response.status;
+  const detail: string | undefined = e.response.data?.message;
+  // 401 是唯一「凭证确实不对」的状态码
+  if (status === 401) return detail || '用户名或密码错误';
+  return detail || `服务暂时不可用，请稍后重试（${status}）`;
+}
+
 export default function LoginPage() {
   const { message } = App.useApp();
   const { finishLogin } = useLoginRedirect();
@@ -63,7 +85,7 @@ export default function LoginPage() {
     } catch (e: any) {
       // login() 显式声明了 skipErrorHandler（凭证错误不该弹全局提示），因此这里必须
       // 自己呈现——「显式跳过」与「必须自行呈现」是一对，缺一就回到了静默吞错误。
-      message.error(e?.response?.data?.message || '用户名或密码错误');
+      message.error(loginErrorMessage(e));
     }
   };
 

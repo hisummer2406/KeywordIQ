@@ -143,7 +143,7 @@ describe('登录屏', () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/upload'));
   });
 
-  it('登录失败：不存令牌、不跳转（错误提示由全局 errorHandler 负责）', async () => {
+  it('登录失败：不存令牌、不跳转（login 声明了 skipErrorHandler，提示由本屏自己呈现）', async () => {
     loginMock.mockRejectedValue(new Error('401'));
     renderLogin();
     await submit('admin', 'wrong');
@@ -151,6 +151,42 @@ describe('登录屏', () => {
     await waitFor(() => expect(loginMock).toHaveBeenCalled());
     expect(getToken()).toBeNull();
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 回归 issue #58：后端不可达曾被显示成「用户名或密码错误」。两者要求用户做的动作
+   * 相反，说错了他只会一遍遍重试密码。所以这三条守的是「失败类型不许被合并」。
+   */
+  describe('失败文案按类型分开', () => {
+    it('401：说凭证错误', async () => {
+      loginMock.mockRejectedValue({
+        response: { status: 401, data: { message: '用户名或密码错误' } },
+      });
+      renderLogin();
+      await submit('admin', 'wrong');
+
+      expect(await screen.findByText('用户名或密码错误')).toBeInTheDocument();
+    });
+
+    it('拿不到响应（后端不可达）：说连不上服务器，绝不说密码错', async () => {
+      loginMock.mockRejectedValue(Object.assign(new Error('Network Error'), { request: {} }));
+      renderLogin();
+      await submit();
+
+      expect(await screen.findByText('无法连接服务器，请检查网络后重试')).toBeInTheDocument();
+      expect(screen.queryByText(/密码错误/)).not.toBeInTheDocument();
+    });
+
+    it('5xx 且响应体不是统一错误契约（如 nginx 502）：说服务不可用并带上状态码', async () => {
+      loginMock.mockRejectedValue({
+        response: { status: 502, data: '<html>Bad Gateway</html>' },
+      });
+      renderLogin();
+      await submit();
+
+      expect(await screen.findByText('服务暂时不可用，请稍后重试（502）')).toBeInTheDocument();
+      expect(screen.queryByText(/密码错误/)).not.toBeInTheDocument();
+    });
   });
 
   it('用户名密码为空时不发请求（表单必填校验）', async () => {
