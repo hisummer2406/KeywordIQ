@@ -142,6 +142,70 @@ async def test_未关注的卖家整个请求拒绝(db):
     assert await _count(db, "SELECT count(*) FROM analysis.competitor_seller_asin") == 0
 
 
+# ---------- 空批次与非法输入 ----------
+
+
+async def test_空items整批拒绝不落定基线(db):
+    """放行的话，首次上报会落一个不含任何 ASIN 的"空基线"——下一次正常上报时，该卖家的
+    全部存量 ASIN 都晚于这个空基线，被整批误判成新发现。这个错误不会报错，界面表现只是
+    新发现数突然涌出一大批。"""
+    seed = await db.run_sync(_seed)
+    with pytest.raises(UnprocessableError) as exc:
+        await service.submit_report(db, seed["owner"], _req(asins=()))
+    assert exc.value.code == "competitor.report_empty"
+    assert await _count(db, "SELECT count(*) FROM analysis.competitor_asin_report") == 0
+    assert await _count(db, "SELECT count(*) FROM analysis.competitor_seller_asin") == 0
+    assert (
+        await _count(
+            db,
+            "SELECT count(*) FROM analysis.competitor_seller "
+            "WHERE seller_id=:s AND site=:t AND baseline_at IS NOT NULL",
+            {"s": _SELLER, "t": _SITE},
+        )
+        == 0
+    )
+
+
+async def test_全部条目格式非法时整批拒绝不落定基线(db):
+    """与空列表同一种风险：accepted_rows 为空的两种成因（请求本来就是空的 / 全部被逐条
+    拒绝）都不得建立基线，不能只堵其中一种。"""
+    seed = await db.run_sync(_seed)
+    with pytest.raises(UnprocessableError) as exc:
+        await service.submit_report(db, seed["owner"], _req(asins=("不是ASIN", "也不是")))
+    assert exc.value.code == "competitor.report_empty"
+    assert await _count(db, "SELECT count(*) FROM analysis.competitor_asin_report") == 0
+    assert (
+        await _count(
+            db,
+            "SELECT count(*) FROM analysis.competitor_seller "
+            "WHERE seller_id=:s AND site=:t AND baseline_at IS NOT NULL",
+            {"s": _SELLER, "t": _SITE},
+        )
+        == 0
+    )
+
+
+async def test_已有基线时空批次同样整批拒绝(db):
+    """即便基线已经落定，一次零有效条目的上报本身也不携带任何可用信息，不该被受理——
+    这不是"只在首次上报时才检查"的特例规则。"""
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1"))
+    with pytest.raises(UnprocessableError) as exc:
+        await service.submit_report(db, seed["owner"], _req(request_id="rq-2", asins=()))
+    assert exc.value.code == "competitor.report_empty"
+    assert await _count(db, "SELECT count(*) FROM analysis.competitor_asin_report") == 1
+
+
+async def test_非法站点码返回422而不是500(db):
+    """`normalize_site_code` 抛的是 `UnknownSiteError`，不转译就会被全局兜底处理成 500——
+    这是非法输入，不是服务器故障。站点校验在授权检查之前，不需要先建关注关系。"""
+    with pytest.raises(UnprocessableError) as exc:
+        await service.submit_report(
+            db, 1, AsinReportRequest(request_id="rq-1", seller_id=_SELLER, site="UK", items=[])
+        )
+    assert exc.value.code == "competitor.site_invalid"
+
+
 # ---------- 基线 ----------
 
 
@@ -578,6 +642,57 @@ async def _seed_amazon_arrivals(db, user_id, *, n=3):
             ),
             {"s": _SELLER, "t": _SITE, "a": f"B0MIX{i:05d}", "at": at, "ti": f"卖家商品{i}"},
         )
+
+
+async def test_同一seller_id跨站点卖同一asin两行都保留不冲突(db):
+    """共享层的真实粒度是 (seller_id, site, asin)，不是 (seller_id, asin)。同一 seller_id
+    跨站点卖同一 ASIN 是常态；若响应身份或排序键漏了 site，这两行会在 API/前端 rowKey 上
+    撞成同一行，翻页时互相顶替。这里用完全相同的 first_seen_at 制造平局，同时验证
+    site 参与了次级排序键。"""
+    seed = await db.run_sync(_seed)
+    same_at = datetime(2026, 8, 2, 12, tzinfo=UTC)
+    await _seed_amazon_arrivals(db, seed["owner"], n=1)  # US: B0MIX00000 @ same_at
+
+    gb_site = "GB"
+    await db.execute(
+        text(
+            "INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
+            "VALUES (:s,:t,:b)"
+        ),
+        {"s": _SELLER, "t": gb_site, "b": datetime(2026, 8, 1, tzinfo=UTC)},
+    )
+    await db.execute(
+        text(
+            "INSERT INTO analysis.user_seller_watch(user_id,seller_id,site,priority) "
+            "VALUES (:u,:s,:t,1)"
+        ),
+        {"u": seed["owner"], "s": _SELLER, "t": gb_site},
+    )
+    await db.execute(
+        text(
+            "INSERT INTO analysis.competitor_seller_asin"
+            "(seller_id,site,asin,first_seen_at,title) VALUES (:s,:t,:a,:at,:ti)"
+        ),
+        {"s": _SELLER, "t": gb_site, "a": "B0MIX00000", "at": same_at, "ti": "GB同款"},
+    )
+
+    feed = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
+    )
+    amazon_rows = [r for r in feed.data if r.source == "AMAZON"]
+    assert len(amazon_rows) == 2
+    assert {r.site for r in amazon_rows} == {_SITE, gb_site}
+    # 两行的 source_key + product_key 完全相同，只有 site 能区分——正是要防的碰撞场景
+    assert {(r.source_key, r.product_key) for r in amazon_rows} == {(_SELLER, "B0MIX00000")}
+
+    # 翻页同样不能因为这个平局漏掉或重复任何一行
+    seen: list[tuple[str, str, str | None]] = []
+    for page in (1, 2):
+        page_feed = await service_store.new_arrivals(
+            db, seed["owner"], NewArrivalRequest(days=90, page=page, per_page=1)
+        )
+        seen.extend((r.source, r.product_key, r.site) for r in page_feed.data if r.source == "AMAZON")
+    assert len(seen) == len(set(seen)) == 2
 
 
 async def test_上新流两类来源都在同一个流里(db):

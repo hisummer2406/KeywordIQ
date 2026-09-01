@@ -179,6 +179,14 @@ class NewArrivalOut(BaseModel):
     source: str = Field(description="DTC / AMAZON")
     source_key: str = Field(description="独立站为域名，Amazon 为 seller_id")
     source_name: str | None
+    site: str | None = Field(
+        default=None,
+        description=(
+            "站点码，仅 AMAZON 行非空。共享层的真实粒度是 (seller_id, site, asin)——"
+            "同一 seller_id 跨站点卖同一 ASIN 时，缺了这一列就无法在响应与 rowKey 里"
+            "区分两行"
+        ),
+    )
     product_key: str = Field(description="独立站为 product_id，Amazon 为 ASIN")
     title: str
     image_url: str | None

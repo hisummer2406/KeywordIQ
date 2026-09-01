@@ -145,6 +145,8 @@ CODE_COMPETITOR_PREVIEW_EXPIRED: Final = "competitor.preview_expired"
 # 取错了元素"或"你复用了幂等键"。
 CODE_COMPETITOR_SELLER_NOT_WATCHED: Final = "competitor.seller_not_watched"
 CODE_COMPETITOR_IDEMPOTENCY_KEY_REUSED: Final = "competitor.idempotency_key_reused"
+CODE_COMPETITOR_REPORT_EMPTY: Final = "competitor.report_empty"      # 零条有效 ASIN，禁止落定空基线
+CODE_COMPETITOR_SITE_INVALID: Final = "competitor.site_invalid"
 
 # 导入与对象存储
 CODE_UPLOAD_IMPORT_REJECTED: Final = "upload.import_rejected"

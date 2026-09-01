@@ -249,7 +249,7 @@ def test_上新流排序带次级键():
     它碰巧是稳定的——集成测试里去掉次级键照样全绿（实测过）。所以这里直接钉语句本身。
     """
     order_by = _arrivals_sql().upper().split("ORDER BY")[1]
-    for col in ("AT DESC", "SOURCE", "SOURCE_KEY", "PRODUCT_KEY"):
+    for col in ("AT DESC", "SOURCE", "SOURCE_KEY", "SITE", "PRODUCT_KEY"):
         assert col in order_by, f"ORDER BY 缺少 {col}：{order_by}"
 
 
@@ -281,3 +281,17 @@ def test_amazon侧的时间语义写死为发现于():
     """被动采集证明不了商品何时上架。这是常量不是条件分支——有条件的只有独立站那侧。"""
     amazon = _arrivals_sql().split("UNION ALL")[1]
     assert "PUBLISHED" not in amazon
+
+
+def test_amazon侧携带站点码_独立站侧恒为空():
+    """共享层的粒度是 (seller_id, site, asin)，不是 (seller_id, asin)。同一 seller_id
+    跨站点卖同一 ASIN 时，缺了 site 这两行在响应与 rowKey 上无法区分——上一版正是这样。"""
+    from sqlalchemy.sql.elements import Null
+
+    from app.table.competitor.store_crud import _amazon_arrivals_select, _dtc_arrivals_select
+
+    amazon_site = _amazon_arrivals_select(1, 7).selected_columns["site"]
+    dtc_site = _dtc_arrivals_select(1, 7).selected_columns["site"]
+    assert "competitor_seller_asin.site" in str(amazon_site).lower()
+    # 独立站侧的 site 是字面 NULL，不是引用任何列——独立站没有站点这回事
+    assert isinstance(dtc_site.element.clause, Null)

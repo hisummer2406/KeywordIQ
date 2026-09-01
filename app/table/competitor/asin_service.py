@@ -23,11 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.errors import (
     CODE_COMPETITOR_IDEMPOTENCY_KEY_REUSED,
+    CODE_COMPETITOR_REPORT_EMPTY,
     CODE_COMPETITOR_SELLER_NOT_WATCHED,
+    CODE_COMPETITOR_SITE_INVALID,
     ConflictError,
     UnprocessableError,
 )
-from app.site_registry import normalize_site_code
+from app.site_registry import UnknownSiteError, normalize_site_code
 from app.table.competitor import asin_crud as crud
 from app.table.competitor.asin_schemas import (
     ASIN_RE,
@@ -46,19 +48,37 @@ logger = logging.getLogger(__name__)
 # 而分叉的表现是前端按码分支时匹配不上，没有任何地方会报错。
 CODE_IDEMPOTENCY_KEY_REUSED = CODE_COMPETITOR_IDEMPOTENCY_KEY_REUSED
 CODE_SELLER_NOT_WATCHED = CODE_COMPETITOR_SELLER_NOT_WATCHED
+CODE_REPORT_EMPTY = CODE_COMPETITOR_REPORT_EMPTY
+CODE_SITE_INVALID = CODE_COMPETITOR_SITE_INVALID
 
 
 async def submit_report(
     db: AsyncSession, user_id: int, req: AsinReportRequest
 ) -> AsinReportResponse:
     """受理一次上报。`user_id` 由调用方从令牌取，**绝不从请求体读**。"""
-    site = normalize_site_code(req.site)
+    try:
+        site = normalize_site_code(req.site)
+    except UnknownSiteError as exc:
+        # 不转译就会被全局兜底当成 500——非法输入，不是服务器故障。
+        raise UnprocessableError(str(exc), code=CODE_SITE_INVALID) from exc
     seller_id = req.seller_id.strip()
     page_context = truncate(req.page_context, MAX_PAGE_CONTEXT_LEN)
 
     await _assert_watched(db, user_id, seller_id, site)
 
     accepted_rows, rejected = _normalize_items(req)
+    if not accepted_rows:
+        # 空列表或全部条目因格式非法被拒绝时，MUST NOT 落定基线：首次上报若在此刻建立
+        # 基线，落的是一个不含任何 ASIN 的"空基线"——下一次正常上报时,整批存量商品都
+        # 满足 first_seen_at > baseline_at，被误判成新发现。整批拒绝，一条都不写，
+        # 比"允许空报但跳过落基线"更简单也更彻底：即便基线已经落定，一次零有效条目的
+        # 上报本身也不携带任何可用信息，没有受理它的理由。
+        message = (
+            f"本次上报的 {len(req.items)} 条 ASIN 全部格式非法，未受理"
+            if req.items
+            else "本次上报未包含任何 ASIN，未受理"
+        )
+        raise UnprocessableError(message, code=CODE_REPORT_EMPTY)
     asins = [row["asin"] for row in accepted_rows]
 
     request_hash = crud.compute_request_hash(
@@ -93,13 +113,10 @@ async def submit_report(
     for row in accepted_rows:
         row["first_report_id"] = report_id
 
-    new_asins: list[str] = []
-    if accepted_rows:
-        new_asins = list(
-            (await db.execute(crud.insert_asins_stmt(accepted_rows))).scalars().all()
-        )
-        if new_asins:
-            await db.execute(crud.update_report_new_count_stmt(report_id, len(new_asins)))
+    # accepted_rows 此刻必非空——空批次已在函数开头整批拒绝、从未走到这里。
+    new_asins = list((await db.execute(crud.insert_asins_stmt(accepted_rows))).scalars().all())
+    if new_asins:
+        await db.execute(crud.update_report_new_count_stmt(report_id, len(new_asins)))
 
     baseline_established = (
         await db.execute(crud.set_baseline_stmt(seller_id, site))
