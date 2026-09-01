@@ -333,3 +333,199 @@ async def test_分组可同时装卖家与独立站(db):
 
     assert out.group_id == group_id
     assert out.group_name == "头部竞对"
+
+
+# ---------- 批量加入 ----------
+
+
+def _routed(handler_map):
+    """按域名分发的假 transport：域名 -> 处理函数。未列出的域名一律当作非 Shopify。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fn = handler_map.get(request.url.host)
+        if fn is None:
+            return httpx.Response(200, text=json.dumps({"hello": "world"}))
+        return fn(request)
+
+    return _stub_client(handler)
+
+
+def _ok_meta(name: str):
+    def _fn(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=json.dumps({**_META, "name": name}))
+
+    return _fn
+
+
+def _boom(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectTimeout("boom")
+
+
+async def _batch(db, user_id, domains, **kw):
+    from app.table.competitor.store_schemas import StoreBatchAddRequest
+
+    return await service.add_stores_batch(
+        db, user_id, StoreBatchAddRequest(domains=domains, **kw)
+    )
+
+
+async def test_批量里三类结果各归各段且拒绝逐条附原因(db, stub_probe):
+    """只报「N 条失败」等于让用户自己去猜是哪几条、为什么。"""
+    users = await db.run_sync(_seed_users)
+    stub_probe.setattr(
+        service,
+        "_store_client",
+        _routed({"good.example": _ok_meta("好店"), "down.example": _boom}),
+    )
+
+    result = await _batch(
+        db,
+        users["owner"],
+        [
+            "https://www.good.example/collections/all",  # 正常
+            "notshopify.example",                         # 非 Shopify
+            "down.example",                               # 打不开
+            "不是域名",                                    # 域名不合法
+            "https://www.amazon.com/s?me=A1TZ946F8HZTNY",  # 亚马逊链接
+        ],
+    )
+
+    assert [a.domain for a in result.added] == ["good.example"]
+    assert result.added[0].name == "好店"
+    # 回指的是用户粘的那一行原文，不是规范化后的域名
+    assert result.added[0].input == "https://www.good.example/collections/all"
+
+    reasons = {r.input: r.reason for r in result.rejected}
+    assert len(reasons) == 4
+    assert "Shopify" in reasons["notshopify.example"]
+    assert "无法访问" in reasons["down.example"]
+    assert "域名" in reasons["不是域名"]
+    assert "亚马逊" in reasons["https://www.amazon.com/s?me=A1TZ946F8HZTNY"]
+    # 四条原因各不相同——合并成一句就没法判断哪些该换地址重试、哪些根本不受支持
+    assert len(set(reasons.values())) == 4
+
+
+async def test_全部被拒时请求仍然成功返回(db, stub_probe):
+    """那不是错误，是「这一批都不受支持」这个事实。"""
+    users = await db.run_sync(_seed_users)
+    stub_probe.setattr(service, "_store_client", _routed({}))
+
+    result = await _batch(db, users["owner"], ["a.example", "b.example"])
+
+    assert result.added == []
+    assert len(result.rejected) == 2
+    assert result.success is True
+
+
+async def test_同批重复域名只处理一次(db, stub_probe):
+    users = await db.run_sync(_seed_users)
+    stub_probe.setattr(service, "_store_client", _routed({"dup.example": _ok_meta("店")}))
+
+    result = await _batch(
+        db,
+        users["owner"],
+        ["dup.example", "https://www.dup.example/", "HTTPS://DUP.EXAMPLE/products/x?utm=1"],
+    )
+
+    assert len(result.added) == 1
+    assert await db.scalar(
+        text("SELECT count(*) FROM analysis.user_store_watch WHERE domain='dup.example'")
+    ) == 1
+
+
+async def test_已关注的进已关注段不重复写(db, stub_probe):
+    users = await db.run_sync(_seed_users)
+    stub_probe.setattr(service, "_store_client", _routed({DOMAIN: _ok_meta("已有")}))
+    await _add(db, users["owner"])
+
+    result = await _batch(db, users["owner"], [DOMAIN, "x.example"])
+
+    assert [e.domain for e in result.already_watched] == [DOMAIN]
+    assert result.added == []
+
+
+async def test_超条数上限整批拒绝且一条都不写(db, stub_probe):
+    """截断会让用户以为全部加进去了。"""
+    from app.common.errors import UnprocessableError
+    from config import settings
+
+    users = await db.run_sync(_seed_users)
+    stub_probe.setattr(service, "_store_client", _routed({}))
+    original = settings.COMPETITOR_MAX_WATCH_PER_USER
+    settings.COMPETITOR_MAX_WATCH_PER_USER = 2
+    try:
+        with pytest.raises(UnprocessableError):
+            await _batch(db, users["owner"], ["a.example", "b.example", "c.example"])
+    finally:
+        settings.COMPETITOR_MAX_WATCH_PER_USER = original
+
+    assert await db.scalar(
+        text("SELECT count(*) FROM analysis.user_store_watch WHERE user_id=:u"),
+        {"u": users["owner"]},
+    ) == 0
+
+
+async def test_批量与单条对同一个脏链接得到相同结果(db, stub_probe):
+    """两份规范化实现分叉的表现是「单个粘贴能进，放进批量里同样的链接却被拒」。"""
+    users = await db.run_sync(_seed_users)
+    dirty = "HTTPS://WWW.Same.Example/products/abc?utm_source=fb#top"
+    stub_probe.setattr(service, "_store_client", _routed({"same.example": _ok_meta("同一家")}))
+
+    batch_result = await _batch(db, users["owner"], [dirty])
+    assert [a.domain for a in batch_result.added] == ["same.example"]
+
+    # 单条路径对同一个脏链接必须收敛到同一个域名（这里换个用户避免撞重复关注）
+    single = await _add(db, users["other"], domain=dirty)
+    assert single.domain == "same.example"
+
+
+async def test_批量可以指定分组(db, stub_probe):
+    users = await db.run_sync(_seed_users)
+    group_id = await db.scalar(
+        text(
+            "INSERT INTO analysis.user_seller_group(user_id,name) "
+            "VALUES (:u,'批量组') RETURNING group_id"
+        ),
+        {"u": users["owner"]},
+    )
+    stub_probe.setattr(service, "_store_client", _routed({"g.example": _ok_meta("店")}))
+
+    await _batch(db, users["owner"], ["g.example"], group_id=group_id)
+
+    assert await db.scalar(
+        text("SELECT group_id FROM analysis.user_store_watch WHERE domain='g.example'")
+    ) == group_id
+
+
+async def test_能访问但不是Shopify_不得报成无法访问(db, stub_probe):
+    """真实站点对 /meta.json 返回 404 是最常见的「不是 Shopify」形态。
+
+    归进「无法访问」的表现是用户对着一个好好的站点反复重试——实测 baidu.com 就是这样
+    被误判过一次。
+    """
+    users = await db.run_sync(_seed_users)
+
+    def _not_found(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="<html>404</html>")
+
+    stub_probe.setattr(service, "_store_client", _stub_client(_not_found))
+
+    # 单条路径
+    with pytest.raises(BadRequestError) as exc:
+        await _add(db, users["owner"])
+    assert "Shopify" in exc.value.message
+    assert "无法访问" not in exc.value.message
+
+    # 批量路径必须给出同一个分类——两边分叉会让同一站点在两条入口得到不同理由
+    result = await _batch(db, users["owner"], ["other.example"])
+    assert len(result.rejected) == 1
+    assert "Shopify" in result.rejected[0].reason
+
+
+async def test_真的够不着才报无法访问(db, stub_probe):
+    users = await db.run_sync(_seed_users)
+    stub_probe.setattr(service, "_store_client", _routed({DOMAIN: _boom}))
+
+    result = await _batch(db, users["owner"], [DOMAIN])
+
+    assert "无法访问" in result.rejected[0].reason

@@ -30,6 +30,56 @@ class StoreAddRequest(BaseModel):
     note: str | None = Field(default=None, max_length=200)
 
 
+class StoreBatchAddRequest(BaseModel):
+    """一次加入多个独立站。
+
+    条数上限见 ``MAX_BATCH_DOMAINS``：**超限整批拒绝而不截断**（截断会让用户以为全部
+    加进去了）。有了这个上限，最坏耗时即有界，因此本能力不需要引入异步任务。
+    """
+
+    domains: list[str] = Field(min_length=1, max_length=200)
+    group_id: int | None = None
+
+
+MAX_BATCH_DOMAINS = 200
+
+
+class BatchAddedItem(BaseModel):
+    """加入成功的一条。``input`` 回指用户粘的**原文那一行**。
+
+    只回规范化后的域名的话，用户无法把它与自己粘的那行对上——
+    ``https://www.example.com/products/abc?utm=x`` 与 ``example.com`` 看起来不像同一个东西。
+    """
+
+    input: str
+    domain: str
+    name: str | None
+    currency: str | None
+
+
+class BatchRejectedItem(BaseModel):
+    """被拒绝的一条，**必须带原因**。
+
+    只报「N 条失败」等于让用户自己去猜是哪几条、为什么。原因复用单条路径已有的分类，
+    两边分叉的表现是「单个粘贴能进，放进批量里同样的链接却被拒」。
+    """
+
+    input: str
+    reason: str
+
+
+class StoreBatchAddResponse(BaseModel):
+    """三段结果，按**输入行**组织而不是按站点组织。
+
+    请求整体返回 200 即使全部被拒——那不是错误，是「这一批都不受支持」这个事实。
+    """
+
+    added: list[BatchAddedItem]
+    already_watched: list[BatchAddedItem]
+    rejected: list[BatchRejectedItem]
+    success: bool = True
+
+
 class StoreUpdateRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
