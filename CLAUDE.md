@@ -1,6 +1,9 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件是这个仓库的开发约定与设计记录，**面向所有在这里干活的智能体**，不只是 Claude Code
+——名字只是历史沿革。仓库根部的 `AGENTS.md` 是给 Codex 等其他智能体的入口，它**不复制**
+本文件的内容，只列出本文件里少数几句「只对 Claude Code 这个运行环境成立」的差异
+（提交门禁、skill 机制、`AskUserQuestion`）。**新增约定写进本文件，不要写进 `AGENTS.md`。**
 
 ## Project Overview
 
@@ -999,6 +1002,23 @@ TDD 逐函数红绿 → 每次提交跑全量门禁。每层单独看都合理�
    `pnpm test src/pages/Login` 是 7 秒。`pnpm exec vitest related <file>` 走真实模块图，
    对叶子文件能省 9 倍——但 `.umirc.ts` / `vitest.config.ts` / `src/test/setup.ts` 这类
    **不在模块图里却影响所有测试**的文件它会匹配出 0 个，那种必须跑全量。
+
+## 工作分支是 `v2`，不是 `main`
+
+V1 已完成使命并退役，V2 是完整重建（见上文「V2 数据模型」）。**所有工作基于 `v2`**，
+`main` 停在 V1 最后的状态不动，等 V2 整体做完再一次性合并。
+
+两条直接后果：
+
+- **开分支从 `v2` 拉**（`git worktree add -b "change/$ID" ... v2`）。
+- **`gh pr create --base v2` 的 `--base` 不可省。** 仓库的**默认分支是 `main`**，漏掉它会
+  开出一个含上百提交、根本没法读的 PR。开完立刻 `gh pr view` 核一眼 base 对不对。
+
+同理，`Closes #<n>` 在合并进 `v2` 时**不会触发关闭**（GitHub 只在合并进默认分支时关 issue），
+需要手动 `gh issue close`。
+
+**V2 不逐个发布**：各变更合进 `v2` 后不单独上线，整体做完再一次性发布。列剩余工作时不要
+夹带发布步骤。
 
 ## 并行会话：一个变更一个 worktree
 
