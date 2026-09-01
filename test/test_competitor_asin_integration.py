@@ -25,7 +25,9 @@ from sqlalchemy.pool import NullPool
 
 from app.common.errors import ConflictError, UnprocessableError
 from app.table.competitor import asin_service as service
+from app.table.competitor import store_service as service_store
 from app.table.competitor.asin_schemas import AsinReportItem, AsinReportRequest
+from app.table.competitor.store_schemas import NewArrivalRequest
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -522,3 +524,222 @@ async def test_跨事务下第二次上报的新品晚于基线(committing_db):
     )
     assert rows["B0AAAAAAAA"] is False  # 基线批次：不算
     assert rows["B0BBBBBBBB"] is True   # 基线之后：算
+
+
+# ---------- 上新流合并两类来源 ----------
+
+
+async def _seed_dtc(db, user_id, *, domain="mixed-shop.com", n=3):
+    """一个已建基线的独立站 + n 个基线之后上架的商品。"""
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    await db.execute(
+        text(
+            "INSERT INTO analysis.competitor_store(domain,name,first_fetch_at,currency) "
+            "VALUES (:d,'混合店',:t,'USD')"
+        ),
+        {"d": domain, "t": base},
+    )
+    await db.execute(
+        text("INSERT INTO analysis.user_store_watch(user_id,domain) VALUES (:u,:d)"),
+        {"u": user_id, "d": domain},
+    )
+    for i in range(n):
+        # published_at 与 first_seen_at 都晚于 first_fetch_at，故进流。
+        at = base + timedelta(days=i + 1)
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_store_product"
+                "(domain,product_id,handle,title,published_at,first_seen_at) "
+                "VALUES (:d,:p,:h,:ti,:at,:at)"
+            ),
+            {"d": domain, "p": 1000 + i, "h": f"h{i}", "ti": f"独立站商品{i}", "at": at},
+        )
+    return domain
+
+
+async def _seed_amazon_arrivals(db, user_id, *, n=3):
+    """一个已建基线的 Amazon 卖家 + n 个基线之后发现的 ASIN。
+
+    直接写表而不走 service：这里要控制 `first_seen_at` 的具体取值来验排序与翻页，
+    而 service 一律用服务端事务时间（那是对的，见 test_captured_at偏移不影响判定）。
+    """
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    await db.execute(
+        text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
+        {"t": base, "s": _SELLER},
+    )
+    for i in range(n):
+        at = base + timedelta(days=i + 1, hours=12)
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_seller_asin"
+                "(seller_id,site,asin,first_seen_at,title) VALUES (:s,:t,:a,:at,:ti)"
+            ),
+            {"s": _SELLER, "t": _SITE, "a": f"B0MIX{i:05d}", "at": at, "ti": f"卖家商品{i}"},
+        )
+
+
+async def test_上新流两类来源都在同一个流里(db):
+    seed = await db.run_sync(_seed)
+    await _seed_dtc(db, seed["owner"])
+    await _seed_amazon_arrivals(db, seed["owner"])
+
+    feed = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, page=1, per_page=50)
+    )
+    assert feed.total == 6
+    assert {r.source for r in feed.data} == {"DTC", "AMAZON"}
+
+
+async def test_amazon行的时间语义恒为发现于(db):
+    """被动采集证明不了商品何时上架。标成「上架于」等于拿「我们发现得晚」冒充「他上得晚」。"""
+    seed = await db.run_sync(_seed)
+    await _seed_dtc(db, seed["owner"])
+    await _seed_amazon_arrivals(db, seed["owner"])
+
+    feed = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
+    )
+    kinds = {r.source: {x.time_kind for x in feed.data if x.source == r.source} for r in feed.data}
+    assert kinds["AMAZON"] == {"DISCOVERED"}
+    assert kinds["DTC"] == {"PUBLISHED"}  # 有数据源给的 published_at
+
+
+async def test_合并后按显示的时间倒序(db):
+    """列表若不按自己显示的那一列排序，读起来就是坏的。"""
+    seed = await db.run_sync(_seed)
+    await _seed_dtc(db, seed["owner"])
+    await _seed_amazon_arrivals(db, seed["owner"])
+
+    feed = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
+    )
+    times = [r.at for r in feed.data]
+    assert times == sorted(times, reverse=True)
+    # 两类来源真的交错，不是先排完一类再排另一类
+    assert len({r.source for r in feed.data[:3]}) == 2
+
+
+async def test_翻页无重复无遗漏(db):
+    """各来源自己的偏移量与合并后的全局序号对不上时，同一行会在两页各出现一次——
+    而界面表现只是「某条上新出现了两次」，极难归因。"""
+    seed = await db.run_sync(_seed)
+    await _seed_dtc(db, seed["owner"])
+    await _seed_amazon_arrivals(db, seed["owner"])
+
+    seen: list[tuple[str, str]] = []
+    for page in (1, 2, 3):
+        feed = await service_store.new_arrivals(
+            db, seed["owner"], NewArrivalRequest(days=90, page=page, per_page=2)
+        )
+        assert feed.total == 6
+        seen.extend((r.source, r.product_key) for r in feed.data)
+
+    assert len(seen) == 6
+    assert len(set(seen)) == 6  # 无重复
+    # 与一次取全的结果完全一致（无遗漏、次序相同）
+    whole = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
+    )
+    assert seen == [(r.source, r.product_key) for r in whole.data]
+
+
+async def test_时间相同的多条也能翻完(db):
+    """`published_at` 只精确到分钟，同一分钟内多条是常态。
+
+    **这条只验"能翻完且不重复"，验不了次级排序键在不在。** 去掉 ORDER BY 里的次级键，
+    本用例照样绿——6 行数据下 Postgres 的顺序碰巧是稳定的，乱序要在更大的数据量或不同的
+    执行计划下才现形。次级键的存在由
+    `test_competitor_asin_unit.py::test_上新流排序带次级键` 结构性地钉住。
+    """
+    seed = await db.run_sync(_seed)
+    same = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+    await db.execute(
+        text(
+            "INSERT INTO analysis.competitor_store(domain,name,first_fetch_at,currency) "
+            "VALUES ('tie-shop.com','平局店',:t,'USD')"
+        ),
+        {"t": datetime(2026, 8, 1, tzinfo=UTC)},
+    )
+    await db.execute(
+        text("INSERT INTO analysis.user_store_watch(user_id,domain) VALUES (:u,'tie-shop.com')"),
+        {"u": seed["owner"]},
+    )
+    for i in range(4):
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_store_product"
+                "(domain,product_id,handle,title,published_at,first_seen_at) "
+                "VALUES ('tie-shop.com',:p,:h,:ti,:at,:at)"
+            ),
+            {"p": 2000 + i, "h": f"t{i}", "ti": f"同刻商品{i}", "at": same},
+        )
+    await db.execute(
+        text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
+        {"t": datetime(2026, 8, 1, tzinfo=UTC), "s": _SELLER},
+    )
+    for i in range(2):
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_seller_asin"
+                "(seller_id,site,asin,first_seen_at,title) VALUES (:s,:t,:a,:at,:ti)"
+            ),
+            {"s": _SELLER, "t": _SITE, "a": f"B0TIE{i:05d}", "at": same, "ti": f"同刻卖家品{i}"},
+        )
+
+    seen: list[tuple[str, str]] = []
+    for page in (1, 2, 3):
+        feed = await service_store.new_arrivals(
+            db, seed["owner"], NewArrivalRequest(days=90, page=page, per_page=2)
+        )
+        seen.extend((r.source, r.product_key) for r in feed.data)
+    assert len(set(seen)) == 6
+
+
+async def test_未关注的卖家不进我的上新流(db):
+    """流按 user_id 过滤。共享层的数据是所有关注者共用的，但"谁看得到"是私有的。"""
+    seed = await db.run_sync(_seed)
+    await _seed_amazon_arrivals(db, seed["owner"])
+    await db.execute(
+        text("DELETE FROM analysis.user_seller_watch WHERE user_id=:u"), {"u": seed["other"]}
+    )
+    feed = await service_store.new_arrivals(
+        db, seed["other"], NewArrivalRequest(days=90, per_page=50)
+    )
+    assert feed.total == 0
+
+
+async def test_无基线的卖家一条都不进流(db):
+    """没有基线就无从区分「刚开始看」与「新发现」，首刷那批会整批涌进来。"""
+    seed = await db.run_sync(_seed)
+    await _seed_amazon_arrivals(db, seed["owner"])
+    await db.execute(
+        text("UPDATE analysis.competitor_seller SET baseline_at=NULL WHERE seller_id=:s"),
+        {"s": _SELLER},
+    )
+    feed = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
+    )
+    assert feed.total == 0
+
+
+async def test_没有标题的asin用asin兜底(db):
+    """响应契约里 title 必填，而上报可以不带标题。空标题在界面上是一行看不出是什么的条目。"""
+    seed = await db.run_sync(_seed)
+    await db.execute(
+        text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
+        {"t": datetime(2026, 8, 1, tzinfo=UTC), "s": _SELLER},
+    )
+    await db.execute(
+        text(
+            "INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
+            "VALUES (:s,:t,'B0NOTITLE1',:at)"
+        ),
+        {"s": _SELLER, "t": _SITE, "at": datetime(2026, 8, 5, tzinfo=UTC)},
+    )
+    feed = await service_store.new_arrivals(
+        db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
+    )
+    assert feed.data[0].title == "B0NOTITLE1"
+    # 卖家名我们从未取过，恒为 NULL——界面回落显示 seller_id，不拿用户私有备注顶替
+    assert feed.data[0].source_name is None

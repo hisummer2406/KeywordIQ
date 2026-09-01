@@ -224,3 +224,60 @@ def test_写在售关系不更新已有行():
     ).upper()
     assert "DO NOTHING" in compiled
     assert "DO UPDATE" not in compiled
+
+
+# ---------- 上新流合并的语句形状 ----------
+
+
+def _arrivals_sql() -> str:
+    from app.table.competitor import store_crud
+
+    return str(store_crud.new_arrivals_stmt(1, days=7))
+
+
+def test_上新流是一次union_all而不是两次查询():
+    """各来源自己的偏移量与合并后的全局序号对不上，翻页时会重复或漏掉条目，而界面表现
+    只是「某条上新出现两次」，极难归因。"""
+    assert "UNION ALL" in _arrivals_sql().upper()
+
+
+def test_上新流排序带次级键():
+    """**这条必须是结构性断言，不能靠跑数据验。**
+
+    `published_at` 只精确到分钟，同一分钟内多条商品是常态；没有次级排序键时 Postgres 对
+    相同 `at` 的行不保证稳定顺序，同一行可能在第 1 页和第 2 页各出现一次。但小数据量下
+    它碰巧是稳定的——集成测试里去掉次级键照样全绿（实测过）。所以这里直接钉语句本身。
+    """
+    order_by = _arrivals_sql().upper().split("ORDER BY")[1]
+    for col in ("AT DESC", "SOURCE", "SOURCE_KEY", "PRODUCT_KEY"):
+        assert col in order_by, f"ORDER BY 缺少 {col}：{order_by}"
+
+
+def test_上新流按显示的那个时间排序():
+    """列表若不按自己显示的时间列排序，读起来就是坏的。独立站显示 published_at
+    （缺失才退回 first_seen_at），所以排序键也必须是那个 coalesce 后的值。"""
+    sql = _arrivals_sql().lower()
+    assert "coalesce" in sql.split("union all")[0]  # 独立站那侧的 at
+    assert "order by anon_1.at desc" in sql
+
+
+def test_两侧投影的列名与列序一致():
+    """UNION 两侧列数不等会直接报错，但**列序错位不会**——两列都是 text 时 Postgres 照单
+    全收，表现是标题栏里显示图片地址。所以逐个比列名，不只比列数。
+
+    顺带钉住列名与 `NewArrivalOut` 的字段一致：service 层现在按名取值（`row.source` 等），
+    改了投影的列名而不改 service，取到的会是 None 而不是报错。
+    """
+    from app.table.competitor.store_crud import _amazon_arrivals_select, _dtc_arrivals_select
+    from app.table.competitor.store_schemas import NewArrivalOut
+
+    dtc = list(_dtc_arrivals_select(1, 7).selected_columns.keys())
+    amazon = list(_amazon_arrivals_select(1, 7).selected_columns.keys())
+    assert dtc == amazon
+    assert set(dtc) == set(NewArrivalOut.model_fields)
+
+
+def test_amazon侧的时间语义写死为发现于():
+    """被动采集证明不了商品何时上架。这是常量不是条件分支——有条件的只有独立站那侧。"""
+    amazon = _arrivals_sql().split("UNION ALL")[1]
+    assert "PUBLISHED" not in amazon

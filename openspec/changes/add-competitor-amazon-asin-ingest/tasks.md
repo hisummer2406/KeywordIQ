@@ -71,11 +71,19 @@
 
 ## 3. 上新流合并两类来源
 
-- [ ] 3.1 `store_crud.new_arrivals_stmt` 改为两来源统一投影后 `UNION ALL`，再统一排序
+- [x] 3.1 `store_crud.new_arrivals_stmt` 改为两来源统一投影后 `UNION ALL`，再统一排序
       分页；Amazon 侧条件是 `baseline_at IS NOT NULL AND first_seen_at > baseline_at`
-      且落在时间窗内
-- [ ] 3.2 `store_service.new_arrivals` 按合并后的行组装响应：Amazon 行
-      `source="AMAZON"` / `time_kind="DISCOVERED"`；`total` 对同一个子查询计数
+      且落在时间窗内。三处实现细节写在 docstring 里：
+      **(a)** 排序键改为界面显示的那个 `at`（独立站原先按 `first_seen_at` 排却显示
+      `published_at`，单来源时看不出来，合并后就是一张乱序表）；**成员判定仍按
+      `first_seen_at`**，两个口径不同是既有决策。
+      **(b)** 必须有次级排序键 `(source, source_key, product_key)`——`published_at` 只
+      精确到分钟，同一分钟多条是常态，无次级键时同一行会在两页各出现一次。
+      **(c)** Amazon 侧 `source_name` 恒 NULL（我们从未取过卖家名，不拿用户私有的
+      `note` 顶替）、`title` 用 `COALESCE(title, asin)`（上报可不带标题，而契约里必填）
+- [x] 3.2 `store_service.new_arrivals` 按合并后的行组装响应。**来源判别与时间语义都在
+      SQL 里定完，service 只做映射**——UNION 之后"这一行来自哪张表"的信息已经没有了，
+      在 Python 里按行推断是不可能的；`total` 对同一个 union 子查询计数
 - [ ] 3.3 卖家清单查询补「近 7 日新发现」与「最近采集于」：无基线的卖家两项都返回 null
       （前端显示占位符），有基线的返回真实条数（含 0）与最近一次 `reported_at`
 
@@ -108,16 +116,20 @@
       重放处理（展示属性不进摘要）
 - [x] 5.4 `captured_at` 偏移不影响判定、`first_seen_at` 仍取服务端时间；且
       `competitor_seller_asin` 表上根本没有 `captured_at` 列（断言列名单）
-- [~] 5.5 集成：首次上报不产生上新条目 ✅、`first_report_id` 指向正确 ✅、
+- [x] 5.5 集成：首次上报不产生上新条目 ✅、`first_report_id` 指向正确 ✅、
       **跨事务下第二次上报的新品严格晚于基线** ✅（单独的 committing 夹具——夹具那个外层
       事务里 `now()` 恒定，这条只有真提交才验得到，而它错了不会报错、只表现为"上新流永远
-      是空的"）。**「两来源合并后翻页无重复无遗漏」待 §3 落地**
+      是空的"）、**两来源合并后翻页无重复无遗漏** ✅（逐页取完与一次取全逐项相等）。
+
+      **次级排序键那条改用结构性断言**（`test_上新流排序带次级键`，比 ORDER BY 子句）：
+      跑数据验不出来——去掉次级键后集成用例照样全绿，6 行数据下 Postgres 的顺序碰巧稳定，
+      乱序要更大数据量或不同执行计划才现形。实测确认过这个假绿，用例注释里写明了
 - [ ] 5.6 前端：卖家行两态显示（占位符 vs 真实 0）、「近 7 日新发现」措辞、
       上新流 AMAZON 行的「发现于」措辞（`pnpm test src/pages/Competitor`）。
       「状态里没有已暂停」那条已随 4.2 落地
-- [~] 5.7 全量回归（本轮）：`TEST_DATABASE_URL=... uv run pytest test/` →
-      **786 passed, 1 skipped**（唯一的 skip 是 OSS 真实回路，需 `TEST_OSS_*`，与本变更无关）；
-      `ruff` 通过。§3/§4 落地后需再跑一次，含前端全量
+- [~] 5.7 全量回归（§3 落地后）：`TEST_DATABASE_URL=... uv run pytest test/` →
+      **799 passed, 1 skipped**（唯一的 skip 是 OSS 真实回路，需 `TEST_OSS_*`，与本变更无关）；
+      `ruff` 通过。§4 落地后需再跑一次，含前端全量
 
 ## 6. 文档与收尾
 
