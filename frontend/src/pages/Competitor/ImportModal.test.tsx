@@ -113,6 +113,57 @@ describe('append/replace_group 两种模式的文案', () => {
   });
 });
 
+/**
+ * 回归 issue #59：书签导入按文件夹名自动建组，一份真实书签一次建出 37 个组，名字多是
+ * 「7.17」「竞6.12」这类短名。replace_group 选中的组会被整组清空重建，靠滚动在相似
+ * 名字里找目标，选错的代价是清空另一个分组。
+ */
+describe('目标分组下拉可搜索', () => {
+  const MANY_GROUPS = ['7.17', '6.24', '竞6.12', '空白', '头部竞对'].map((name, i) => ({
+    group_id: i + 1,
+    name,
+    watch_count: 0,
+    created_at: '',
+    updated_at: '',
+  }));
+
+  /** 打开下拉并输入关键词，返回下拉里当前可见的选项文本。 */
+  async function searchIn(placeholder: string, keyword: string) {
+    const holder = screen.getByText(placeholder).closest('.ant-select') as HTMLElement;
+    fireEvent.mouseDown(holder.querySelector('.ant-select-selector')!);
+    fireEvent.change(holder.querySelector('input')!, { target: { value: keyword } });
+    await waitFor(() =>
+      expect(document.querySelectorAll('.ant-select-item-option-content').length).toBeGreaterThan(0),
+    );
+    return Array.from(document.querySelectorAll('.ant-select-item-option-content')).map(
+      (el) => el.textContent,
+    );
+  }
+
+  it('replace_group：按分组名过滤，不相干的组不再出现在候选里', async () => {
+    setup({ groups: MANY_GROUPS });
+    await fillTextAndPreview();
+
+    fireEvent.click(screen.getByText('对齐分组(清空重建)'));
+    await waitFor(() => expect(screen.getByText(/现有的全部关注会被清空/)).toBeTruthy());
+
+    const visible = await searchIn('选择分组', '6.24');
+    expect(visible).toContain('6.24');
+    // 过滤要按 label 走。options 形态下 antd 默认按 value（这里是 group_id）过滤，
+    // 表现是「搜什么都搜不到」且不报错——所以这条断言守的是 optionFilterProp。
+    expect(visible).not.toContain('7.17');
+  });
+
+  it('append 的归入分组下拉同样可搜索（同一份分组清单）', async () => {
+    setup({ groups: MANY_GROUPS });
+    await fillTextAndPreview();
+
+    const visible = await searchIn('不分组', '竞');
+    expect(visible).toContain('竞6.12');
+    expect(visible).not.toContain('空白');
+  });
+});
+
 describe('超配额等预览失败', () => {
   it('预览失败时留在输入步,不崩溃(errorHandler 负责提示)', async () => {
     previewImport.mockRejectedValue(new Error('关注总数上限为 3000 个'));
