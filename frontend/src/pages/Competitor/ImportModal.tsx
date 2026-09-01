@@ -305,6 +305,8 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
                 </Typography.Text>
                 <Select
                   allowClear
+                  showSearch
+                  optionFilterProp="label"
                   style={{ width: 240 }}
                   placeholder="不分组"
                   value={targetGroupId}
@@ -317,7 +319,19 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
                 <Typography.Text type="secondary">
                   选择要对齐的分组:该分组下现有的全部关注会被清空,替换为本次预览结果。
                 </Typography.Text>
+                {/*
+                  showSearch 在这里不是锦上添花：书签导入按文件夹名自动建组，一份真实
+                  书签一次就能建出 37 个组，名字还多是「7.17」「竞6.12」这类难以区分的
+                  短名（虚拟列表一次只渲染 10 项，实测要滚 5 屏）。而这个下拉选中的组
+                  会被**整组清空重建**——滚动查找相似名字时选错，代价是清空另一个分组。
+                  下拉本身写明了后果，但降低不了选错的概率，搜索才能。
+
+                  optionFilterProp 必须显式给 label：options 形态下 antd 默认按 value
+                  过滤，而 value 是 group_id，表现为「搜什么都搜不到」且不报错。
+                */}
                 <Select
+                  showSearch
+                  optionFilterProp="label"
                   style={{ width: 240 }}
                   placeholder="选择分组"
                   value={targetGroupId}
