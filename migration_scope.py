@@ -40,6 +40,11 @@ V2_TABLES = frozenset(
         "user_seller_group",
         "user_seller_watch",
         "competitor_watch_preview",
+        # Amazon 卖家在售 ASIN 与上报记录。两张普通表——同样**不要**登记进
+        # partitioning.PARTITIONED_TABLES：first_seen_at 是上新判定的依据，
+        # 被按月 DROP 掉就等于让老品重新变成"新发现"。
+        "competitor_seller_asin",
+        "competitor_asin_report",
         # 独立站监控。五张普通表——**不要再登记进 partitioning.PARTITIONED_TABLES**：
         # 那会让保留清理按 HOT_WINDOW_MONTHS 把价格与名次历史整月 DROP，而这两样越长越
         # 值钱；那个窗口是为八亿行的 ABA 事实表定的。
