@@ -10,6 +10,10 @@
 > 2026-09-01 第三轮（复核意见）：摘要范围**改为把 `captured_at`/`ship_to_region`/
 > `page_context` 纳入**（原先排除，理由「重读 DOM 后重试会撞假 409」站不住——那不是重试）；
 > §2 上报端点与 §5.1–5.4 已实现并跑通，含真实数据库集成验收（786 passed）。
+> 2026-09-02：§3 全部完成（3.1/3.2/3.3，两来源合并上新流 + 卖家清单两指标，含真库验收
+> 805 passed）；§4 全部完成（4.1/4.3/4.4，含一条"这不是本变更范围"的诚实标注：详情视图
+> 对两类来源都未实现，不是 Amazon 分支特有的缺口）；§5.6 前端测试完成（374 passed）。
+> 剩 §6：CLAUDE.md 一节 + 开 PR。
 
 ## 1. 数据模型与迁移
 
@@ -94,18 +98,34 @@
 
 ## 4. 前端
 
-- [ ] 4.1 `pages/Competitor/columns.tsx`：卖家状态按有无基线显示「待建立基线 / 监控中」
-      **两态**；列改名为「近 7 日新发现」，无基线时显示占位符、有基线时显示真实数字（含 0）；
-      有基线的行显示「最近采集于」并在陈旧时提示
+- [x] 4.1 `pages/Competitor/columns.tsx`：卖家状态按有无基线显示「待建立基线 / 监控中」
+      **两态**（状态列本身在 4.2 已收成两态，本条只是补两列数据）；列改名为
+      `近 ${NEW_DISCOVERY_WINDOW_DAYS} 日新发现`，无基线（`new_discoveries_7d === null`）
+      显示占位符「待建立基线」、有基线显示真实数字（含 0）；「最近采集于」无上报显示
+      「未采集」，有上报显示时刻，**超过窗口天数没有新上报时追加陈旧提示**
+      （`Tooltip` + `Typography.Text type="warning"`）。
+
+      窗口天数 `NEW_DISCOVERY_WINDOW_DAYS=7` 在前端硬编码，与后端同名常量手动保持同步
+      （后端没有把它通过接口下发，它是代码常量不是运行时配置）——注释里写明了这个耦合，
+      改后端那个常量必须记得回来改这里。
 - [x] 4.2 从 `WatchStatus` 与状态映射里删掉 `PAUSED`/「已暂停」（`services/competitor.ts`、
       `columns.tsx`、`app/table/competitor/watch_schemas.py` 三处一起），注释里写明暂停
       若要做属于私有层 `user_seller_watch`；回归测试
       `test_competitor_watch_unit.py::test_状态只有两态_没有已暂停` 断言取值集合
       （已验证：把 `PAUSED` 加回去该用例即红）。`pnpm tsc` 与
       `pnpm test src/pages/Competitor`（38 passed）通过
-- [ ] 4.3 `NewArrivalsTab` 打通 AMAZON 分支：来源标记与「发现于」措辞（组件已有形状，
-      确认无需为此改契约）；Amazon 条目详情展示采集元数据，**不出现 BSR/评价数**
-- [ ] 4.4 `services/competitor.ts` 补类型；无新增页面、无新增菜单项
+- [x] 4.3 `NewArrivalsTab` 的 AMAZON 分支**零代码改动即打通**——组件此前就已按两类来源
+      的形状写好（`SOURCE_META`/`TIME_KIND_META` 都含 AMAZON 分支、`source_name` 已有
+      `|| source_key` 回落），§3.1/3.2 让后端真的产出 AMAZON 行之后直接生效。只更新了
+      一处过时的 docstring（不再说"当前只有独立站一类有数据"）。
+
+      **「Amazon 条目详情展示采集元数据」未实现，且这不是 Amazon 分支特有的缺口**：
+      `NewArrivalsTab` 现在对**两类来源都没有**点开一行看详情的交互——DTC 行同样没有。
+      `competitor-storefront-watch` spec 的「查看条目详情」场景目前对两个来源都不成立，
+      是遗留缺口（预先存在，与本变更引入的东西无关），不在本变更范围内补，已在组件
+      docstring 里如实标注。**不要把这条静默勾成"已实现"。**
+- [x] 4.4 `services/competitor.ts` 的 `WatchRow` 补 `new_discoveries_7d` / `last_reported_at`
+      两个字段（`NewArrivalRow` 已经与后端契约一致，未改）；无新增页面、无新增菜单项
 
 ## 5. 测试
 
@@ -129,9 +149,13 @@
       **次级排序键那条改用结构性断言**（`test_上新流排序带次级键`，比 ORDER BY 子句）：
       跑数据验不出来——去掉次级键后集成用例照样全绿，6 行数据下 Postgres 的顺序碰巧稳定，
       乱序要更大数据量或不同执行计划才现形。实测确认过这个假绿，用例注释里写明了
-- [ ] 5.6 前端：卖家行两态显示（占位符 vs 真实 0）、「近 7 日新发现」措辞、
-      上新流 AMAZON 行的「发现于」措辞（`pnpm test src/pages/Competitor`）。
-      「状态里没有已暂停」那条已随 4.2 落地
+- [x] 5.6 前端。`index.test.tsx` 新增 3 项：无基线两指标皆 `null`（占位符「待建立基线」+
+      「未采集」，且断言用 `getAllByText` 而不是 `getByText`——状态列与指标列此时显示
+      同一个字符串，`getByText` 遇多个匹配会抛错，这是写的时候真的踩到的）；有基线显示
+      真实 0；陈旧提示（`.ant-typography-warning` 存在）。**已验证 `isStale` 判断写死
+      返回 false 时该用例即红**，不是假绿。上新流 AMAZON 措辞的 5 项此前已在
+      （`NewArrivalsTab.test.tsx`，本轮零改动）。
+      全量 `pnpm lint && pnpm tsc && pnpm test` → **374 passed**
 - [~] 5.7 全量回归（§3 全部落地后）：`TEST_DATABASE_URL=... uv run pytest test/` →
       **805 passed, 1 skipped**（唯一的 skip 是 OSS 真实回路，需 `TEST_OSS_*`，与本变更无关）；
       `ruff` 通过。§4 落地后需再跑一次，含前端全量

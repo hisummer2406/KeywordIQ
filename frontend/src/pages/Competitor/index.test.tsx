@@ -46,6 +46,10 @@ function watch(overrides: Record<string, unknown> = {}) {
     note: null,
     status: 'PENDING_BASELINE',
     created_at: '2026-08-01T00:00:00Z',
+    // 默认按「无基线」两态一起给：新关注的卖家两个指标恒为 null，不是 0 或空对象——
+    // 与后端 watch_crud 的相关子查询在无基线时返回 NULL（不是 count(*) 的 0）保持一致。
+    new_discoveries_7d: null,
+    last_reported_at: null,
     ...overrides,
   };
 }
@@ -107,11 +111,54 @@ describe('分组区', () => {
 });
 
 describe('状态列与占位指标', () => {
-  it('新关注的卖家显示待建立基线,近 7 日上新数是占位符不是 0', async () => {
+  it('新关注的卖家显示待建立基线,新发现数是占位符不是 0,最近采集于显示未采集', async () => {
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('待建立基线')).toBeTruthy());
-    // 0 会被读成"没有新品",占位符才准确表达"这个指标还没有数据来源"
-    expect(screen.getByText('待接入')).toBeTruthy();
+    // 「待建立基线」在状态列与指标列各出现一次，都对应同一个判据（有没有基线），
+    // 所以用 getAllByText 而不是 getByText——后者遇到多个匹配会抛错。
+    await waitFor(() => expect(screen.getAllByText('待建立基线').length).toBe(2));
+    // 0 会被读成"没有新发现",占位符才准确表达"这个指标还没有数据来源"
+    expect(screen.getByText('未采集')).toBeTruthy();
+  });
+
+  it('已有基线的卖家显示真实数字含 0,与最近采集时刻', async () => {
+    listWatches.mockResolvedValue({
+      success: true,
+      data: [
+        watch({
+          status: 'MONITORING',
+          new_discoveries_7d: 0,
+          last_reported_at: new Date().toISOString(), // 刚采集过，不陈旧
+        }),
+      ],
+      total: 1,
+      watch_count: 1,
+      max_watch: 3000,
+    });
+    await renderSettled();
+    await waitFor(() => expect(screen.getByText('监控中')).toBeTruthy());
+    // 真实的 0：不是空白、不是「待建立基线」占位符
+    expect(screen.getByText('0')).toBeTruthy();
+    expect(screen.queryByText('待建立基线')).toBeNull();
+  });
+
+  it('很久没采集的卖家在最近采集于旁边给出陈旧提示', async () => {
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    listWatches.mockResolvedValue({
+      success: true,
+      data: [
+        watch({ status: 'MONITORING', new_discoveries_7d: 0, last_reported_at: eightDaysAgo }),
+      ],
+      total: 1,
+      watch_count: 1,
+      max_watch: 3000,
+    });
+    await renderSettled();
+    // 陈旧提示用 warning 语义色渲染时刻文本，而不是普通文本——用户要能一眼分辨
+    // 「确实没有新发现」与「很久没采过、这个 0 不可信」
+    await waitFor(() => {
+      const warned = document.querySelector('.ant-typography-warning');
+      expect(warned).toBeTruthy();
+    });
   });
 });
 
