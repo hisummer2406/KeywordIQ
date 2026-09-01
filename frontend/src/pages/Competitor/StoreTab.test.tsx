@@ -1,21 +1,26 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listStores, addStore, updateStore, removeStore, listStoreProducts } = vi.hoisted(() => ({
-  listStores: vi.fn(),
-  addStore: vi.fn(),
-  updateStore: vi.fn(),
-  removeStore: vi.fn(),
-  listStoreProducts: vi.fn(),
-}));
+const { listStores, addStore, addStoresBatch, updateStore, removeStore, listStoreProducts } =
+  vi.hoisted(() => ({
+    listStores: vi.fn(),
+    addStore: vi.fn(),
+    addStoresBatch: vi.fn(),
+    updateStore: vi.fn(),
+    removeStore: vi.fn(),
+    listStoreProducts: vi.fn(),
+  }));
 
 vi.mock('@umijs/max', () => ({ useAccess: () => ({}) }));
 vi.mock('@/services/competitor', () => ({
   listStores,
   addStore,
+  addStoresBatch,
   updateStore,
   removeStore,
   listStoreProducts,
+  MAX_BATCH_DOMAINS: 200,
 }));
 
 import StoreTab from './StoreTab';
@@ -164,5 +169,54 @@ describe('币种', () => {
     // 币种未知时绝不加符号——加错了比不加更糟
     expect(formatMoney('18.98', null)).toBe('18.98');
     expect(formatMoney(null, 'USD')).toBe('—');
+  });
+});
+
+
+describe('批量粘贴', () => {
+  it('弹窗里有「批量粘贴」tab，与单条添加并存', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('监控中');
+
+    await user.click(screen.getByRole('button', { name: '添加独立站' }));
+
+    expect(await screen.findByRole('tab', { name: '添加一个' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '批量粘贴' })).toBeTruthy();
+  });
+
+  it('按钮上带出解析到的条数，提交前就能看出粘对了没有', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText('监控中');
+
+    await user.click(screen.getByRole('button', { name: '添加独立站' }));
+    await user.click(await screen.findByRole('tab', { name: '批量粘贴' }));
+    await user.type(
+      screen.getByPlaceholderText(/一行一个/),
+      'a.example{enter}b.example{enter}c.example',
+    );
+
+    expect(await screen.findByRole('button', { name: '加入这 3 个' })).toBeTruthy();
+  });
+
+  it('提交后就地展示结果且弹窗不关——用户要看清哪几条没进去', async () => {
+    const user = userEvent.setup();
+    addStoresBatch.mockResolvedValue({
+      success: true,
+      added: [{ input: 'a.example', domain: 'a.example', name: '甲店', currency: 'USD' }],
+      already_watched: [],
+      rejected: [{ input: 'b.example', reason: '这个站点不是 Shopify 建站，暂时无法监控' }],
+    });
+    renderTab();
+    await screen.findByText('监控中');
+
+    await user.click(screen.getByRole('button', { name: '添加独立站' }));
+    await user.click(await screen.findByRole('tab', { name: '批量粘贴' }));
+    await user.type(screen.getByPlaceholderText(/一行一个/), 'a.example{enter}b.example');
+    await user.click(screen.getByRole('button', { name: '加入这 2 个' }));
+
+    expect(await screen.findByText('已加入 1')).toBeTruthy();
+    expect(screen.getByText('这个站点不是 Shopify 建站，暂时无法监控')).toBeTruthy();
   });
 });
