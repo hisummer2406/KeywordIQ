@@ -350,6 +350,9 @@ export interface NewArrivalRow {
   source: 'DTC' | 'AMAZON';
   source_key: string;
   source_name: string | null;
+  /** 站点码，仅 AMAZON 行非空。同一 seller_id 跨站点卖同一 ASIN 是常态，
+   * 缺了它两行在 rowKey 上无法区分。 */
+  site: string | null;
   product_key: string;
   title: string;
   image_url: string | null;

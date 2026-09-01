@@ -391,6 +391,10 @@ def _dtc_arrivals_select(user_id: int, days: int):
 
     时间取 ``published_at``（数据源给的真实上架时间），缺失才退回 ``first_seen_at``，
     ``time_kind`` 随之标 ``PUBLISHED`` / ``DISCOVERED``。
+
+    ``site`` 恒为 NULL：独立站商品的粒度是 ``(domain, product_id)``，没有站点这回事。
+    这一列只在 Amazon 那侧非空——两侧投影列数与列名必须一致（UNION 的硬要求），故这里
+    仍要占一列。
     """
     at = func.coalesce(CompetitorStoreProduct.published_at, CompetitorStoreProduct.first_seen_at)
     return (
@@ -398,6 +402,7 @@ def _dtc_arrivals_select(user_id: int, days: int):
             cast(literal("DTC"), Text).label("source"),
             cast(CompetitorStoreProduct.domain, Text).label("source_key"),
             cast(CompetitorStore.name, Text).label("source_name"),
+            cast(null(), Text).label("site"),
             cast(CompetitorStoreProduct.product_id, Text).label("product_key"),
             cast(CompetitorStoreProduct.title, Text).label("title"),
             cast(CompetitorStoreProduct.image_url, Text).label("image_url"),
@@ -436,12 +441,20 @@ def _amazon_arrivals_select(user_id: int, days: int):
     - ``title`` 用 ``COALESCE(title, asin)``：上报可以不带标题（``title`` 可空），而响应
       契约里 ``title`` 是必填。用 ASIN 兜底，不编造空串——空标题在界面上是一行看不出是
       什么的条目。
+
+    ``site`` **必须选进来**：共享层的真实粒度是 ``(seller_id, site, asin)``，不是
+    ``(seller_id, asin)``。同一用户同时关注同一个 seller_id 的 US、GB 两个站点、且两个
+    站点都出现同一个 ASIN 时（不同市场跟卖同一个商品是常态），若响应身份只有
+    ``source_key``（seller_id）+ ``product_key``（asin），两行在 API 与前端 rowKey 上
+    完全无法区分；`new_arrivals_stmt` 的次级排序键同样要靠它才能恢复全序——否则这两行
+    会被判成"同一行"，翻页时互相顶替。
     """
     return (
         select(
             cast(literal("AMAZON"), Text).label("source"),
             cast(CompetitorSellerAsin.seller_id, Text).label("source_key"),
             cast(null(), Text).label("source_name"),
+            cast(CompetitorSellerAsin.site, Text).label("site"),
             cast(CompetitorSellerAsin.asin, Text).label("product_key"),
             cast(func.coalesce(CompetitorSellerAsin.title, CompetitorSellerAsin.asin), Text).label(
                 "title"
@@ -486,6 +499,12 @@ def new_arrivals_stmt(user_id: int, *, days: int):
     **平局必须有确定的次序。** ``published_at`` 只精确到分钟，同一分钟内的多条商品极常见；
     没有次级排序键时，Postgres 对相同 ``at`` 的行不保证稳定顺序，同一行可能在第 1 页和
     第 2 页各出现一次——正是上面那条要防的失败形态，且它只在翻页时才现形。
+
+    **次级键必须含 ``site``，否则对 Amazon 侧不是全序。** 共享层的粒度是
+    ``(seller_id, site, asin)``；同一 seller_id 跨站点出现同一 ASIN 时，
+    ``(source, source_key, product_key)`` 三者都相同，仍会撞出并列——补 ``site`` 才能
+    恢复确定顺序。``site`` 对 DTC 侧恒为 NULL，Postgres 排序里 NULL 参与比较不影响
+    Amazon 侧内部的确定性，两侧本就先按 ``source`` 分开。
     """
     unified = union_all(
         _dtc_arrivals_select(user_id, days), _amazon_arrivals_select(user_id, days)
@@ -494,6 +513,7 @@ def new_arrivals_stmt(user_id: int, *, days: int):
         unified.c.at.desc(),
         unified.c.source,
         unified.c.source_key,
+        unified.c.site,
         unified.c.product_key,
     )
 

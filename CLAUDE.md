@@ -354,15 +354,35 @@ CSV 准备的，用在这里是过度设计。
 完整性假象，原因回传能让插件作者发现选择器取错了元素。同请求内重复 ASIN 去重不拒绝——
 同一个品出现在页面两处是常态。
 
+**零条有效 ASIN（请求为空，或全部条目因格式非法被逐条拒绝）整批拒绝（422），MUST NOT
+落定基线。** 这条不是"单条格式错"的推论，单独成立：放行的话，首次上报会落一个不含任何
+ASIN 的"空基线"，下一次正常上报时该卖家的全部存量商品都晚于这个空基线，被整批误判成新
+发现——这个错误不会报错，界面表现只是新发现数突然涌出一大批。判据不分是否已有基线：即便
+基线已经落定，一次零有效条目的上报本身也不携带任何可用信息，没有受理它的理由。
+
+**非法站点码返回 422，不是 500。** `normalize_site_code` 抛 `UnknownSiteError`，
+`asin_service.submit_report` 必须捕获并转译——不转译就会被全局兜底处理器当成内部错误。
+这条检查在授权检查之前，因为一个连站点码都不合法的请求，谈不上"是否关注了这个卖家"。
+
 **上新流在 SQL 里合并两类来源，不在应用层归并两页**（`store_crud.new_arrivals_stmt` 对
 两侧统一投影后 `union_all`）：各来源自己的 offset 与合并后的全局序号对不上，翻页会重复或
 漏条目，表现是"某条上新出现两次"。**排序必须带次级键**
-（`source, source_key, product_key`）：`published_at`/`first_seen_at` 精度有限、同一时刻
-多条是常态，没有次级键时同一行可能在两页各出现一次——**这条在小数据量下测不出来**（去掉
-次级键后集成测试照样绿，Postgres 的顺序碰巧稳定），得靠比 `ORDER BY` 子句本身的结构性
-断言。卖家清单的「近 N 日新发现」同样有一处容易写错且错了不报错的地方：相关子查询里
-`count(*)` 恒返回 0 而不是 NULL，**无基线时必须显式 `CASE WHEN baseline_at IS NULL THEN
-NULL` 罩一层**，写成 `COALESCE(...,0)` 会让「待建立基线 vs 监控中」的界面故事就地塌掉。
+（`source, source_key, site, product_key`）：`published_at`/`first_seen_at` 精度有限、同一
+时刻多条是常态，没有次级键时同一行可能在两页各出现一次——**这条在小数据量下测不出来**
+（去掉次级键后集成测试照样绿，Postgres 的顺序碰巧稳定），得靠比 `ORDER BY` 子句本身的
+结构性断言。**`site` 必须进投影与次级键，不是可选项**：共享层的真实粒度是
+`(seller_id, site, asin)`，同一 seller_id 跨站点卖同一 ASIN 是常态；漏了 `site`，这两行
+在响应身份、前端 `rowKey`、排序键上会撞成"同一行"——`(source, source_key, product_key)`
+三者都相同，翻页时互相顶替。独立站没有站点这回事，该列对 DTC 行恒为 NULL，两侧投影列数
+仍须相等（UNION 的硬要求）。卖家清单的「近 N 日新发现」同样有一处容易写错且错了不报错的
+地方：相关子查询里 `count(*)` 恒返回 0 而不是 NULL，**无基线时必须显式 `CASE WHEN
+baseline_at IS NULL THEN NULL` 罩一层**，写成 `COALESCE(...,0)` 会让「待建立基线 vs
+监控中」的界面故事就地塌掉。
+
+**「点开一行看详情」不在本变更范围内**（两类来源都没有这个交互，不是 Amazon 分支特有的
+缺口），已从 `competitor-storefront-watch` spec 的 delta 里移出、记在 issue #65：独立站
+缺 UI 入口去承接已有的变体/价格历史，Amazon 侧连"最近一次采集时刻"这个数据能不能按 ASIN
+维度取到都还没定（当前 schema 只记了每个 ASIN *首次*被哪次上报引入）。
 
 **`competitor_seller_asin`/`competitor_asin_report` 不参与按月保留清理**（不登记进
 `PARTITIONED_TABLES`）：首次见到时刻正是新发现判定的依据，越久越有价值，三个月窗口是为

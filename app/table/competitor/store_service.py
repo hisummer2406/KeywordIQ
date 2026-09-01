@@ -662,6 +662,7 @@ async def new_arrivals(
                 source=row.source,
                 source_key=row.source_key,
                 source_name=row.source_name,
+                site=row.site,
                 product_key=row.product_key,
                 title=row.title,
                 image_url=row.image_url,
