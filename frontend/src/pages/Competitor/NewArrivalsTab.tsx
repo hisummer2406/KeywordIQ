@@ -2,6 +2,7 @@ import { ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { Alert, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useRef, useState } from 'react';
+import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
 import { listNewArrivals, type NewArrivalRow } from '@/services/competitor';
 
 /**
@@ -12,10 +13,15 @@ import { listNewArrivals, type NewArrivalRow } from '@/services/competitor';
  * 晚好几天。用同一个措辞呈现，等于拿「我们发现得晚」冒充「他上得晚」。
  *
  * **主列表只放两类来源的交集字段**（来源、店铺/卖家、商品、时间）。独立站独有的变体
- * 与价格、Amazon 独有的 BSR 与评价数都不进这张表——否则会有一半的列对另一类来源恒为空。
+ * 与价格、Amazon 独有的采集元数据都不进这张表——否则会有一半的列对另一类来源恒为空。
  *
- * 当前只有独立站一类有数据（Amazon 侧的采集不在本变更范围），但形状已经按两类做好，
- * 接入时不必重建。
+ * 两类来源都是真实数据（`store_crud.new_arrivals_stmt` 的 UNION ALL）——这个组件在
+ * Amazon 侧还没有数据时就已经按两类形状写好，接入时零改动，本身就是这个形状设计对了
+ * 的证据。
+ *
+ * **尚未实现：点开一行看详情**（独立站的变体/价格历史、Amazon 的采集元数据）。这不是
+ * Amazon 分支特有的缺口——DTC 行同样没有这个交互，`competitor-storefront-watch` spec 里
+ * 「查看条目详情」那条场景目前对两类来源都不成立，是遗留缺口，不在本变更范围内补。
  */
 
 const TIME_KIND_META = {
@@ -66,12 +72,16 @@ export default function NewArrivalsTab() {
 
       <ProTable<NewArrivalRow>
         actionRef={actionRef}
-        rowKey={(row) => `${row.source}:${row.source_key}:${row.product_key}`}
+        // 共享层的真实粒度是 (seller_id, site, asin)：同一 seller_id 跨站点卖同一 ASIN
+        // 是常态，rowKey 不带 site 会让两行撞成一个 key，React 与分页都会认错行。
+        rowKey={(row) => `${row.source}:${row.site ?? ''}:${row.source_key}:${row.product_key}`}
         search={false}
         options={false}
         dateFormatter="string"
         pagination={{ pageSize: 20, showSizeChanger: true }}
-        locale={{ emptyText: '这段时间里，你关注的竞对没有上新' }}
+        // 空流只能证明「已采集范围内没有新发现/新上架」，不能证明真的没有——尤其是
+        // Amazon 侧，被动采集的覆盖率取决于运营的浏览习惯。措辞不承诺没有真实新品。
+        locale={{ emptyText: '当前时间范围内暂无上架/新发现记录' }}
         columns={[
           {
             title: '来源',
@@ -87,7 +97,12 @@ export default function NewArrivalsTab() {
             dataIndex: 'source_name',
             width: 200,
             ellipsis: true,
-            render: (_, row) => row.source_name || row.source_key,
+            render: (_, row) => (
+              <Space size={4}>
+                {row.site ? <span>{siteCodeToFlag(row.site)}</span> : null}
+                <span>{row.source_name || row.source_key}</span>
+              </Space>
+            ),
           },
           { title: '商品', dataIndex: 'title', ellipsis: true },
           {

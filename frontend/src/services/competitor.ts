@@ -9,7 +9,12 @@ import { request } from '@umijs/max';
  * 关注）驱动。
  */
 
-export type WatchStatus = 'PENDING_BASELINE' | 'MONITORING' | 'PAUSED';
+/**
+ * 关注状态**两态**，由该卖家有没有基线决定。曾有第三个 `PAUSED`，删掉是因为没有任何字段
+ * 或端点能让一行进入该状态——永远取不到值的状态会让人以为系统能暂停某个卖家。要做暂停，
+ * 它属于私有层 `user_seller_watch`，是另一次变更。
+ */
+export type WatchStatus = 'PENDING_BASELINE' | 'MONITORING';
 
 export interface CompetitorGroup {
   group_id: number;
@@ -29,6 +34,18 @@ export interface WatchRow {
   note: string | null;
   status: WatchStatus;
   created_at: string;
+
+  /**
+   * 近 7 日新发现数。**null 表示该卖家还没有基线（从未被采集过），必须显示占位符而不是
+   * 0**——0 会被读成「这家店没有新发现」，而事实是「这个卖家还没有数据来源」。有基线时
+   * 是真实条数（含 0，此时 0 的含义才是「已采集范围内没有新发现」）。
+   *
+   * MUST NOT 读作「上新数」：被动采集证明不了商品何时上架，只能证明"我们何时见到"。
+   */
+  new_discoveries_7d: number | null;
+  /** 最近一次被采集的时刻，无上报时为 null。「很久没采过」与「确实没有新发现」在界面上
+   * 长得一模一样，必须同屏展示它并在陈旧时提示。 */
+  last_reported_at: string | null;
 }
 
 export interface WatchListBody {
@@ -333,6 +350,9 @@ export interface NewArrivalRow {
   source: 'DTC' | 'AMAZON';
   source_key: string;
   source_name: string | null;
+  /** 站点码，仅 AMAZON 行非空。同一 seller_id 跨站点卖同一 ASIN 是常态，
+   * 缺了它两行在 rowKey 上无法区分。 */
+  site: string | null;
   product_key: string;
   title: string;
   image_url: string | null;

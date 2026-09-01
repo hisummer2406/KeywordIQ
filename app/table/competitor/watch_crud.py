@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import delete, func, select, tuple_, update
+from sqlalchemy import case, delete, func, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.table.competitor.asin_model import CompetitorAsinReport, CompetitorSellerAsin
 from app.table.competitor.seller_model import CompetitorSeller
 from app.table.competitor.watch_model import CompetitorWatchPreview, UserSellerGroup, UserSellerWatch
 
@@ -100,6 +101,58 @@ def watch_count_stmt(user_id: int):
     return select(func.count()).select_from(UserSellerWatch).where(UserSellerWatch.user_id == user_id)
 
 
+#: 「近 N 日新发现」的窗口。与独立站那侧的 ``new_in_7d`` 取同一个天数，但**含义不同**：
+#: 那边按数据源给的 ``published_at`` 算「上架」，这边只能按我们首次见到的时刻算「新发现」。
+NEW_DISCOVERY_WINDOW_DAYS = 7
+
+
+def _new_discoveries_subq():
+    """近 N 日新发现数。**无基线时必须是 NULL，不能是 0。**
+
+    这是本查询里唯一容易写错、且错了不会报错的地方：相关子查询里的 ``count(*)`` 恒返回
+    0 而不是 NULL，所以必须显式用 ``CASE WHEN baseline_at IS NULL THEN NULL`` 罩一层。
+    写成 ``COALESCE(..., 0)`` 或直接裸用 count，整个「待建立基线 vs 监控中」的界面故事
+    就地塌掉——0 会被读成"这家店没有新发现"，而事实是"这个卖家还没有被采集过"。
+
+    判据与上新流同构：``first_seen_at > baseline_at`` 且落在窗口内。
+    """
+    counted = (
+        select(func.count())
+        .select_from(CompetitorSellerAsin)
+        .where(
+            CompetitorSellerAsin.seller_id == CompetitorSeller.seller_id,
+            CompetitorSellerAsin.site == CompetitorSeller.site,
+            CompetitorSellerAsin.first_seen_at > CompetitorSeller.baseline_at,
+            CompetitorSellerAsin.first_seen_at
+            > func.now() - text(f"interval '{NEW_DISCOVERY_WINDOW_DAYS} days'"),
+        )
+        .correlate(CompetitorSeller)
+        .scalar_subquery()
+    )
+    return case((CompetitorSeller.baseline_at.is_(None), None), else_=counted)
+
+
+def _last_reported_at_subq():
+    """最近一次被采集的时刻。
+
+    界面必须有它：Amazon 侧的覆盖率取决于运营的浏览习惯，**「很久没采过」与「确实没有
+    新发现」在界面上长得一模一样**。缺了这一列，一个三个月没被点开的卖家会长期显示
+    「监控中 · 0」，与"一切正常且没有动静"完全相同。
+
+    这里不必像上面那样罩 CASE：``max()`` 对空集天然返回 NULL，而有上报就必然有基线
+    （基线正是在首次上报时落定的）。
+    """
+    return (
+        select(func.max(CompetitorAsinReport.reported_at))
+        .where(
+            CompetitorAsinReport.seller_id == CompetitorSeller.seller_id,
+            CompetitorAsinReport.site == CompetitorSeller.site,
+        )
+        .correlate(CompetitorSeller)
+        .scalar_subquery()
+    )
+
+
 def watches_stmt(user_id: int, group_id: int | None, offset: int, limit: int):
     stmt = (
         select(
@@ -112,6 +165,8 @@ def watches_stmt(user_id: int, group_id: int | None, offset: int, limit: int):
             UserSellerWatch.note,
             UserSellerWatch.created_at,
             CompetitorSeller.baseline_at,
+            _new_discoveries_subq().label("new_discoveries_7d"),
+            _last_reported_at_subq().label("last_reported_at"),
         )
         .select_from(UserSellerWatch)
         .join(

@@ -7,10 +7,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# 主表格状态三态。本变更（P0）没有数据获取层，baseline_at 恒为 NULL，因此只会产出
-# PENDING_BASELINE；MONITORING/PAUSED 是为后续数据获取层预留的取值，界面渲染逻辑
-# 按三态实现，避免那时还要改这一列。
-WatchStatus = Literal["PENDING_BASELINE", "MONITORING", "PAUSED"]
+# 主表格状态**两态**，由该卖家有没有基线决定：无基线 PENDING_BASELINE、有基线 MONITORING。
+#
+# 曾经还有第三个 PAUSED，是 P0 为「后续数据获取层」预留的占位取值。它被删掉不是因为没用上，
+# 而是因为**没有任何字段或端点能让一行进入该状态**——一个永远取不到值的状态比没有更糟，
+# 它让读界面的人以为系统能暂停某个卖家。预留一个取值的成本看起来是零，实际成本是它会一直
+# 谎报一项不存在的能力，且没有任何地方会报错。
+#
+# 真要做暂停，它属于**私有层** `user_seller_watch`（「我暂时不想看这家」是个人意愿，不是
+# 卖家的客观属性），连同暂停/恢复端点是另一次变更。
+WatchStatus = Literal["PENDING_BASELINE", "MONITORING"]
 
 # 单次批量操作（移除/改分组）的条数上限，防止一次请求体过大。
 MAX_ITEMS_PER_REQUEST = 500
@@ -69,6 +75,23 @@ class WatchOut(BaseModel):
     note: str | None
     status: WatchStatus
     created_at: datetime
+
+    new_discoveries_7d: int | None = Field(
+        default=None,
+        description=(
+            "近 7 日新发现数。**None 表示该卖家还没有基线（从未被采集过），界面必须显示"
+            "占位符而不是 0**——0 会被读成「这家店没有新发现」。有基线时是真实条数，含 0，"
+            "此时 0 的含义才是「已采集范围内没有新发现」。"
+            "MUST NOT 读作「上新数」：被动采集证明不了商品何时上架"
+        ),
+    )
+    last_reported_at: datetime | None = Field(
+        default=None,
+        description=(
+            "最近一次被采集的时刻，无上报时为 None。界面必须展示它并在陈旧时提示——"
+            "「很久没采过」与「确实没有新发现」在界面上长得一模一样"
+        ),
+    )
 
 
 class WatchListResponse(BaseModel):
