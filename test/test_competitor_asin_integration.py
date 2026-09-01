@@ -26,6 +26,7 @@ from sqlalchemy.pool import NullPool
 from app.common.errors import ConflictError, UnprocessableError
 from app.table.competitor import asin_service as service
 from app.table.competitor import store_service as service_store
+from app.table.competitor import watch_service as service_watch
 from app.table.competitor.asin_schemas import AsinReportItem, AsinReportRequest
 from app.table.competitor.store_schemas import NewArrivalRequest
 
@@ -743,3 +744,98 @@ async def test_没有标题的asin用asin兜底(db):
     assert feed.data[0].title == "B0NOTITLE1"
     # 卖家名我们从未取过，恒为 NULL——界面回落显示 seller_id，不拿用户私有备注顶替
     assert feed.data[0].source_name is None
+
+
+# ---------- 卖家清单的两个指标列 ----------
+
+
+async def _watch_row(db, user_id, seller_id=_SELLER):
+    from app.table.competitor.watch_schemas import WatchListRequest
+
+    resp = await service_watch.list_watches(db, user_id, WatchListRequest(page=1, perPage=50))
+    return next(r for r in resp.data if r.seller_id == seller_id)
+
+
+async def test_无基线的卖家两个指标都是None而不是0(db):
+    """**这是本段唯一容易写错、且错了不会报错的地方。** 相关子查询里的 count(*) 恒返回 0
+    而不是 NULL；写成 COALESCE(...,0) 或裸用 count，整个「待建立基线 vs 监控中」的界面
+    故事就地塌掉——0 会被读成"这家店没有新发现"，而事实是"这个卖家还没有被采集过"。"""
+    seed = await db.run_sync(_seed)
+    row = await _watch_row(db, seed["owner"])
+    assert row.status == "PENDING_BASELINE"
+    assert row.new_discoveries_7d is None
+    assert row.last_reported_at is None
+
+
+async def test_有基线但窗口内无新发现时是真实的0(db):
+    """有基线时 0 的含义才是「已采集范围内没有新发现」，此时必须是数字不是占位符。"""
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req())  # 首批，恒不算新发现
+
+    row = await _watch_row(db, seed["owner"])
+    assert row.status == "MONITORING"
+    assert row.new_discoveries_7d == 0
+    assert row.last_reported_at is not None
+
+
+async def test_窗口内的新发现被计入(db):
+    seed = await db.run_sync(_seed)
+    await db.execute(
+        text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
+        {"t": datetime.now(UTC) - timedelta(days=30), "s": _SELLER},
+    )
+    for i, days_ago in enumerate((1, 3, 20)):  # 第三条落在 7 天窗口外
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_seller_asin"
+                "(seller_id,site,asin,first_seen_at) VALUES (:s,:t,:a,:at)"
+            ),
+            {
+                "s": _SELLER,
+                "t": _SITE,
+                "a": f"B0WIN{i:05d}",
+                "at": datetime.now(UTC) - timedelta(days=days_ago),
+            },
+        )
+    row = await _watch_row(db, seed["owner"])
+    assert row.new_discoveries_7d == 2
+
+
+async def test_基线批次不计入新发现数(db):
+    """与上新流同构：判据是严格大于基线，首批与基线时刻相等故不算。"""
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(asins=("B0AAAAAAAA", "B0BBBBBBBB")))
+    row = await _watch_row(db, seed["owner"])
+    assert row.new_discoveries_7d == 0
+
+
+async def test_最近采集于取最新一次上报(db):
+    """「很久没采过」与「确实没有新发现」在界面上长得一模一样，缺了这一列就分不开。"""
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1"))
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-2"))
+    row = await _watch_row(db, seed["owner"])
+    # 两点都是踩出来的：
+    # 1. **直接比时间戳，不要绕 epoch 整数**。Python 的 int() 截断、Postgres 的
+    #    extract(epoch)::bigint 四舍五入，亚秒部分 ≥ .5 时差 1 秒——单跑碰巧绿、全量红。
+    # 2. **取值必须带作用域**。裸 max() 只在"库里除了我什么都没有"时成立。
+    latest = (
+        await db.execute(
+            text(
+                "SELECT max(reported_at) FROM analysis.competitor_asin_report "
+                "WHERE seller_id=:s AND site=:t AND user_id=:u"
+            ),
+            {"s": _SELLER, "t": _SITE, "u": seed["owner"]},
+        )
+    ).scalar()
+    assert row.last_reported_at == latest
+
+
+async def test_别人的上报也算数指标是共享的(db):
+    """在售数据是共享层：甲采的，乙只要也关注了这个卖家就该看到。抓取代价按 unique
+    seller 花，一个卖家被十个人关注也只该被采一次——那正是分共享层的全部意义。"""
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req())
+    row = await _watch_row(db, seed["other"])
+    assert row.status == "MONITORING"
+    assert row.new_discoveries_7d == 0  # 是 0 不是 None：这个卖家已经有基线了

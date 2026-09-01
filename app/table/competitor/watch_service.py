@@ -97,7 +97,15 @@ def _duplicate_name_or_reraise(exc: IntegrityError, detail: str) -> GroupDuplica
 
 
 def _status_of(baseline_at) -> str:
-    """本变更没有数据获取层，baseline_at 恒为 NULL，因此恒为 PENDING_BASELINE。"""
+    """状态**两态**，判据只有一条：这个卖家有没有基线。
+
+    基线在首次 ASIN 上报时落定（``asin_service.submit_report``），所以「监控中」的准确
+    含义是"至少被采集过一次"，不是"系统在自动抓它"——Amazon 侧没有自动抓取，覆盖率取决于
+    运营的浏览习惯。界面因此必须同时展示 ``last_reported_at``。
+
+    没有第三态。曾有的 ``PAUSED`` 是占位取值，没有任何字段或端点能让一行进入该状态，
+    已删除（见 ``watch_schemas.WatchStatus``）。
+    """
     return "PENDING_BASELINE" if baseline_at is None else "MONITORING"
 
 
@@ -184,6 +192,9 @@ async def list_watches(db: AsyncSession, user_id: int, req: WatchListRequest) ->
             watch_id=r.watch_id, seller_id=r.seller_id, site=r.site,
             group_id=r.group_id, group_name=r.group_name, priority=r.priority,
             note=r.note, status=_status_of(r.baseline_at), created_at=r.created_at,
+            # 无基线时 crud 侧返回的就是 NULL（不是 0），原样传出去——界面靠这个区分
+            # 「还没有数据来源」与「已采集但没有新发现」。
+            new_discoveries_7d=r.new_discoveries_7d, last_reported_at=r.last_reported_at,
         )
         for r in rows
     ]
