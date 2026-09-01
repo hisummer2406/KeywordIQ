@@ -1,9 +1,25 @@
 import { ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
-import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Table, message } from 'antd';
+import {
+  Alert,
+  Button,
+  Drawer,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Typography,
+  message,
+} from 'antd';
 import { useRef, useState } from 'react';
 import {
   addStore,
+  addStoresBatch,
+  MAX_BATCH_DOMAINS,
+  type StoreBatchAddResponse,
   listStoreProducts,
   listStores,
   removeStore,
@@ -12,6 +28,7 @@ import {
   type StoreProductRow,
   type StoreRow,
 } from '@/services/competitor';
+import BatchAddResult from './BatchAddResult';
 import { buildStoreColumns, formatMoney } from './storeColumns';
 
 /**
@@ -35,10 +52,19 @@ export default function StoreTab({
   const [adding, setAdding] = useState(false);
   const [form] = Form.useForm<{ domain: string; group_id?: number; note?: string }>();
 
+  const [batchText, setBatchText] = useState('');
+  const [batchGroupId, setBatchGroupId] = useState<number | undefined>(undefined);
+  const [batchResult, setBatchResult] = useState<StoreBatchAddResponse | null>(null);
+
   const [productsOf, setProductsOf] = useState<StoreRow | null>(null);
   const [products, setProducts] = useState<StoreProductRow[]>([]);
   const [productCurrency, setProductCurrency] = useState<string | null>(null);
   const [productsLoading, setProductsLoading] = useState(false);
+
+  const closeAddModal = () => {
+    setAddOpen(false);
+    setBatchResult(null);
+  };
 
   const onAdd = async () => {
     const values = await form.validateFields().catch(() => undefined);
@@ -58,10 +84,45 @@ export default function StoreTab({
       setAdding(false);
     }
     message.success('已加入监控，等待首次拉取');
-    setAddOpen(false);
+    closeAddModal();
     form.resetFields();
     await onGroupsChanged();
     actionRef.current?.reload(true);
+  };
+
+  const batchDomains = batchText
+    .split(/[\n,;\s]+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const onBatchAdd = async () => {
+    if (batchDomains.length === 0) {
+      message.warning('请先粘贴至少一个域名');
+      return;
+    }
+    if (batchDomains.length > MAX_BATCH_DOMAINS) {
+      // 先在前端挡一道给出即时反馈；后端同样会整批拒绝且一条都不写
+      message.warning(`一次最多 ${MAX_BATCH_DOMAINS} 个，当前 ${batchDomains.length} 个`);
+      return;
+    }
+    setAdding(true);
+    let res;
+    try {
+      res = await addStoresBatch({ domains: batchDomains, group_id: batchGroupId ?? null });
+    } catch {
+      // 失败提示由 app.tsx 的 errorHandler 唯一出口负责。catch 不能省——Button 的
+      // onClick 不消费返回的 promise，少了它就是一条 unhandled rejection。
+      return;
+    } finally {
+      setAdding(false);
+    }
+    setBatchResult(res);
+    // 结果就地展示，弹窗不关——用户要看清哪几条没进去、为什么
+    if (res.added.length > 0) {
+      setBatchText('');
+      await onGroupsChanged();
+      actionRef.current?.reload(true);
+    }
   };
 
   const onChangeGroup = async (domain: string, groupId: number | null) => {
@@ -135,9 +196,9 @@ export default function StoreTab({
         title="添加独立站"
         open={addOpen}
         confirmLoading={adding}
-        onOk={onAdd}
-        onCancel={() => setAddOpen(false)}
-        okText="加入监控"
+        onCancel={closeAddModal}
+        footer={null}
+        width={620}
         destroyOnHidden
       >
         <Alert
@@ -145,29 +206,77 @@ export default function StoreTab({
           showIcon
           style={{ marginBottom: 12 }}
           message="目前只支持 Shopify 建站的独立站"
-          description="粘贴店铺首页地址即可，带不带 https:// 和 www. 都行。加入时会立即校验——不是 Shopify 会当场告诉你，不会等到明天才失败。"
+          description="粘贴店铺地址即可，带不带 https:// 和 www. 都行。加入时会立即校验——不是 Shopify 会当场告诉你，不会等到明天才失败。"
         />
-        <Form form={form} layout="vertical">
-          <Form.Item
-            name="domain"
-            label="店铺域名"
-            rules={[{ required: true, message: '请填写店铺域名' }]}
-          >
-            <Input placeholder="例如 example.com 或 https://www.example.com/" allowClear />
-          </Form.Item>
-          <Form.Item name="group_id" label="分组（可选）">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="不选则为未分组"
-              options={groups.map((g) => ({ label: g.name, value: g.group_id }))}
-            />
-          </Form.Item>
-          <Form.Item name="note" label="备注（可选）">
-            <Input maxLength={200} allowClear />
-          </Form.Item>
-        </Form>
+        <Tabs
+          defaultActiveKey="single"
+          items={[
+            {
+              key: 'single',
+              label: '添加一个',
+              children: (
+                <Form form={form} layout="vertical">
+                  <Form.Item
+                    name="domain"
+                    label="店铺域名"
+                    rules={[{ required: true, message: '请填写店铺域名' }]}
+                  >
+                    <Input placeholder="例如 example.com 或 https://www.example.com/" allowClear />
+                  </Form.Item>
+                  <Form.Item name="group_id" label="分组（可选）">
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="不选则为未分组"
+                      options={groups.map((g) => ({ label: g.name, value: g.group_id }))}
+                    />
+                  </Form.Item>
+                  <Button type="primary" loading={adding} onClick={onAdd}>
+                    加入监控
+                  </Button>
+                </Form>
+              ),
+            },
+            {
+              key: 'batch',
+              label: '批量粘贴',
+              children: (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Input.TextArea
+                    rows={8}
+                    value={batchText}
+                    onChange={(e) => setBatchText(e.target.value)}
+                    placeholder={'一行一个，也可以用逗号分隔\nexample.com\nhttps://www.another.com/collections/all'}
+                  />
+                  <Space>
+                    <Select
+                      style={{ width: 200 }}
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="分组（可选）"
+                      value={batchGroupId}
+                      onChange={setBatchGroupId}
+                      options={groups.map((g) => ({ label: g.name, value: g.group_id }))}
+                    />
+                    <Button type="primary" loading={adding} onClick={onBatchAdd}>
+                      加入这 {batchDomains.length} 个
+                    </Button>
+                  </Space>
+                  {adding && (
+                    // 探测每个站点各要发一次请求，几十条会跑十几秒——不说清在做什么，
+                    // 用户会以为界面卡住了
+                    <Typography.Text type="secondary">
+                      正在逐个校验这些站点是不是 Shopify、并读取币种，请稍候……
+                    </Typography.Text>
+                  )}
+                  {batchResult && <BatchAddResult result={batchResult} />}
+                </Space>
+              ),
+            },
+          ]}
+        />
       </Modal>
 
       <Drawer

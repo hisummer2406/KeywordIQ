@@ -247,6 +247,40 @@ export async function removeStore(domain: string) {
   });
 }
 
+/**
+ * 批量加入的结果，按**输入行**组织而不是按站点：被拒绝的条目根本得不到域名，只能用
+ * 原文回指；能加入的条目若只回域名，用户也无法把它与自己粘的那行对上。
+ */
+export interface BatchAddedItem {
+  input: string;
+  domain: string;
+  name: string | null;
+  currency: string | null;
+}
+
+export interface BatchRejectedItem {
+  input: string;
+  /** 必须逐条附原因。只报「N 条失败」等于让用户自己去猜是哪几条、为什么 */
+  reason: string;
+}
+
+export interface StoreBatchAddResponse {
+  success: boolean;
+  added: BatchAddedItem[];
+  already_watched: BatchAddedItem[];
+  rejected: BatchRejectedItem[];
+}
+
+/** 单次上限。与后端一致——超限后端整批拒绝且一条都不写，前端先挡一道给出即时反馈 */
+export const MAX_BATCH_DOMAINS = 200;
+
+export async function addStoresBatch(body: { domains: string[]; group_id?: number | null }) {
+  return request<StoreBatchAddResponse>('/api/competitor/stores/batch', {
+    method: 'POST',
+    data: { domains: body.domains, group_id: body.group_id ?? null },
+  });
+}
+
 export interface StoreProductRow {
   product_id: number;
   handle: string;
