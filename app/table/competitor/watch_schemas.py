@@ -76,6 +76,23 @@ class WatchOut(BaseModel):
     status: WatchStatus
     created_at: datetime
 
+    new_discoveries_7d: int | None = Field(
+        default=None,
+        description=(
+            "近 7 日新发现数。**None 表示该卖家还没有基线（从未被采集过），界面必须显示"
+            "占位符而不是 0**——0 会被读成「这家店没有新发现」。有基线时是真实条数，含 0，"
+            "此时 0 的含义才是「已采集范围内没有新发现」。"
+            "MUST NOT 读作「上新数」：被动采集证明不了商品何时上架"
+        ),
+    )
+    last_reported_at: datetime | None = Field(
+        default=None,
+        description=(
+            "最近一次被采集的时刻，无上报时为 None。界面必须展示它并在陈旧时提示——"
+            "「很久没采过」与「确实没有新发现」在界面上长得一模一样"
+        ),
+    )
+
 
 class WatchListResponse(BaseModel):
     """ProTable 契约 {data,total,success} + 配额回显。"""

@@ -84,8 +84,13 @@
 - [x] 3.2 `store_service.new_arrivals` 按合并后的行组装响应。**来源判别与时间语义都在
       SQL 里定完，service 只做映射**——UNION 之后"这一行来自哪张表"的信息已经没有了，
       在 Python 里按行推断是不可能的；`total` 对同一个 union 子查询计数
-- [ ] 3.3 卖家清单查询补「近 7 日新发现」与「最近采集于」：无基线的卖家两项都返回 null
-      （前端显示占位符），有基线的返回真实条数（含 0）与最近一次 `reported_at`
+- [x] 3.3 卖家清单查询补「近 7 日新发现」与「最近采集于」（`watch_crud.watches_stmt` 两个
+      相关子查询 + `WatchOut` 两个字段）。**唯一容易写错、且错了不会报错的地方**：相关子
+      查询里的 `count(*)` 恒返回 0 而不是 NULL，所以无基线时必须显式用
+      `CASE WHEN baseline_at IS NULL THEN NULL` 罩一层——写成 `COALESCE(...,0)` 或裸用
+      count，整个「待建立基线 vs 监控中」的界面故事就地塌掉。已验证：去掉那层 CASE，
+      `test_无基线的卖家两个指标都是None而不是0` 即红。
+      「最近采集于」不必罩：`max()` 对空集天然 NULL，且有上报就必然有基线
 
 ## 4. 前端
 
@@ -127,8 +132,8 @@
 - [ ] 5.6 前端：卖家行两态显示（占位符 vs 真实 0）、「近 7 日新发现」措辞、
       上新流 AMAZON 行的「发现于」措辞（`pnpm test src/pages/Competitor`）。
       「状态里没有已暂停」那条已随 4.2 落地
-- [~] 5.7 全量回归（§3 落地后）：`TEST_DATABASE_URL=... uv run pytest test/` →
-      **799 passed, 1 skipped**（唯一的 skip 是 OSS 真实回路，需 `TEST_OSS_*`，与本变更无关）；
+- [~] 5.7 全量回归（§3 全部落地后）：`TEST_DATABASE_URL=... uv run pytest test/` →
+      **805 passed, 1 skipped**（唯一的 skip 是 OSS 真实回路，需 `TEST_OSS_*`，与本变更无关）；
       `ruff` 通过。§4 落地后需再跑一次，含前端全量
 
 ## 6. 文档与收尾
