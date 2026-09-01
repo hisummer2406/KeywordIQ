@@ -6,10 +6,24 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import NamedTuple
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import (
+    Text,
+    case,
+    cast,
+    delete,
+    func,
+    literal,
+    null,
+    select,
+    text,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from app.table.competitor.asin_model import CompetitorSellerAsin
+from app.table.competitor.seller_model import CompetitorSeller
 from app.table.competitor.store_fetcher import ParsedProduct, ParsedStoreMeta
 from app.table.competitor.store_model import (
     CompetitorStore,
@@ -18,7 +32,7 @@ from app.table.competitor.store_model import (
     CompetitorStoreRank,
     UserStoreWatch,
 )
-from app.table.competitor.watch_model import UserSellerGroup
+from app.table.competitor.watch_model import UserSellerGroup, UserSellerWatch
 
 
 class PriceSnapshot(NamedTuple):
@@ -364,17 +378,36 @@ def products_stmt(domain: str, *, include: str, new_only: bool, days: int = 7):
     return stmt
 
 
-def new_arrivals_stmt(user_id: int, *, days: int):
-    """上新流：**排除首刷那批**。
+def _window(days: int):
+    return func.now() - text(f"interval '{days} days'")
 
-    判据是 ``first_seen_at > first_fetch_at``——首刷时两者相等，故首刷那批天然被排除。
-    没有 ``first_fetch_at`` 这一列就无从区分「刚开始看」与「今天上新」，表现是新纳入
-    一个站点当天涌出几百条假上新。
+
+def _dtc_arrivals_select(user_id: int, days: int):
+    """独立站那一侧的统一投影。
+
+    **排除首刷那批**：判据是 ``first_seen_at > first_fetch_at``——首刷时两者相等，故首刷
+    那批天然被排除。没有 ``first_fetch_at`` 这一列就无从区分「刚开始看」与「今天上新」，
+    表现是新纳入一个站点当天涌出几百条假上新。
+
+    时间取 ``published_at``（数据源给的真实上架时间），缺失才退回 ``first_seen_at``，
+    ``time_kind`` 随之标 ``PUBLISHED`` / ``DISCOVERED``。
     """
+    at = func.coalesce(CompetitorStoreProduct.published_at, CompetitorStoreProduct.first_seen_at)
     return (
         select(
-            CompetitorStoreProduct,
-            CompetitorStore.name.label("store_name"),
+            cast(literal("DTC"), Text).label("source"),
+            cast(CompetitorStoreProduct.domain, Text).label("source_key"),
+            cast(CompetitorStore.name, Text).label("source_name"),
+            cast(CompetitorStoreProduct.product_id, Text).label("product_key"),
+            cast(CompetitorStoreProduct.title, Text).label("title"),
+            cast(CompetitorStoreProduct.image_url, Text).label("image_url"),
+            at.label("at"),
+            case(
+                (CompetitorStoreProduct.published_at.is_not(None), literal("PUBLISHED")),
+                else_=literal("DISCOVERED"),
+            )
+            .cast(Text)
+            .label("time_kind"),
         )
         .join(CompetitorStore, CompetitorStore.domain == CompetitorStoreProduct.domain)
         .join(UserStoreWatch, UserStoreWatch.domain == CompetitorStoreProduct.domain)
@@ -382,9 +415,86 @@ def new_arrivals_stmt(user_id: int, *, days: int):
             UserStoreWatch.user_id == user_id,
             CompetitorStore.first_fetch_at.is_not(None),
             CompetitorStoreProduct.first_seen_at > CompetitorStore.first_fetch_at,
-            CompetitorStoreProduct.first_seen_at > func.now() - text(f"interval '{days} days'"),
+            CompetitorStoreProduct.first_seen_at > _window(days),
         )
-        .order_by(CompetitorStoreProduct.first_seen_at.desc())
+    )
+
+
+def _amazon_arrivals_select(user_id: int, days: int):
+    """Amazon 卖家那一侧的统一投影。
+
+    判据与独立站同构，只是基线列不同：``first_seen_at > baseline_at``（首次上报落定基线，
+    该批与基线时刻严格相等，故恒不进流）。**时间语义永远是 ``DISCOVERED``**——被动采集
+    证明不了商品何时上架，标成「上架于」等于拿「我们发现得晚」冒充「他上得晚」。
+
+    两处退让写在这里，都是"目前只能这样"而不是设计选择：
+
+    - ``source_name`` 恒为 NULL。``competitor_seller`` 里**没有卖家名这回事**——我们从未
+      取过它。不拿 ``user_seller_watch.note`` 顶替：那是用户私有的备注，塞进一个在独立站
+      那侧表示"店铺自己的名字"的列，会让同一个字段按行表示两种东西。界面照旧回落显示
+      ``source_key``（seller_id）。将来采集端顺手报回卖家名时，它直接落进这一列。
+    - ``title`` 用 ``COALESCE(title, asin)``：上报可以不带标题（``title`` 可空），而响应
+      契约里 ``title`` 是必填。用 ASIN 兜底，不编造空串——空标题在界面上是一行看不出是
+      什么的条目。
+    """
+    return (
+        select(
+            cast(literal("AMAZON"), Text).label("source"),
+            cast(CompetitorSellerAsin.seller_id, Text).label("source_key"),
+            cast(null(), Text).label("source_name"),
+            cast(CompetitorSellerAsin.asin, Text).label("product_key"),
+            cast(func.coalesce(CompetitorSellerAsin.title, CompetitorSellerAsin.asin), Text).label(
+                "title"
+            ),
+            cast(CompetitorSellerAsin.image_url, Text).label("image_url"),
+            CompetitorSellerAsin.first_seen_at.label("at"),
+            cast(literal("DISCOVERED"), Text).label("time_kind"),
+        )
+        .join(
+            CompetitorSeller,
+            (CompetitorSeller.seller_id == CompetitorSellerAsin.seller_id)
+            & (CompetitorSeller.site == CompetitorSellerAsin.site),
+        )
+        .join(
+            UserSellerWatch,
+            (UserSellerWatch.seller_id == CompetitorSellerAsin.seller_id)
+            & (UserSellerWatch.site == CompetitorSellerAsin.site),
+        )
+        .where(
+            UserSellerWatch.user_id == user_id,
+            CompetitorSeller.baseline_at.is_not(None),
+            CompetitorSellerAsin.first_seen_at > CompetitorSeller.baseline_at,
+            CompetitorSellerAsin.first_seen_at > _window(days),
+        )
+    )
+
+
+def new_arrivals_stmt(user_id: int, *, days: int):
+    """上新流：两类来源**在同一次查询内**合并后统一排序分页。
+
+    **MUST NOT 各查一页再在应用层归并。** 各来源自己的偏移量与合并后的全局序号对不上，
+    翻页时会重复或漏掉条目，而这种错误在界面上表现为「某条上新出现两次」，极难归因。
+
+    **排序键必须与界面显示的那个时间是同一个。** 这里按 ``at`` 排（独立站是上架时间、
+    Amazon 是发现时间），而不是两侧各按自己的 ``first_seen_at`` ——列表若不按自己显示的
+    时间列排序，读起来就是坏的。
+
+    > 这一条改动了独立站原先的行为：它此前按 ``first_seen_at`` 排却显示 ``published_at``，
+    > 单来源时两者通常接近所以看不出来。**成员判定仍按 ``first_seen_at``**（"纳入监控后
+    > 新出现了什么"），只有排序改了——两个口径不同不是疏漏，见 CLAUDE.md 独立站一节。
+
+    **平局必须有确定的次序。** ``published_at`` 只精确到分钟，同一分钟内的多条商品极常见；
+    没有次级排序键时，Postgres 对相同 ``at`` 的行不保证稳定顺序，同一行可能在第 1 页和
+    第 2 页各出现一次——正是上面那条要防的失败形态，且它只在翻页时才现形。
+    """
+    unified = union_all(
+        _dtc_arrivals_select(user_id, days), _amazon_arrivals_select(user_id, days)
+    ).subquery()
+    return select(unified).order_by(
+        unified.c.at.desc(),
+        unified.c.source,
+        unified.c.source_key,
+        unified.c.product_key,
     )
 
 

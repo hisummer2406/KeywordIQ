@@ -641,12 +641,14 @@ async def list_products(
 async def new_arrivals(
     db: AsyncSession, user_id: int, req: NewArrivalRequest
 ) -> NewArrivalResponse:
-    """上新流。
+    """上新流：独立站与 Amazon 卖家两类来源合并成一个流。
 
-    当前只有独立站一类来源（Amazon 侧的采集不在本变更范围），但**响应形状已按两类来源
-    设计**：每行带 ``source`` 与 ``time_kind``，独立站是 ``PUBLISHED``（上架于），
-    Amazon 接入时是 ``DISCOVERED``（发现于）。把后者标成「上架于」等于拿「我们发现得晚」
-    冒充「他上得晚」。
+    **来源判别与时间语义都在 SQL 里定完**（``crud.new_arrivals_stmt`` 的两侧投影），
+    这里只做映射。这不是风格问题：`source` / `time_kind` 若在 Python 里按行推断，就必须
+    先知道这一行来自哪张表——而 UNION 之后那个信息已经没有了。
+
+    ``total`` 对**同一个** union 子查询计数，不是两侧各数一次再相加：后者在任一侧的
+    过滤条件写歪时仍会给出一个看起来合理的数字，而分页恰好就用它算页数。
     """
     stmt = store_crud.new_arrivals_stmt(user_id, days=req.days)
     total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
@@ -657,15 +659,14 @@ async def new_arrivals(
     return NewArrivalResponse(
         data=[
             NewArrivalOut(
-                source="DTC",
-                source_key=row[0].domain,
-                source_name=row.store_name,
-                product_key=str(row[0].product_id),
-                title=row[0].title,
-                image_url=row[0].image_url,
-                # 独立站有数据源给的真实上架时间，故报 published_at；缺失才退回首次见到。
-                at=row[0].published_at or row[0].first_seen_at,
-                time_kind="PUBLISHED" if row[0].published_at else "DISCOVERED",
+                source=row.source,
+                source_key=row.source_key,
+                source_name=row.source_name,
+                product_key=row.product_key,
+                title=row.title,
+                image_url=row.image_url,
+                at=row.at,
+                time_kind=row.time_kind,
             )
             for row in rows
         ],
