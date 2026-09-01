@@ -9,7 +9,12 @@ import { request } from '@umijs/max';
  * 关注）驱动。
  */
 
-export type WatchStatus = 'PENDING_BASELINE' | 'MONITORING' | 'PAUSED';
+/**
+ * 关注状态**两态**，由该卖家有没有基线决定。曾有第三个 `PAUSED`，删掉是因为没有任何字段
+ * 或端点能让一行进入该状态——永远取不到值的状态会让人以为系统能暂停某个卖家。要做暂停，
+ * 它属于私有层 `user_seller_watch`，是另一次变更。
+ */
+export type WatchStatus = 'PENDING_BASELINE' | 'MONITORING';
 
 export interface CompetitorGroup {
   group_id: number;

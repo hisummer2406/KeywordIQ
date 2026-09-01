@@ -11,10 +11,13 @@ import type { SiteOption } from '@/services/upload';
  * 表达"这个指标还没有数据来源"（spec.md「关注状态展示待建立基线」场景）。
  */
 
+/**
+ * 状态**两态**，跟着 `WatchStatus` 走。这里曾有第三项「已暂停」，删掉是因为它取不到值——
+ * 详见 `services/competitor.ts` 的 `WatchStatus` 注释。
+ */
 const STATUS_META: Record<WatchStatus, { color: string; text: string }> = {
   PENDING_BASELINE: { color: 'gold', text: '待建立基线' },
   MONITORING: { color: 'green', text: '监控中' },
-  PAUSED: { color: 'default', text: '已暂停' },
 };
 
 /** 卖家收藏页模板链接。只用 seller_id/site 现拼,不回存/复用原始 URL 里的会话签名参数。 */

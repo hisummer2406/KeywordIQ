@@ -2,7 +2,7 @@
 
 两张**普通表**，MUST NOT 登记进 ``app.table.analysis.partitioning.PARTITIONED_TABLES``。
 登记即被保留清理按 ``HOT_WINDOW_MONTHS``（默认 3 个月）整分区 DROP，而
-``first_seen_at`` 正是上新判定的依据，越久越有价值——那个三个月窗口是为八亿行的 ABA
+``first_seen_at`` 正是新发现判定的依据，越久越有价值——那个三个月窗口是为八亿行的 ABA
 事实表定的。
 
 **数据来自采集端主动上报（推模型），不是后端拉取。** 上报只表达「在某个时刻，上报者的
@@ -21,12 +21,12 @@
 
 粒度是 ``(seller_id, site, asin)`` 而**不是按 ASIN 全局唯一**：跟卖是 Amazon 的常态，
 「A 店首次出现这个品」与「B 店首次出现这个品」是两件独立的事，各有各的
-``first_seen_at``。按 ASIN 唯一存一行，第二家店的上新会被第一家的记录吃掉，表现为上新流里
+``first_seen_at``。按 ASIN 唯一存一行，第二家店的新发现会被第一家的记录吃掉，表现为上新流里
 缺条目，而缺的恰是"跟卖"这种最该被看见的动作。
 
 **时间的权威只有服务端。** ``first_seen_at`` 与 ``competitor_seller.baseline_at`` 一律取
 服务端事务时间；上报体里的 ``captured_at`` 只落进 ``CompetitorAsinReport.captured_at``
-供审计，**MUST NOT 参与任何判定**。让客户端时钟能左右上新判定，等于一台时间偏了的机器
+供审计，**MUST NOT 参与任何判定**。让客户端时钟能左右新发现判定，等于一台时间偏了的机器
 就能把整批老品推进上新流——而这个错误没有任何地方会报错。
 
 schema 由 ``database.Base`` 的 metadata 统一提供（取自 ``settings.DATABASE_SCHEMA``）。
@@ -65,13 +65,27 @@ class CompetitorAsinReport(Base):
 
     它**不是快照**——不存本次见到的 ASIN 清单（见模块 docstring）。它回答的是"这个卖家的
     数据有多新、是怎么来的"，在覆盖率取决于人的浏览习惯时，这是界面必须能说清的事：
-    「很久没采过」与「确实没上新」在上新流里长得一模一样。
+    「很久没采过」与「确实没有新发现」在上新流里长得一模一样。
 
     ``request_id`` 是**客户端生成的幂等键**，唯一性按 ``(user_id, request_id)`` 判定。
     没有它，"上报幂等"只成立一半：``ON CONFLICT DO NOTHING`` 保证商品关系不重复，但同一个
     请求因网络超时被重发时仍会多出一行上报记录，把界面的「最近采集于」往前推——数据看起来
     比实际更新。唯一性按用户分域而非全局，是因为跨用户撞键会让 B 的上报被当成重复吞掉、
     并把 A 那次上报的计数回放给 B（既丢数据又泄露别人的记录）。
+
+    ``request_hash`` 是**同一把钥匙配的第二道锁**：光有幂等键只能认出"这个键来过"，认不出
+    "这两次是不是同一次上报"。插件若因 bug 复用了同一个 ``request_id`` 去报另一个卖家或
+    另一批 ASIN，只按键判定就会回放旧记录并返回 200——新的观测被静默丢弃，甚至把另一个
+    卖家的旧计数返回给调用方。与跨用户撞键是同一类失败，同样不会报错。所以命中键之后还要
+    比对摘要：**一致才回放，不一致返 409**（``competitor.idempotency_key_reused``），
+    绝不吞掉新请求。
+
+    **摘要只覆盖决定"写什么"的字段**：``seller_id`` + ``site`` + 规范化去重并排序后的 ASIN
+    集合，``request_id`` 本身不进摘要。审计与展示字段（``captured_at`` /
+    ``ship_to_region`` / ``page_context`` / 标题 / 图片）**有意排除**——真正的重发送的是
+    同一个请求体，把它们算进去不增加任何保护；反倒是重新读一遍 DOM 后重试的场景里，标题被
+    Amazon 截得不一样、``captured_at`` 重算过，会撞出一个**假的 409**，而那恰恰是幂等键要
+    保护的那次重试。
 
     ``ship_to_region`` 存下来但**不参与任何判定**。实测 Amazon 店铺搜索结果按操作者账号的
     收货地址过滤（2026-08-31 抽样 120 家，日本地址下 92 家显示无货，抽查 30 家却有 16 家
@@ -97,6 +111,14 @@ class CompetitorAsinReport(Base):
         nullable=False,
         comment="客户端生成的幂等键；按 (user_id, request_id) 唯一，重发命中即回放原记录不新增",
     )
+    request_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment=(
+            "请求摘要（sha256 十六进制），只覆盖 seller_id + site + 规范化去重排序后的 ASIN 集合。"
+            "命中幂等键后比对：一致才回放，不一致返 409——防止同键被复用于另一次上报而静默吞掉"
+        ),
+    )
     seller_id: Mapped[str] = mapped_column(
         String(24), nullable=False, comment="→ competitor_seller.seller_id"
     )
@@ -112,7 +134,7 @@ class CompetitorAsinReport(Base):
         nullable=True,
         comment=(
             "采集端声称的采集时刻。**只作审计、MUST NOT 参与任何判定**："
-            "客户端时钟不可信，上新判定一律用服务端时间"
+            "客户端时钟不可信，新发现判定一律用服务端时间"
         ),
     )
     item_count: Mapped[int] = mapped_column(
