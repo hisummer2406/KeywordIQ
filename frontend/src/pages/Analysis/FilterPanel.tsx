@@ -1,4 +1,4 @@
-import { Button, Input, InputNumber, Radio, Space, Tooltip, Typography } from 'antd';
+import { Button, Input, InputNumber, Radio, Space, Switch, Tooltip, Typography } from 'antd';
 import {
   RANGE_PRESETS,
   matchedPreset,
@@ -33,6 +33,16 @@ export const LABEL_WIDTH = 88;
  * 一句描述不存在差异的噪音——而噪音会让用户不再阅读界面提示，连带这两条真正有效的也失效。
  */
 export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里展示的是前三名';
+
+/**
+ * 「竞对新品」的口径提示。
+ *
+ * 命中数据依赖浏览器插件采集的竞对在售 ASIN（issue #56 P3a），插件客户端尚未上线时
+ * 这个开关可能一直没有命中——不标注的话，用户第一次打开就会当成筛选坏了或数据缺失，
+ * 而不是"这条链路还没接上"。
+ */
+export const COMPETITOR_NEW_HINT =
+  '依赖浏览器插件采集的竞对在售数据，插件未上线前这里可能暂无命中';
 
 function Row({
   label,
@@ -202,6 +212,14 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
             { label: '新词', value: 'true' },
             { label: '非新词', value: 'false' },
           ]}
+        />
+      </Row>
+      <Row label="竞对新品" hint={COMPETITOR_NEW_HINT}>
+        <Switch
+          aria-label="竞对新品"
+          disabled={onlyDropped}
+          checked={value.competitorNew}
+          onChange={(checked) => patch({ competitorNew: checked })}
         />
       </Row>
       <Row label="商品标题" hint={TOP1_ONLY_HINT}>

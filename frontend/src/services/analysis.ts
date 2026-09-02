@@ -84,6 +84,12 @@ export interface SearchBody {
   conversion_share_min?: number;
   conversion_share_max?: number;
   is_new?: boolean;
+  /**
+   * 竞对新品：前三商品槽位任一 ASIN 属于当前用户关注的卖家在售集合，与 `is_new` 同构
+   * （不传 = 不筛）。依赖浏览器插件采集的竞对在售数据（issue #56 P3a），插件覆盖率
+   * 不够时这个开关可能暂无命中——这不是筛选坏了。
+   */
+  competitor_new?: boolean;
   /** 行集合维度，缺省 ALL。切到 DROPPED 时其余筛选在界面上必须置灰——它们会让掉榜段恒为空。 */
   include?: Include;
 }

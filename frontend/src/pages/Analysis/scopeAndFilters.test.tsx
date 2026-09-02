@@ -126,6 +126,24 @@ describe('分析查询屏 · 作用域与筛选', () => {
     });
   });
 
+  it('竞对新品开关只改草稿，点开始筛选才带上 competitor_new（issue #56 P2）', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('switch', { name: '竞对新品' }));
+    await settle();
+    // 与其余筛选同一条纪律：改草稿不发请求
+    expect(searchAnalysis).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await user.click(applyFilters());
+    });
+
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+    expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ competitor_new: true });
+  });
+
   it('顶部立即查询不会偷带尚未应用的筛选条件', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));

@@ -102,6 +102,16 @@ describe('toSearchBody', () => {
     expect(toSearchBody(scope, { ...defaultFilters(), isNew: false }).is_new).toBe(false);
     expect(toSearchBody(scope, { ...defaultFilters(), isNew: undefined }).is_new).toBeUndefined();
   });
+
+  it('竞对新品是两态开关：勾选时传 true，不勾选不传（issue #56 P2）', () => {
+    // 与新词不同，这里没有第三态——不勾选就是「不筛」，不需要区分「未勾选」与「明确要全部」。
+    expect(toSearchBody(scope, { ...defaultFilters(), competitorNew: true }).competitor_new).toBe(
+      true,
+    );
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), competitorNew: false }).competitor_new,
+    ).toBeUndefined();
+  });
 });
 
 describe('defaultFilters', () => {
@@ -180,6 +190,7 @@ describe('行集合开关', () => {
       clickShare: { min: 10 },
       conversionShare: { min: 5 },
       isNew: true,
+      competitorNew: true,
     });
     expect(body.include).toBe('DROPPED');
     expect(body.keyword).toBeUndefined();
@@ -193,14 +204,20 @@ describe('行集合开关', () => {
     expect(body.click_share_min).toBeUndefined();
     expect(body.conversion_share_min).toBeUndefined();
     expect(body.is_new).toBeUndefined();
+    expect(body.competitor_new).toBeUndefined();
   });
 
   it('ALL / LISTED 下其余筛选照常带上', () => {
     const body = toSearchBody(scope, {
-      ...defaultFilters(), include: 'LISTED', q: 'coffee', ranking: { min: 1, max: 100 },
+      ...defaultFilters(),
+      include: 'LISTED',
+      q: 'coffee',
+      ranking: { min: 1, max: 100 },
+      competitorNew: true,
     });
     expect(body.keyword).toBe('coffee');
     expect(body.ranking_min).toBe(1);
+    expect(body.competitor_new).toBe(true);
   });
 
 });

@@ -29,6 +29,7 @@ vi.mock('@/services/analysis', () => ({
 vi.mock('@/services/upload', () => ({ getSites }));
 vi.mock('@/services/library', () => ({ listGroups, createGroup, addItems }));
 
+import { SAVED_MODE_VERSION } from '@/pages/Analysis/savedMode';
 import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { applyFilters, renderSettled, settle } from './__testing__/analysisHarness';
 
@@ -252,7 +253,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       window.localStorage.setItem(
         KEY(userId),
         JSON.stringify({
-          version: 1,
+          version: SAVED_MODE_VERSION,
           site: 'DE',
           view: 'DAY',
           filters: {
@@ -264,6 +265,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
             isNew: undefined,
             brands: [],
             productTitle: '',
+            competitorNew: false,
           },
           sort: { field: 'current_ranking', dir: 'asc' },
           ...over,
@@ -375,7 +377,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       });
 
       const stored = JSON.parse(window.localStorage.getItem(KEY(1))!);
-      expect(stored).toMatchObject({ version: 1, site: 'US', view: 'DAY' });
+      expect(stored).toMatchObject({ version: SAVED_MODE_VERSION, site: 'US', view: 'DAY' });
       expect(stored.filters.isNew).toBe(true);
       // 检索词不入库：一次性查找不是「常看的模式」
       expect(stored.filters.q).toBeUndefined();

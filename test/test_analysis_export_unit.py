@@ -16,11 +16,13 @@ from app.table.analysis import analysis_service as service
 
 
 class _StubUser:
-    """够用即可：require_permission 只看 is_super 与 permission_codes。"""
+    """够用即可：require_permission 只看 is_super 与 permission_codes；``id`` 供
+    「竞对新品」筛选的 user_id 透传使用（issue #56 P2）。"""
 
-    def __init__(self, *, is_super=False, permissions=()):
+    def __init__(self, *, is_super=False, permissions=(), id=1):
         self.is_super = is_super
         self.permission_codes = set(permissions)
+        self.id = id
 
 
 def _row(kid: int, keyword: str, ranking: int, *, slots: int = 3) -> dict:
@@ -54,9 +56,12 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
 
     monkeypatch.setattr(service.crud, "available_dates", lambda db, s, v: [view_date])
     monkeypatch.setattr(service.crud, "scope_row_count", lambda db, s, v, on: total)
-    monkeypatch.setattr(service.crud, "count_capped", lambda db, s, v, on, req, cap: min(total, cap))
+    monkeypatch.setattr(
+        service.crud, "count_capped",
+        lambda db, s, v, on, req, cap, user_id: min(total, cap),
+    )
     monkeypatch.setattr(service.crud, "iter_export_rows",
-                        lambda db, s, v, on, req, limit: iter([rows]))
+                        lambda db, s, v, on, req, limit, user_id: iter([rows]))
     # 掉榜段：默认为空，故这些用例断言的仍是原来那份在榜行为
     monkeypatch.setattr(service.crud, "scope_dropped_count", lambda db, s, v, on: dropped)
     monkeypatch.setattr(service.crud, "iter_export_dropped_rows",
@@ -299,7 +304,7 @@ def test_stream_interruption_is_logged_with_stack(monkeypatch, caplog):
 
     from app.table.analysis import analysis_service as svc
 
-    def _boom(db, s, v, on, req, limit):
+    def _boom(db, s, v, on, req, limit, user_id):
         yield [_row(1, "kettle", 1)]
         raise RuntimeError("cursor died mid-stream")
 

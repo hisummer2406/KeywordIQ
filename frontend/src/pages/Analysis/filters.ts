@@ -41,6 +41,11 @@ export interface FilterDraft {
   brands: string[];
   productTitle: string;
   /**
+   * 竞对新品：前三商品槽位任一 ASIN 属于当前用户关注的卖家在售集合。两态开关，不做
+   * 三态——不像 isNew 是核心维度，这是一个可选的叠加信号，缺省不筛（issue #56 P2）。
+   */
+  competitorNew: boolean;
+  /**
    * 行集合维度，缺省 ALL。**不是筛选条件**——它决定"哪些行进表"，而筛选决定
    * "进表的行里留哪些"。放在同一个草稿里是因为它和筛选一起被「立即查询」提交。
    */
@@ -68,6 +73,7 @@ export const defaultFilters = (): FilterDraft => ({
   isNew: true,
   brands: [],
   productTitle: '',
+  competitorNew: false,
 });
 
 // --------------------------------------------------------------------------
@@ -185,5 +191,6 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     conversion_share_min: onlyDropped ? undefined : filters.conversionShare.min,
     conversion_share_max: onlyDropped ? undefined : filters.conversionShare.max,
     is_new: onlyDropped ? undefined : filters.isNew,
+    competitor_new: !onlyDropped && filters.competitorNew ? true : undefined,
   };
 }

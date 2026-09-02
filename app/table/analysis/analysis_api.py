@@ -48,21 +48,21 @@ _View = Literal["DAY", "WEEK"]
 async def search_data(
     req: AnalysisSearchRequest,
     db: AsyncSession = Depends(get_async_db),
-    _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
+    user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> AnalysisSearchResponse:
     """作用域内分页查询。
 
     作用域非法时抛 `ScopeError` → 422。此前是返 HTTP 200 + `success:false`，
     前端只能表现为一个没有解释的空表格。
     """
-    return await service.search(db, req)
+    return await service.search(db, req, user.id)
 
 
 @analysis_router.post("/export")
 def export_data(
     req: AnalysisSearchRequest,
     db: Session = Depends(get_db),
-    _user=Depends(simple_auth.require_permission(ANALYSIS_EXPORT)),
+    user=Depends(simple_auth.require_permission(ANALYSIS_EXPORT)),
 ) -> StreamingResponse:
     """把当前作用域与筛选下的结果流式导出为 CSV。
 
@@ -72,11 +72,11 @@ def export_data(
     **之前**完成——一旦开流，状态码与响应头已发出，之后再抛异常只会得到一份被截断的
     200 CSV，而它会被当成完整数据使用。
     """
-    site, view, on = service.resolve_export_scope(db, req)
+    site, view, on = service.resolve_export_scope(db, req, user.id)
 
     filename = service.export_filename(site, view, on)
     return StreamingResponse(
-        service.iter_export_csv(site, view, on, req),
+        service.iter_export_csv(site, view, on, req, user.id),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
