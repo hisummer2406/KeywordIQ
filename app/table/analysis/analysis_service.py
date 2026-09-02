@@ -224,7 +224,7 @@ async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
 async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> AnalysisSearchResponse:
     """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。
 
-    ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新品」筛选判定关注
+    ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新发现」筛选判定关注
     关系，MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
     """
     site = _resolve_site(req.site)

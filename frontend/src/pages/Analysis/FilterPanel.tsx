@@ -35,14 +35,18 @@ export const LABEL_WIDTH = 88;
 export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里展示的是前三名';
 
 /**
- * 「竞对新品」的口径提示。
+ * 「竞对新发现」的口径提示。
  *
- * 命中数据依赖浏览器插件采集的竞对在售 ASIN（issue #56 P3a），插件客户端尚未上线时
- * 这个开关可能一直没有命中——不标注的话，用户第一次打开就会当成筛选坏了或数据缺失，
- * 而不是"这条链路还没接上"。
+ * **必须把 7 天窗口写进提示里。** 空结果有两个同样常见的成因——插件客户端尚未上线
+ * （issue #56 P3b，数据根本没进来），以及关注卖家的这些商品是 7 天前就见到的（数据
+ * 进来了但都过了窗口）。提示只说前者，用户在插件上线后碰到空表会照着一条已经不成立的
+ * 原因去排查（PR #66 三次复审 P2）。
+ *
+ * 措辞用「发现」不用「上新」：被动采集证明不了商品何时上架，只能证明我们何时见到
+ * ——与卖家清单「近 N 日新发现」同一条纪律（见 CLAUDE.md 竞对 ASIN 上报一节）。
  */
 export const COMPETITOR_NEW_HINT =
-  '依赖浏览器插件采集的竞对在售数据，插件未上线前这里可能暂无命中';
+  '近 7 日内首次见到、且晚于该卖家基线批次的商品；数据依赖浏览器插件采集，插件未上线前可能长期无命中';
 
 function Row({
   label,
@@ -136,7 +140,7 @@ export interface FilterPanelProps {
   value: FilterDraft;
   onChange: (next: FilterDraft) => void;
   /**
-   * 是否显示「竞对新品」开关。它读取的是竞对监控域的私有数据（关注了哪些卖家），
+   * 是否显示「竞对新发现」开关。它读取的是竞对监控域的私有数据（关注了哪些卖家），
    * `analysis:view` 不足以授权——只有同时拥有 `competitor:view` 的用户才看得到这个
    * 开关，后端 `/search`、`/export` 在 `competitor_new=true` 时同样会再校验一次
    * （PR #66 复审 P1：这不是"前端隐藏就够了"的纯展示问题，两处都要拦）。
@@ -222,9 +226,9 @@ export default function FilterPanel({ value, onChange, canCompetitorNew }: Filte
         />
       </Row>
       {canCompetitorNew ? (
-        <Row label="竞对新品" hint={COMPETITOR_NEW_HINT}>
+        <Row label="竞对新发现" hint={COMPETITOR_NEW_HINT}>
           <Switch
-            aria-label="竞对新品"
+            aria-label="竞对新发现"
             disabled={onlyDropped}
             checked={value.competitorNew}
             onChange={(checked) => patch({ competitorNew: checked })}

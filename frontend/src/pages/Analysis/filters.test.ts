@@ -104,7 +104,7 @@ describe('toSearchBody', () => {
     expect(toSearchBody(scope, { ...defaultFilters(), isNew: undefined }).is_new).toBeUndefined();
   });
 
-  it('竞对新品是两态开关：勾选时传 true，不勾选不传（issue #56 P2）', () => {
+  it('竞对新发现是两态开关：勾选时传 true，不勾选不传（issue #56 P2）', () => {
     // 与新词不同，这里没有第三态——不勾选就是「不筛」，不需要区分「未勾选」与「明确要全部」。
     expect(toSearchBody(scope, { ...defaultFilters(), competitorNew: true }).competitor_new).toBe(
       true,

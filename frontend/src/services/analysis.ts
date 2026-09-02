@@ -85,9 +85,13 @@ export interface SearchBody {
   conversion_share_max?: number;
   is_new?: boolean;
   /**
-   * 竞对新品：前三商品槽位任一 ASIN 属于当前用户关注的卖家在售集合，与 `is_new` 同构
-   * （不传 = 不筛）。依赖浏览器插件采集的竞对在售数据（issue #56 P3a），插件覆盖率
-   * 不够时这个开关可能暂无命中——这不是筛选坏了。
+   * 竞对新发现：前三商品槽位任一 ASIN，是当前用户关注的卖家**近 7 日新发现**的 ASIN
+   * （晚于该卖家基线批次且落在窗口内），与 `is_new` 同构（不传 = 不筛）。
+   *
+   * **不是"关注卖家的全部在售商品"**——空结果有两个成因：插件未上线（数据没进来）、
+   * 或商品都是 7 天前见到的（过了窗口）。界面提示两条都要说（见 `COMPETITOR_NEW_HINT`）。
+   * 字段名沿用 `competitor_new`，界面标签是「竞对新发现」：measure 读作 new *discovery*，
+   * 被动采集证明不了商品何时上架。
    */
   competitor_new?: boolean;
   /** 行集合维度，缺省 ALL。切到 DROPPED 时其余筛选在界面上必须置灰——它们会让掉榜段恒为空。 */

@@ -126,12 +126,12 @@ describe('分析查询屏 · 作用域与筛选', () => {
     });
   });
 
-  it('竞对新品开关只改草稿，点开始筛选才带上 competitor_new（issue #56 P2）', async () => {
+  it('竞对新发现开关只改草稿，点开始筛选才带上 competitor_new（issue #56 P2）', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole('switch', { name: '竞对新品' }));
+    await user.click(screen.getByRole('switch', { name: '竞对新发现' }));
     await settle();
     // 与其余筛选同一条纪律：改草稿不发请求
     expect(searchAnalysis).toHaveBeenCalledTimes(1);
@@ -150,12 +150,12 @@ describe('分析查询屏 · 作用域与筛选', () => {
    * 曾因为这个清单不完整而不显示既有的「本次结果不含掉榜行」提示——用户看到的会是
    * 一份悄悄漏了行的结果，且没有任何解释。
    */
-  it('只启用竞对新品筛选（新词切到全部）时仍显示掉榜提示', async () => {
+  it('只启用竞对新发现筛选（新词切到全部）时仍显示掉榜提示', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
 
-    // 关掉默认的新词筛选，让「竞对新品」成为生效条件里唯一在起作用的筛选维度。
+    // 关掉默认的新词筛选，让「竞对新发现」成为生效条件里唯一在起作用的筛选维度。
     // 按 value 用 JS `===` 定位，不用 `[value="all"]` 属性选择器——jsdom 的属性匹配
     // 大小写不敏感，会连带选中行集合开关那组默认选中的 `ALL`。
     const allOption = Array.from(
@@ -163,7 +163,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     ).find((radio) => radio.value === 'all')!.closest('label')!;
     fireEvent.click(allOption);
 
-    await user.click(screen.getByRole('switch', { name: '竞对新品' }));
+    await user.click(screen.getByRole('switch', { name: '竞对新发现' }));
     await act(async () => {
       await user.click(applyFilters());
     });
@@ -175,7 +175,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     expect(await screen.findByText(/本次结果不含掉榜行/)).toBeInTheDocument();
   });
 
-  it('没有 competitor:view 权限时不显示竞对新品开关（PR #66 复审 P1）', async () => {
+  it('没有 competitor:view 权限时不显示竞对新发现开关（PR #66 复审 P1）', async () => {
     // 这个开关读取的是竞对监控域的私有数据，只有 analysis:view 不足以授权；
     // 后端 /search、/export 在 competitor_new=true 时会再校验一次 competitor:view，
     // 这里只验证前端不提供这个入口。
@@ -183,7 +183,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
 
-    expect(screen.queryByRole('switch', { name: '竞对新品' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: '竞对新发现' })).not.toBeInTheDocument();
   });
 
   it('顶部立即查询不会偷带尚未应用的筛选条件', async () => {

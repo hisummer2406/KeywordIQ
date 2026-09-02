@@ -293,7 +293,7 @@ def _count_base_query(site: str, view: str, on: date):
     的关联对"有多少行"毫无贡献（LEFT JOIN 主键不改变行数），带上就是纯粹的开销。
     筛选条件引用的维度在两条路径上完全一致，故 ``_apply_filters`` 两边通用。
 
-    **这个 ``DimProduct`` LEFT JOIN 不能删**：ASIN 与「竞对新品」筛选已经改成不相关子
+    **这个 ``DimProduct`` LEFT JOIN 不能删**：ASIN 与「竞对新发现」筛选已经改成不相关子
     查询，不再依赖它，但 ``product_title`` 筛选仍然只作用于 top1、仍然借用这个别名
     （issue #56 P2 design.md 决策 2）。
     """
@@ -311,13 +311,13 @@ def _count_base_query(site: str, view: str, on: date):
 def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int):
     """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。
 
-    **ASIN 与「竞对新品」按前三商品槽位任一命中**（与品牌/类目同一形状：解析成
+    **ASIN 与「竞对新发现」按前三商品槽位任一命中**（与品牌/类目同一形状：解析成
     ``product_id``/id 集合的子查询 → 三列 ``OR``），走独立的 ``idx_{prefix}_top{n}_product``
     三个索引（issue #56 P2）。``product_title`` 仍然只作用于点击量第一名——它借用的是
     base query 里已 JOIN 到 ``top1_product_id`` 的那个 ``DimProduct`` 别名，本次不扩展。
     要扩到三个槽位必须显式改写本函数，不会因为 base query 多返回了字段而悄悄扩散。
 
-    ``user_id`` 只用于「竞对新品」筛选的关注关系判定，从 service 层的当前用户令牌传入，
+    ``user_id`` 只用于「竞对新发现」筛选的关注关系判定，从 service 层的当前用户令牌传入，
     MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
     """
     if req.keyword:
@@ -353,10 +353,10 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id
         )
     if req.product_title:
         stmt = stmt.where(DimProduct.title.ilike(f"%{req.product_title}%"))
-    # 竞对新品：命中口径是该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家
+    # 竞对新发现：命中口径是该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家
     # **近 NEW_DISCOVERY_WINDOW_DAYS 天内新发现**的 ASIN（不是"曾经上报过就算"——
     # `competitor_seller_asin` 不做下架删除，无时间限定的话这个开关会命中卖家有史以来
-    # 上报过的全部商品，与字段名"新品"名实不符，PR #66 复审 P1 指出）。判据与卖家清单的
+    # 上报过的全部商品，PR #66 复审 P1 指出）。判据与卖家清单的
     # 「近 7 日新发现」（`watch_crud._new_discoveries_subq`）同构并复用同一个窗口常量：
     # `first_seen_at > baseline_at`（基线批次不算新发现）且落在窗口内；`baseline_at`
     # 为 NULL（尚未建立基线）时比较结果是 SQL NULL，天然不命中，不需要额外的 CASE。
@@ -433,7 +433,7 @@ def search_stmt(
 
     ``offset``/``limit`` 显式给出时优先于 ``req`` 的分页字段——分段分页下这一段取的
     未必是整页（跨界时只取到在榜段末尾），偏移与条数由 ``row_segments.plan_segments``
-    算出，不能再从页码反推。``user_id`` 只给「竞对新品」筛选用，见 ``_apply_filters``。
+    算出，不能再从页码反推。``user_id`` 只给「竞对新发现」筛选用，见 ``_apply_filters``。
     """
     stmt, fact = _base_query(site, view, on)
     stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)

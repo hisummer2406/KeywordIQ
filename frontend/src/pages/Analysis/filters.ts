@@ -41,8 +41,9 @@ export interface FilterDraft {
   brands: string[];
   productTitle: string;
   /**
-   * 竞对新品：前三商品槽位任一 ASIN 属于当前用户关注的卖家在售集合。两态开关，不做
-   * 三态——不像 isNew 是核心维度，这是一个可选的叠加信号，缺省不筛（issue #56 P2）。
+   * 竞对新发现：前三商品槽位任一 ASIN，是当前用户关注的卖家近 7 日新发现的 ASIN
+   * （晚于基线批次且在窗口内，见 services/analysis.ts 的 `competitor_new`）。两态开关，
+   * 不做三态——不像 isNew 是核心维度，这是一个可选的叠加信号，缺省不筛（issue #56 P2）。
    */
   competitorNew: boolean;
   /**
@@ -77,7 +78,7 @@ export const defaultFilters = (): FilterDraft => ({
 });
 
 /**
- * 按当前权限规范化「竞对新品」字段。**必须在采用保存的条件/会话状态之前调用**。
+ * 按当前权限规范化「竞对新发现」字段。**必须在采用保存的条件/会话状态之前调用**。
  *
  * 保存的条件跨登录持久（见「保存的默认条件」一节），若用户保存时勾了这个开关、之后
  * `competitor:view` 权限被收回，原样恢复会让首屏自动查询带着 `competitorNew: true`

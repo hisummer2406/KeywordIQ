@@ -17,7 +17,7 @@ from app.table.analysis import analysis_service as service
 
 class _StubUser:
     """够用即可：require_permission 只看 is_super 与 permission_codes；``id`` 供
-    「竞对新品」筛选的 user_id 透传使用（issue #56 P2）。"""
+    「竞对新发现」筛选的 user_id 透传使用（issue #56 P2）。"""
 
     def __init__(self, *, is_super=False, permissions=(), id=1):
         self.is_super = is_super

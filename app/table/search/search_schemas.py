@@ -100,14 +100,24 @@ class AnalysisSearchRequest(BaseModel):
     # 布尔筛选
     is_new: bool | None = Field(None, description="是否本周期新词")
 
-    # 竞对新品：命中口径见 competitor-keyword-crosslink 能力——三个商品槽位任一个的 ASIN
-    # 属于当前用户在当前站点关注的卖家的在售集合。`None` 不筛，与 `is_new` 同构。
+    # 竞对新发现：命中口径见 competitor-keyword-crosslink 能力——三个商品槽位任一个的
+    # ASIN，是当前用户在当前站点关注的卖家**近期新发现**的 ASIN
+    # （`first_seen_at > baseline_at` 且落在 `NEW_DISCOVERY_WINDOW_DAYS` 窗口内）。
+    # `None` 不筛，与 `is_new` 同构。
+    #
+    # **不是"在售集合"。** `competitor_seller_asin` 不做下架删除，按"曾经上报过"判定会
+    # 命中卖家有史以来的全部商品（PR #66 复审 P1 的原始缺陷）。判定口径改了、这行文案
+    # 没跟着改的话，OpenAPI 上写的就是那个已被否决的旧口径。
     #
     # **这个字段必须同步进 crud.request_has_filters()**，否则只勾这一项时总数仍会走
     # `site_data_stats` 的预存值路径而非精确计算路径，页码与实际可翻的页数对不上，且
     # 没有任何地方会报错（issue #56 P2 design.md 决策 3）。
     competitor_new: bool | None = Field(
-        None, description="是否命中当前用户关注的竞对在售 ASIN（前三商品槽位任一命中）"
+        None,
+        description=(
+            "是否命中当前用户关注的竞对卖家近期新发现的 ASIN"
+            "（前三商品槽位任一命中；窗口与卖家清单「近 7 日新发现」同一常量）"
+        ),
     )
 
     @field_validator("asin")
@@ -135,7 +145,7 @@ class FactRowBase(BaseModel):
     （ASIN/标题/品牌/类目为 None，两个份额为 0），**不由后一名顶替**——名次与槽位的
     对应关系是这些字段的全部意义。
 
-    注意：这三组字段只是**展示**数据。品牌/类目/ASIN/竞对新品的筛选按前三任一命中，
+    注意：这三组字段只是**展示**数据。品牌/类目/ASIN/竞对新发现的筛选按前三任一命中，
     标题筛选与排序仍只作用于 top1，见 crud.\\_apply_filters 与 crud.SORTABLE_FIELDS。
     """
 

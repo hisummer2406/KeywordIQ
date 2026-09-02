@@ -14,9 +14,9 @@
 - 分析查询屏的 ASIN 精确匹配从只命中 `top1_product_id` 扩展为 `top1/2/3_product_id` 任一
   命中（**MODIFIED**，`site-scoped-query`）——把 ASIN 粘进搜索框就能看到它在前三名任一
   位置出现过的全部关键词，不再"排第二名就查不到"
-- 分析查询屏新增「竞对新品」筛选维度：命中条件是该行 `top1/2/3_product_id` 对应的 ASIN
+- 分析查询屏新增「竞对新发现」筛选维度：命中条件是该行 `top1/2/3_product_id` 对应的 ASIN
   属于当前用户在当前站点关注的卖家们的在售集合（**MODIFIED**，`site-scoped-query`）
-- 新增能力 `competitor-keyword-crosslink`：定义"竞对新品命中一个关键词"这件事的语义边界
+- 新增能力 `competitor-keyword-crosslink`：定义"竞对新发现命中一个关键词"这件事的语义边界
   （只服务器端时间意义上的"当前在售"，不做历史回溯；只到 ASIN 级，不做品牌级）
 
 **不在本次范围内**：issue 里的方向 C（品牌级：卖家关联品牌 → `top1/2/3_brand_id`）——
@@ -30,7 +30,7 @@
   （命中条件、时间口径、性能约束），供 `site-scoped-query` 的筛选实现遵循
 
 ### Modified Capabilities
-- `site-scoped-query`：ASIN 精确匹配扩展到三个槽位；新增「竞对新品」筛选维度
+- `site-scoped-query`：ASIN 精确匹配扩展到三个槽位；新增「竞对新发现」筛选维度
 
 ## Impact
 

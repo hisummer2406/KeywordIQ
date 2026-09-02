@@ -31,7 +31,7 @@ D1, D2, D3 = date(2026, 7, 8), date(2026, 7, 9), date(2026, 7, 10)  # 同 ISO �
 W1, W2, WEEK = date(2026, 6, 26), date(2026, 7, 3), date(2026, 7, 10)
 
 # 大多数用例不关心「谁在查」，固定一个占位 user_id——真实身份隔离由
-# 「竞对新品」那组测试用真实 user_center 行覆盖（issue #56 P2）。
+# 「竞对新发现」那组测试用真实 user_center 行覆盖（issue #56 P2）。
 USER_ID = 1
 
 
@@ -579,7 +579,7 @@ async def test_share_filter_only_considers_first_slot(db):
 
 
 # --------------------------------------------------------------------------
-# 竞对新品筛选（issue #56 P2）
+# 竞对新发现筛选（issue #56 P2）
 #
 # 命中口径：该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家**近期新发现**
 # 的 ASIN——`first_seen_at > baseline_at`（基线批次不算）且落在

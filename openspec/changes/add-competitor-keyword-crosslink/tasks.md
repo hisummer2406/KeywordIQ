@@ -15,7 +15,7 @@
 - [x] 1.3 `uv run alembic upgrade head`（本地库）；跑一次 autogenerate 探针确认为空
       ——`alembic check` 输出 "No new upgrade operations detected."
 
-## 2. 后端：竞对新品判定与 ASIN 扩展
+## 2. 后端：竞对新发现判定与 ASIN 扩展
 
 - [x] 2.1 `app/table/search/search_schemas.py` 的 `AnalysisSearchRequest` 新增
       `competitor_new: bool | None = Field(None, description=...)`，与 `is_new` 同构
@@ -56,10 +56,12 @@
       `stateCache.ts` 的 `CACHE_VERSION` 与 `savedMode.ts` 的 `SAVED_MODE_VERSION`
       均 1→2（两者都完整存 `FilterDraft`/`Omit<FilterDraft,'q'>`，不 bump 的话旧快照/
       旧保存条件会让 `competitorNew` 以 `undefined` 渗入 UI）
-- [x] 3.2 `frontend/src/pages/Analysis/FilterPanel.tsx` 加一个「竞对新品」开关（两态，不做
-      三态——不像"只看新词"是核心维度，这是一个可选的叠加信号）；旁边加一句提示："依赖
-      浏览器插件采集的竞对在售数据，插件未上线前这里可能暂无命中"（design.md 风险 1，
-      解决用户第一次看到空结果时的困惑）——用 antd `Switch` + `aria-label="竞对新品"`
+- [x] 3.2 `frontend/src/pages/Analysis/FilterPanel.tsx` 加一个「竞对新发现」开关（两态，不做
+      三态——不像"只看新词"是核心维度，这是一个可选的叠加信号）；旁边加一句提示："近 7 日
+      内首次见到、且晚于该卖家基线批次的商品；数据依赖浏览器插件采集，插件未上线前可能
+      长期无命中"（design.md 风险 1，解决用户第一次看到空结果时的困惑；PR #66 三次复审 P2
+      把口径那半句补了进来——只说"插件未上线"会让插件上线后的空结果被归因到一条已不成立
+      的原因）——用 antd `Switch` + `aria-label="竞对新发现"`
       （供测试与无障碍工具按可访问名定位；`Row` 的标签本身只是纯文本，不天然绑定控件）
 - [x] 3.3 `frontend/src/services/upload.ts` 或对应的请求体类型（凡是维护
       `AnalysisSearchRequest` 前端镜像类型的地方）同步加 `competitor_new` 字段——
@@ -99,7 +101,7 @@
 
 ## 5. 文档与收尾
 
-- [x] 5.1 CLAUDE.md「分析查询屏」一节补充「竞对新品」筛选维度的说明（口径、AND 组合、
+- [x] 5.1 CLAUDE.md「分析查询屏」一节补充「竞对新发现」筛选维度的说明（口径、AND 组合、
       `request_has_filters` 那个陷阱——按本文件既有的"错了不会报错"密度写）；
       「竞对监控」一节的 issue #56 阶段说明更新（P2 已完成，方向 C 移出待补数据源）
 - [x] 5.2 `.env.example` 若引入新配置项（目前预计不需要，若实现时发现需要上限类配置
@@ -121,7 +123,7 @@
 
 复审在 `91456e4` 上独立跑通 CI 后指出 2 个 P1 阻断项 + 1 个 P2 语义问题，均已修复：
 
-- [x] 6.1 **[P1] "竞对新品"改成真正的时间窗口判定**：`analysis_crud.py` 的
+- [x] 6.1 **[P1] "竞对新发现"改成真正的时间窗口判定**：`analysis_crud.py` 的
       `competitor_new` 子查询补 `CompetitorSeller` join，加两个条件
       `first_seen_at > baseline_at`（排除基线批次）与
       `first_seen_at > now() - interval 'N days'`（复用
@@ -171,11 +173,41 @@
       `competitor_new`、开关隐藏、且不误报「未生效条件」）
 - [x] 7.2 **[P2] `competitor_new` 漏出掉榜提示的筛选字段清单**：`index.tsx` 的
       `FILTER_KEYS` 补上 `'competitor_new'`。新增集成测试
-      `scopeAndFilters.test.tsx`：只启用竞对新品筛选（新词切到全部）时仍显示
+      `scopeAndFilters.test.tsx`：只启用竞对新发现筛选（新词切到全部）时仍显示
       「本次结果不含掉榜行」提示
-- [x] 7.3 CLAUDE.md「竞对新品」一段补充这两处修复的说明（按既有密度：错了不会报错的
+- [x] 7.3 CLAUDE.md「竞对新发现」一段补充这两处修复的说明（按既有密度：错了不会报错的
       地方才展开）
 - [x] 7.4 前端全量：`pnpm exec vitest run src/pages/Analysis/`（195 passed）、
       `pnpm exec tsc --noEmit`（无报错）、`pnpm exec eslint`（改动文件均通过）。
       本轮未改动后端，未跑后端回归
 - [x] 7.5 按路径提交 → 推送 → 等待复审重新确认
+
+## 8. PR #66 三次复审修复（2026-09-03）
+
+三次复审在 `d609e2e` 上确认前两轮 5 条（2 P1 + 3 P2）全部关闭、CI 与门禁全绿，新发现
+1 个 P2：**判定口径在第一轮已从"在售集合"改成"近 7 日新发现"，但用户可见的名称与说明
+没跟着改**——一审 P1 给的两个选项是"改判定"或"改名"，选了改判定，只改到 SQL、CLAUDE.md
+与 spec delta，四处对外措辞仍停在旧口径。纯文案，不改行为。
+
+- [x] 8.1 **界面提示改写**（`FilterPanel.tsx` 的 `COMPETITOR_NEW_HINT`）：原文只说
+      "依赖浏览器插件采集的竞对在售数据，插件未上线前这里可能暂无命中"，把空结果单一
+      归因给插件未上线。实际有三个成因且界面上长得一模一样：插件未上线、卖家还没被上报
+      过两次（首次上报即基线）、见到的时刻出了 7 天窗口。插件（P3b）上线后，用户碰到
+      空表会照着一条已不成立的原因排查。新文案："近 7 日内首次见到、且晚于该卖家基线
+      批次的商品；数据依赖浏览器插件采集，插件未上线前可能长期无命中"——"晚于基线批次"
+      同时表达了"至少两次上报"这个前提（design.md 风险 1 当初点名没覆盖的那一层）
+- [x] 8.2 **界面标签「竞对新品」→「竞对新发现」**（`FilterPanel.tsx` 的 `label` 与
+      `aria-label`，四处测试的可访问名查询同步）。理由不是措辞偏好：被动采集证明不了
+      商品何时上架，只能证明我们何时见到，CLAUDE.md 竞对 ASIN 上报一节明写"界面措辞
+      一律「发现于」/「近 N 日新发现」"、"上新"及其近义词（含"新品"）在这条数据线上
+      不用——本变更是那条纪律立起来之后的第一个下游消费者，放过去就成了默认写法。
+      中文称谓在代码、测试、CLAUDE.md 与本变更的 spec/design/tasks 里一并统一；
+      **请求字段沿用 `competitor_new`、前端字段沿用 `competitorNew`**（改标识符要动
+      schema、前端镜像类型、spec 三处，收益不抵成本），它读作 new *discovery*
+- [x] 8.3 **三处旧口径注释/描述**：`search_schemas.py` 的字段注释与 `description`
+      （后者进 OpenAPI，是对外契约，写的是已被否决的"在售 ASIN"口径）、
+      `services/analysis.ts` 与 `filters.ts` 的字段注释
+- [x] 8.4 CLAUDE.md 补两条：界面标签为什么不叫「新品」（指回上文竞对 ASIN 上报一节的
+      同一条纪律）、界面提示必须同时说出空结果的多个成因
+- [x] 8.5 后端 `ruff check .` + 定向回归；前端 lint/tsc/test 由提交门禁跑
+- [x] 8.6 按路径提交 → 推送 → 合并

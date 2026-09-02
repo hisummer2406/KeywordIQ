@@ -1,4 +1,4 @@
-"""「竞对新品」筛选的权限边界（无需 PostgreSQL）。
+"""「竞对新发现」筛选的权限边界（无需 PostgreSQL）。
 
 覆盖 issue #56 P2 PR #66 复审 P1：`competitor_new=true` 读取的是竞对监控域的私有
 数据（用户关注了哪些卖家），只有 `analysis:view`/`analysis:export` 不足以授权。
@@ -76,7 +76,7 @@ async def _stub_search(*_args, **_kwargs) -> AnalysisSearchResponse:
 
 
 def test_search_without_competitor_new_does_not_require_competitor_view(monkeypatch):
-    """不勾竞对新品时，只有 analysis:view 照常放行——这条权限校验不该误伤其余筛选。"""
+    """不勾竞对新发现时，只有 analysis:view 照常放行——这条权限校验不该误伤其余筛选。"""
     app = _build_app(monkeypatch, user=_StubUser(permissions={"analysis:view"}))
     monkeypatch.setattr(service, "search", _stub_search)
 
