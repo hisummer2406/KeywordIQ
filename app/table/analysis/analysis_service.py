@@ -167,7 +167,7 @@ async def _fetch_trends(
 
 async def _listed_total(
     db: AsyncSession, site: str, view: str, on: date,
-    req: AnalysisSearchRequest, has_filters: bool,
+    req: AnalysisSearchRequest, has_filters: bool, user_id: int,
 ) -> int:
     """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
 
@@ -179,7 +179,9 @@ async def _listed_total(
         return (
             await db.execute(crud.scope_row_count_stmt(site, view, on))
         ).scalar_one_or_none() or 0
-    return (await db.execute(crud.count_filtered_stmt(site, view, on, req))).scalar_one()
+    return (
+        await db.execute(crud.count_filtered_stmt(site, view, on, req, user_id))
+    ).scalar_one()
 
 
 async def _dropped_total(db: AsyncSession, site: str, view: str, on: date) -> int:
@@ -219,8 +221,12 @@ async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
     )
 
 
-async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearchResponse:
-    """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。"""
+async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> AnalysisSearchResponse:
+    """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。
+
+    ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新发现」筛选判定关注
+    关系，MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
+    """
     site = _resolve_site(req.site)
     view = req.view
     dates = await _available_dates(db, site, view)
@@ -234,7 +240,7 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     # 掉榜段就为空**。这不是优化，是「只看选定期」这条口径的必然结果，界面侧须明示。
     has_filters = crud.request_has_filters(req)
 
-    listed_total = await _listed_total(db, site, view, on, req, has_filters)
+    listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id)
     dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on)
 
     # 两段各自有序且永不交错（掉榜恒在末尾），故按边界切分、各发一条查询，而不是
@@ -248,7 +254,11 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     if plan.listed is not None:
         offset, limit = plan.listed
         rows += crud.shape_rows(
-            (await db.execute(crud.search_stmt(site, view, on, req, offset=offset, limit=limit))).all()
+            (
+                await db.execute(
+                    crud.search_stmt(site, view, on, req, offset=offset, limit=limit, user_id=user_id)
+                )
+            ).all()
         )
     if plan.dropped is not None and not has_filters:
         offset, limit = plan.dropped
@@ -288,11 +298,13 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest) -> AnalysisSearch
     )
 
 
-def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, str, date | None]:
+def resolve_export_scope(
+    db: Session, req: AnalysisSearchRequest, user_id: int
+) -> tuple[str, str, date | None]:
     """解析导出作用域并在开始流式输出前把上限检查做掉。
 
     上限必须在响应头发出之前检查：一旦开始流，就只能给出 200 + 一个被截断的 CSV，
-    而截断的 CSV 会被当成完整数据使用。宁可 413 让用户加筛选。
+    而截断的 CSV 会被当成完整数据使用。宁可 413 让用户加筛选。``user_id`` 同 ``search``。
     """
     site = _resolve_site(req.site)
     dates = crud.available_dates(db, site, req.view)
@@ -308,7 +320,7 @@ def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, 
     listed = 0
     if wants_listed(req.include):
         listed = (
-            crud.count_capped(db, site, req.view, on, req, cap + 1) if has_filters
+            crud.count_capped(db, site, req.view, on, req, cap + 1, user_id) if has_filters
             else crud.scope_row_count(db, site, req.view, on)
         )
     # 带筛选时掉榜段恒为空：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配。
@@ -325,7 +337,7 @@ def resolve_export_scope(db: Session, req: AnalysisSearchRequest) -> tuple[str, 
 
 
 def iter_export_csv(
-    site: str, view: str, on: date | None, req: AnalysisSearchRequest
+    site: str, view: str, on: date | None, req: AnalysisSearchRequest, user_id: int
 ) -> Iterator[str]:
     """产出 CSV 文本块（首块带 UTF-8 BOM）。
 
@@ -365,7 +377,9 @@ def iter_export_csv(
             return _flush()
 
         if wants_listed(req.include):
-            for rows in crud.iter_export_rows(db, site, view, on, req, settings.EXPORT_ROW_CAP):
+            for rows in crud.iter_export_rows(
+                db, site, view, on, req, settings.EXPORT_ROW_CAP, user_id
+            ):
                 yield _emit(rows)
 
         # 掉榜段接在在榜段之后，与列表里的顺序一致（掉榜恒在末尾）。带筛选时它恒为空，
