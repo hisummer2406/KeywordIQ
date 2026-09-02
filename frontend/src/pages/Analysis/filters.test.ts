@@ -4,6 +4,7 @@ import {
   detectSearchKind,
   defaultFilters,
   matchedPreset,
+  sanitizeCompetitorNew,
   toSearchBody,
   type ScopeDraft,
 } from './filters';
@@ -111,6 +112,26 @@ describe('toSearchBody', () => {
     expect(
       toSearchBody(scope, { ...defaultFilters(), competitorNew: false }).competitor_new,
     ).toBeUndefined();
+  });
+});
+
+describe('sanitizeCompetitorNew', () => {
+  it('有权限时原样透传', () => {
+    const filters = { ...defaultFilters(), competitorNew: true };
+    expect(sanitizeCompetitorNew(filters, true)).toEqual(filters);
+  });
+
+  it('无权限时强制关闭，即便原值是 true（PR #66 复审 P2）', () => {
+    // 保存的条件跨登录持久：用户保存时有权限、之后被收回，原样恢复会让首屏自动查询
+    // 带着 competitor_new=true 撞上后端权限校验（403），而开关又因无权限被隐藏，
+    // 用户看不到也关不掉这个仍在生效的条件。
+    const filters = { ...defaultFilters(), competitorNew: true };
+    expect(sanitizeCompetitorNew(filters, false).competitorNew).toBe(false);
+  });
+
+  it('无权限且原值已是 false 时不受影响', () => {
+    const filters = { ...defaultFilters(), competitorNew: false };
+    expect(sanitizeCompetitorNew(filters, false)).toEqual(filters);
   });
 });
 

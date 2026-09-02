@@ -152,3 +152,30 @@
       失败，复审已确认不是本 PR 的阻断项）；`openspec validate --strict` 通过
 - [x] 6.5 按路径提交 → 推送 → 等待复审重新确认——两个提交：`3d8d522`（无关的挂钟时间
       测试修复，独立提交）、`0992e8d`（三处复审修复），已推送
+
+## 7. PR #66 二次复审修复（2026-09-02）
+
+二次复审在 `4460e3c` 上确认上轮 2 个 P1 + 1 个 P2 均已关闭，但新发现 2 个 P2（均为
+纯前端问题，未涉及后端）：
+
+- [x] 7.1 **[P2] 权限撤销后，已保存的竞对筛选会让首屏持续 403**：`filters.ts` 新增纯函数
+      `sanitizeCompetitorNew(filters, canCompetitorNew)`，无权限时强制把 `competitorNew`
+      规范化为 `false`。`index.tsx` 在两处读取保存条件的地方接入（草稿初值、
+      `resolveInitialScope` 组装首屏条件）；`apply()`（立即查询/开始筛选/首屏自动查询
+      三处生效入口唯一共同必经之处）额外做一次同样的兜底并据此重算 `sig`，不依赖调用方
+      各自记得清空这个字段——顺带把 `apply` 的第二个参数（调用方传入的 `sig`）去掉，
+      改为函数内部统一算，避免字段被清空后 `body` 与外部传入的 `sig` 不再对应同一份
+      内容。新增单测：`filters.test.ts` 3 个用例（有权限透传/无权限强制关闭/无权限且
+      原值已是 false）+ `defaultsAndFirstPaint.test.tsx` 1 个集成用例（保存
+      `competitorNew: true`、当前 `canViewCompetitor: false` 时首屏请求不带
+      `competitor_new`、开关隐藏、且不误报「未生效条件」）
+- [x] 7.2 **[P2] `competitor_new` 漏出掉榜提示的筛选字段清单**：`index.tsx` 的
+      `FILTER_KEYS` 补上 `'competitor_new'`。新增集成测试
+      `scopeAndFilters.test.tsx`：只启用竞对新品筛选（新词切到全部）时仍显示
+      「本次结果不含掉榜行」提示
+- [x] 7.3 CLAUDE.md「竞对新品」一段补充这两处修复的说明（按既有密度：错了不会报错的
+      地方才展开）
+- [x] 7.4 前端全量：`pnpm exec vitest run src/pages/Analysis/`（195 passed）、
+      `pnpm exec tsc --noEmit`（无报错）、`pnpm exec eslint`（改动文件均通过）。
+      本轮未改动后端，未跑后端回归
+- [x] 7.5 按路径提交 → 推送 → 等待复审重新确认

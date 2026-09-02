@@ -76,6 +76,21 @@ export const defaultFilters = (): FilterDraft => ({
   competitorNew: false,
 });
 
+/**
+ * 按当前权限规范化「竞对新品」字段。**必须在采用保存的条件/会话状态之前调用**。
+ *
+ * 保存的条件跨登录持久（见「保存的默认条件」一节），若用户保存时勾了这个开关、之后
+ * `competitor:view` 权限被收回，原样恢复会让首屏自动查询带着 `competitorNew: true`
+ * 撞上后端新增的权限校验（403）——而开关本身又因无权限被隐藏，用户看不到、也无从
+ * 关掉这个仍在生效的条件（PR #66 复审 P2）。
+ */
+export function sanitizeCompetitorNew(
+  filters: FilterDraft,
+  canCompetitorNew: boolean,
+): FilterDraft {
+  return canCompetitorNew ? filters : { ...filters, competitorNew: false };
+}
+
 // --------------------------------------------------------------------------
 // 检索目标判定
 // --------------------------------------------------------------------------
