@@ -1,0 +1,28 @@
+<!--
+  手工构造的脱敏样本，模拟 Amazon 店铺全品列表页（`me=`）复用的标准搜索结果页
+  结构。这不是从真实页面另存的——本仓库无法访问真实登录的 Amazon 会话
+  （design.md 决策 4）。真机验证前，这份 fixture 只能证明"解析器能处理这种形状
+  的 HTML"，不能证明"选择器与真实页面一致"。tasks.md 第 8 节的真机验证若发现
+  选择器不匹配，应同时更新这份 fixture 为真实页面的脱敏结构（去除卖家名/账号等
+  个人信息，只保留商品卡片的 DOM 形状）。
+-->
+<div id="search">
+  <div data-component-type="s-search-result" data-asin="B0TESTASIN1">
+    <h2><a href="/dp/B0TESTASIN1"><span>Sample Product One</span></a></h2>
+    <img class="s-image" src="https://m.media-amazon.com/images/I/sample1.jpg" />
+  </div>
+  <div data-component-type="s-search-result" data-asin="b0testasin2">
+    <h2><span>Sample Product Two (lowercase asin, no image)</span></h2>
+  </div>
+  <!-- 广告位/无 data-asin 的卡片：必须被跳过，不产生空 ASIN 条目 -->
+  <div data-component-type="s-search-result">
+    <h2><span>Sponsored placeholder</span></h2>
+  </div>
+  <div data-component-type="s-search-result" data-asin="B0TESTASIN3">
+    <h2><a href="/dp/B0TESTASIN3"><span>  Sample Product Three (needs trim)  </span></a></h2>
+    <img class="s-image" src="https://m.media-amazon.com/images/I/sample3.jpg" />
+  </div>
+</div>
+<span class="s-pagination-item s-pagination-next s-pagination-button" aria-disabled="false">
+  <a class="s-pagination-item s-pagination-next" href="/s?i=merchant-items&amp;me=SELLERID&amp;page=2">Next</a>
+</span>

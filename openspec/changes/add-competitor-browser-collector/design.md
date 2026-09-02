@@ -166,6 +166,32 @@ export const DOMAIN_TO_SITE: Record<string, string> = {
 | 409 `competitor.idempotency_key_reused` | 不应该发生（决策 3 的结构保证幂等键与请求体是绑定的一对一），若发生视为插件自身缺陷，提示"上报异常，请刷新页面重试"（= 走一次全新的步骤 1），并在插件内部日志（`chrome.storage.local` 的一个环形缓冲区，供运营截图反馈问题）记录原始响应体 |
 | 422（未关注该卖家 / 站点码非法 / 上报体本身不合法） | 提示服务端返回的具体原因（`RejectedItem`/错误消息透传），不重试——重试不会让"未关注"变成"已关注" |
 
+### 决策 6：网络请求发自后台 service worker，不发自 content script；API 地址可配置
+
+content script 只负责 DOM 解析与页面内 UI，解析结果通过 `chrome.runtime.sendMessage`
+交给 background（MV3 service worker），由 background 持有 `getAuthToken()`、执行
+`fetch`、做决策 3 的 `request_id` 冻结与决策 5 的重试/错误分类，再把结果消息传回
+content script 展示。**不在 content script 里直接 `fetch`**：content script 与
+被注入的 Amazon 页面共享执行上下文的网络策略认知，容易与页面自身的 CSP/网络行为
+纠缠；把网络逻辑集中在 background 也让"一次采集对应一次冻结的请求体"这条纪律
+只需要在一个地方（background 的消息处理器）维护。
+
+API 地址（开发环境 `http://localhost:8000`、生产环境实际域名）随 token 一起在
+options page 配置、存进 `chrome.storage.local`（键名 `keywordiq_api_base`），
+`auth.ts` 提供 `getApiBaseUrl()`/`setApiBaseUrl()`，与 `getAuthToken()` 同构。
+
+**CORS 依赖**：后端 `main.py` 当前 `CORSMiddleware` 配置 `allow_origins=["*"]`，
+插件不发送 Cookie（用 `Authorization` 头而非 `credentials: 'include'`），因此
+background service worker 的 `fetch` 在当前后端配置下无需声明 `host_permissions`
+即可成功——浏览器按标准 CORS 规则放行。这是**对现状的依赖，不是本变更做出的决定**：
+若后端未来把 CORS 来源收紧为白名单（类似 `.env.example` 里 OSS bucket CORS 收紧
+的既有先例），插件的请求会开始失败，且失败表现是普通的网络错误（决策 5 的"网络
+错误/超时"分支），运营看到的提示不会指向"CORS 被收紧"这个真正原因。**收紧后端
+CORS 之前，需要同时给插件的来源开白名单，或改为 `optional_host_permissions` +
+`chrome.permissions.request()` 的动态授权模式**（MV3 处理"用户自定义域名"的标准
+做法）——本次不做后者，因为当前唯一的调用方就是这个插件，声明动态权限请求的复杂度
+换不回实际收益。
+
 ## Risks / Trade-offs
 
 - **[风险] 鉴权占位方案的每日重新粘贴体验差** → 缓解：这是有意的临时状态，proposal
@@ -188,3 +214,12 @@ export const DOMAIN_TO_SITE: Record<string, string> = {
 - 站点映射表要不要在插件启动时打一条"当前支持站点：US/GB/DE"的可见提示，让运营
   在遇到不支持的站点时立刻知道是"插件不支持"而不是"我操作错了"——留给实现时按
   UI 便利性决定，不影响数据正确性
+- **`ship_to_region` 本次实现未采集，字段留空（`undefined`）。** 该字段是"配送
+  地区码"，schema 限长 8 字符，暗示的是一个短码（国家码/邮编一类），但店铺列表页
+  上肉眼可见的送货地址信息是完整文本（如"Deliver to United States"），不是短码，
+  也不确定页面上哪个元素能可靠给出一个符合"码"这个形态的值——这需要对着真实登录
+  会话核实，本仓库做不到（与决策 4 同一类限制）。该字段本就是可选的审计字段、
+  不参与任何判定，留空不影响数据正确性，只是暂时失去"这批数据是在什么配送地区
+  设置下采的"这层审计能力。tasks.md 第 8 节真机验证时应顺手确认页面上有没有
+  合适的短码来源，有就在此后补一个小改动接上，没有就把这条 Open Question
+  改写成"确认为不可得，接受这个信息缺口"
