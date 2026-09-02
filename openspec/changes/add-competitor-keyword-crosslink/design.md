@@ -15,8 +15,12 @@
 
 **Goals:**
 - ASIN 精确匹配从只命中 `top1_product_id` 扩展到三个槽位任一命中
-- 新增"竞对新品"筛选：命中条件是该词前三商品里，有一个 ASIN 属于当前用户在当前站点
-  关注的卖家的在售集合
+- 新增"竞对新品"筛选：命中条件是该词前三商品里，有一个 ASIN 是当前用户在当前站点关注
+  的卖家**近期新发现**的商品——判据与卖家清单「近 7 日新发现」（`watch_crud.
+  NEW_DISCOVERY_WINDOW_DAYS`）同构：`first_seen_at > baseline_at`（基线批次不算）且
+  落在窗口内（PR #66 复审 P1 定案；首版把它写成"当前在售集合、不限时间"，但
+  `competitor_seller_asin` 不做下架删除，无时间限定会让这个开关命中卖家有史以来上报过
+  的全部商品，与字段名"新品"名实不符）
 - 索引补齐到位，两条筛选都不退化成全表扫描
 - 保持"带筛选的查询锁死在单一事实切片里"这条既有纪律不变——不引入新的查询模式
 
@@ -55,16 +59,26 @@ if req.asin:
     stmt = stmt.where(or_(fact.top1_product_id == pid, fact.top2_product_id == pid,
                            fact.top3_product_id == pid))
 
-# 竞对新品：解析成一个 product_id 集合
+# 竞对新品：解析成一个 product_id 集合，限定「近期新发现」
 if req.competitor_new:
     ids = (
         select(DimProduct.product_id)
         .join(CompetitorSellerAsin, CompetitorSellerAsin.asin == DimProduct.asin)
+        .join(CompetitorSeller, and_(
+            CompetitorSeller.seller_id == CompetitorSellerAsin.seller_id,
+            CompetitorSeller.site == CompetitorSellerAsin.site,
+        ))
         .join(UserSellerWatch, and_(
             UserSellerWatch.seller_id == CompetitorSellerAsin.seller_id,
             UserSellerWatch.site == CompetitorSellerAsin.site,
         ))
-        .where(UserSellerWatch.user_id == user_id, CompetitorSellerAsin.site == site)
+        .where(
+            UserSellerWatch.user_id == user_id,
+            CompetitorSellerAsin.site == site,
+            CompetitorSellerAsin.first_seen_at > CompetitorSeller.baseline_at,
+            CompetitorSellerAsin.first_seen_at
+            > func.now() - text(f"interval '{NEW_DISCOVERY_WINDOW_DAYS} days'"),
+        )
         .scalar_subquery()
     )
     stmt = stmt.where(or_(fact.top1_product_id.in_(ids), fact.top2_product_id.in_(ids),
@@ -74,6 +88,23 @@ if req.competitor_new:
 两处子查询都不相关（uncorrelated：`user_id`/`site`/`asin` 对整条查询是常量），计划器会
 物化一次再对三列做 `IN`/`=` 探测，与已验证的品牌/类目筛选同一执行形状，不需要单独再证明
 一次性能。`user_id` 从令牌取（服务层传入，不从请求体读，与本仓库既有鉴权模式一致）。
+
+**"新发现"两个时间条件复用 `watch_crud.NEW_DISCOVERY_WINDOW_DAYS`，不重新定义一个窗口
+常量**（这条是 PR #66 复审后补的决策，首版没有）。`competitor_seller_asin` 是被动、增量
+采集的历史观察集合，不做下架删除（见 `asin_model.py` 的既有边界）——不加时间限定的话，
+「竞对新品」会命中卖家有史以来上报过的全部商品，与字段名不符，且与卖家清单页"近 7 日
+新发现"的口径不一致（同一个数据源，两处却在回答不同的问题）。两个条件缺一都会制造假新品：
+- `first_seen_at > baseline_at`——排除首次上报那批（基线批次不是"新发现"，是"我们第一次
+  看到这家店在卖什么"，见 `asin_service.py` 的基线不变式）
+- `first_seen_at > now() - interval 'N days'`——排除"新发现"但已经不新鲜的历史记录，
+  `baseline_at` 为 NULL（卖家尚未建立基线）时比较结果是 SQL NULL，天然不命中，不需要
+  额外的 `CASE WHEN` 兜底（与 `_new_discoveries_subq` 那种"要区分 NULL 与 0"的场景不同，
+  这里只是一个 WHERE 条件的真假判断）
+
+**改动前 ASIN 筛选是 `DimProduct.asin == req.asin`（借用 base query 里已 JOIN 到
+`top1_product_id` 的那个 `DimProduct` 别名）。改成子查询形式后，这个 JOIN 不再是 ASIN
+筛选的依赖，但 `product_title` 筛选仍然依赖它（`product_title` 本次不扩展到三个槽位，
+保持只命中 top1）——`_count_base_query` 里的 `DimProduct` LEFT JOIN 不能删。**
 
 **改动前 ASIN 筛选是 `DimProduct.asin == req.asin`（借用 base query 里已 JOIN 到
 `top1_product_id` 的那个 `DimProduct` 别名）。改成子查询形式后，这个 JOIN 不再是 ASIN
@@ -89,6 +120,12 @@ if req.competitor_new:
 路径都能正常跑完，只是总数是错的）。这是本次改动里"错了不会报错"的地方，必须在实现时
 显式核对，并补一个断言 `request_has_filters` 结果的单测。
 
+**元组里放的是 `req.competitor_new or None`，不是裸值**（PR #66 复审 P2 补的修正）。
+`competitor_new` 与三态的 `is_new` 不同——它只有两态，`_apply_filters` 里是
+`if req.competitor_new:`，`False` 与 `None` 的查询结果完全一样。裸传 `req.competitor_new`
+会让 `False` 被 `v is not None` 误判成"带筛选"，错误地切到精确计数路径；`or None` 把
+`False` 收敛回 `None`，与它在 `_apply_filters` 里的实际行为对齐。
+
 ### 决策 4：不做"按具体卖家筛选"，只做全局布尔开关
 
 请求字段是 `competitor_new: bool | None = Field(None, ...)`（`None` = 不筛，与 `is_new`
@@ -98,12 +135,29 @@ if req.competitor_new:
 细分，用户可以先去竞对监控页确认是哪个卖家的 ASIN、再把该 ASIN 粘到 ASIN 搜索框（决策 2
 已经支持三槽位任一命中）——两个入口组合起来覆盖了这个需求，不需要为此新增一个筛选维度。
 
+### 决策 5：`competitor_new=true` 额外要求 `competitor:view` 权限
+
+`/search`、`/export` 只挂了 `analysis:view`/`analysis:export`，而 `competitor_new` 读取
+的是竞对监控域的私有数据（用户关注了哪些卖家）——两个数据域的权限点是独立的
+（`app/auth/permissions.py`：`COMPETITOR_VIEW` 的注释明确写着"每个用户的关注池互相独立，
+不是全体共用一个开关的授权粒度，与 `ANALYSIS_VIEW` 等同一档次"）。首版遗漏了这一点
+（PR #66 复审 P1），补法是在两个端点里按需校验：`if req.competitor_new:
+simple_auth.check_permission(user, COMPETITOR_VIEW)`——`check_permission` 是新增的静态
+方法，逻辑与 `require_permission` 依赖内部一致，独立成方法是因为这里的权限要不要求取决于
+请求体内容，不是逐路由的静态声明，套不进 `Depends()` 那一套。前端同步按
+`access.canViewCompetitor` 隐藏开关（`FilterPanel` 新增 `canCompetitorNew` prop）——
+但前端隐藏只是体验层面，真正的边界仍然在后端这两处检查。
+
 ## Risks / Trade-offs
 
-- **[风险] 上线后短期内 `competitor_new` 筛选可能恒为空结果** → P3a 的浏览器插件客户端
-  尚未开发（服务端 P3a 已完成，见 PR #64），`competitor_seller_asin` 可能没有真实数据。
-  这不是本次改动的缺陷，但前端文案需要说清楚（例如筛选开关旁加一句提示"竞对在售数据依赖
-  浏览器插件采集，插件上线前这里可能没有命中"），否则用户会以为筛选坏了
+- **[风险] "新发现"判定依赖 `baseline_at` 落定，且落定需要至少两次上报** → 首次上报把
+  `baseline_at` 与该批 `first_seen_at` 落在同一事务、严格相等（`asin_service.py` 的不变式），
+  `first_seen_at > baseline_at` 因此恒为假；要让某个 ASIN 被判定为"新发现"，必须是该卖家
+  **第二次及以后**的上报里出现的新 ASIN。这不是缺陷，是"新发现"这个词本身的含义（"这次
+  比上次多了什么"，不可能只凭一次观测就回答），但上线后短期内——尤其是刚被关注、只上报过
+  一次的卖家——`competitor_new` 筛选大概率是空的，前端文案需要说清楚（"依赖浏览器插件采集
+  的竞对在售数据，插件未上线前这里可能暂无命中"这句已经覆盖了"数据还没来"，但没覆盖"数据
+  来了、但还不够两次"这层）
 - **[风险] 已装满的生产库跑迁移会长时间持锁** → 与品牌索引那次同一个风险，缓解手法也一样：
   迁移里的 `CREATE INDEX IF NOT EXISTS` 只在索引不存在时才真的建；上线前按迁移注释里的
   ONLY + CONCURRENTLY + ATTACH 流程离线补建，迁移本身空转

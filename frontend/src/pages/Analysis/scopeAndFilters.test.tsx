@@ -144,6 +144,17 @@ describe('分析查询屏 · 作用域与筛选', () => {
     expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ competitor_new: true });
   });
 
+  it('没有 competitor:view 权限时不显示竞对新品开关（PR #66 复审 P1）', async () => {
+    // 这个开关读取的是竞对监控域的私有数据，只有 analysis:view 不足以授权；
+    // 后端 /search、/export 在 competitor_new=true 时会再校验一次 competitor:view，
+    // 这里只验证前端不提供这个入口。
+    accessState.canViewCompetitor = false;
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+
+    expect(screen.queryByRole('switch', { name: '竞对新品' })).not.toBeInTheDocument();
+  });
+
   it('顶部立即查询不会偷带尚未应用的筛选条件', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));

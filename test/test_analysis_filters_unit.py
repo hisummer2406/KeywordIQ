@@ -97,9 +97,14 @@ def test_asin_filter_hits_all_three_product_slots():
 
 
 def test_competitor_new_filter_joins_watch_and_asin_and_hits_three_slots():
-    """命中口径：前三商品槽位任一 ASIN 属于当前用户在当前站点关注的卖家在售集合。"""
+    """命中口径：前三商品槽位任一 ASIN 属于当前用户在当前站点关注的卖家**近期新发现**
+    的 ASIN——不是"曾经上报过就算"（PR #66 复审 P1：`competitor_seller_asin` 不做
+    下架删除，无时间限定的话这个开关会命中卖家有史以来上报过的全部商品，与字段名
+    "新品"名实不符）。判据复用卖家清单「近 7 日新发现」同一个窗口常量与 SQL 形状。
+    """
     sql = _compiled_sql(_req(competitor_new=True))
     assert "competitor_seller_asin" in sql
+    assert "competitor_seller" in sql
     assert "user_seller_watch" in sql
     assert "top1_product_id" in sql
     assert "top2_product_id" in sql
@@ -107,6 +112,10 @@ def test_competitor_new_filter_joins_watch_and_asin_and_hits_three_slots():
     # user_id 与 site 都作为常量条件出现（literal_binds 会把值编译进 SQL 文本）
     assert "user_seller_watch.user_id = 7" in sql
     assert "competitor_seller_asin.site = 'US'" in sql
+    # 基线之后 + 窗口内两个时间条件都要出现，缺一个都会退化回"只要上报过就算"
+    assert "first_seen_at >" in sql
+    assert "baseline_at" in sql
+    assert "interval" in sql
 
 
 def test_competitor_new_alone_counts_as_a_filter():
@@ -115,3 +124,13 @@ def test_competitor_new_alone_counts_as_a_filter():
     """
     assert request_has_filters(_req(competitor_new=True)) is True
     assert request_has_filters(_req(competitor_new=None)) is False
+
+
+def test_competitor_new_false_is_not_a_filter():
+    """`competitor_new` 只有两态（不像 `is_new` 三态），`False` 与 `None` 结果必须一样。
+
+    `_apply_filters` 里是 `if req.competitor_new:`——`False` 不会被施加任何条件，
+    如果这里裸传 `req.competitor_new` 会让 `False` 被 `v is not None` 误判成"带筛选"，
+    从而错误地切到精确计数路径（PR #66 复审 P2）。
+    """
+    assert request_has_filters(_req(competitor_new=False)) is False

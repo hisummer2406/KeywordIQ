@@ -25,6 +25,8 @@ from app.table.analysis.fact_model import (
     SiteDataStats,
 )
 from app.table.competitor.asin_model import CompetitorSellerAsin
+from app.table.competitor.seller_model import CompetitorSeller
+from app.table.competitor.watch_crud import NEW_DISCOVERY_WINDOW_DAYS
 from app.table.competitor.watch_model import UserSellerWatch
 from app.table.search.search_schemas import AnalysisSearchRequest
 from config import settings
@@ -86,6 +88,13 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     **新增筛选字段必须加进这个元组。** 漏掉的表现是：该字段确实过滤了行，总数却仍报告
     "站点当期总词数"这个与筛选前一样的数字，分页页码全部对不上，且两条路径都能正常跑完、
     不会有任何报错或测试失败（`competitor_new` 的教训，见 issue #56 P2 design.md 决策 3）。
+
+    **`competitor_new` 用 `or None` 而不是裸值**：与三态的 `is_new`（`None`/`True`/`False`
+    都是各自不同的筛选结果）不同，`competitor_new` 只有两态——`_apply_filters` 里是
+    `if req.competitor_new:`，`False` 与 `None` 的查询结果完全一样（都不施加条件）。
+    裸传 `req.competitor_new` 会让 `False` 被 `v is not None` 判成"带筛选"，从而错误地
+    切到精确计数路径（PR #66 复审 P2 指出）——这条路径本身没有性能问题，错的是语义：
+    调用方传 `competitor_new=false` 时应当等价于没传这个字段。
     """
     return any(
         v is not None
@@ -93,7 +102,8 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
             req.keyword, req.asin, req.product_title,
             req.brands or None, req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
-            req.conversion_share_min, req.conversion_share_max, req.is_new, req.competitor_new,
+            req.conversion_share_min, req.conversion_share_max, req.is_new,
+            req.competitor_new or None,
         )
     )
 
@@ -343,13 +353,24 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id
         )
     if req.product_title:
         stmt = stmt.where(DimProduct.title.ilike(f"%{req.product_title}%"))
-    # 竞对新品：命中口径是该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家的
-    # 在售集合（`competitor_seller_asin`，issue #56 P3a）。子查询里 `user_id`/`site` 对
-    # 整条查询是常量（不相关子查询），计划器物化一次即可，与品牌/类目筛选同一执行形状。
+    # 竞对新品：命中口径是该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家
+    # **近 NEW_DISCOVERY_WINDOW_DAYS 天内新发现**的 ASIN（不是"曾经上报过就算"——
+    # `competitor_seller_asin` 不做下架删除，无时间限定的话这个开关会命中卖家有史以来
+    # 上报过的全部商品，与字段名"新品"名实不符，PR #66 复审 P1 指出）。判据与卖家清单的
+    # 「近 7 日新发现」（`watch_crud._new_discoveries_subq`）同构并复用同一个窗口常量：
+    # `first_seen_at > baseline_at`（基线批次不算新发现）且落在窗口内；`baseline_at`
+    # 为 NULL（尚未建立基线）时比较结果是 SQL NULL，天然不命中，不需要额外的 CASE。
     if req.competitor_new:
         watched_product_ids = (
             select(DimProduct.product_id)
             .join(CompetitorSellerAsin, CompetitorSellerAsin.asin == DimProduct.asin)
+            .join(
+                CompetitorSeller,
+                and_(
+                    CompetitorSeller.seller_id == CompetitorSellerAsin.seller_id,
+                    CompetitorSeller.site == CompetitorSellerAsin.site,
+                ),
+            )
             .join(
                 UserSellerWatch,
                 and_(
@@ -357,7 +378,13 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id
                     UserSellerWatch.site == CompetitorSellerAsin.site,
                 ),
             )
-            .where(UserSellerWatch.user_id == user_id, CompetitorSellerAsin.site == site)
+            .where(
+                UserSellerWatch.user_id == user_id,
+                CompetitorSellerAsin.site == site,
+                CompetitorSellerAsin.first_seen_at > CompetitorSeller.baseline_at,
+                CompetitorSellerAsin.first_seen_at
+                > func.now() - text(f"interval '{NEW_DISCOVERY_WINDOW_DAYS} days'"),
+            )
             .scalar_subquery()
         )
         stmt = stmt.where(

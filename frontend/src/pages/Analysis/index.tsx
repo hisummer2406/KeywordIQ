@@ -645,7 +645,11 @@ export default function AnalysisPage() {
                 />
               </Col>
               <Col flex="auto" style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 16 }}>
-                <FilterPanel value={filters} onChange={setFilters} />
+                <FilterPanel
+                  value={filters}
+                  onChange={setFilters}
+                  canCompetitorNew={access.canViewCompetitor}
+                />
               </Col>
             </Row>
             {/* 负 margin 让这条分隔线铺满卡片宽度，左右两个值必须等于 body 的 paddingInline

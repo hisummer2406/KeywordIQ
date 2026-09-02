@@ -767,18 +767,30 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   （负数=上升），档位用中文语义承担可读性——界面翻转符号会让用户拿表格里的数字回填筛选时
   得到相反结果。
 - **「竞对新品」是与其余筛选维度 AND 组合的独立布尔开关**（`competitor_new`，与 `is_new`
-  同构，`None`/未勾选 = 不筛，issue #56 P2）。命中口径：该词前三商品槽位任一 ASIN，属于
-  当前用户在当前站点关注的卖家的在售集合（`competitor_seller_asin` join `user_seller_watch`，
-  按 `user_id` 与 `site` 限定，两者都取自访问令牌/作用域而非请求体）。ASIN 精确匹配同一批
-  改动里从只命中 `top1_product_id` 扩到三个商品槽位任一命中（与品牌/类目同一形状），
-  `product_title` 仍只命中 top1、未扩展。**`competitor_new` 必须计入
-  `analysis_crud.request_has_filters()` 的元组**——漏掉的表现是它确实过滤了行，总数却仍
-  报告"站点当期总词数"这个与筛选前一样的数字，分页页码全部对不上，且两条路径都能正常跑完、
-  不会有任何报错（`brands`/`categories`/`is_new` 同一陷阱，这次特意为它补了单测断言"去掉
-  这一项会不会漏"）。界面开关旁必须提示"依赖浏览器插件采集的竞对在售数据，插件未上线前这里
-  可能暂无命中"——插件客户端（issue #56 P3b）尚未开工，勾选后长期看不到命中会被当成筛选
-  坏了。方向 C（品牌级：卖家 → 品牌名 → `top1/2/3_brand_id`）数据源不存在（拿不到"卖家 →
-  品牌名"这层映射），移出本次范围。
+  同构，`None`/未勾选 = 不筛，issue #56 P2）。命中口径：该词前三商品槽位任一 ASIN，是
+  当前用户在当前站点关注的卖家**近期新发现**的 ASIN——判据与卖家清单「近 7 日新发现」
+  （`watch_crud.NEW_DISCOVERY_WINDOW_DAYS`）同构并复用同一个窗口常量：
+  `first_seen_at > baseline_at`（基线批次不算）且落在窗口内。**MUST NOT 只判断"卖家是否
+  上报过这个 ASIN"**——`competitor_seller_asin` 不做下架删除（`asin_model.py` 的既有边界），
+  首版实现漏了时间限定，表现是这个开关命中卖家有史以来上报过的全部商品，与字段名"新品"
+  名实不符（PR #66 复审 P1）。`baseline_at` 为 `NULL`（卖家尚未建立基线）时
+  `first_seen_at > NULL` 恒为 SQL NULL（假），天然不命中，不需要额外的空值兜底。
+  `user_id`/`site` 都取自访问令牌/作用域，不取自请求体。ASIN 精确匹配同一批改动里从只命中
+  `top1_product_id` 扩到三个商品槽位任一命中（与品牌/类目同一形状），`product_title` 仍只
+  命中 top1、未扩展。**`competitor_new` 必须计入 `analysis_crud.request_has_filters()`
+  的元组，且是 `req.competitor_new or None` 不是裸值**——裸值会让漏掉计入这一项时
+  "确实过滤了行、总数却仍报告站点当期总词数"（`brands`/`categories`/`is_new` 同一陷阱），
+  而不用 `or None` 会让 `competitor_new=false` 被误判成"带筛选"（这个字段只有两态，
+  `_apply_filters` 是 `if req.competitor_new:`，`False` 与 `None` 的查询结果完全一样，
+  PR #66 复审 P2）。**`competitor_new=true` 额外要求 `competitor:view` 权限**，只有
+  `analysis:view`/`analysis:export` 不够——它读的是竞对监控域的私有数据，两个数据域权限
+  独立；`/search`、`/export` 都要在触达数据库之前用 `simple_auth.check_permission` 拦
+  （PR #66 复审 P1，同批漏掉的第二处），前端按 `access.canViewCompetitor` 同步隐藏开关，
+  但那只是体验层，真正的边界在后端。界面开关旁必须提示"依赖浏览器插件采集的竞对在售数据，
+  插件未上线前这里可能暂无命中"——插件客户端（issue #56 P3b）尚未开工，且即便数据在，
+  某个卖家也要**至少被上报两次**才可能产生"新发现"（首次上报即基线，不算），勾选后长期
+  看不到命中会被当成筛选坏了。方向 C（品牌级：卖家 → 品牌名 → `top1/2/3_brand_id`）数据源
+  不存在（拿不到"卖家 → 品牌名"这层映射），移出本次范围。
 
 - **结果表格可勾选行并批量「加入词库」**（唯一的入库入口，见上文词库一节）。可选分组只列
   **生效作用域**站点下的分组——草稿切了站点但没查时表格里还是旧站点的行，跟着草稿走会把

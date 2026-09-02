@@ -116,3 +116,38 @@
 - [x] 5.5 按路径提交 → 推分支 → `gh pr create --base v2`（PR 正文含变更 id、
       `Refs #56`、spec delta 文件列表）——PR #66（`base: v2`，已核对），
       https://github.com/hisummer2406/KeywordIQ/pull/66
+
+## 6. PR #66 复审修复（2026-09-02）
+
+复审在 `91456e4` 上独立跑通 CI 后指出 2 个 P1 阻断项 + 1 个 P2 语义问题，均已修复：
+
+- [x] 6.1 **[P1] "竞对新品"改成真正的时间窗口判定**：`analysis_crud.py` 的
+      `competitor_new` 子查询补 `CompetitorSeller` join，加两个条件
+      `first_seen_at > baseline_at`（排除基线批次）与
+      `first_seen_at > now() - interval 'N days'`（复用
+      `watch_crud.NEW_DISCOVERY_WINDOW_DAYS`，不新定义窗口常量）。此前的实现只判断
+      "卖家是否上报过这个 ASIN"，`competitor_seller_asin` 不做下架删除，等价于命中
+      卖家有史以来的全部商品。design.md 决策 2、两份 spec delta、CLAUDE.md 均已同步
+      改写。真库集成测试新增
+      `test_competitor_new_excludes_baseline_batch`/`test_competitor_new_excludes_stale_discovery`
+      直接验证这两个时间条件缺一不可；`_seed_competitor_watch` 补了显式
+      `baseline_at`/`first_seen_at`
+- [x] 6.2 **[P1] `competitor_new=true` 补 `competitor:view` 权限校验**：
+      `simple_auth.py` 新增 `SimpleAuth.check_permission`（供依赖注入覆盖不到的
+      "权限要不要求取决于请求体内容"场景用）；`/search`、`/export` 在触达 service 层
+      之前各加一行 `if req.competitor_new: simple_auth.check_permission(user,
+      COMPETITOR_VIEW)`。前端 `FilterPanel` 新增 `canCompetitorNew` prop，
+      `index.tsx` 传入 `access.canViewCompetitor`，无权限时不渲染开关（体验层，
+      真正边界在后端）。新增单测文件
+      `test_analysis_competitor_permission_unit.py`（4 个用例：两端点各测有/无权限）+
+      前端一条隐藏开关的用例；`analysisMocks.ts` 的 `accessState` 补
+      `canViewCompetitor: true` 默认值
+- [x] 6.3 **[P2] `competitor_new=false` 不再被误判为"带筛选"**：
+      `request_has_filters` 元组里改成 `req.competitor_new or None`——这个字段只有
+      两态（不像三态的 `is_new`），`_apply_filters` 是 `if req.competitor_new:`，
+      `False` 与 `None` 查询结果一样，裸传会让 `False` 被 `v is not None` 误判成
+      "带筛选"从而错误切到精确计数路径。补单测 `test_competitor_new_false_is_not_a_filter`
+- [x] 6.4 复审后重新跑通：`ruff check .` 全绿；`TEST_DATABASE_URL` 全量真库回归
+      `825 passed, 1 skipped`（含新增 6 个用例；另有 1 个与本 PR 无关的既有日期边界
+      失败，复审已确认不是本 PR 的阻断项）；`openspec validate --strict` 通过
+- [ ] 6.5 按路径提交 → 推送 → 等待复审重新确认

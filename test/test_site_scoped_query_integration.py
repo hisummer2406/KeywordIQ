@@ -581,15 +581,17 @@ async def test_share_filter_only_considers_first_slot(db):
 # --------------------------------------------------------------------------
 # 竞对新品筛选（issue #56 P2）
 #
-# 命中口径：该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家的在售集合
-# （``competitor_seller_asin``，来自 issue #56 P3a 的插件被动采集）。判定按 user_id
-# 私有、按 site 限定——与词库/竞对监控同一条纪律。依赖 ``_seed_top_slots`` 造好的
-# B0SLOT00001/2/3 三个 ASIN。
+# 命中口径：该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家**近期新发现**
+# 的 ASIN——`first_seen_at > baseline_at`（基线批次不算）且落在
+# `watch_crud.NEW_DISCOVERY_WINDOW_DAYS`（7 天）窗口内，与卖家清单「近 7 日新发现」
+# 同一判据（PR #66 复审 P1：早期实现没有时间限定，会把卖家有史以来上报过的全部商品都
+# 算成"新品"）。判定按 user_id 私有、按 site 限定——与词库/竞对监控同一条纪律。
+# 依赖 ``_seed_top_slots`` 造好的 B0SLOT00001/2/3 三个 ASIN。
 # --------------------------------------------------------------------------
 
 
 def _seed_competitor_watch(db):
-    """四个用户覆盖四种关注形态：
+    """四个用户覆盖四种关注形态，全部落在「基线已建立 + 近期新发现」的窗口内：
 
     - ``owner``：在 US 关注一个卖家，其在售 ASIN 对应 kw-full 的**第二**名——覆盖
       非 top1 槽位；同时该卖家在 GB 站也有一条独立主体，被 owner 一并关注，用来在
@@ -600,6 +602,11 @@ def _seed_competitor_watch(db):
     - ``no_watch``：不关注任何卖家——最常见的初始状态，命中必须为空且不报错。
     - ``gb_only``：只在 GB 关注一个卖家，其 GB 在售 ASIN 恰与 kw-full 的**第一**名
       字符串相同——专门验证跨站点关注不该让 US 查询命中，即便 ASIN 字符串一致。
+
+    每个卖家 ``baseline_at`` 落在 30 天前，``competitor_seller_asin.first_seen_at``
+    落在 1 天前（晚于基线、在 7 天窗口内）——两个条件都满足才算「新发现」，时间窗口
+    本身的正确性由 :func:`test_competitor_new_excludes_baseline_batch` 与
+    :func:`test_competitor_new_excludes_stale_discovery` 单独验证。
 
     返回 ``{"owner": id, "other": id, "no_watch": id, "gb_only": id}``。
     """
@@ -622,7 +629,8 @@ def _seed_competitor_watch(db):
         ("A1GBONLYSELLER", "GB"),
     ):
         db.execute(
-            text("INSERT INTO analysis.competitor_seller(seller_id,site) VALUES (:sid,:site)"),
+            text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
+                 "VALUES (:sid,:site,now() - interval '30 days')"),
             {"sid": seller_id, "site": site},
         )
 
@@ -633,8 +641,8 @@ def _seed_competitor_watch(db):
         ("A1GBONLYSELLER", "GB", "B0SLOT00001"),  # 字符串与第一名相同，但 site 是 GB
     ):
         db.execute(
-            text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin) "
-                 "VALUES (:sid,:site,:asin)"),
+            text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
+                 "VALUES (:sid,:site,:asin,now() - interval '1 day')"),
             {"sid": seller_id, "site": site, "asin": asin},
         )
 
@@ -750,6 +758,80 @@ async def test_competitor_new_total_is_exact_hit_count(db):
     )
     assert resp.total == 1
     assert len(resp.data) == 1
+
+
+async def test_competitor_new_excludes_baseline_batch(db):
+    """基线批次不算新发现（PR #66 复审 P1 的核心场景）：某卖家首次上报时，那一批 ASIN 的
+    `first_seen_at` 与 `competitor_seller.baseline_at` 严格相等（同一事务落定，见
+    `asin_service.py` 的不变式），`first_seen_at > baseline_at` 因此为假——不加时间限定
+    的旧实现会把这批"卖家有史以来就在卖"的商品也算成"新品"。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    def _seed_baseline_batch(db):
+        user_id = db.execute(
+            text("INSERT INTO analysis.user_center(user_name,hashed_pwd,is_active,is_super) "
+                 "VALUES ('cn-baseline-batch','x',true,false) RETURNING id"),
+        ).scalar()
+        db.execute(
+            text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
+                 "VALUES ('A1BASELINESELLER','US',now() - interval '10 days')")
+        )
+        # 首次上报：first_seen_at 与 baseline_at 落在同一时刻，不是"之后"
+        db.execute(
+            text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
+                 "SELECT 'A1BASELINESELLER','US','B0SLOT00002',baseline_at "
+                 "FROM analysis.competitor_seller "
+                 "WHERE seller_id='A1BASELINESELLER' AND site='US'")
+        )
+        db.execute(
+            text("INSERT INTO analysis.user_seller_watch(user_id,seller_id,site) "
+                 "VALUES (:u,'A1BASELINESELLER','US')"),
+            {"u": user_id},
+        )
+        db.flush()
+        return user_id
+
+    user_id = await db.run_sync(_seed_baseline_batch)
+    miss, resp = await _row_for(db, kids["kw-full"], competitor_new=True, user_id=user_id)
+    assert miss is None
+    assert resp.total == 0
+
+
+async def test_competitor_new_excludes_stale_discovery(db):
+    """窗口外的新发现不算：ASIN 确实晚于基线才被上报（是真正的新发现），但发现时刻是
+    20 天前，超出 `NEW_DISCOVERY_WINDOW_DAYS`（7 天）——"新发现"是有时效的，不是
+    "只要晚于基线就永远算新"。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    def _seed_stale_discovery(db):
+        user_id = db.execute(
+            text("INSERT INTO analysis.user_center(user_name,hashed_pwd,is_active,is_super) "
+                 "VALUES ('cn-stale','x',true,false) RETURNING id"),
+        ).scalar()
+        db.execute(
+            text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
+                 "VALUES ('A1STALESELLER','US',now() - interval '30 days')")
+        )
+        db.execute(
+            text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
+                 "VALUES ('A1STALESELLER','US','B0SLOT00002',now() - interval '20 days')")
+        )
+        db.execute(
+            text("INSERT INTO analysis.user_seller_watch(user_id,seller_id,site) "
+                 "VALUES (:u,'A1STALESELLER','US')"),
+            {"u": user_id},
+        )
+        db.flush()
+        return user_id
+
+    user_id = await db.run_sync(_seed_stale_discovery)
+    miss, resp = await _row_for(db, kids["kw-full"], competitor_new=True, user_id=user_id)
+    assert miss is None
+    assert resp.total == 0
 
 
 # --------------------------------------------------------------------------

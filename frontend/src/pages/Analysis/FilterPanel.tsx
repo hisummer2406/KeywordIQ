@@ -135,9 +135,16 @@ function RangeRow({ label, hint, disabled, suffix, presets, value, onChange }: R
 export interface FilterPanelProps {
   value: FilterDraft;
   onChange: (next: FilterDraft) => void;
+  /**
+   * 是否显示「竞对新品」开关。它读取的是竞对监控域的私有数据（关注了哪些卖家），
+   * `analysis:view` 不足以授权——只有同时拥有 `competitor:view` 的用户才看得到这个
+   * 开关，后端 `/search`、`/export` 在 `competitor_new=true` 时同样会再校验一次
+   * （PR #66 复审 P1：这不是"前端隐藏就够了"的纯展示问题，两处都要拦）。
+   */
+  canCompetitorNew: boolean;
 }
 
-export default function FilterPanel({ value, onChange }: FilterPanelProps) {
+export default function FilterPanel({ value, onChange, canCompetitorNew }: FilterPanelProps) {
   const patch = (p: Partial<FilterDraft>) => onChange({ ...value, ...p });
   // 「仅掉榜」时其余筛选全部失效：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行
   // 可匹配，任何条件一生效结果必然为空。置灰是把这条规则摆到用户眼前，免得他填了条件、
@@ -214,14 +221,16 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
           ]}
         />
       </Row>
-      <Row label="竞对新品" hint={COMPETITOR_NEW_HINT}>
-        <Switch
-          aria-label="竞对新品"
-          disabled={onlyDropped}
-          checked={value.competitorNew}
-          onChange={(checked) => patch({ competitorNew: checked })}
-        />
-      </Row>
+      {canCompetitorNew ? (
+        <Row label="竞对新品" hint={COMPETITOR_NEW_HINT}>
+          <Switch
+            aria-label="竞对新品"
+            disabled={onlyDropped}
+            checked={value.competitorNew}
+            onChange={(checked) => patch({ competitorNew: checked })}
+          />
+        </Row>
+      ) : null}
       <Row label="商品标题" hint={TOP1_ONLY_HINT}>
         <Input
           size="middle"
