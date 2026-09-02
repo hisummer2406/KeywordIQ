@@ -293,3 +293,59 @@ def test_pathspec_commit_is_never_divergent(hook, tmp_path):
     (repo / "a.py").write_text("x = 2\n")
 
     assert hook.divergent_files(repo, "git commit -m x -- a.py") == []
+
+
+# ---------------------------------------------------------------------------
+# staged_files：本次提交会带进去的文件
+#
+# 这一组守的是"门禁认不出改动 → 一条检查都不跑 → 静默放行"这条路。它与
+# divergent_files 那一组容易混：那边问"提交的内容和被 lint 的内容是不是同一份"，
+# 这边问"门禁到底看不看得见有改动"。看不见的后果更隐蔽——没有失败，也没有拦截，
+# 输出与"全部检查通过"完全一样。
+# ---------------------------------------------------------------------------
+
+
+def test_pathspec_commit_sees_worktree_changes(hook, tmp_path):
+    """`git commit -- <路径>` 提的是工作树内容，暂存区可以是空的。
+
+    真实发生过（PR #66 的文案修复）：改了 20 个文件、一个都没 add，按路径提交，
+    门禁查 `--cached` 查了个空，前端 lint/tsc/test 一条没跑就放行了。本仓库为并行
+    会话推荐的恰恰是按路径提交，所以这不是边角形态，是主路径。
+    """
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", "init")
+    (repo / "a.py").write_text("x = 2\n")  # 只改工作树，不 add
+
+    assert _git(repo, "diff", "--cached", "--name-only").stdout == ""
+    assert hook.staged_files(repo, "git commit -m x -- a.py") == ["a.py"]
+
+
+def test_commit_all_sees_worktree_changes(hook, tmp_path):
+    """`git commit -a` 的既有行为不回归（同一条路的另一半）。"""
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", "init")
+    (repo / "a.py").write_text("x = 2\n")
+
+    assert hook.staged_files(repo, "git commit -am x") == ["a.py"]
+
+
+def test_plain_commit_only_sees_the_index(hook, tmp_path):
+    """裸 `git commit` 提的是索引，工作树里的脏文件不该把无关检查拽进来。
+
+    这条是上面两条的反面约束：不能为了"多查一点更安全"就无差别地并上工作树，
+    否则同一个 worktree 里一份半成品会拦住一次与它无关的提交。
+    """
+    repo = _repo(tmp_path)
+    (repo / "a.py").write_text("x = 1\n")
+    (repo / "b.py").write_text("y = 1\n")
+    _git(repo, "add", "a.py", "b.py")
+    _git(repo, "commit", "-q", "-m", "init")
+    (repo / "a.py").write_text("x = 2\n")
+    _git(repo, "add", "a.py")
+    (repo / "b.py").write_text("y = 2\n")  # 未暂存，不属于本次提交
+
+    assert hook.staged_files(repo, "git commit -m x") == ["a.py"]
