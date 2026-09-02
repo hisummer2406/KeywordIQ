@@ -41,6 +41,12 @@ export interface FilterDraft {
   brands: string[];
   productTitle: string;
   /**
+   * 竞对新发现：前三商品槽位任一 ASIN，是当前用户关注的卖家近 7 日新发现的 ASIN
+   * （晚于基线批次且在窗口内，见 services/analysis.ts 的 `competitor_new`）。两态开关，
+   * 不做三态——不像 isNew 是核心维度，这是一个可选的叠加信号，缺省不筛（issue #56 P2）。
+   */
+  competitorNew: boolean;
+  /**
    * 行集合维度，缺省 ALL。**不是筛选条件**——它决定"哪些行进表"，而筛选决定
    * "进表的行里留哪些"。放在同一个草稿里是因为它和筛选一起被「立即查询」提交。
    */
@@ -68,7 +74,23 @@ export const defaultFilters = (): FilterDraft => ({
   isNew: true,
   brands: [],
   productTitle: '',
+  competitorNew: false,
 });
+
+/**
+ * 按当前权限规范化「竞对新发现」字段。**必须在采用保存的条件/会话状态之前调用**。
+ *
+ * 保存的条件跨登录持久（见「保存的默认条件」一节），若用户保存时勾了这个开关、之后
+ * `competitor:view` 权限被收回，原样恢复会让首屏自动查询带着 `competitorNew: true`
+ * 撞上后端新增的权限校验（403）——而开关本身又因无权限被隐藏，用户看不到、也无从
+ * 关掉这个仍在生效的条件（PR #66 复审 P2）。
+ */
+export function sanitizeCompetitorNew(
+  filters: FilterDraft,
+  canCompetitorNew: boolean,
+): FilterDraft {
+  return canCompetitorNew ? filters : { ...filters, competitorNew: false };
+}
 
 // --------------------------------------------------------------------------
 // 检索目标判定
@@ -185,5 +207,6 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     conversion_share_min: onlyDropped ? undefined : filters.conversionShare.min,
     conversion_share_max: onlyDropped ? undefined : filters.conversionShare.max,
     is_new: onlyDropped ? undefined : filters.isNew,
+    competitor_new: !onlyDropped && filters.competitorNew ? true : undefined,
   };
 }

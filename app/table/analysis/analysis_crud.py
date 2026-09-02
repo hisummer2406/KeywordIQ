@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, NamedTuple
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
 from app.table.analysis.dimension_model import (
@@ -24,6 +24,10 @@ from app.table.analysis.fact_model import (
     FactWeekly,
     SiteDataStats,
 )
+from app.table.competitor.asin_model import CompetitorSellerAsin
+from app.table.competitor.seller_model import CompetitorSeller
+from app.table.competitor.watch_crud import NEW_DISCOVERY_WINDOW_DAYS
+from app.table.competitor.watch_model import UserSellerWatch
 from app.table.search.search_schemas import AnalysisSearchRequest
 from config import settings
 
@@ -79,7 +83,19 @@ def fact_and_datecol(view: str):
 
 
 def request_has_filters(req: AnalysisSearchRequest) -> bool:
-    """请求是否带任何筛选（决定总数走 site_data_stats 还是上限计数）。"""
+    """请求是否带任何筛选（决定总数走 site_data_stats 还是上限计数）。
+
+    **新增筛选字段必须加进这个元组。** 漏掉的表现是：该字段确实过滤了行，总数却仍报告
+    "站点当期总词数"这个与筛选前一样的数字，分页页码全部对不上，且两条路径都能正常跑完、
+    不会有任何报错或测试失败（`competitor_new` 的教训，见 issue #56 P2 design.md 决策 3）。
+
+    **`competitor_new` 用 `or None` 而不是裸值**：与三态的 `is_new`（`None`/`True`/`False`
+    都是各自不同的筛选结果）不同，`competitor_new` 只有两态——`_apply_filters` 里是
+    `if req.competitor_new:`，`False` 与 `None` 的查询结果完全一样（都不施加条件）。
+    裸传 `req.competitor_new` 会让 `False` 被 `v is not None` 判成"带筛选"，从而错误地
+    切到精确计数路径（PR #66 复审 P2 指出）——这条路径本身没有性能问题，错的是语义：
+    调用方传 `competitor_new=false` 时应当等价于没传这个字段。
+    """
     return any(
         v is not None
         for v in (
@@ -87,6 +103,7 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
             req.brands or None, req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
             req.conversion_share_min, req.conversion_share_max, req.is_new,
+            req.competitor_new or None,
         )
     )
 
@@ -275,6 +292,10 @@ def _count_base_query(site: str, view: str, on: date):
     与 ``_base_query`` 分开，是因为计数要扫遍命中行（精确计数，不封顶），而 top2/top3
     的关联对"有多少行"毫无贡献（LEFT JOIN 主键不改变行数），带上就是纯粹的开销。
     筛选条件引用的维度在两条路径上完全一致，故 ``_apply_filters`` 两边通用。
+
+    **这个 ``DimProduct`` LEFT JOIN 不能删**：ASIN 与「竞对新发现」筛选已经改成不相关子
+    查询，不再依赖它，但 ``product_title`` 筛选仍然只作用于 top1、仍然借用这个别名
+    （issue #56 P2 design.md 决策 2）。
     """
     fact, date_col = fact_and_datecol(view)
     stmt = (
@@ -287,12 +308,17 @@ def _count_base_query(site: str, view: str, on: date):
     return stmt, fact
 
 
-def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
+def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int):
     """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。
 
-    这里的商品维度条件全部绑在 ``DimProduct`` 上，而 ``DimProduct`` 在 base query 中关联的是
-    ``top1_product_id``——即筛选只作用于点击量第一名。第二、第三名走的是 alias，这里够不着。
+    **ASIN 与「竞对新发现」按前三商品槽位任一命中**（与品牌/类目同一形状：解析成
+    ``product_id``/id 集合的子查询 → 三列 ``OR``），走独立的 ``idx_{prefix}_top{n}_product``
+    三个索引（issue #56 P2）。``product_title`` 仍然只作用于点击量第一名——它借用的是
+    base query 里已 JOIN 到 ``top1_product_id`` 的那个 ``DimProduct`` 别名，本次不扩展。
     要扩到三个槽位必须显式改写本函数，不会因为 base query 多返回了字段而悄悄扩散。
+
+    ``user_id`` 只用于「竞对新发现」筛选的关注关系判定，从 service 层的当前用户令牌传入，
+    MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
     """
     if req.keyword:
         stmt = stmt.where(DimKeyword.keyword.ilike(f"%{req.keyword}%"))
@@ -315,13 +341,59 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest):
             or_(fact.top1_category_id.in_(ids), fact.top2_category_id.in_(ids),
                 fact.top3_category_id.in_(ids))
         )
-    # ASIN 是精确码，**等值匹配**：走 `uq_dim_product_asin` 唯一索引，不需要 trgm。
+    # ASIN 是精确码，**等值匹配**：先解析出单个 product_id（走 `uq_dim_product_asin`
+    # 唯一索引），再对三个商品槽位做 OR——之前只匹配 top1，把一个实际排第二、第三名次
+    # 的 ASIN 粘进搜索框会查不到任何结果，这个限制对用户不可见（issue #56 P2）。
     # 大小写与空白已由请求模型规范化（见 AnalysisSearchRequest._normalise_asin），
     # 这里不再兜一遍——两处各规范一次，改动时漏掉一处就会静默分叉。
     if req.asin:
-        stmt = stmt.where(DimProduct.asin == req.asin)
+        pid = select(DimProduct.product_id).where(DimProduct.asin == req.asin).scalar_subquery()
+        stmt = stmt.where(
+            or_(fact.top1_product_id == pid, fact.top2_product_id == pid, fact.top3_product_id == pid)
+        )
     if req.product_title:
         stmt = stmt.where(DimProduct.title.ilike(f"%{req.product_title}%"))
+    # 竞对新发现：命中口径是该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家
+    # **近 NEW_DISCOVERY_WINDOW_DAYS 天内新发现**的 ASIN（不是"曾经上报过就算"——
+    # `competitor_seller_asin` 不做下架删除，无时间限定的话这个开关会命中卖家有史以来
+    # 上报过的全部商品，PR #66 复审 P1 指出）。判据与卖家清单的
+    # 「近 7 日新发现」（`watch_crud._new_discoveries_subq`）同构并复用同一个窗口常量：
+    # `first_seen_at > baseline_at`（基线批次不算新发现）且落在窗口内；`baseline_at`
+    # 为 NULL（尚未建立基线）时比较结果是 SQL NULL，天然不命中，不需要额外的 CASE。
+    if req.competitor_new:
+        watched_product_ids = (
+            select(DimProduct.product_id)
+            .join(CompetitorSellerAsin, CompetitorSellerAsin.asin == DimProduct.asin)
+            .join(
+                CompetitorSeller,
+                and_(
+                    CompetitorSeller.seller_id == CompetitorSellerAsin.seller_id,
+                    CompetitorSeller.site == CompetitorSellerAsin.site,
+                ),
+            )
+            .join(
+                UserSellerWatch,
+                and_(
+                    UserSellerWatch.seller_id == CompetitorSellerAsin.seller_id,
+                    UserSellerWatch.site == CompetitorSellerAsin.site,
+                ),
+            )
+            .where(
+                UserSellerWatch.user_id == user_id,
+                CompetitorSellerAsin.site == site,
+                CompetitorSellerAsin.first_seen_at > CompetitorSeller.baseline_at,
+                CompetitorSellerAsin.first_seen_at
+                > func.now() - text(f"interval '{NEW_DISCOVERY_WINDOW_DAYS} days'"),
+            )
+            .scalar_subquery()
+        )
+        stmt = stmt.where(
+            or_(
+                fact.top1_product_id.in_(watched_product_ids),
+                fact.top2_product_id.in_(watched_product_ids),
+                fact.top3_product_id.in_(watched_product_ids),
+            )
+        )
     if req.ranking_min is not None:
         stmt = stmt.where(fact.current_ranking >= req.ranking_min)
     if req.ranking_max is not None:
@@ -355,16 +427,16 @@ def _apply_order(stmt, fact, req: AnalysisSearchRequest):
 
 def search_stmt(
     site: str, view: str, on: date, req: AnalysisSearchRequest,
-    *, offset: int | None = None, limit: int | None = None,
+    *, offset: int | None = None, limit: int | None = None, user_id: int,
 ):
     """在榜段的一页（含筛选/排序/分页）。
 
     ``offset``/``limit`` 显式给出时优先于 ``req`` 的分页字段——分段分页下这一段取的
     未必是整页（跨界时只取到在榜段末尾），偏移与条数由 ``row_segments.plan_segments``
-    算出，不能再从页码反推。
+    算出，不能再从页码反推。``user_id`` 只给「竞对新发现」筛选用，见 ``_apply_filters``。
     """
     stmt, fact = _base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
     stmt = _apply_order(stmt, fact, req)
     if offset is None:
         offset = (req.page - 1) * req.perPage
@@ -373,7 +445,9 @@ def search_stmt(
     return stmt.offset(offset).limit(limit)
 
 
-def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int):
+def count_capped_stmt(
+    site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int, user_id: int,
+):
     """作用域内筛选后的行数，最多数到 ``cap``（数满即返回 cap，不再往下扫）。
 
     **只给导出的上限检查用，不要拿它当列表总数。** 那里问的是"超没超过 EXPORT_ROW_CAP"
@@ -381,23 +455,23 @@ def count_capped_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest
     列表总数是另一回事，必须精确，见 :func:`count_filtered_stmt`。
     """
     stmt, fact = _count_base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
     capped = stmt.limit(cap).subquery()
     return select(func.count()).select_from(capped)
 
 
-def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest):
+def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, user_id: int):
     """有筛选时的列表总数：**精确计数，不封顶**（理由见文件头 FILTERED_COUNT_CAP 的墓志铭）。
 
     代价由切片大小决定、不随保留窗口增长；实测热缓存下日报 168ms、周报 242–375ms。
     换来的是 total 可以被当成真数使用——翻页器据此算页数，用户才够得着全部命中行。
     """
     stmt, fact = _count_base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
     return select(func.count()).select_from(stmt.subquery())
 
 
-def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int):
+def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int, user_id: int):
     """导出用语句：按作用域与筛选取行，带服务端游标的执行选项。
 
     ``yield_per`` 触发 ``stream_results``，内存与块大小同阶、不随结果集增长——GB 级
@@ -405,7 +479,7 @@ def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limi
     好让上层能按块批量补齐当前视图的搜索趋势。
     """
     stmt, fact = _base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
     stmt = _apply_order(stmt, fact, req)
     return stmt.limit(limit).execution_options(yield_per=EXPORT_CHUNK_SIZE)
 
@@ -623,19 +697,21 @@ def scope_row_count(db: Session, site: str, view: str, on: date) -> int:
 
 
 def search_rows(
-    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, user_id: int
 ) -> list[dict[str, Any]]:
-    return shape_rows(db.execute(search_stmt(site, view, on, req)).all())
+    return shape_rows(db.execute(search_stmt(site, view, on, req, user_id=user_id)).all())
 
 
 def count_capped(
-    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int, user_id: int,
 ) -> int:
-    return db.execute(count_capped_stmt(site, view, on, req, cap)).scalar_one()
+    return db.execute(count_capped_stmt(site, view, on, req, cap, user_id)).scalar_one()
 
 
-def count_filtered(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> int:
-    return db.execute(count_filtered_stmt(site, view, on, req)).scalar_one()
+def count_filtered(
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, user_id: int,
+) -> int:
+    return db.execute(count_filtered_stmt(site, view, on, req, user_id)).scalar_one()
 
 
 def scope_dropped_count(db: Session, site: str, view: str, on: date) -> int:
@@ -643,10 +719,10 @@ def scope_dropped_count(db: Session, site: str, view: str, on: date) -> int:
 
 
 def iter_export_rows(
-    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int
+    db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int, user_id: int,
 ):
     """导出：分块产出（每块一个 dict 列表）。保持同步——服务端游标 + 自建会话。"""
-    result = db.execute(export_stmt(site, view, on, req, limit))
+    result = db.execute(export_stmt(site, view, on, req, limit, user_id))
     for partition in result.partitions():
         yield shape_rows(partition)
 

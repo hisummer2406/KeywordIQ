@@ -19,6 +19,7 @@ const MODE: Omit<SavedMode, 'version'> = {
     isNew: undefined,
     brands: [],
     productTitle: '',
+    competitorNew: false,
   },
   sort: { field: 'current_ranking', dir: 'asc' },
 };

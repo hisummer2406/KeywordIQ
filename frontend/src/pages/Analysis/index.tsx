@@ -28,7 +28,7 @@ import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
 import { buildColumns, totalColumnWidth } from './columns';
-import { defaultFilters, toSearchBody, type ScopeDraft } from './filters';
+import { defaultFilters, sanitizeCompetitorNew, toSearchBody, type ScopeDraft } from './filters';
 import { clearSavedMode, readSavedMode, writeSavedMode } from './savedMode';
 import { readSnapshot, sameRequest, writeSlot, type RequestKey } from './stateCache';
 import { useCachedState } from './useCachedState';
@@ -52,7 +52,7 @@ const FILTER_KEYS = [
   'keyword', 'asin', 'product_title', 'brands', 'categories',
   'ranking_min', 'ranking_max', 'change_min', 'change_max',
   'click_share_min', 'click_share_max', 'conversion_share_min', 'conversion_share_max',
-  'is_new',
+  'is_new', 'competitor_new',
 ] as const satisfies readonly (keyof SearchBody)[];
 
 /**
@@ -126,7 +126,9 @@ export default function AnalysisPage() {
     () => ({ site: saved?.site, view: saved?.view ?? 'DAY' }) as ScopeDraft,
   );
   const [filters, setFilters] = useCachedState('filters', () =>
-    saved ? { ...saved.filters, q: '' } : defaultFilters(),
+    saved
+      ? sanitizeCompetitorNew({ ...saved.filters, q: '' }, access.canViewCompetitor)
+      : defaultFilters(),
   );
 
   // 生效态：表格 request 实际读的那份。用 ref 承载，供 request 闭包读取。
@@ -271,13 +273,22 @@ export default function AnalysisPage() {
    * 顺带把"下次请求要重算总数"立起来。总数是精确计数，代价与命中行数同阶（周报最坏
    * 约 0.9s），而它**只随条件变化**——翻页、改排序、改每页条数都不会改变命中了多少行。
    * 所以只有这里（条件真的变了）才需要重算，其余情况沿用缓存值。
+   *
+   * **`competitor_new` 在这里再做一次权限兜底**（PR #66 复审 P2）：草稿状态已经在
+   * 读取保存的条件时按权限规范化过（见 `sanitizeCompetitorNew`），这里是三处生效入口
+   * （立即查询/开始筛选/首屏自动查询）唯一共同必经之处，兜底不依赖调用方各自记得。
+   * `sig` 由本函数统一重算而不是接调用方传入的——否则去掉字段后 `body` 与传入的
+   * `sig` 不再对应同一份内容，`draftSig`/`appliedSig` 的比较会失真。
    */
-  const apply = (body: SearchBody, sig: string) => {
-    appliedRef.current = body;
+  const apply = (body: SearchBody) => {
+    const safeBody: SearchBody = access.canViewCompetitor
+      ? body
+      : { ...body, competitor_new: undefined };
+    appliedRef.current = safeBody;
     needsTotalRef.current = true;
-    persist({ applied: body, needsTotal: true });
-    setAppliedSig(sig);
-    setAppliedView(body.view);
+    persist({ applied: safeBody, needsTotal: true });
+    setAppliedSig(JSON.stringify(safeBody));
+    setAppliedView(safeBody.view);
     actionRef.current?.reload(true);
   };
 
@@ -299,7 +310,7 @@ export default function AnalysisPage() {
       keyword: scopeOnly.keyword,
       asin: scopeOnly.asin,
     };
-    apply(body, JSON.stringify(body));
+    apply(body);
   };
 
   const submitFilters = () => {
@@ -312,7 +323,7 @@ export default function AnalysisPage() {
       keyword: current.keyword,
       asin: current.asin,
     };
-    apply(body, JSON.stringify(body));
+    apply(body);
   };
 
   /**
@@ -457,7 +468,11 @@ export default function AnalysisPage() {
         keepCategories: true,
         skipErrorHandler: true,
       });
-      return { scope: s, filters: { ...saved.filters, q: '' }, view: saved.view };
+      return {
+        scope: s,
+        filters: sanitizeCompetitorNew({ ...saved.filters, q: '' }, access.canViewCompetitor),
+        view: saved.view,
+      };
     } catch {
       clearSavedMode(userId);
       setSavedApplied(false);
@@ -506,7 +521,7 @@ export default function AnalysisPage() {
         const { scope: s, filters: initialFilters, view } = resolved;
         if (!s.latest_date) return; // 该站点一期数据都没有，不发请求
         const body = toSearchBody({ site: s.site, view, date: s.latest_date }, initialFilters);
-        apply(body, JSON.stringify(body));
+        apply(body);
       })
       .catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -645,7 +660,11 @@ export default function AnalysisPage() {
                 />
               </Col>
               <Col flex="auto" style={{ borderLeft: '1px solid #f0f0f0', paddingLeft: 16 }}>
-                <FilterPanel value={filters} onChange={setFilters} />
+                <FilterPanel
+                  value={filters}
+                  onChange={setFilters}
+                  canCompetitorNew={access.canViewCompetitor}
+                />
               </Col>
             </Row>
             {/* 负 margin 让这条分隔线铺满卡片宽度，左右两个值必须等于 body 的 paddingInline

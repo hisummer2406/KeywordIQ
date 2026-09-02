@@ -29,6 +29,7 @@ vi.mock('@/services/analysis', () => ({
 vi.mock('@/services/upload', () => ({ getSites }));
 vi.mock('@/services/library', () => ({ listGroups, createGroup, addItems }));
 
+import { SAVED_MODE_VERSION } from '@/pages/Analysis/savedMode';
 import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { applyFilters, renderSettled, settle } from './__testing__/analysisHarness';
 
@@ -252,7 +253,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       window.localStorage.setItem(
         KEY(userId),
         JSON.stringify({
-          version: 1,
+          version: SAVED_MODE_VERSION,
           site: 'DE',
           view: 'DAY',
           filters: {
@@ -264,6 +265,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
             isNew: undefined,
             brands: [],
             productTitle: '',
+            competitorNew: false,
           },
           sort: { field: 'current_ranking', dir: 'asc' },
           ...over,
@@ -298,6 +300,39 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
       expect(searchAnalysis.mock.calls[0][0].is_new).toBeUndefined();
+    });
+
+    /**
+     * 权限收回后，已保存的「竞对新发现」不得原样复活（PR #66 复审 P2）。
+     *
+     * 保存的条件跨登录持久；用户保存时有 `competitor:view`、之后被收回，若首屏原样
+     * 恢复 `competitorNew: true`，自动查询会带着 `competitor_new=true` 撞上后端新增
+     * 的权限校验（403）——而开关本身又因无权限被隐藏，用户看不到也无从关掉这个仍在
+     * 生效的条件，只能猜测并重置全部条件。
+     */
+    it('保存过竞对新发现筛选但当前无权限时，首屏不带 competitor_new 且开关隐藏', async () => {
+      seedSaved(1, {
+        filters: {
+          categories: [],
+          ranking: {},
+          change: {},
+          clickShare: {},
+          conversionShare: {},
+          isNew: undefined,
+          brands: [],
+          productTitle: '',
+          competitorNew: true,
+        },
+      });
+      accessState.canViewCompetitor = false;
+
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+
+      expect(searchAnalysis.mock.calls[0][0].competitor_new).toBeUndefined();
+      expect(screen.queryByRole('switch', { name: '竞对新发现' })).not.toBeInTheDocument();
+      // 权限撤销不该被误判成「有未生效改动」——规范化发生在读取草稿时，不是提交时。
+      expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument();
     });
 
     /**
@@ -375,7 +410,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       });
 
       const stored = JSON.parse(window.localStorage.getItem(KEY(1))!);
-      expect(stored).toMatchObject({ version: 1, site: 'US', view: 'DAY' });
+      expect(stored).toMatchObject({ version: SAVED_MODE_VERSION, site: 'US', view: 'DAY' });
       expect(stored.filters.isNew).toBe(true);
       // 检索词不入库：一次性查找不是「常看的模式」
       expect(stored.filters.q).toBeUndefined();
