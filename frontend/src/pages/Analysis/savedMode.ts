@@ -29,7 +29,7 @@ import type { FilterDraft } from './filters';
  * 这条比 `stateCache` 的 `CACHE_VERSION` 更要紧——会话快照最多活一次刷新，而这份能活
  * 几个月、跨好几次上线。旧形状渗进 UI 的表现是零散的空白控件，极难归因。
  */
-export const SAVED_MODE_VERSION = 1;
+export const SAVED_MODE_VERSION = 2;
 
 const KEY_PREFIX = 'keywordiq.analysis.savedMode.v1';
 

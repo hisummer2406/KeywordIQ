@@ -332,9 +332,20 @@ def test_首刷落定_first_fetch_at_且此后不再改动(db):
 
 
 def test_认领只取到期站点且当场推进拉取时刻(db):
-    """last_fetch_at 记的是「上次尝试」——不推进的话，一个坏掉的站点会把轮询占满。"""
-    assert store_crud.claim_due_store(db, interval_hours=24, now=NOW) == DOMAIN
+    """last_fetch_at 记的是「上次尝试」——不推进的话，一个坏掉的站点会把轮询占满。
+
+    **这里必须用真实的挂钟时间，不能用本文件其余用例共用的 ``NOW`` 常量。**
+    ``claim_due_store`` 的判据 ``last_fetch_at < now() - interval`` 里的 ``now()`` 是
+    SQL 侧的数据库当前时间，而写入的 ``last_fetch_at`` 取的是调用方传入的 ``now`` 参数
+    ——两侧必须锚定同一个"现在"，断言才成立。``NOW`` 是写死的历史日期
+    （``2026-09-01 10:00``），此前用它两侧都传，等真实时间超过它 ``interval_hours``
+    之后，第二次调用的判据会从"没到期"悄悄翻成"到期"，断言随之翻转——这条用例本身
+    没有任何改动，纯粹是挂钟时间走过去了才开始失败。文件其余用例的 ``NOW`` 只用作
+    彼此之间的相对锚点，不碰数据库的挂钟时间，不受影响。
+    """
+    now = datetime.now(UTC)
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) == DOMAIN
     db.flush()
 
     # 刚认领过，24 小时内不该再被认领
-    assert store_crud.claim_due_store(db, interval_hours=24, now=NOW) is None
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) is None

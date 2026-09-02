@@ -4,6 +4,7 @@ import {
   detectSearchKind,
   defaultFilters,
   matchedPreset,
+  sanitizeCompetitorNew,
   toSearchBody,
   type ScopeDraft,
 } from './filters';
@@ -102,6 +103,36 @@ describe('toSearchBody', () => {
     expect(toSearchBody(scope, { ...defaultFilters(), isNew: false }).is_new).toBe(false);
     expect(toSearchBody(scope, { ...defaultFilters(), isNew: undefined }).is_new).toBeUndefined();
   });
+
+  it('竞对新发现是两态开关：勾选时传 true，不勾选不传（issue #56 P2）', () => {
+    // 与新词不同，这里没有第三态——不勾选就是「不筛」，不需要区分「未勾选」与「明确要全部」。
+    expect(toSearchBody(scope, { ...defaultFilters(), competitorNew: true }).competitor_new).toBe(
+      true,
+    );
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), competitorNew: false }).competitor_new,
+    ).toBeUndefined();
+  });
+});
+
+describe('sanitizeCompetitorNew', () => {
+  it('有权限时原样透传', () => {
+    const filters = { ...defaultFilters(), competitorNew: true };
+    expect(sanitizeCompetitorNew(filters, true)).toEqual(filters);
+  });
+
+  it('无权限时强制关闭，即便原值是 true（PR #66 复审 P2）', () => {
+    // 保存的条件跨登录持久：用户保存时有权限、之后被收回，原样恢复会让首屏自动查询
+    // 带着 competitor_new=true 撞上后端权限校验（403），而开关又因无权限被隐藏，
+    // 用户看不到也关不掉这个仍在生效的条件。
+    const filters = { ...defaultFilters(), competitorNew: true };
+    expect(sanitizeCompetitorNew(filters, false).competitorNew).toBe(false);
+  });
+
+  it('无权限且原值已是 false 时不受影响', () => {
+    const filters = { ...defaultFilters(), competitorNew: false };
+    expect(sanitizeCompetitorNew(filters, false)).toEqual(filters);
+  });
 });
 
 describe('defaultFilters', () => {
@@ -180,6 +211,7 @@ describe('行集合开关', () => {
       clickShare: { min: 10 },
       conversionShare: { min: 5 },
       isNew: true,
+      competitorNew: true,
     });
     expect(body.include).toBe('DROPPED');
     expect(body.keyword).toBeUndefined();
@@ -193,14 +225,20 @@ describe('行集合开关', () => {
     expect(body.click_share_min).toBeUndefined();
     expect(body.conversion_share_min).toBeUndefined();
     expect(body.is_new).toBeUndefined();
+    expect(body.competitor_new).toBeUndefined();
   });
 
   it('ALL / LISTED 下其余筛选照常带上', () => {
     const body = toSearchBody(scope, {
-      ...defaultFilters(), include: 'LISTED', q: 'coffee', ranking: { min: 1, max: 100 },
+      ...defaultFilters(),
+      include: 'LISTED',
+      q: 'coffee',
+      ranking: { min: 1, max: 100 },
+      competitorNew: true,
     });
     expect(body.keyword).toBe('coffee');
     expect(body.ranking_min).toBe(1);
+    expect(body.competitor_new).toBe(true);
   });
 
 });

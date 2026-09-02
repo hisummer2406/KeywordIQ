@@ -279,6 +279,7 @@ def test_request_id_on_success_response(client):
 
 def _as_super():
     class _Super:
+        id = 1
         is_super = True
         permission_codes: set = set()
     return _Super()
