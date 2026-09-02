@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW
+from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW, COMPETITOR_VIEW
 from app.auth.simple_auth import simple_auth
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import (
@@ -48,21 +48,28 @@ _View = Literal["DAY", "WEEK"]
 async def search_data(
     req: AnalysisSearchRequest,
     db: AsyncSession = Depends(get_async_db),
-    _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
+    user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> AnalysisSearchResponse:
     """作用域内分页查询。
 
     作用域非法时抛 `ScopeError` → 422。此前是返 HTTP 200 + `success:false`，
     前端只能表现为一个没有解释的空表格。
+
+    **`competitor_new` 额外要求 `competitor:view`。** 这个筛选读取的是用户私有的
+    竞对关注数据，`analysis:view` 只授权分析域本身——只有 `analysis:view` 没有
+    `competitor:view` 的用户不该借这个筛选开关绕道看见"我关注了哪些卖家"这层信息
+    （PR #66 复审 P1）。
     """
-    return await service.search(db, req)
+    if req.competitor_new:
+        simple_auth.check_permission(user, COMPETITOR_VIEW)
+    return await service.search(db, req, user.id)
 
 
 @analysis_router.post("/export")
 def export_data(
     req: AnalysisSearchRequest,
     db: Session = Depends(get_db),
-    _user=Depends(simple_auth.require_permission(ANALYSIS_EXPORT)),
+    user=Depends(simple_auth.require_permission(ANALYSIS_EXPORT)),
 ) -> StreamingResponse:
     """把当前作用域与筛选下的结果流式导出为 CSV。
 
@@ -71,12 +78,17 @@ def export_data(
     `resolve_export_scope` 的全部校验（作用域、规模上限）都在返回 `StreamingResponse`
     **之前**完成——一旦开流，状态码与响应头已发出，之后再抛异常只会得到一份被截断的
     200 CSV，而它会被当成完整数据使用。
+
+    **`competitor_new` 额外要求 `competitor:view`**，与 `/search` 同一条纪律（见那边
+    的注释），且必须在开流之前检查——理由与规模上限检查放在开流前完全一样。
     """
-    site, view, on = service.resolve_export_scope(db, req)
+    if req.competitor_new:
+        simple_auth.check_permission(user, COMPETITOR_VIEW)
+    site, view, on = service.resolve_export_scope(db, req, user.id)
 
     filename = service.export_filename(site, view, on)
     return StreamingResponse(
-        service.iter_export_csv(site, view, on, req),
+        service.iter_export_csv(site, view, on, req, user.id),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

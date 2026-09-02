@@ -14,7 +14,7 @@ import { vi } from 'vitest';
  * 顺序保证了工厂执行时它们已经初始化（本模块无依赖，必然先于页面组件求值）。
  */
 
-export const accessState = { canExport: true, canViewKeyword: true };
+export const accessState = { canExport: true, canViewKeyword: true, canViewCompetitor: true };
 
 /** 当前登录用户。保存的默认条件按 id 分键，改这里就等于换账号。 */
 export const userState = { currentUser: { id: 1 } as { id: number } | undefined };
@@ -58,6 +58,7 @@ export function seedAnalysisMocks(): void {
   userState.currentUser = { id: 1 };
   accessState.canExport = true;
   accessState.canViewKeyword = true;
+  accessState.canViewCompetitor = true;
   listGroups.mockResolvedValue([
     {
       group_id: 7,

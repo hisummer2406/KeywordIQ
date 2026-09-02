@@ -95,13 +95,28 @@ def run_checks(
 def staged_files(repo: Path, command: str) -> list[str]:
     """本次提交会带进去的文件。
 
-    ``git commit -a`` 会在提交时把已跟踪文件的改动一并暂存，此时 ``--cached``
-    看不到它们——漏掉就等于门禁形同虚设，故一并取未暂存的已跟踪改动。
+    ``--cached`` 只看得见暂存区，而**有两种提交形态提的是工作树内容**，它们的改动
+    在暂存区里可以完全不存在：
+
+    - ``git commit -a``：提交时把已跟踪文件的改动一并暂存
+    - ``git commit -- <路径>``：提交这些路径的工作树内容，绕过索引
+
+    漏掉任何一种，``files`` 就是空的 → 一条检查都不跑 → **门禁静默放行**，而它长得
+    和"检查全过了"一模一样。路径式提交这条真发生过（PR #66 的文案修复那次）：本仓库
+    为并行会话推荐的正是按路径提交，也就是说推荐路径与门禁覆盖当时是错开的。
+    ``divergent_files`` 早就为这两种形态开了豁免（它们不存在索引/工作树不一致的问题），
+    却没人把同一件事告诉这里——豁免和识别是同一个事实的两半。
+
+    **不按 pathspec 裁剪要跑哪些检查**，路径式提交一律连同全部未暂存改动一起算。
+    裁剪要解析出 ``--`` 之后的路径，而解析出错的方向是**漏查**（提交信息里出现一个
+    独立的 ``--`` 就够了，heredoc 写的多行信息尤其容易），代价是门禁形同虚设；
+    不裁剪的代价只是多跑几十秒检查。这与 ``target_repo`` 的"宁可多查一遍也不要静默
+    不查"是同一个取舍。
     """
     _, out = run(["git", "diff", "--cached", "--name-only"], repo)
     files = [line for line in out.splitlines() if line]
 
-    if _commits_all(command):
+    if _commits_all(command) or _has_pathspec(command):
         _, unstaged = run(["git", "diff", "--name-only"], repo)
         files.extend(line for line in unstaged.splitlines() if line)
 
