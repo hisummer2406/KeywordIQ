@@ -90,9 +90,12 @@
       `onlyDropped` 时被抑制）；`FilterPanel` 相关测试文件补开关的交互测试——本仓库
       没有独立的 `FilterPanel.test.tsx`（交互测试走 `scopeAndFilters.test.tsx` 这个
       整屏集成测试文件，与其余筛选控件同一模式），已在其中补一条：切换开关只改草稿、
-      点「开始筛选」才带上 `competitor_new: true`。**这两个前端测试文件本次未本地跑
-      过**（`pnpm test`/`tsc`/`lint` 按约定留给用户本地执行，见任务 5.4），语法与既有
-      模式的一致性已人工过一遍 diff
+      点「开始筛选」才带上 `competitor_new: true`。提交门禁跑了真实的 `pnpm lint` /
+      `tsc` / `test`（worktree 首次装了 `node_modules`），抓到两处真实回归：
+      `savedMode.test.ts` 的夹具缺 `competitorNew` 字段（tsc 报类型不全）、
+      `defaultsAndFirstPaint.test.tsx` 的 `seedSaved`/断言硬编码 `version: 1`
+      （`SAVED_MODE_VERSION` 已 bump 到 2，硬编码版本号会被判过期静默丢弃，「我的默认」
+      标记读不出来）——均已修好，两处改用符号常量 `SAVED_MODE_VERSION` 而非字面量
 
 ## 5. 文档与收尾
 
@@ -104,8 +107,11 @@
 - [x] 5.3 `openspec validate add-competitor-keyword-crosslink --strict` 通过——
       "Change 'add-competitor-keyword-crosslink' is valid"
 - [x] 5.4 后端全量真库回归 + 前端全量（`pnpm lint && pnpm tsc && pnpm test`，**由用户
-      本地跑，不代跑**）；`ruff check .`——后端已跑：`819 passed, 1 skipped`（连
-      `TEST_DATABASE_URL`）+ `ruff check .` 全绿。**前端 `pnpm lint`/`tsc`/`test` 尚未
-      本地跑过**，按约定留给用户
+      本地跑，不代跑**）；`ruff check .`——后端已单独跑过：`819 passed, 1 skipped`（连
+      `TEST_DATABASE_URL`）+ `ruff check .` 全绿。前端三项由**提交门禁**（`pre_commit.py`）
+      在 `git commit` 时强制跑了一遍（首次提交因 worktree 没装 `node_modules` 而报
+      "command not found"，`pnpm install --prefer-offline` 后门禁真正执行，抓到并
+      修好了 4.3 记的两处回归），门禁通过即代表这一遍全绿——不是本任务的"用户自己另跑
+      一遍"那条，那条仍然按约定不代劳
 - [ ] 5.5 按路径提交 → 推分支 → `gh pr create --base v2`（PR 正文含变更 id、
-      `Refs #56`、spec delta 文件列表）
+      `Refs #56`、spec delta 文件列表）——已提交 `67adf90`，推分支与开 PR 待办
