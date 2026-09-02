@@ -113,5 +113,6 @@
       "command not found"，`pnpm install --prefer-offline` 后门禁真正执行，抓到并
       修好了 4.3 记的两处回归），门禁通过即代表这一遍全绿——不是本任务的"用户自己另跑
       一遍"那条，那条仍然按约定不代劳
-- [ ] 5.5 按路径提交 → 推分支 → `gh pr create --base v2`（PR 正文含变更 id、
-      `Refs #56`、spec delta 文件列表）——已提交 `67adf90`，推分支与开 PR 待办
+- [x] 5.5 按路径提交 → 推分支 → `gh pr create --base v2`（PR 正文含变更 id、
+      `Refs #56`、spec delta 文件列表）——PR #66（`base: v2`，已核对），
+      https://github.com/hisummer2406/KeywordIQ/pull/66
