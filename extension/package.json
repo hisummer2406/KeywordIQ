@@ -1,0 +1,23 @@
+{
+  "name": "keywordiq-competitor-collector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "竞对 Amazon 卖家 ASIN 被动采集插件（issue #56 P3a 客户端半边）",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.270",
+    "@types/node": "^22.5.0",
+    "esbuild": "^0.23.1",
+    "jsdom": "^25.0.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
