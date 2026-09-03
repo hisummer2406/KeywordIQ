@@ -49,10 +49,13 @@
 
 ## 5. 验证
 
-- [ ] 5.1 `git diff --stat` 确认四个测试文件与 `__testing__/` 未被修改（0.1 的判据）
-- [ ] 5.2 提交门禁：`pnpm lint` + `pnpm tsc` + `pnpm test` 全绿（`git commit` 时自动跑，
-      不通过就拒绝提交——这是本变更"行为未变"的机器判据）
-- [ ] 5.3 CI（PR → v2）：前端 lint + tsc + test + **build**（`pnpm build` 只在 CI 跑，
+- [x] 5.1 `git diff --stat` 确认四个测试文件与 `__testing__/` 未被修改（0.1 的判据）
+- [x] 5.2 提交门禁：`pnpm lint` + `pnpm tsc` + `pnpm test` 全绿（`git commit` 时自动跑，
+      不通过就拒绝提交——这是本变更"行为未变"的机器判据）。已额外核对门禁确实认出了
+      这次的路径式提交（`target_repo` 解析到 worktree、`_has_pathspec` 为真因而带上
+      未暂存的 `index.tsx`），不是"一条检查都没跑就放行"
+- [ ] 5.3 CI（PR #71）：前端 lint + tsc + test + **build**（`pnpm build` 只在 CI 跑，
       issue #69 验收标准点名）
-- [ ] 5.4 人工实测交给用户，五项：首屏自动查询（默认只看新词）、切走再切回一个请求都不发、
-      保存/重置条件、导出 CSV、滚动位置恢复
+- [ ] 5.4 人工实测交给用户，五项（PR #71 正文有清单）：首屏自动查询（默认只看新词）、
+      切走再切回一个请求都不发且滚动位置回到离开前、保存/重置条件、导出 CSV、
+      改站点后类目清空
