@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "KeywordIQ 竞对采集（被动）",
+  "version": "0.1.0",
+  "description": "在 Amazon 卖家全品列表页手动采集 ASIN 并上报给 KeywordIQ（issue #56 P3a）",
+  "icons": {
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "permissions": ["storage"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.amazon.com/s*",
+        "*://www.amazon.co.uk/s*",
+        "*://www.amazon.de/s*"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# deps
+/node_modules
+
+# 构建产物
+/dist
+
+# 杂项
+*.log
+.DS_Store
