@@ -6,6 +6,15 @@ import { buildReportRequest } from './build-report';
 import type { CaptureMessage, CaptureResult } from './messages';
 import { sendReport } from './report-client';
 
+// 工具栏按钮点击 → 打开设置页。
+//
+// 采集本身不走这个按钮（那是页面右上角浮动面板的事），但按钮必须做点什么：
+// 一个点了没有任何反应的图标，比没有图标更让人以为插件坏了。设置页是唯一
+// 需要用户反复回去的地方（令牌 24 小时过期），指向它最合理。
+chrome.action?.onClicked.addListener(() => {
+  void chrome.runtime.openOptionsPage();
+});
+
 chrome.runtime.onMessage.addListener((message: CaptureMessage, _sender, sendResponse) => {
   if (message?.type !== 'CAPTURE_REPORT') return undefined;
 

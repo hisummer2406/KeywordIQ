@@ -4,10 +4,22 @@
   "version": "0.1.0",
   "description": "在 Amazon 卖家全品列表页手动采集 ASIN 并上报给 KeywordIQ（issue #56 P3a）",
   "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "KeywordIQ 竞对采集（点击打开设置）",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "options_page": "options.html",
   "permissions": ["storage"],
