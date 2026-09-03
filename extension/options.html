@@ -26,6 +26,14 @@
     <label for="token">访问令牌</label>
     <input id="token" type="password" placeholder="粘贴从网页复制的令牌" />
 
+    <label for="max-report-items">单次上报条数上限</label>
+    <input id="max-report-items" type="number" min="1" step="1" placeholder="200" />
+    <p class="hint">
+      必须与后端环境变量 <code>COMPETITOR_MAX_REPORT_ITEMS</code> 的实际值一致
+      （默认 200，向部署此服务的管理员确认）。填小了插件会过早拒绝继续采集；
+      填大了插件允许攒到超过服务端真实上限，提交时才会收到失败响应。
+    </p>
+
     <button id="save">保存</button>
     <p id="status" class="status"></p>
 

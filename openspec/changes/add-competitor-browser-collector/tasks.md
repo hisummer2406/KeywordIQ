@@ -118,16 +118,25 @@
 - [x] 5.1 `extension/src/auth.ts`：`getAuthToken()`/`setAuthToken()`（design.md
       决策 1，读写 `chrome.storage.local` 的 `keywordiq_token`）、
       `getApiBaseUrl()`/`setApiBaseUrl()`（design.md 决策 6，键名
-      `keywordiq_api_base`，供 background 拼接请求 URL）
-- [x] 5.2 `extension/src/options.ts` + `options.html`：两个文本框（token、API
-      地址）+ 保存按钮，保存成功给出确认提示；页面上说明"从已登录的 KeywordIQ
-      网页复制 token 粘贴到这里"（具体去哪个页面复制、复制哪个字段，写进
-      `extension/README.md`，不在 options page 里重复整段说明）
+      `keywordiq_api_base`，供 background 拼接请求 URL）。**PR #68 三次复审
+      P2 追加**：`getMaxReportItems()`/`setMaxReportItems()`（键名
+      `keywordiq_max_report_items`），单次上报条数上限是服务端运行时配置
+      （`COMPETITOR_MAX_REPORT_ITEMS` 允许部署方改成任意正整数），插件不能把
+      默认值 200 当协议常量写死，同 API 地址一样走本地镜像值，未配置时兜底
+      `capture-accumulator.ts` 的 `MAX_REPORT_ITEMS`（design.md 决策 7）
+- [x] 5.2 `extension/src/options.ts` + `options.html`：三个输入框（token、API
+      地址、单次上报条数上限）+ 保存按钮，保存成功给出确认提示；页面上说明
+      "从已登录的 KeywordIQ 网页复制 token 粘贴到这里"（具体去哪个页面复制、
+      复制哪个字段，写进 `extension/README.md`，不在 options page 里重复整段
+      说明）。上限一项校验为正整数，非法值不保存、给出错误提示
 - [x] 5.3 `extension/test/auth.test.ts`：`getAuthToken` 在未设置时返回 `null`、
-      设置后能取回；`chrome.storage.local` 用 vitest 的 mock（`@types/chrome` +
-      手写 stub，不引入额外的 Chrome API 测试框架）
-- **验证**：`pnpm --dir extension test auth` 全绿——4 个用例通过；真机验证 options
-  page 的保存/读取并入第 8 节，不单独占一次真机验证
+      设置后能取回；`getMaxReportItems` 未配置时返回默认值、配置后能取回自定义
+      值、非法存储值（负数/非整数）回退默认值；`chrome.storage.local` 用
+      vitest 的 mock（`@types/chrome` + 手写 stub，不引入额外的 Chrome API
+      测试框架）
+- **验证**：`pnpm --dir extension test auth` 全绿——7 个用例通过（PR #68 三次
+  复审后新增 3 例）；真机验证 options page 的保存/读取并入第 8 节，不单独占
+  一次真机验证
 
 ## 6. 采集触发、失败处理与重试
 
@@ -155,7 +164,18 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       （`buildPageContext`），不透传完整查询串——`me=` 链接普遍带 `ds=` 等会话
       签名参数，仓库既有契约要求这类参数不得读取、存储或用于重建请求
       （PR #68 复审 P1）。成功后清空本地累积；网络异常等可重试失败保留累积，
-      允许直接重新点"提交上报"
+      允许直接重新点"提交上报"。**PR #68 三次复审 P1 追加**：合并前用
+      `mergeItemsWithCap`（`extension/src/auth.ts` 的 `getMaxReportItems()`
+      给出上限，design.md 决策 7）预检，撞上限时**硬性阻止**——不是"建议先
+      提交已采集的部分"（初版的提示自相矛盾，一边推荐这个操作一边承认它会
+      污染基线），而是把"采集本页"/"提交上报"两个按钮一起锁死，已采集的条目
+      不会被提交，只能点"清空已采集，重新开始"放弃这次采集。**PR #68 二次
+      复审 P1 追加**：请求体里的 `requestId`/`capturedAt` 不再由 background
+      生成，而是 content script 在"当前批次首次提交"时用
+      `capture-accumulator.ts` 的 `freezeRequest` 冻结、随批次持久化；提交
+      失败后不经过重新采集直接再点"提交上报"会复用同一对值，点"采集本页"
+      （无论是否带来新条目）才会作废并在下次提交时重新生成（design.md
+      决策 3 已按此重写）
 - [x] 6.3 `extension/src/background.ts`：`chrome.runtime.onMessage` 监听器，收到
       6.2 的消息后：调 `getAuthToken()`（为空则回复"请先在设置页配置访问令牌"，
       不发请求）→ 调 `buildReportRequest` 生成并**冻结**本次请求体（决策 3）→
@@ -189,12 +209,15 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
   `sendReport` 打桩，覆盖 `handleCapture` 的分支映射、missing_token/
   missing_base_url 前置检查、以及"requestId/capturedAt 直接透传消息里的冻结值、
   不自己生成"这条 PR #68 二次复审 P1 的回归）——`background.ts` 是把 6.2/6.3/6.4
-  串起来的唯一位置，不测这一层就测不到"映射对不对"这件事本身。多页合并、
+  串起来的唯一位置，不测这一层就测不到"映射对不对"这件事本身，其中一例专门
+  盯"两次 handleCapture 携带相同 requestId"（PR #68 二次复审 P1）。多页合并、
   page_context 白名单、单批上限、幂等键冻结/复用这几个纯函数单独测在
   `extension/test/capture-accumulator.test.ts`（14 个用例，对应 PR #68 两轮
   复审的四项修复：分页合并、page_context 白名单、200 条上限整批拒绝、
   `freezeRequest` 的复用/重新生成语义）——`content-script.ts` 里剩下的 DOM
-  绑定部分仍按 design.md 决策 4 的既有边界不做自动化测试，走第 8 节人工真机验证
+  绑定部分（含三次复审 P1 的硬性阻止 UI 状态）仍按 design.md 决策 4 的既有边界
+  不做自动化测试，走第 8 节人工真机验证。上限可配置（三次复审 P2）测在
+  `extension/test/auth.test.ts` 新增的 3 例（默认值/自定义值/非法值回退）
 
 ## 7. 文档与收尾
 
@@ -216,9 +239,10 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       `pnpm --dir extension run test`，写法参照既有的 `FRONTEND_PREFIX` 分支。
       `uv run pytest test/test_pre_commit_hook_unit.py -q` 验证门禁自身逻辑未受
       影响：19 passed。`extension/` 全量：`pnpm --dir extension run typecheck`
-      无报错，`pnpm --dir extension run test` 54 passed（7 个测试文件，PR #68
-      两轮复审修复后新增 `capture-accumulator.test.ts` 一份（14 例）、
-      `report-client.test.ts` 新增 4 例、`background.test.ts` 新增 1 例）
+      无报错，`pnpm --dir extension run test` 57 passed（7 个测试文件，PR #68
+      三轮复审修复后新增 `capture-accumulator.test.ts` 一份（14 例）、
+      `report-client.test.ts` 新增 4 例、`background.test.ts` 新增 1 例、
+      `auth.test.ts` 新增 3 例）
 - [x] 7.5 GitHub Actions（PR #68 二次复审 P2 修正：初版只接入了本地提交门禁，
       `.github/workflows/ci.yml` 一直只有 backend/frontend 两个 job，`extension/`
       的 typecheck/test/build 在 CI 里完全不可见——本地 hook 不保护其他智能体或
@@ -226,11 +250,19 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       结构照抄 `frontend` job（pnpm 9 + Node 22 + frozen-lockfile install），跑
       `pnpm run typecheck` + `pnpm run test` + `pnpm run build`，`working-directory`
       指到 `extension/`
+- [x] 7.6 design.md 同步重写（PR #68 三次复审 P2：决策 3/6 仍描述修复前的流程，
+      与实现、本文件互相矛盾）——决策 3 改写为"content script 冻结、background
+      透传"的当前实现；决策 6 里"background 做 request_id 冻结"那句改成
+      "content script 冻结、background 只透传"；新增决策 7 记录单批上限的
+      硬性阻止行为与运行时可配置这两点设计；Risks 一节同步更新"插件未接入 CI"
+      （已修）与新增的两条上限相关风险
 
 ## 8. 人工真机验证（无法用自动化测试替代）
 
 - [ ] 8.1 Chrome 开发者模式加载 `extension/dist/`
-- [ ] 8.2 用已登录 KeywordIQ 网页的账号复制一个 JWT，粘贴进插件 options page
+- [ ] 8.2 用已登录 KeywordIQ 网页的账号复制一个 JWT，粘贴进插件 options page，
+      确认 API 地址与单次上报条数上限（对照部署环境的 `COMPETITOR_MAX_REPORT_ITEMS`）
+      一并填写、保存后能取回
 - [ ] 8.3 用真实登录的 Amazon 账号，打开一个**该 KeywordIQ 账号已关注**的卖家的
       `me=` 店铺全品列表页，点"采集本页"，确认解析出的商品清单与页面肉眼可见的
       一致、面板显示的累积数正确、"提交上报"按钮从禁用变为可点

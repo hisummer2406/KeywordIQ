@@ -10,13 +10,8 @@
 
 import { hasNextPage, parseStorefrontPage, type ParsedItem } from './parse-storefront';
 import { resolveSite } from './site-map';
-import {
-  MAX_REPORT_ITEMS,
-  buildPageContext,
-  freezeRequest,
-  mergeItemsWithCap,
-  pendingItemsKey,
-} from './capture-accumulator';
+import { getMaxReportItems } from './auth';
+import { buildPageContext, freezeRequest, mergeItemsWithCap, pendingItemsKey } from './capture-accumulator';
 import type { CaptureMessage, CaptureResult } from './messages';
 
 function getSellerId(url: URL): string | null {
@@ -29,14 +24,23 @@ function getSellerId(url: URL): string | null {
  * `capturedAt` 为 `null` 表示"这批条目还没有被提交过一次"，非 `null` 表示
  * "上一次提交用的是这对值，提交失败后不经过重新采集、直接再点提交要复用它们"
  * （capture-accumulator.ts 的 freezeRequest，PR #68 二次复审 P1）。
+ *
+ * `capped: true` 表示这批条目在某次"采集本页"时撞上了单次上报上限——不是"这一
+ * 页没并入"就完了，而是**永久**拒绝提交这批数据，直到运营点"清空已采集，重新
+ * 开始"。原因：一旦提交这批不完整的条目，就会用它们给该卖家落定基线；运营接下来
+ * 大概率会继续采集剩下的商品并再次提交，而那一批会被服务端判成"新发现"（同一个
+ * bug 的另一种触发方式，PR #68 复审 P1 已经修过一次）。允许提交部分数据、只是
+ * 不建议，等于把"会污染数据"的操作留在用户可以选择的路径上——PR #68 三次复审
+ * P1 明确要求改成硬性阻止。
  */
 interface PendingCapture {
   items: ParsedItem[];
   requestId: string | null;
   capturedAt: string | null;
+  capped: boolean;
 }
 
-const EMPTY_PENDING: PendingCapture = { items: [], requestId: null, capturedAt: null };
+const EMPTY_PENDING: PendingCapture = { items: [], requestId: null, capturedAt: null, capped: false };
 
 async function loadPendingCapture(site: string, sellerId: string): Promise<PendingCapture> {
   const key = pendingItemsKey(site, sellerId);
@@ -47,6 +51,7 @@ async function loadPendingCapture(site: string, sellerId: string): Promise<Pendi
     items: value.items,
     requestId: typeof value.requestId === 'string' ? value.requestId : null,
     capturedAt: typeof value.capturedAt === 'string' ? value.capturedAt : null,
+    capped: value.capped === true,
   };
 }
 
@@ -134,11 +139,18 @@ function describeAccumulated(count: number, hasMore: boolean): string {
   return hasMore ? `${base}（检测到还有下一页，建议翻页后继续点"采集本页"）` : base;
 }
 
-function describeCapRejected(currentCount: number): string {
+/**
+ * 撞上单次上报上限后的硬性阻止提示（PR #68 三次复审 P1）：不建议、而是明确
+ * 阻止提交这批不完整的数据——提交会给该卖家落定一个不完整的基线，运营后续
+ * 采集剩余商品并再次提交时，那批会被服务端判成"新发现"。插件目前没有能安全
+ * 分批建立基线的协议，只能在这里止步，让运营决定放弃采集这个卖家还是清空重来。
+ */
+function describeCapExceeded(cap: number, currentCount: number): string {
   return (
-    `已达单次上报上限（${MAX_REPORT_ITEMS} 条），本页未并入。请先点"提交上报"` +
-    `提交已采集的 ${currentCount} 条——该卖家的商品总数超过这个上限时，插件目前` +
-    `无法在一次会话里采完整个店铺（分批提交会让后一批的存量商品被误判成新发现）`
+    `该卖家的商品数超过单次上报上限（${cap} 条），插件当前不支持完整采集这类` +
+    `大店铺。已采集的 ${currentCount} 条不会被提交——提交会用这部分数据给该` +
+    `卖家落定基线，之后继续采集剩下的商品并再次提交时，那批会被误判成"新发现"。` +
+    `请点"清空已采集，重新开始"放弃这次采集，或等待后续版本支持更大店铺。`
   );
 }
 
@@ -160,20 +172,34 @@ async function init(): Promise<void> {
   // 的 null 检查之后：TypeScript 只在这种写法下才会把外层已收窄的 `string | null`
   // → `string` 带进闭包，写成 hoisted 的 function 声明拿不到这份收窄。
 
+  // 上限是运行时配置，不是协议常量——服务端 COMPETITOR_MAX_REPORT_ITEMS 允许
+  // 部署方改成任意正整数，插件只能镜像运营在 options page 里手填的值
+  // （PR #68 三次复审 P2，auth.ts 的 getMaxReportItems 注释有完整解释）。
+  const maxReportItems = await getMaxReportItems();
+
   let pending = await loadPendingCapture(site, sellerId);
-  panel.submitButton.disabled = pending.items.length === 0;
-  panel.status.textContent = describeAccumulated(pending.items.length, hasNextPage(document));
+  panel.collectButton.disabled = pending.capped;
+  panel.submitButton.disabled = pending.items.length === 0 || pending.capped;
+  panel.status.textContent = pending.capped
+    ? describeCapExceeded(maxReportItems, pending.items.length)
+    : describeAccumulated(pending.items.length, hasNextPage(document));
 
   const handleCollect = async (): Promise<void> => {
+    if (pending.capped) return; // 已被硬性阻止，只能走"清空已采集，重新开始"
+
     const items = parseStorefrontPage(document);
     if (items.length === 0) {
       panel.status.textContent = '未识别到任何商品，页面结构可能已变化';
       return;
     }
 
-    const merged = mergeItemsWithCap(pending.items, items);
+    const merged = mergeItemsWithCap(pending.items, items, maxReportItems);
     if (merged.rejectedByCap) {
-      panel.status.textContent = describeCapRejected(pending.items.length);
+      pending = { items: pending.items, requestId: null, capturedAt: null, capped: true };
+      await savePendingCapture(site, sellerId, pending);
+      panel.collectButton.disabled = true;
+      panel.submitButton.disabled = true;
+      panel.status.textContent = describeCapExceeded(maxReportItems, pending.items.length);
       return;
     }
 
@@ -181,18 +207,23 @@ async function init(): Promise<void> {
     // 带来新内容都要作废已冻结的幂等键（spec「`request_id`……重新采集换新」：
     // 无论内容是否变化）。只有"提交上报"失败后不经过重新采集、直接再点
     // "提交上报"才会复用冻结值（PR #68 二次复审 P1）。
-    pending = { items: merged.items, requestId: null, capturedAt: null };
+    pending = { items: merged.items, requestId: null, capturedAt: null, capped: false };
     await savePendingCapture(site, sellerId, pending);
     panel.submitButton.disabled = pending.items.length === 0;
     panel.status.textContent = describeAccumulated(pending.items.length, hasNextPage(document));
   };
 
   const handleSubmit = async (): Promise<void> => {
-    if (pending.items.length === 0) return;
+    if (pending.items.length === 0 || pending.capped) return;
 
     if (!pending.requestId || !pending.capturedAt) {
       const frozen = freezeRequest(pending);
-      pending = { items: pending.items, requestId: frozen.requestId, capturedAt: frozen.capturedAt };
+      pending = {
+        items: pending.items,
+        requestId: frozen.requestId,
+        capturedAt: frozen.capturedAt,
+        capped: false,
+      };
       await savePendingCapture(site, sellerId, pending);
     }
     const requestId = pending.requestId;
@@ -231,13 +262,14 @@ async function init(): Promise<void> {
       panel.status.textContent = '插件内部通信异常，已采集的数据仍会保留，可重新点"提交上报"';
     } finally {
       panel.collectButton.disabled = false;
-      panel.submitButton.disabled = pending.items.length === 0;
+      panel.submitButton.disabled = pending.items.length === 0 || pending.capped;
     }
   };
 
   const handleReset = async (): Promise<void> => {
     pending = { ...EMPTY_PENDING };
     await clearPendingCapture(site, sellerId);
+    panel.collectButton.disabled = false; // 撤销硬性阻止状态（若曾撞上单次上报上限）
     panel.submitButton.disabled = true;
     panel.status.textContent = describeAccumulated(0, hasNextPage(document));
   };
