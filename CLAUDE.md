@@ -709,7 +709,16 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
 本服务只提供 JSON API（amis 后台已删）。生产由 nginx 托管 SPA 产物 + 反代 `/api`。
 
 **分析查询屏（`frontend/src/pages/Analysis/`）分三段**：顶部作用域栏（站点/视图/日期/检索框/
-立即查询）、中部过滤区（左类目多选、右结果过滤）、底部 ProTable（`search={false}`）。三条约定：
+立即查询）、中部过滤区（左类目多选、右结果过滤）、底部 ProTable（`search={false}`）。
+
+**状态编排拆成三个 hook，依赖方向单向**（issue #69 阶段二）：`useAnalysisSession`（会话快照、
+复原短路、滚动位置）← `useAnalysisScope`（站点/视图/日期与选项清单）/ `useAnalysisQuery`
+（草稿态与生效态、排序、总数、导出、表格请求）← `index.tsx`（只留跨模块协调与 JSX）。
+**三个 hook 之间没有直接 import**：作用域失效要清筛选那条耦合，由 `index.tsx` 把
+`clearCategoryFilters` 经回调接给 `useAnalysisScope`；组装查询体要读作用域那条，则是把
+`scope` 草稿**按值**传进 `useAnalysisQuery`。两个方向都不许改成 hook 之间互相 import——
+类目在「选项清单」与「用户勾选」两个身份下同名却生命周期相反，合回一处就又要靠上下文
+判断「这个 categories 是哪一个」。三条约定：
 
 - **首屏按默认作用域自动查一次**。进屏先拉站点、作用域与类目（选择器的前提），拿到结果
   立即用默认站点 + 按天 + 最新一期 + **默认筛选（只看新词）**查一次。这一屏是主力数据屏，
@@ -812,7 +821,7 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   一个，用户就会照着一条不成立的原因去排查。方向 C（品牌级：卖家 → 品牌名 → `top1/2/3_brand_id`）数据源
   不存在（拿不到"卖家 → 品牌名"这层映射），移出本次范围。
 
-  **`competitorNew` 必须计入前端 `FILTER_KEYS`**（`index.tsx`）——它决定「本次结果不含
+  **`competitorNew` 必须计入前端 `FILTER_KEYS`**（`useAnalysisQuery.ts`）——它决定「本次结果不含
   掉榜行」提示的显隐，漏掉的表现是用户只启用这一个筛选、其余（含默认的「只看新词」）都
   关掉时，后端仍按带筛选路径排除全部掉榜行，界面却不提示，用户以为看到的是全量结果
   （PR #66 二次复审 P2）。**保存的条件读入草稿时必须按当前权限规范化**
