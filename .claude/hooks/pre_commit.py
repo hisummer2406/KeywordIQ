@@ -26,6 +26,9 @@ from pathlib import Path
 BACKEND_PREFIXES = ("app/", "scripts/", "test/", "alembic/")
 BACKEND_TOP_LEVEL = ("config.py", "database.py", "main.py", "monitoring.py", "pyproject.toml")
 FRONTEND_PREFIX = "frontend/"
+# 浏览器插件：独立技术栈（esbuild + vitest），不接入 frontend/ 的 pnpm 工作区，
+# 判据与 frontend/ 同构——改动范围含这个前缀就跑（issue #56 P3a）。
+EXTENSION_PREFIX = "extension/"
 
 TEST_DB_URL = "postgresql://postgres:pwd123@localhost/keywordiq_test"
 
@@ -297,8 +300,9 @@ def main() -> None:
         if f.startswith(BACKEND_PREFIXES) or f in BACKEND_TOP_LEVEL
     ]
     frontend = [f for f in files if f.startswith(FRONTEND_PREFIX)]
+    extension = [f for f in files if f.startswith(EXTENSION_PREFIX)]
 
-    if not backend and not frontend:
+    if not backend and not frontend and not extension:
         sys.exit(0)  # 只改了文档 / openspec，放行
 
     checks: list[tuple[str, list[str], Path, dict]] = []
@@ -313,6 +317,13 @@ def main() -> None:
         checks.append(("eslint", ["pnpm", "lint"], fe, {}))
         checks.append(("tsc", ["pnpm", "tsc"], fe, {}))
         checks.append(("vitest", ["pnpm", "test"], fe, {}))
+
+    if extension:
+        ext = repo / "extension"
+        # 没有单独的 lint 步骤——tsc --noEmit（strict）+ vitest 是当前唯一的门禁，
+        # 这是一个占位插件的刻意从简（design.md），不是漏配
+        checks.append(("ext-typecheck", ["pnpm", "run", "typecheck"], ext, {}))
+        checks.append(("ext-test", ["pnpm", "run", "test"], ext, {}))
 
     failures = [f"### {name} 失败（{' '.join(cmd)}）\n{tail}" for name, cmd, tail in run_checks(checks)]
 
