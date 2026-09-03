@@ -85,7 +85,8 @@ page 的 UI），不涉及 `content-script.ts`、`background.ts` 的请求组装
 // 手工镜像 app/site_registry.py 的 SITE_CATALOG，两边改动必须同步。
 export const MARKETPLACE_ID_TO_SITE: Record<string, string> = {
   ATVPDKIKX0DER: 'US',
-  A1F83G8C2ARO7: 'GB',   // 英国站，不是 UK——见 site_registry.py 的既有纪律
+  A1F83G8C2ARO7P: 'GB',  // 英国站，不是 UK——见 site_registry.py 的既有纪律；
+                          // 末尾 P 不能漏（PR #68 二次复审 P2）
   A1PA6795UKMFR9: 'DE',
 };
 export const DOMAIN_TO_SITE: Record<string, string> = {

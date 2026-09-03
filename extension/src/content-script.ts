@@ -10,7 +10,13 @@
 
 import { hasNextPage, parseStorefrontPage, type ParsedItem } from './parse-storefront';
 import { resolveSite } from './site-map';
-import { buildPageContext, mergeItems, pendingItemsKey } from './capture-accumulator';
+import {
+  MAX_REPORT_ITEMS,
+  buildPageContext,
+  freezeRequest,
+  mergeItemsWithCap,
+  pendingItemsKey,
+} from './capture-accumulator';
 import type { CaptureMessage, CaptureResult } from './messages';
 
 function getSellerId(url: URL): string | null {
@@ -18,18 +24,37 @@ function getSellerId(url: URL): string | null {
   return url.searchParams.get('me');
 }
 
-async function loadPendingItems(site: string, sellerId: string): Promise<ParsedItem[]> {
+/**
+ * 已累积但未提交的一批条目，连同该批的冻结幂等键一起持久化——`requestId`/
+ * `capturedAt` 为 `null` 表示"这批条目还没有被提交过一次"，非 `null` 表示
+ * "上一次提交用的是这对值，提交失败后不经过重新采集、直接再点提交要复用它们"
+ * （capture-accumulator.ts 的 freezeRequest，PR #68 二次复审 P1）。
+ */
+interface PendingCapture {
+  items: ParsedItem[];
+  requestId: string | null;
+  capturedAt: string | null;
+}
+
+const EMPTY_PENDING: PendingCapture = { items: [], requestId: null, capturedAt: null };
+
+async function loadPendingCapture(site: string, sellerId: string): Promise<PendingCapture> {
   const key = pendingItemsKey(site, sellerId);
   const stored = await chrome.storage.local.get(key);
-  const value = stored[key];
-  return Array.isArray(value) ? (value as ParsedItem[]) : [];
+  const value = stored[key] as Partial<PendingCapture> | undefined;
+  if (!value || !Array.isArray(value.items)) return { ...EMPTY_PENDING };
+  return {
+    items: value.items,
+    requestId: typeof value.requestId === 'string' ? value.requestId : null,
+    capturedAt: typeof value.capturedAt === 'string' ? value.capturedAt : null,
+  };
 }
 
-async function savePendingItems(site: string, sellerId: string, items: ParsedItem[]): Promise<void> {
-  await chrome.storage.local.set({ [pendingItemsKey(site, sellerId)]: items });
+async function savePendingCapture(site: string, sellerId: string, pending: PendingCapture): Promise<void> {
+  await chrome.storage.local.set({ [pendingItemsKey(site, sellerId)]: pending });
 }
 
-async function clearPendingItems(site: string, sellerId: string): Promise<void> {
+async function clearPendingCapture(site: string, sellerId: string): Promise<void> {
   await chrome.storage.local.remove(pendingItemsKey(site, sellerId));
 }
 
@@ -109,6 +134,14 @@ function describeAccumulated(count: number, hasMore: boolean): string {
   return hasMore ? `${base}（检测到还有下一页，建议翻页后继续点"采集本页"）` : base;
 }
 
+function describeCapRejected(currentCount: number): string {
+  return (
+    `已达单次上报上限（${MAX_REPORT_ITEMS} 条），本页未并入。请先点"提交上报"` +
+    `提交已采集的 ${currentCount} 条——该卖家的商品总数超过这个上限时，插件目前` +
+    `无法在一次会话里采完整个店铺（分批提交会让后一批的存量商品被误判成新发现）`
+  );
+}
+
 async function init(): Promise<void> {
   const url = new URL(window.location.href);
   const sellerId = getSellerId(url);
@@ -127,9 +160,9 @@ async function init(): Promise<void> {
   // 的 null 检查之后：TypeScript 只在这种写法下才会把外层已收窄的 `string | null`
   // → `string` 带进闭包，写成 hoisted 的 function 声明拿不到这份收窄。
 
-  let pending = await loadPendingItems(site, sellerId);
-  panel.submitButton.disabled = pending.length === 0;
-  panel.status.textContent = describeAccumulated(pending.length, hasNextPage(document));
+  let pending = await loadPendingCapture(site, sellerId);
+  panel.submitButton.disabled = pending.items.length === 0;
+  panel.status.textContent = describeAccumulated(pending.items.length, hasNextPage(document));
 
   const handleCollect = async (): Promise<void> => {
     const items = parseStorefrontPage(document);
@@ -138,25 +171,46 @@ async function init(): Promise<void> {
       return;
     }
 
-    pending = mergeItems(pending, items);
-    await savePendingItems(site, sellerId, pending);
-    panel.submitButton.disabled = pending.length === 0;
-    panel.status.textContent = describeAccumulated(pending.length, hasNextPage(document));
+    const merged = mergeItemsWithCap(pending.items, items);
+    if (merged.rejectedByCap) {
+      panel.status.textContent = describeCapRejected(pending.items.length);
+      return;
+    }
+
+    // 每次真正解析到 DOM 结果都视为"重新触发一次采集"，无论合并后条目集合是否
+    // 带来新内容都要作废已冻结的幂等键（spec「`request_id`……重新采集换新」：
+    // 无论内容是否变化）。只有"提交上报"失败后不经过重新采集、直接再点
+    // "提交上报"才会复用冻结值（PR #68 二次复审 P1）。
+    pending = { items: merged.items, requestId: null, capturedAt: null };
+    await savePendingCapture(site, sellerId, pending);
+    panel.submitButton.disabled = pending.items.length === 0;
+    panel.status.textContent = describeAccumulated(pending.items.length, hasNextPage(document));
   };
 
   const handleSubmit = async (): Promise<void> => {
-    if (pending.length === 0) return;
+    if (pending.items.length === 0) return;
+
+    if (!pending.requestId || !pending.capturedAt) {
+      const frozen = freezeRequest(pending);
+      pending = { items: pending.items, requestId: frozen.requestId, capturedAt: frozen.capturedAt };
+      await savePendingCapture(site, sellerId, pending);
+    }
+    const requestId = pending.requestId;
+    const capturedAt = pending.capturedAt;
+    if (!requestId || !capturedAt) return; // 不可达，只是安抚上面刚冻结完的 TS 类型
 
     panel.collectButton.disabled = true;
     panel.submitButton.disabled = true;
-    panel.status.textContent = `提交中…（合并 ${pending.length} 个商品）`;
+    panel.status.textContent = `提交中…（合并 ${pending.items.length} 个商品）`;
 
     try {
       const message: CaptureMessage = {
         type: 'CAPTURE_REPORT',
         sellerId,
         site,
-        items: pending,
+        items: pending.items,
+        requestId,
+        capturedAt,
         pageContext: buildPageContext(url),
       };
 
@@ -164,23 +218,26 @@ async function init(): Promise<void> {
       panel.status.textContent = describeResult(result);
 
       if (result.outcome === 'success') {
-        pending = [];
-        await clearPendingItems(site, sellerId);
+        pending = { ...EMPTY_PENDING };
+        await clearPendingCapture(site, sellerId);
       }
+      // 其余结局（网络异常、鉴权失效、409、422）一律保留 pending 原样，包括其中
+      // 已冻结的 requestId/capturedAt——这正是本轮修复要保证的：不经过重新采集
+      // 的下一次提交必须携带同一对值。
     } catch {
       // sendMessage 本身抛出（如 background 未响应）：按网络异常处理，保留已
-      // 采集的数据，允许运营重新点"提交上报"（PR #68 复审 P2——按钮不能因异常
-      // 路径永久停在禁用态）。
+      // 采集的数据与已冻结的幂等键，允许运营重新点"提交上报"（PR #68 复审
+      // P2——按钮不能因异常路径永久停在禁用态）。
       panel.status.textContent = '插件内部通信异常，已采集的数据仍会保留，可重新点"提交上报"';
     } finally {
       panel.collectButton.disabled = false;
-      panel.submitButton.disabled = pending.length === 0;
+      panel.submitButton.disabled = pending.items.length === 0;
     }
   };
 
   const handleReset = async (): Promise<void> => {
-    pending = [];
-    await clearPendingItems(site, sellerId);
+    pending = { ...EMPTY_PENDING };
+    await clearPendingCapture(site, sellerId);
     panel.submitButton.disabled = true;
     panel.status.textContent = describeAccumulated(0, hasNextPage(document));
   };

@@ -8,6 +8,11 @@ export interface CaptureMessage {
   sellerId: string;
   site: string;
   items: ParsedItem[];
+  // content script 冻结（capture-accumulator.ts 的 freezeRequest），background
+  // 直接使用、不再自己生成——否则同一批未变化的条目在提交失败后手动重新点
+  // "提交上报"会被当成另一次全新观测，绕开幂等保护（PR #68 二次复审 P1）。
+  requestId: string;
+  capturedAt: string;
   pageContext?: string;
 }
 
