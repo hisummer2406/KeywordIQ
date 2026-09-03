@@ -145,16 +145,23 @@
       测试框架）
 - [x] 5.4 `extension/src/host-permission.ts`（PR #68 四次复审 P1）：
       `toOriginPattern(baseUrl)` 从 URL 提取 `scheme://host/*` 形态的 match
-      pattern；`ensureHostPermission(baseUrl)` 先 `chrome.permissions.contains`
-      查已授权则直接放行，否则 `chrome.permissions.request` 弹出 Chrome 的
-      权限对话框并返回用户的选择。`test/host-permission.test.ts`（6 例）+
-      `test/options.test.ts`（4 例，新增文件，覆盖保存流程申请权限/权限被拒
-      不落库/地址不合法不弹权限对话框/已授权地址不重复弹窗）；`test/chrome-stub.ts`
-      补了 `chrome.permissions` 的内存替身
-- **验证**：`pnpm --dir extension test` 全绿——67 个用例通过（较三次复审后的
-  57 个新增 10 例：host-permission 6 例 + options 4 例）；真机验证 options
-  page 的保存/授权流程并入第 8 节，不单独占
-  一次真机验证
+      pattern；`ensureHostPermission(baseUrl)` 调用 `chrome.permissions.request`
+      弹出 Chrome 的权限对话框并返回用户的选择。**PR #68 五次复审 P1 订正**：
+      初版这里先 `await chrome.permissions.contains()` 查是否已授权、只在未
+      授权时才 `request()`——这个 await 会丢失调用者的 user gesture 上下文，
+      导致 `request()` 在真机上报错"must be called during a user gesture"，
+      本地单测因为 stub 的 `contains()` 立即 resolve 而测不出来。已改为直接
+      调用 `request()`，不做 `contains()` 短路（Chrome 保证已授权时 `request()`
+      自己会直接返回 `true` 不弹窗）；`options.ts` 的保存按钮 click handler
+      到 `ensureHostPermission` 之间不能再插入任何 await，见 design.md 决策 6。
+      `test/host-permission.test.ts`（8 例，新增"不调用 contains""非法 URL 不
+      调用 request"两例）+ `test/options.test.ts`（4 例，覆盖保存流程申请
+      权限/权限被拒不落库/地址不合法不弹权限对话框/已授权地址仍会调用
+      request 但保存成功）；`test/chrome-stub.ts` 的 `chrome.permissions`
+      内存替身不变
+- **验证**：`pnpm --dir extension test` 全绿——69 个用例通过（较四次复审后
+  的 67 个新增 2 例：host-permission 新增 2 例）；真机验证 options page 的
+  保存/授权流程并入第 8 节，不单独占一次真机验证
 
 ## 6. 采集触发、失败处理与重试
 
@@ -279,6 +286,11 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       无需声明 `host_permissions`"的错误推理，说明 MV3 网络层按
       `host_permissions` 判断放行、与服务器 CORS 响应头无关；记录新方案
       （`optional_host_permissions` + 保存时动态申请）与拒绝时不落库的行为
+- [x] 7.8 design.md 决策 6 追加"不做 contains 短路"一段（PR #68 五次复审
+      P1）：订正上一轮"先 `contains()` 查已授权再决定要不要 `request()`"的
+      实现——这个 await 会丢失 user gesture 上下文，导致真机上 `request()`
+      报错；记录订正后的实现（直接调用 `request()`）与配套约束（click
+      handler 到 `ensureHostPermission` 之间不能插入 await）
 
 ## 8. 人工真机验证（无法用自动化测试替代）
 
@@ -311,12 +323,15 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       直接再点"提交上报"，对比两次请求体，确认 `request_id`/`captured_at`
       完全相同（这正是"服务端其实已经收到、只是响应丢了"这种情况下不产生第二条
       观测记录的保证）
-- [ ] 8.8 验证拒绝权限时不落库（PR #68 四次复审 P1 修正的核心场景）：options
-      page 填一个此前从未授权过的新域名，点保存后弹出的权限对话框点"拒绝"，
-      确认面板提示"未授予该地址的访问权限"、刷新页面后 API 地址仍是旧值（没有
-      被写入拒绝掉的新地址）；随后用一个真实可用的地址重新走一遍 8.2-8.4，
-      确认权限对话框点"允许"后插件确实能成功提交（而不是保存成功但提交时
-      仍收到网络错误——这是本轮要修的核心症状）
+- [ ] 8.8 验证权限对话框能弹出、拒绝时不落库（PR #68 四次+五次复审 P1 修正的
+      核心场景）：options page 填一个此前从未授权过的新域名，点保存，**首先
+      确认 Chrome 真的弹出了权限对话框**（这正是五次复审要修的问题——初版的
+      `contains()` 短路会丢失 user gesture，真机上表现是点保存后**不弹窗**、
+      控制台报"must be called during a user gesture"、面板停在无提示或误报的
+      状态；只验证"点拒绝后不落库"测不出这条，因为对话框根本没弹出来）；点
+      "拒绝"后确认面板提示"未授予该地址的访问权限"、刷新页面后 API 地址仍是
+      旧值（没有被写入拒绝掉的新地址）；随后用一个真实可用的地址重新走一遍
+      8.2-8.4，确认权限对话框点"允许"后插件确实能成功提交
 - **本节没有可以替代它的自动化测试**——设计上就是如此（design.md 决策 4），
   验证记录（截图或文字描述实际观察到的结果）直接写在对应任务的勾选说明里，
   不能只打勾不留证据

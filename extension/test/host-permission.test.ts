@@ -32,14 +32,22 @@ describe('ensureHostPermission', () => {
     expect(requestSpy).toHaveBeenCalledWith({ origins: ['http://localhost:8000/*'] });
   });
 
-  it('已授权时直接返回 true，不重复弹出请求（chrome.permissions.request 不被调用）', async () => {
+  it('不调用 chrome.permissions.contains（PR #68 五次复审 P1：先 await contains 再决定要不要 request 会丢失 user gesture）', async () => {
+    const containsSpy = vi.spyOn(chrome.permissions, 'contains');
+
+    await ensureHostPermission('http://localhost:8000');
+
+    expect(containsSpy).not.toHaveBeenCalled();
+  });
+
+  it('已授权的来源再次调用仍会 request（不做 contains 短路）；Chrome 保证已授权时 request 直接返回 true 不弹窗，这里用 stub 验证返回值语义', async () => {
     await chrome.permissions.request({ origins: ['http://localhost:8000/*'] });
     const requestSpy = vi.spyOn(chrome.permissions, 'request');
 
     const granted = await ensureHostPermission('http://localhost:8000');
 
     expect(granted).toBe(true);
-    expect(requestSpy).not.toHaveBeenCalled();
+    expect(requestSpy).toHaveBeenCalledWith({ origins: ['http://localhost:8000/*'] });
   });
 
   it('用户在 Chrome 权限弹窗里拒绝时返回 false', async () => {
@@ -48,5 +56,13 @@ describe('ensureHostPermission', () => {
     const granted = await ensureHostPermission('https://api.example.com');
 
     expect(granted).toBe(false);
+  });
+
+  it('baseUrl 不是合法 URL 时同步抛出，不调用 chrome.permissions.request（不消耗 user gesture）', async () => {
+    const requestSpy = vi.spyOn(chrome.permissions, 'request');
+
+    await expect(ensureHostPermission('not-a-url')).rejects.toThrow();
+
+    expect(requestSpy).not.toHaveBeenCalled();
   });
 });

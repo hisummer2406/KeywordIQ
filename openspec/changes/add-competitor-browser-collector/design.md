@@ -218,10 +218,26 @@ https://developer.chrome.com/docs/extensions/develop/concepts/network-requests �
 API 地址是用户自填的（本地开发、生产域名皆有可能），不能在 manifest 里固定声明
 一个 `host_permissions`。改为声明 `optional_host_permissions: ["http://*/*",
 "https://*/*"]`，具体来源只在用户于 options page 点"保存"时按需申请
-（`host-permission.ts` 的 `ensureHostPermission`）：已经拿到过该来源权限的直接
-放行，没有则弹出 Chrome 的权限对话框，精确到这一个域，不要求安装时就"访问所有
-网站"。拒绝时 SHALL 不落库这次填写的地址——存一个连不上的地址没有意义，且会让
-用户以为已经配置成功。
+（`host-permission.ts` 的 `ensureHostPermission`）。拒绝时 SHALL 不落库这次填写
+的地址——存一个连不上的地址没有意义，且会让用户以为已经配置成功。
+
+**`ensureHostPermission` 不做"先查 `contains()` 再决定要不要 `request()`"的
+短路**（PR #68 五次复审 P1，订正上一轮的实现）：初版在 `request()` 之前
+`await` 了一次 `chrome.permissions.contains()`，这个 await 会丢失调用者的
+user gesture 上下文——`permissions.request()` 要求必须在用户手势的调用链里
+**同步**发起，Chromium 团队确认过"`request()` 前先 `await` 任意异步调用（哪怕
+只是只读的 `contains()`）都可能导致这个上下文丢失"（
+https://groups.google.com/a/chromium.org/g/chromium-extensions/c/u4txOB87_fo ），
+表现为真机上 `request()` 直接报错"must be called during a user gesture"，
+弹不出权限对话框，保存流程整个失败。本地单测测不出来：stub 的 `contains()`
+是立即 resolve 的内存操作，不会触发真实 Chrome IPC 才有的这个坑。
+
+现在的实现直接调用 `chrome.permissions.request()`，不先查询——Chrome 保证
+已授权的来源调用 `request()` 会直接返回 `true` 且不弹窗，这个"跳过重复提示"
+的职责本就该由 `request()` 自己承担，不需要调用方用 `contains()` 抢答。
+配套约束：`options.ts` 的保存按钮 click handler 从事件触发到调用
+`ensureHostPermission` 之间**不能插入任何 await**，这是保住 gesture 上下文
+的唯一手段。
 
 ### 决策 7：单次上报条数上限——客户端预检并整批拒绝，上限是运行时配置不是协议常量
 
