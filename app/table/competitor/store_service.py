@@ -267,6 +267,25 @@ async def refresh_due_store() -> RefreshSummary | None:
     return summary
 
 
+async def refresh_due_store_round() -> bool:
+    """轮询 job：拉取一个到期的独立站，返回本轮是否真的拉了一个。
+
+    是本轮询接管的工作型任务，与排队接手一个批次同一形态——拉到了返回 ``True``，好让
+    积压的到期站点连着排空，见 ``app/jobs/poller.py``。
+
+    「到点了没」由 ``competitor_store.last_fetch_at`` 这个状态列判定，进程重启、多
+    worker 或崩溃后都不失效；进程内计时器会，而失效的表现是「再也不更新了」，没有
+    任何东西会回头看它。
+
+    异常就地吞掉，不连累同一轮里排在它之后的其他 job。
+    """
+    try:
+        return await refresh_due_store() is not None
+    except Exception:
+        logger.exception("拉取到期独立站时出错，本轮跳过")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # 请求路径（异步）
 #

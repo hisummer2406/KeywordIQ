@@ -14,7 +14,10 @@ from app.api_router import api_router
 from app.auth.simple_auth import simple_auth
 from app.common.error_handlers import register_error_handlers
 from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
-from app.table.upload.import_queue import run_queue_drainer
+from app.jobs.poller import run_poller
+from app.table.competitor.store_service import refresh_due_store_round
+from app.table.competitor.watch_service import purge_expired_previews_round
+from app.table.upload.import_queue import drain_one_batch_round, reap_stale_uploads_round
 from config import settings
 from database import async_engine, engine
 from monitoring import SystemMonitor
@@ -119,10 +122,23 @@ async def lifespan(app: FastAPI):
 
     # 排队批次接手：导入串行，抢不到锁的批次留在 QUEUED，靠它在锁释放后接手。
     # 没有它 QUEUED 就是个死标签——界面显示「队列中」，实际没有任何东西会回头看它。
+    # job 顺序即优先级，不可调整：先回收超时上传（可能把批次转成排队中，同一轮就能
+    # 被紧接着的排队接手抽走）→ 再清理过期的竞对预览行（与排队接手无关，顺带捎带）
+    # → 再排空一个导入批次（用户在等的事）→ 队列为空时才拉一个到期独立站（拉取不是
+    # 用户在等的事，让路给导入）。
     drainer: asyncio.Task | None = None
     if settings.IMPORT_QUEUE_POLL_SECONDS > 0:
         drainer = asyncio.create_task(
-            run_queue_drainer(settings.IMPORT_QUEUE_POLL_SECONDS)
+            run_poller(
+                [
+                    reap_stale_uploads_round,
+                    purge_expired_previews_round,
+                    drain_one_batch_round,
+                    refresh_due_store_round,
+                ],
+                settings.IMPORT_QUEUE_POLL_SECONDS,
+                name="导入队列",
+            )
         )
     else:
         logger.warning("⚠️ IMPORT_QUEUE_POLL_SECONDS=0，排队批次不会自动接手")
