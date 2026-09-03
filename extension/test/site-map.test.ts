@@ -4,8 +4,18 @@ import { DOMAIN_TO_SITE, MARKETPLACE_ID_TO_SITE, resolveSite } from '../src/site
 describe('resolveSite', () => {
   it('优先按 marketplaceID 识别（三个已知站点）', () => {
     expect(resolveSite('https://www.amazon.com/s?i=merchant-items&me=X&marketplaceID=ATVPDKIKX0DER')).toBe('US');
-    expect(resolveSite('https://www.amazon.co.uk/s?i=merchant-items&me=X&marketplaceID=A1F83G8C2ARO7')).toBe('GB');
+    expect(resolveSite('https://www.amazon.co.uk/s?i=merchant-items&me=X&marketplaceID=A1F83G8C2ARO7P')).toBe('GB');
     expect(resolveSite('https://www.amazon.de/s?i=merchant-items&me=X&marketplaceID=A1PA6795UKMFR9')).toBe('DE');
+  });
+
+  it('marketplaceID 与域名冲突时以 marketplaceID 为准（PR #68 二次复审 P2）', () => {
+    // 用真实的英国 marketplaceID（末尾带 P）配一个不相关的域名，确认优先级
+    // 真的按 marketplaceID 生效，而不是巧合地被域名回落掩盖——初版这里的值本身
+    // 就写错了（漏了末尾 P），且没有一条测试在两者冲突时单独验证 marketplaceID
+    // 分支，所以错值一直没被测出来。
+    expect(
+      resolveSite('https://www.amazon.de/s?i=merchant-items&me=X&marketplaceID=A1F83G8C2ARO7P'),
+    ).toBe('GB');
   });
 
   it('marketplaceID 缺失时回落域名（三个已知站点）', () => {

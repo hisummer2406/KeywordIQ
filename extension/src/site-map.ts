@@ -8,7 +8,10 @@
 /** marketplaceID 查询参数 → 站点码。 */
 export const MARKETPLACE_ID_TO_SITE: Record<string, string> = {
   ATVPDKIKX0DER: 'US',
-  A1F83G8C2ARO7: 'GB', // 英国站，不是 UK——见 site_registry.py 的既有纪律
+  A1F83G8C2ARO7P: 'GB', // 英国站，不是 UK——见 site_registry.py 的既有纪律；
+  // 末尾的 P 不能漏——这是 Amazon 官方英国 marketplace ID，与
+  // app/table/competitor/seller_ref_parser.py 里的值一致（PR #68 二次复审 P2：
+  // 初版漏了这个 P，且本文件自己的测试当时把同一个错值写死，测不出来）
   A1PA6795UKMFR9: 'DE',
 };
 

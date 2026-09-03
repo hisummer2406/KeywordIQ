@@ -73,6 +73,12 @@ pnpm run test        # vitest
   见 design.md 决策 4
 - `ship_to_region`（配送地区码）本次未采集，见 design.md Open Questions
 - 只做"被动采集"，不做后台自动巡检（P3b）；不上架 Chrome Web Store
+- **单个卖家的累积条目数超过服务端上限（`COMPETITOR_MAX_REPORT_ITEMS`，默认
+  200）时无法在一次会话里采完整个店铺**：插件会拒绝并入会导致超限的那一页，
+  提示先提交已采集的部分。分批分别提交不是可行的绕过方式——那会重新引入"首批
+  建立基线、后续批次的存量商品被误判成新发现"的问题（PR #68 复审 P1 的核心
+  修复点），本变更没有解决"单一卖家商品数超过这个上限"这个场景，见
+  `extension/src/capture-accumulator.ts` 的 `mergeItemsWithCap` 注释
 
 ## 目录结构
 

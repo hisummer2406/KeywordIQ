@@ -1,6 +1,5 @@
 // service worker：唯一发起网络请求的地方（design.md 决策 6）。收到 content
-// script 的采集结果后，在这里冻结 request_id/captured_at（决策 3）、组装请求体、
-// 发送并分类结果。
+// script 的采集结果后，组装请求体、发送并分类结果。
 
 import { getApiBaseUrl, getAuthToken } from './auth';
 import { buildReportRequest } from './build-report';
@@ -21,14 +20,17 @@ export async function handleCapture(message: CaptureMessage): Promise<CaptureRes
   const baseUrl = await getApiBaseUrl();
   if (!baseUrl) return { outcome: 'missing_base_url' };
 
-  // request_id 与 capturedAt 在此生成一次并通过 buildReportRequest 固定进请求体；
-  // sendReport 内部的所有自动重试都复用这同一份序列化结果，不会重新生成。
+  // requestId/capturedAt 由 content script 冻结后随消息传入（decision 3 +
+  // capture-accumulator.ts 的 freezeRequest），background 不再自己生成——它是
+  // 无状态的 service worker，每次消息都当作独立事件处理，没有能力判断"这是
+  // 同一批条目的重新提交"（PR #68 二次复审 P1）。sendReport 内部的所有自动
+  // 重试都复用这同一份序列化结果。
   const body = buildReportRequest({
     sellerId: message.sellerId,
     site: message.site,
     items: message.items,
-    requestId: crypto.randomUUID(),
-    capturedAt: new Date().toISOString(),
+    requestId: message.requestId,
+    capturedAt: message.capturedAt,
     pageContext: message.pageContext,
   });
 

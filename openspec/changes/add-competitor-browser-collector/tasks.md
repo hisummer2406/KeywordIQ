@@ -36,7 +36,10 @@
 
 - [x] 2.1 `extension/src/site-map.ts`：`MARKETPLACE_ID_TO_SITE`、`DOMAIN_TO_SITE`
       两张手写映射表（design.md 决策 2），头部注释写明"手工镜像
-      `app/site_registry.py` 的 `SITE_CATALOG`，两边改动必须同步"
+      `app/site_registry.py` 的 `SITE_CATALOG`，两边改动必须同步"。英国
+      marketplaceID 是 `A1F83G8C2ARO7P`（末尾带 P，对齐
+      `app/table/competitor/seller_ref_parser.py`）——初版这里漏了这个 P，
+      PR #68 二次复审 P2 修正
 - [x] 2.2 `resolveSite(url: string): string | null`：优先取 `marketplaceID` 查询
       参数，查不到或未登记则回落域名；两者都失败返回 `null`（不猜测默认站点，
       design.md 决策 2/spec「站点识别失败时拒绝生成请求」）
@@ -48,9 +51,13 @@
         `Object.values(MARKETPLACE_ID_TO_SITE)` 的去重集合等于
         `['US', 'GB', 'DE']`——这条测试的意义是"改动这份镜像时至少会被自己的测试
         看见"，不是自动同步（design.md 决策 2 已写明限制）
+      - PR #68 二次复审 P2 补了一条：marketplaceID 与域名故意冲突（用真实英国
+        ID 配一个非 GB 域名）时以 marketplaceID 为准——初版没有这条测试，
+        `marketplaceID` 命中用例与错误的映射值都用了同一个（错的）字面量，
+        错值因此一直没被测出来
 - [x] 2.4 `app/site_registry.py` 模块 docstring 补一句：新增站点时同步更新
       `extension/src/site-map.ts`，指明文件路径
-- **验证**：`pnpm --dir extension test site-map` 全绿——6 个用例通过
+- **验证**：`pnpm --dir extension test site-map` 全绿——7 个用例通过
 
 ## 3. DOM 解析
 
@@ -85,12 +92,16 @@
 - [x] 4.2 ASIN 去重：同一批 `items` 内按 `asin`（大写、去首尾空白后）去重，保留
       第一次出现的 `title`/`image_url`（服务端也会做这一步，但插件侧先去重能减少
       请求体大小，且方便运营在上报前预览"实际会提交多少条"）
-- [x] 4.3 `request_id` 生成与冻结（design.md 决策 3）：`background.ts` 里，一次
-      "采集 → 序列化请求体"的流程只生成一次 `crypto.randomUUID()` 与 `capturedAt`
-      （`new Date().toISOString()`），此后同一份请求体的自动重试（见第 6 节）
-      **必须**复用这两个值——实现上建议把"已冻结的请求体"作为一个不可变对象传给
-      重试逻辑，而不是每次重试都重新调用组装函数，从代码结构上杜绝"重试时不小心
-      重新生成了 request_id"这类错误
+- [x] 4.3 `request_id` 生成与冻结（design.md 决策 3）。**PR #68 二次复审 P1 后
+      冻结点从 `background.ts` 挪到了 `content-script.ts`**：两步流程下"提交
+      上报"可能因网络异常反复点击而不重新解析 DOM，若仍由无状态的 background
+      在每条消息上各自生成一对新值，手动重新提交会被当成全新观测、绕开幂等
+      保护。现在 `capture-accumulator.ts` 的 `freezeRequest` 只在"当前累积批次
+      从未提交过"（`requestId`/`capturedAt` 为 `null`）时才生成新值，否则原样
+      复用已持久化的值；这两个值随 `CaptureMessage` 一起传给 background，
+      `sendReport` 内部的自动重试（见第 6 节）依旧复用同一份序列化请求体不变。
+      "重新采集"（点"采集本页"，无论合并结果是否带来新条目）才会把这两个字段
+      重置为 `null`，触发下次提交时重新生成——对应 spec 原文"无论内容是否变化"
 - [x] 4.4 `extension/test/build-report.test.ts`：ASIN 去重用例、字段形状与
       `AsinReportRequest` 一致的用例（可以用一份手写的 JSON Schema 或者简单的
       字段清单断言比对，不需要引入跨语言的契约测试工具）；`request_id` 冻结语义的
@@ -174,14 +185,16 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
 - **验证**：`pnpm --dir extension test report-client` 全绿——11 个用例通过
   （较初版新增：请求挂起超时重试、超时重试后成功、409 写入环形缓冲区、环形
   缓冲区超容量丢弃最旧记录，共 4 条，对应 PR #68 复审 P2 的两项修复）。
-  另加了一份本任务清单原先没列的 `extension/test/background.test.ts`（5 个用例，
-  `sendReport` 打桩，覆盖 `handleCapture` 的分支映射与 missing_token/
-  missing_base_url 前置检查）——`background.ts` 是把 6.2/6.3/6.4 串起来的唯一
-  位置，不测这一层就测不到"映射对不对"这件事本身。多页合并与 page_context 白名单
-  的纯函数部分单独测在
-  `extension/test/capture-accumulator.test.ts`（7 个用例），对应 PR #68 复审
-  P1 的两项修复——`content-script.ts` 里剩下的 DOM 绑定部分仍按 design.md 决策 4
-  的既有边界不做自动化测试，走第 8 节人工真机验证
+  另加了一份本任务清单原先没列的 `extension/test/background.test.ts`（6 个用例，
+  `sendReport` 打桩，覆盖 `handleCapture` 的分支映射、missing_token/
+  missing_base_url 前置检查、以及"requestId/capturedAt 直接透传消息里的冻结值、
+  不自己生成"这条 PR #68 二次复审 P1 的回归）——`background.ts` 是把 6.2/6.3/6.4
+  串起来的唯一位置，不测这一层就测不到"映射对不对"这件事本身。多页合并、
+  page_context 白名单、单批上限、幂等键冻结/复用这几个纯函数单独测在
+  `extension/test/capture-accumulator.test.ts`（14 个用例，对应 PR #68 两轮
+  复审的四项修复：分页合并、page_context 白名单、200 条上限整批拒绝、
+  `freezeRequest` 的复用/重新生成语义）——`content-script.ts` 里剩下的 DOM
+  绑定部分仍按 design.md 决策 4 的既有边界不做自动化测试，走第 8 节人工真机验证
 
 ## 7. 文档与收尾
 
@@ -203,9 +216,16 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       `pnpm --dir extension run test`，写法参照既有的 `FRONTEND_PREFIX` 分支。
       `uv run pytest test/test_pre_commit_hook_unit.py -q` 验证门禁自身逻辑未受
       影响：19 passed。`extension/` 全量：`pnpm --dir extension run typecheck`
-      无报错，`pnpm --dir extension run test` 45 passed（7 个测试文件，PR #68
-      复审修复后新增 `capture-accumulator.test.ts` 一份、`report-client.test.ts`
-      新增 4 例）
+      无报错，`pnpm --dir extension run test` 54 passed（7 个测试文件，PR #68
+      两轮复审修复后新增 `capture-accumulator.test.ts` 一份（14 例）、
+      `report-client.test.ts` 新增 4 例、`background.test.ts` 新增 1 例）
+- [x] 7.5 GitHub Actions（PR #68 二次复审 P2 修正：初版只接入了本地提交门禁，
+      `.github/workflows/ci.yml` 一直只有 backend/frontend 两个 job，`extension/`
+      的 typecheck/test/build 在 CI 里完全不可见——本地 hook 不保护其他智能体或
+      直接 `git push` 的场景，`AGENTS.md` 已经写明这一点）。新增 `extension` job，
+      结构照抄 `frontend` job（pnpm 9 + Node 22 + frozen-lockfile install），跑
+      `pnpm run typecheck` + `pnpm run test` + `pnpm run build`，`working-directory`
+      指到 `extension/`
 
 ## 8. 人工真机验证（无法用自动化测试替代）
 
@@ -227,6 +247,12 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       累积数是两页商品数之和（去重后）；此时才点"提交上报"，确认只产生**一次**
       网络请求、`asin_report` 只新增一行，且第二页原本就存在的商品**不会**出现
       在这次的"新发现"里（它们与第一页的商品同属这次上报的基线批次）
+- [ ] 8.7 验证失败后重新提交复用幂等键（PR #68 二次复审 P1 修正的核心场景）：
+      开发者工具 Network 面板里把 `/api/competitor/asin-reports` 设为离线/超时，
+      点"提交上报"直到自动重试耗尽、面板提示网络异常；恢复网络后不点"采集本页"，
+      直接再点"提交上报"，对比两次请求体，确认 `request_id`/`captured_at`
+      完全相同（这正是"服务端其实已经收到、只是响应丢了"这种情况下不产生第二条
+      观测记录的保证）
 - **本节没有可以替代它的自动化测试**——设计上就是如此（design.md 决策 4），
   验证记录（截图或文字描述实际观察到的结果）直接写在对应任务的勾选说明里，
   不能只打勾不留证据

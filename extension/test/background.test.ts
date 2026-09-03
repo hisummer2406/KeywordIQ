@@ -18,6 +18,8 @@ const baseMessage = {
   sellerId: 'A1TZ946F8HZTNY',
   site: 'US',
   items: [{ asin: 'B0TESTASIN1' }],
+  requestId: 'frozen-req-1',
+  capturedAt: '2026-09-03T00:00:00.000Z',
 };
 
 describe('handleCapture', () => {
@@ -47,6 +49,35 @@ describe('handleCapture', () => {
 
     expect(result).toEqual({ outcome: 'missing_base_url' });
     expect(sendReport).not.toHaveBeenCalled();
+  });
+
+  it('requestId/capturedAt 直接使用消息里冻结的值，不重新生成（PR #68 二次复审 P1）', async () => {
+    const { setAuthToken, setApiBaseUrl } = await import('../src/auth');
+    const { sendReport } = await import('../src/report-client');
+    const { handleCapture } = await import('../src/background');
+    await setAuthToken('tok');
+    await setApiBaseUrl('http://localhost:8000');
+    vi.mocked(sendReport).mockResolvedValue({
+      kind: 'success',
+      response: {
+        report_id: 1,
+        accepted: 1,
+        new_asins: 0,
+        baseline_established: false,
+        duplicate_of: 1,
+        rejected: [],
+      },
+    });
+
+    await handleCapture(baseMessage);
+    await handleCapture(baseMessage); // 模拟"提交失败后不经过重新采集，直接再点提交上报"
+
+    expect(sendReport).toHaveBeenCalledTimes(2);
+    const bodies = vi.mocked(sendReport).mock.calls.map((call) => call[2]);
+    expect(bodies[0]?.request_id).toBe('frozen-req-1');
+    expect(bodies[1]?.request_id).toBe('frozen-req-1');
+    expect(bodies[0]?.captured_at).toBe('2026-09-03T00:00:00.000Z');
+    expect(bodies[1]?.captured_at).toBe('2026-09-03T00:00:00.000Z');
   });
 
   it('两者都配置时按 sendReport 的结果映射为 CaptureResult（成功·新发现）', async () => {
