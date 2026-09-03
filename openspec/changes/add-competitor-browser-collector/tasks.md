@@ -9,8 +9,14 @@
       `*://www.amazon.com/s*`、`*://www.amazon.co.uk/s*`、`*://www.amazon.de/s*`
       这一级——查询参数不能直接匹配，实际判断放在 content script 入口内部按
       `location.search` 二次判断）、`background.service_worker`（不声明
-      `"type": "module"`，见 1.2 的打包方式）、`options_page`。不声明
-      `host_permissions`（design.md 决策 6 的 CORS 依赖说明）
+      `"type": "module"`，见 1.2 的打包方式）、`options_page`。**PR #68 四次
+      复审 P1 订正**：初版这里写"不声明 `host_permissions`（依赖后端宽松
+      CORS）"，该推理对 MV3 权限模型是错的——service worker 的跨域 `fetch`
+      在浏览器网络层就按 `host_permissions` 放行与否判断，与目标服务器的
+      CORS 响应头无关，不满足时请求根本发不出去。已改为声明
+      `optional_host_permissions: ["http://*/*", "https://*/*"]`，具体来源
+      由 5.4 的 `host-permission.ts` 在用户保存 API 地址时按需申请，见
+      design.md 决策 6 订正后的说明
 - [x] 1.2 构建工具用 `esbuild`（不引入 `vite`/`@crxjs` 这类专用 MV3 插件——三个
       入口都打成独立的 IIFE 就足够，esbuild 零配置成本更低、依赖面更小）：
       `esbuild src/background.ts src/content-script.ts src/options.ts --bundle
@@ -128,14 +134,26 @@
       地址、单次上报条数上限）+ 保存按钮，保存成功给出确认提示；页面上说明
       "从已登录的 KeywordIQ 网页复制 token 粘贴到这里"（具体去哪个页面复制、
       复制哪个字段，写进 `extension/README.md`，不在 options page 里重复整段
-      说明）。上限一项校验为正整数，非法值不保存、给出错误提示
+      说明）。上限一项校验为正整数，非法值不保存、给出错误提示。**PR #68 四次
+      复审 P1 追加**：保存前先调用 5.4 的 `ensureHostPermission(apiBase)`；
+      权限被拒绝或地址不是合法 URL 时不写入任何字段（token/上限也不保存），
+      给出对应提示——不能存一个连不上的地址让用户以为已配置成功
 - [x] 5.3 `extension/test/auth.test.ts`：`getAuthToken` 在未设置时返回 `null`、
       设置后能取回；`getMaxReportItems` 未配置时返回默认值、配置后能取回自定义
       值、非法存储值（负数/非整数）回退默认值；`chrome.storage.local` 用
       vitest 的 mock（`@types/chrome` + 手写 stub，不引入额外的 Chrome API
       测试框架）
-- **验证**：`pnpm --dir extension test auth` 全绿——7 个用例通过（PR #68 三次
-  复审后新增 3 例）；真机验证 options page 的保存/读取并入第 8 节，不单独占
+- [x] 5.4 `extension/src/host-permission.ts`（PR #68 四次复审 P1）：
+      `toOriginPattern(baseUrl)` 从 URL 提取 `scheme://host/*` 形态的 match
+      pattern；`ensureHostPermission(baseUrl)` 先 `chrome.permissions.contains`
+      查已授权则直接放行，否则 `chrome.permissions.request` 弹出 Chrome 的
+      权限对话框并返回用户的选择。`test/host-permission.test.ts`（6 例）+
+      `test/options.test.ts`（4 例，新增文件，覆盖保存流程申请权限/权限被拒
+      不落库/地址不合法不弹权限对话框/已授权地址不重复弹窗）；`test/chrome-stub.ts`
+      补了 `chrome.permissions` 的内存替身
+- **验证**：`pnpm --dir extension test` 全绿——67 个用例通过（较三次复审后的
+  57 个新增 10 例：host-permission 6 例 + options 4 例）；真机验证 options
+  page 的保存/授权流程并入第 8 节，不单独占
   一次真机验证
 
 ## 6. 采集触发、失败处理与重试
@@ -256,13 +274,21 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       "content script 冻结、background 只透传"；新增决策 7 记录单批上限的
       硬性阻止行为与运行时可配置这两点设计；Risks 一节同步更新"插件未接入 CI"
       （已修）与新增的两条上限相关风险
+- [x] 7.7 design.md 决策 6 的"CORS 依赖"一节改写为"host permission，不是
+      CORS"（PR #68 四次复审 P1）：订正此前"后端 `allow_origins=*` 使插件
+      无需声明 `host_permissions`"的错误推理，说明 MV3 网络层按
+      `host_permissions` 判断放行、与服务器 CORS 响应头无关；记录新方案
+      （`optional_host_permissions` + 保存时动态申请）与拒绝时不落库的行为
 
 ## 8. 人工真机验证（无法用自动化测试替代）
 
 - [ ] 8.1 Chrome 开发者模式加载 `extension/dist/`
 - [ ] 8.2 用已登录 KeywordIQ 网页的账号复制一个 JWT，粘贴进插件 options page，
       确认 API 地址与单次上报条数上限（对照部署环境的 `COMPETITOR_MAX_REPORT_ITEMS`）
-      一并填写、保存后能取回
+      一并填写、保存后能取回。**PR #68 四次复审 P1**：点保存时应弹出 Chrome
+      的权限对话框（要求允许访问填写的这个域名），点"允许"后才提示"已保存"；
+      刷新 options page 确认三项设置仍在（说明确实写进了 `chrome.storage.local`，
+      不是权限对话框把整个保存流程绕过去了）
 - [ ] 8.3 用真实登录的 Amazon 账号，打开一个**该 KeywordIQ 账号已关注**的卖家的
       `me=` 店铺全品列表页，点"采集本页"，确认解析出的商品清单与页面肉眼可见的
       一致、面板显示的累积数正确、"提交上报"按钮从禁用变为可点
@@ -285,6 +311,12 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       直接再点"提交上报"，对比两次请求体，确认 `request_id`/`captured_at`
       完全相同（这正是"服务端其实已经收到、只是响应丢了"这种情况下不产生第二条
       观测记录的保证）
+- [ ] 8.8 验证拒绝权限时不落库（PR #68 四次复审 P1 修正的核心场景）：options
+      page 填一个此前从未授权过的新域名，点保存后弹出的权限对话框点"拒绝"，
+      确认面板提示"未授予该地址的访问权限"、刷新页面后 API 地址仍是旧值（没有
+      被写入拒绝掉的新地址）；随后用一个真实可用的地址重新走一遍 8.2-8.4，
+      确认权限对话框点"允许"后插件确实能成功提交（而不是保存成功但提交时
+      仍收到网络错误——这是本轮要修的核心症状）
 - **本节没有可以替代它的自动化测试**——设计上就是如此（design.md 决策 4），
   验证记录（截图或文字描述实际观察到的结果）直接写在对应任务的勾选说明里，
   不能只打勾不留证据

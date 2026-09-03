@@ -203,17 +203,25 @@ API 地址（开发环境 `http://localhost:8000`、生产环境实际域名）�
 options page 配置、存进 `chrome.storage.local`（键名 `keywordiq_api_base`），
 `auth.ts` 提供 `getApiBaseUrl()`/`setApiBaseUrl()`，与 `getAuthToken()` 同构。
 
-**CORS 依赖**：后端 `main.py` 当前 `CORSMiddleware` 配置 `allow_origins=["*"]`，
-插件不发送 Cookie（用 `Authorization` 头而非 `credentials: 'include'`），因此
-background service worker 的 `fetch` 在当前后端配置下无需声明 `host_permissions`
-即可成功——浏览器按标准 CORS 规则放行。这是**对现状的依赖，不是本变更做出的决定**：
-若后端未来把 CORS 来源收紧为白名单（类似 `.env.example` 里 OSS bucket CORS 收紧
-的既有先例），插件的请求会开始失败，且失败表现是普通的网络错误（决策 5 的"网络
-错误/超时"分支），运营看到的提示不会指向"CORS 被收紧"这个真正原因。**收紧后端
-CORS 之前，需要同时给插件的来源开白名单，或改为 `optional_host_permissions` +
-`chrome.permissions.request()` 的动态授权模式**（MV3 处理"用户自定义域名"的标准
-做法）——本次不做后者，因为当前唯一的调用方就是这个插件，声明动态权限请求的复杂度
-换不回实际收益。
+**host permission，不是 CORS**（PR #68 四次复审 P1，订正本节此前的结论）：
+此前这里推理过"后端 `allow_origins=["*"]`、插件不带 Cookie，因此 background 的
+`fetch` 不声明 `host_permissions` 也能靠标准 CORS 规则放行"——这个推理是错的，
+且错在对 MV3 权限模型的误判，不是对后端配置的误判。MV3 的 service worker 发起
+跨域 `fetch` 前，浏览器网络层先按 `host_permissions`/`optional_host_permissions`
+判断这个来源允不允许被访问；不满足时请求在浏览器侧就被拒绝，根本不会发到网络上，
+与目标服务器返回什么 CORS 响应头无关（
+https://developer.chrome.com/docs/extensions/develop/concepts/network-requests ）。
+也就是说此前的实现在任何真机环境下都无法成功提交——本地单测测不出这个问题，
+是因为 `report-client.ts` 的 `fetchImpl` 一直被测试替身注入，从未真正经过浏览器
+的网络层。
+
+API 地址是用户自填的（本地开发、生产域名皆有可能），不能在 manifest 里固定声明
+一个 `host_permissions`。改为声明 `optional_host_permissions: ["http://*/*",
+"https://*/*"]`，具体来源只在用户于 options page 点"保存"时按需申请
+（`host-permission.ts` 的 `ensureHostPermission`）：已经拿到过该来源权限的直接
+放行，没有则弹出 Chrome 的权限对话框，精确到这一个域，不要求安装时就"访问所有
+网站"。拒绝时 SHALL 不落库这次填写的地址——存一个连不上的地址没有意义，且会让
+用户以为已经配置成功。
 
 ### 决策 7：单次上报条数上限——客户端预检并整批拒绝，上限是运行时配置不是协议常量
 

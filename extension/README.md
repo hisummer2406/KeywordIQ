@@ -44,6 +44,11 @@ pnpm run test        # vitest
    上一步复制的令牌，以及**单次上报条数上限**——必须与部署此服务的后端环境变量
    `COMPETITOR_MAX_REPORT_ITEMS` 一致（默认 200，向管理员确认；不知道就先留
    默认值），填错的表现见下文"已知限制"。三项都填完后点保存
+4. Chrome 会弹出一个权限对话框，要求允许插件访问你刚填的这个域名——**必须点
+   "允许"**，否则本次不会保存，且插件之后发出的所有请求都会失败（这是 Chrome
+   扩展的标准行为：service worker 访问哪个域名必须先拿到该域名的权限，见
+   design.md 决策 6）。换了 API 地址（比如从本地开发切到生产域名）需要重新
+   走一遍这个授权
 
 **令牌有效期 24 小时**，过期后插件会提示"登录已过期"，重新做一遍上面的步骤即可。
 
@@ -98,6 +103,7 @@ extension/
     capture-accumulator.ts  # 多页合并去重 + page_context 白名单（纯函数）
     build-report.ts          # 组装符合后端契约的请求体
     auth.ts                  # token / API 地址 / 单次上报条数上限的本地存取
+    host-permission.ts       # API 地址对应 host permission 的按需申请
     idempotency-log.ts       # 409 幂等冲突的环形缓冲区日志
     report-client.ts         # 发请求 + 失败分类 + 重试 + 超时
     background.ts            # service worker：唯一发网络请求的地方

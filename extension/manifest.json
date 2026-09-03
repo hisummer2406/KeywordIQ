@@ -11,6 +11,7 @@
   },
   "options_page": "options.html",
   "permissions": ["storage"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_scripts": [
     {
       "matches": [
