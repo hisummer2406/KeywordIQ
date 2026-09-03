@@ -1,7 +1,8 @@
-"""排队批次的接手者（drainer）。
+"""排队批次的接手者（drainer），导入领域自己的两件"一轮工作"：排队导入接手、超时
+上传回收。
 
 导入用 `pg_try_advisory_lock` 串行化，同一时刻只跑一个。抢不到锁的批次留在 `QUEUED`
-——**这个模块就是让「排队中」名副其实的那一半**。没有它，`QUEUED` 只是个死标签：
+——**这两个函数就是让「排队中」名副其实的那一半**。没有它们，`QUEUED` 只是个死标签：
 批次停在那里，界面显示「队列中」，而没有任何东西会回头看它，用户在等一件永远不会
 发生的事（真实发生过：日报 300K 行要跑约 4 分钟，在这期间提交的第二个文件就此消失）。
 
@@ -9,19 +10,22 @@
 或前一个导入是别的 worker 跑的时候都会断链，而断链的表现恰恰又是「永远排队」——
 和它要修的病一模一样。轮询多花一条 SELECT，换来的是自愈。
 
-**多 worker 下不会重复执行**：4 个 worker 各有一个 drainer，但它们都要先拿同一把
-咨询锁，拿不到的直接返回。串行约束由锁保证，与 drainer 有几个无关。
+**多 worker 下不会重复执行**：4 个 worker 各自的轮询任务都要先拿同一把咨询锁，拿不到
+的直接返回。串行约束由锁保证，与轮询任务有几个无关。
+
+轮询节奏、任务优先级、取消与顶层异常隔离**不在这个文件里**，那是 `app/jobs/poller.py`
+的职责；本文件只暴露 `reap_stale_uploads_round` / `drain_one_batch_round` 两个
+`async () -> bool` 的"一轮工作"入口，由 `main.py` 的 lifespan 组装进 job 列表。
+竞对领域的预览清理与独立站拉取分别在 `app/table/competitor/watch_service.py` 与
+`app/table/competitor/store_service.py` 里暴露各自的入口，同样不在这里。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from starlette.concurrency import run_in_threadpool
 
-from app.table.competitor.store_service import refresh_due_store
-from app.table.competitor.watch_service import purge_expired_previews
 from app.table.upload import oss_client
 from app.table.upload.import_service import drain_import_queue, reap_stale_uploads
 from app.table.upload.import_source import ImportSource, OSSObjectSource
@@ -49,19 +53,6 @@ def oss_object_size(object_key: str) -> int | None:
         return None
 
 
-def _purge_expired_competitor_previews() -> None:
-    """清理过期的竞对导入预览暂存行（``competitor_watch_preview``）。
-
-    这是本轮询任务顺带接管的第二件"短期状态清理"工作，与回收超时直传批次同一条道理：
-    预览表替代了引入 Redis，过期行需要一个"回头看它"的地方，而不是新开一个定时器。
-    异常同样就地吞掉，不连累排队接手。
-    """
-    try:
-        purge_expired_previews()
-    except Exception:
-        logger.exception("清理过期竞对预览时出错，本轮跳过")
-
-
 def _reap_stale_uploads() -> None:
     """回收超时的直传批次。OSS 未启用时整条路径不存在，直接跳过。
 
@@ -80,59 +71,24 @@ def _reap_stale_uploads() -> None:
         logger.exception("回收超时直传批次时出错，本轮跳过")
 
 
-async def _refresh_due_dtc_store() -> bool:
-    """拉取一个到期的独立站，返回本轮是否真的拉了一个。
-
-    这是本轮询任务接管的第三件工作。挂在这里而不是新开定时器，与前两件同一条道理：
-    「到点了没」由 ``competitor_store.last_fetch_at`` 这个状态列判定，进程重启、多 worker
-    或崩溃后都不失效；进程内计时器会，而失效的表现是「再也不更新了」，没有任何东西会
-    回头看它。
-
-    **注意它不走 ``run_in_threadpool``**：拉取是网络 IO，直接 await 在事件循环上，只有
-    内部的数据库写入才进线程池。那 32 条线程（``config.THREAD_POOL_LIMIT``）与 bcrypt
-    登录、CSV 导出、同步后台导入共用，一家店抓 8 秒就占住一条线程 8 秒。
-
-    异常同样就地吞掉，不连累排队接手。
+async def reap_stale_uploads_round() -> bool:
+    """轮询 job：回收超时的直传批次。是维护性任务，恒返回 ``False``——它每一轮都会
+    被执行到，但不参与"整轮要不要重来"的判定，见 ``app/jobs/poller.py``。
     """
-    try:
-        return await refresh_due_store() is not None
-    except Exception:
-        logger.exception("拉取到期独立站时出错，本轮跳过")
-        return False
+    await run_in_threadpool(_reap_stale_uploads)
+    return False
 
 
-async def run_queue_drainer(interval_seconds: int) -> None:
-    """周期性接手排队批次，直到被取消。
-
-    每轮只接一个批次；跑完立刻再来一轮（不等满一个间隔），好让积压的队列连着排空。
+async def drain_one_batch_round() -> bool:
+    """轮询 job：接手一个排队批次。跑完立刻再来一轮（不等满一个间隔），好让积压的
+    队列连着排空——因此接到批次时返回 ``True``。
 
     导入是同步阻塞的、可达数十分钟，必须交给线程池——直接 await 在事件循环上跑会把
     这个 worker 的全部请求一起卡住。这与上传接口把导入交给 BackgroundTasks 是同一
     条约束（占用同一个 anyio 线程限流器，见 config.THREAD_POOL_LIMIT 的说明）。
     """
-    logger.info("🧹 导入队列接手任务已启动（每 %d 秒一轮）", interval_seconds)
-    while True:
-        try:
-            # 先回收超时的直传批次再抽队列：回收会把「传完了但没触发导入」的批次置为
-            # QUEUED，同一轮里紧接着就能被抽走，不必多等一个间隔。
-            await run_in_threadpool(_reap_stale_uploads)
-            # 与导入队列无关，顺带清理过期的竞对预览行——同一个轮询任务，两件事都是
-            # "短期状态需要有人回头看它"。
-            await run_in_threadpool(_purge_expired_competitor_previews)
-            batch = await run_in_threadpool(
-                drain_import_queue, source_factory=oss_source_factory
-            )
-            if batch is not None:
-                logger.info("排队批次已接手完成 %s: 状态=%s", batch.file_name, batch.status)
-                continue  # 队列里可能还有，接着抽
-            # 排队为空时才拉独立站：导入是用户在等的事，拉取不是，让路给前者。
-            # 拉到了就立刻再来一轮，好让积压的站点连着排空（与上面接手批次同一形态）。
-            if await _refresh_due_dtc_store():
-                continue
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # 轮询任务不能因为一次异常就退出——退出之后没有任何东西会重启它，
-            # 病症会退回到「批次永远排队」，且这次连日志都不会再有第二条。
-            logger.exception("接手排队批次时出错，本轮跳过")
-        await asyncio.sleep(interval_seconds)
+    batch = await run_in_threadpool(drain_import_queue, source_factory=oss_source_factory)
+    if batch is None:
+        return False
+    logger.info("排队批次已接手完成 %s: 状态=%s", batch.file_name, batch.status)
+    return True
