@@ -125,12 +125,26 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
 
 - [x] 6.1 `extension/src/content-script.ts`：判断当前页面是否是 `me=` 店铺全品
       列表页（`location.search` 解析 `i=merchant-items` 与 `me` 参数）；是则注入
-      一个采集入口（按钮/面板，UI 细节实现时定，功能优先于美观）
-- [x] 6.2 点击采集：调 `parseStorefrontPage` → 若结果为空，页面内提示"未识别到
-      任何商品，页面结构可能已变化"并终止（不发请求，spec「解析结果为空时拒绝
-      上报并提示」）；否则调 `resolveSite`（拿不到站点则提示"未识别的站点"并
-      终止，spec「站点识别失败时拒绝生成请求」）；通过后 `chrome.runtime.sendMessage`
-      把 `{ sellerId, site, items }` 交给 background，等待响应并展示结果/错误
+      一个采集入口（"采集本页"/"提交上报"两个按钮 + 一个"清空重新开始"链接，
+      UI 细节实现时定，功能优先于美观）
+- [x] 6.2 **采集与提交是两步，不是一步**（PR #68 复审 P1 修正：初版实现每次点击
+      立即把当前页作为独立报告发出，导致第一页单独落定基线、第二页存量商品被
+      误判成"新发现"，与 spec「支持翻页，多页结果合并为一次上报」不符）。
+      点"采集本页"：调 `parseStorefrontPage` → 若结果为空，页面内提示"未识别到
+      任何商品，页面结构可能已变化"并终止（不改变已累积状态，spec「解析结果为
+      空时拒绝上报并提示」）；否则与此前已累积的条目按 ASIN 合并去重
+      （`capture-accumulator.ts` 的 `mergeItems`），存入 `chrome.storage.local`
+      （按 `(site, sellerId)` 持久化，翻页导致 content script 重新注入后仍能读
+      回）。点"提交上报"：累积为零时不动作；`resolveSite` 拿不到站点则在初始化
+      阶段就提示"未识别的站点"并禁用采集入口（spec「站点识别失败时拒绝生成
+      请求」），否则 `chrome.runtime.sendMessage` 把
+      `{ sellerId, site, items: 全部累积条目, pageContext }` 交给 background，
+      等待响应并展示结果/错误；`try/finally` 保证按钮不会因异常路径永久停在
+      禁用态（PR #68 复审 P2）。`pageContext` 只取页码/排序等白名单参数
+      （`buildPageContext`），不透传完整查询串——`me=` 链接普遍带 `ds=` 等会话
+      签名参数，仓库既有契约要求这类参数不得读取、存储或用于重建请求
+      （PR #68 复审 P1）。成功后清空本地累积；网络异常等可重试失败保留累积，
+      允许直接重新点"提交上报"
 - [x] 6.3 `extension/src/background.ts`：`chrome.runtime.onMessage` 监听器，收到
       6.2 的消息后：调 `getAuthToken()`（为空则回复"请先在设置页配置访问令牌"，
       不发请求）→ 调 `buildReportRequest` 生成并**冻结**本次请求体（决策 3）→
@@ -140,24 +154,34 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       发起 `POST /api/competitor/asin-reports`（`Authorization: Bearer <token>`，
       **不带** `credentials: 'include'`——design.md 决策 6，插件不依赖 Cookie），
       失败分类处理（design.md 决策 5）：
-      - 网络错误/超时：退避重试 3 次（1s/2s/4s），复用同一份已冻结请求体
+      - 网络错误/超时：每次尝试挂一个 `AbortController` 超时（默认 15s，
+        PR #68 复审 P2 修正：初版没有超时机制，请求挂起时永远不会进入重试分支），
+        超时与断网/DNS 失败一样按退避重试 3 次（1s/2s/4s），复用同一份已冻结
+        请求体
       - 401/403：不重试，提示"登录已过期，请重新粘贴令牌"，引导至 options page
       - 422：不重试，把服务端返回的错误信息原样展示（`RejectedItem` 列表或顶层
         错误消息）
       - 409 `competitor.idempotency_key_reused`：不重试，提示"上报异常，请刷新
         页面重试"（视为插件自身缺陷，见 design.md 决策 5），并把原始响应体写入
-        一个环形缓冲区（`chrome.storage.local`，容量与格式实现时定，供运营截图
-        反馈问题用）
+        一个环形缓冲区（`idempotency-log.ts`，`chrome.storage.local`，最近 20 条，
+        供运营截图反馈问题用；PR #68 复审 P2 修正：初版只读了 `message` 就返回，
+        没有真的写日志）
       - 2xx 成功：展示 `accepted`/`new_asins`/`baseline_established` 供运营确认
         本次采集结果（`duplicate_of` 非空时提示"这是重复上报，未产生新数据"）
-- [x] 6.5 `extension/test/report-client.test.ts`：用 `fetch` mock 覆盖上述五种
-      响应场景（网络错误、401、422、409、200），断言重试次数与是否重试的行为
-      符合 6.4 的分类
-- **验证**：`pnpm --dir extension test report-client` 全绿——8 个用例通过。
+- [x] 6.5 `extension/test/report-client.test.ts`：用 `fetch` mock 覆盖上述场景
+      （网络错误、超时、401、422、409 含环形缓冲区容量断言、200），断言重试
+      次数与是否重试的行为符合 6.4 的分类
+- **验证**：`pnpm --dir extension test report-client` 全绿——11 个用例通过
+  （较初版新增：请求挂起超时重试、超时重试后成功、409 写入环形缓冲区、环形
+  缓冲区超容量丢弃最旧记录，共 4 条，对应 PR #68 复审 P2 的两项修复）。
   另加了一份本任务清单原先没列的 `extension/test/background.test.ts`（5 个用例，
   `sendReport` 打桩，覆盖 `handleCapture` 的分支映射与 missing_token/
   missing_base_url 前置检查）——`background.ts` 是把 6.2/6.3/6.4 串起来的唯一
-  位置，不测这一层就测不到"映射对不对"这件事本身
+  位置，不测这一层就测不到"映射对不对"这件事本身。多页合并与 page_context 白名单
+  的纯函数部分单独测在
+  `extension/test/capture-accumulator.test.ts`（7 个用例），对应 PR #68 复审
+  P1 的两项修复——`content-script.ts` 里剩下的 DOM 绑定部分仍按 design.md 决策 4
+  的既有边界不做自动化测试，走第 8 节人工真机验证
 
 ## 7. 文档与收尾
 
@@ -179,22 +203,30 @@ script 只做 6.1/6.2 两步本地判断+解析，之后把结果整个交给 ba
       `pnpm --dir extension run test`，写法参照既有的 `FRONTEND_PREFIX` 分支。
       `uv run pytest test/test_pre_commit_hook_unit.py -q` 验证门禁自身逻辑未受
       影响：19 passed。`extension/` 全量：`pnpm --dir extension run typecheck`
-      无报错，`pnpm --dir extension run test` 35 passed（6 个测试文件）
+      无报错，`pnpm --dir extension run test` 45 passed（7 个测试文件，PR #68
+      复审修复后新增 `capture-accumulator.test.ts` 一份、`report-client.test.ts`
+      新增 4 例）
 
 ## 8. 人工真机验证（无法用自动化测试替代）
 
 - [ ] 8.1 Chrome 开发者模式加载 `extension/dist/`
 - [ ] 8.2 用已登录 KeywordIQ 网页的账号复制一个 JWT，粘贴进插件 options page
 - [ ] 8.3 用真实登录的 Amazon 账号，打开一个**该 KeywordIQ 账号已关注**的卖家的
-      `me=` 店铺全品列表页，触发采集，确认解析出的商品清单与页面肉眼可见的一致
-- [ ] 8.4 点击上报，确认返回成功；在数据库里核实 `asin_report` 新增一行、
-      `competitor_seller_asin` 写入了预期的 ASIN 行、该卖家的 `baseline_at`
-      被落定（若这是该卖家的首次上报）
-- [ ] 8.5 验证失败路径至少两条：故意清空/改错 options page 里的 token 触发
-      401 提示；故意用一个未关注的卖家页面触发采集，确认看到服务端的拒绝原因
-- [ ] 8.6 验证翻页：找一个有多页商品的已关注卖家，先在第一页采集并上报，翻到
-      第二页再次采集并上报，确认第二次的"新发现数"只包含第二页新出现的 ASIN
-      （第一页已上报过的不重复计入）
+      `me=` 店铺全品列表页，点"采集本页"，确认解析出的商品清单与页面肉眼可见的
+      一致、面板显示的累积数正确、"提交上报"按钮从禁用变为可点
+- [ ] 8.4 点"提交上报"，确认返回成功；在数据库里核实 `asin_report` 新增**一行**
+      （不是多行）、`competitor_seller_asin` 写入了预期的 ASIN 行、该卖家的
+      `baseline_at` 被落定（若这是该卖家的首次上报）
+- [ ] 8.5 验证失败路径至少两条：故意清空/改错 options page 里的 token，点"提交
+      上报"触发 401 提示，确认已累积的数据未被清空（面板仍显示累积数，无需
+      重新点"采集本页"）；故意用一个未关注的卖家页面触发采集，确认看到服务端的
+      拒绝原因
+- [ ] 8.6 验证多页合并（PR #68 复审 P1 修正的核心场景）：找一个**至少两页商品**
+      的已关注卖家，在第一页点"采集本页"（此时不应发出任何网络请求，可用浏览器
+      开发者工具的 Network 面板确认），翻到第二页再点"采集本页"，确认面板显示的
+      累积数是两页商品数之和（去重后）；此时才点"提交上报"，确认只产生**一次**
+      网络请求、`asin_report` 只新增一行，且第二页原本就存在的商品**不会**出现
+      在这次的"新发现"里（它们与第一页的商品同属这次上报的基线批次）
 - **本节没有可以替代它的自动化测试**——设计上就是如此（design.md 决策 4），
   验证记录（截图或文字描述实际观察到的结果）直接写在对应任务的勾选说明里，
   不能只打勾不留证据
