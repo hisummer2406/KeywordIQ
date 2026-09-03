@@ -79,9 +79,10 @@ describe('options page', () => {
     expect(await getApiBaseUrl()).toBeNull();
   });
 
-  it('已授权过的地址再次保存不会重复弹出权限请求', async () => {
+  it('已授权过的地址再次保存仍会调用 request 但保存照常成功（PR #68 五次复审 P1：不做 contains 短路，Chrome 保证已授权时 request 直接返回 true 不弹窗）', async () => {
     await chrome.permissions.request({ origins: ['http://localhost:8000/*'] });
     const requestSpy = vi.spyOn(chrome.permissions, 'request');
+    const containsSpy = vi.spyOn(chrome.permissions, 'contains');
     await loadOptionsModule();
 
     (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
@@ -90,7 +91,8 @@ describe('options page', () => {
     document.getElementById('save')!.dispatchEvent(new Event('click'));
     await flush();
 
-    expect(requestSpy).not.toHaveBeenCalled();
+    expect(requestSpy).toHaveBeenCalledWith({ origins: ['http://localhost:8000/*'] });
+    expect(containsSpy).not.toHaveBeenCalled();
     expect(document.getElementById('status')!.textContent).toBe('已保存');
   });
 });

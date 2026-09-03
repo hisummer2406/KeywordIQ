@@ -39,8 +39,12 @@ async function init(): Promise<void> {
       }
 
       // service worker 向这个地址发起的 fetch 需要 host permission 才能真正
-      // 发出（PR #68 四次复审 P1，见 host-permission.ts 顶部注释）；在这里申请，
-      // 不在保存之后才发现——权限被拒绝时不该把一个连不上的地址存进去。
+      // 发出（PR #68 四次复审 P1）；在这里申请，不在保存之后才发现——权限被拒绝
+      // 时不该把一个连不上的地址存进去。**这一句之前不能插入任何 await**（哪怕
+      // 是看似无害的只读检查）：`ensureHostPermission` 内部直接、同步地调用
+      // `chrome.permissions.request()`，依赖的正是"从 click 事件到这里都没有
+      // 经过微任务边界"这件事来保住 user gesture 上下文（PR #68 五次复审 P1，
+      // 见 host-permission.ts 顶部注释）。
       let granted: boolean;
       try {
         granted = await ensureHostPermission(apiBase);
