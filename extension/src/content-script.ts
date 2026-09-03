@@ -1,8 +1,16 @@
 // 注入到 Amazon 店铺全品列表页的入口。只做本地判断（是不是 me= 页面）与 DOM
 // 解析，网络请求全部交给 background（design.md 决策 6）。
+//
+// 分页天然跨"页面"——Amazon 翻页会整页刷新，content script 重新注入、内存状态
+// 清零——因此"已采集但未提交"的条目按 (site, sellerId) 持久化在
+// chrome.storage.local（capture-accumulator.ts），多页结果合并为**一次**上报后
+// 才发起网络请求：逐页各发一次会让第一页单独落定基线，第二页的存量商品因此被
+// 服务端判成"新发现"（spec「采集当前已加载页面的 ASIN 清单，支持翻页」，
+// PR #68 复审 P1）。
 
-import { hasNextPage, parseStorefrontPage } from './parse-storefront';
+import { hasNextPage, parseStorefrontPage, type ParsedItem } from './parse-storefront';
 import { resolveSite } from './site-map';
+import { buildPageContext, mergeItems, pendingItemsKey } from './capture-accumulator';
 import type { CaptureMessage, CaptureResult } from './messages';
 
 function getSellerId(url: URL): string | null {
@@ -10,7 +18,29 @@ function getSellerId(url: URL): string | null {
   return url.searchParams.get('me');
 }
 
-function createPanel(): { root: HTMLElement; button: HTMLButtonElement; status: HTMLElement } {
+async function loadPendingItems(site: string, sellerId: string): Promise<ParsedItem[]> {
+  const key = pendingItemsKey(site, sellerId);
+  const stored = await chrome.storage.local.get(key);
+  const value = stored[key];
+  return Array.isArray(value) ? (value as ParsedItem[]) : [];
+}
+
+async function savePendingItems(site: string, sellerId: string, items: ParsedItem[]): Promise<void> {
+  await chrome.storage.local.set({ [pendingItemsKey(site, sellerId)]: items });
+}
+
+async function clearPendingItems(site: string, sellerId: string): Promise<void> {
+  await chrome.storage.local.remove(pendingItemsKey(site, sellerId));
+}
+
+interface Panel {
+  collectButton: HTMLButtonElement;
+  submitButton: HTMLButtonElement;
+  resetLink: HTMLAnchorElement;
+  status: HTMLElement;
+}
+
+function createPanel(): Panel {
   const root = document.createElement('div');
   root.id = 'keywordiq-collector-panel';
   root.style.cssText =
@@ -18,18 +48,33 @@ function createPanel(): { root: HTMLElement; button: HTMLButtonElement; status: 
     'border:1px solid #ccc;border-radius:6px;padding:10px 12px;font-size:13px;' +
     'font-family:system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.15);max-width:280px;';
 
-  const button = document.createElement('button');
-  button.textContent = '采集并上报给 KeywordIQ';
-  button.style.cssText = 'padding:6px 10px;cursor:pointer;';
+  const collectButton = document.createElement('button');
+  collectButton.textContent = '采集本页';
+  collectButton.style.cssText = 'padding:6px 10px;cursor:pointer;margin-right:6px;';
+
+  const submitButton = document.createElement('button');
+  submitButton.textContent = '提交上报';
+  submitButton.style.cssText = 'padding:6px 10px;cursor:pointer;';
+  submitButton.disabled = true;
+
+  const buttonRow = document.createElement('div');
+  buttonRow.appendChild(collectButton);
+  buttonRow.appendChild(submitButton);
+
+  const resetLink = document.createElement('a');
+  resetLink.textContent = '清空已采集，重新开始';
+  resetLink.href = '#';
+  resetLink.style.cssText = 'display:block;margin-top:6px;font-size:12px;color:#888;';
 
   const status = document.createElement('div');
   status.style.cssText = 'margin-top:6px;color:#333;white-space:pre-wrap;';
 
-  root.appendChild(button);
+  root.appendChild(buttonRow);
+  root.appendChild(resetLink);
   root.appendChild(status);
   document.body.appendChild(root);
 
-  return { root, button, status };
+  return { collectButton, submitButton, resetLink, status };
 }
 
 function describeResult(result: CaptureResult): string {
@@ -39,13 +84,13 @@ function describeResult(result: CaptureResult): string {
     case 'missing_base_url':
       return '请先在插件设置页配置 API 地址';
     case 'auth_error':
-      return '登录已过期，请重新粘贴访问令牌（在插件设置页）';
+      return '登录已过期，请重新粘贴访问令牌（在插件设置页）——本次已采集的数据仍会保留，重新粘贴后再点"提交上报"即可';
     case 'idempotency_conflict':
-      return `上报异常，请刷新页面重试：${result.message}`;
+      return `上报异常：${result.message}。请点"清空已采集，重新开始"后重新采集`;
     case 'rejected':
       return `上报被拒绝：${result.message}`;
     case 'network_error':
-      return '网络异常，请稍后重试';
+      return '网络异常，已采集的数据仍会保留，可稍后重新点"提交上报"';
     case 'success': {
       const parts = [`已提交 ${result.accepted} 条`];
       if (result.duplicate) {
@@ -59,56 +104,97 @@ function describeResult(result: CaptureResult): string {
   }
 }
 
-function init(): void {
+function describeAccumulated(count: number, hasMore: boolean): string {
+  const base = count === 0 ? '尚未采集' : `已采集 ${count} 个商品，尚未提交`;
+  return hasMore ? `${base}（检测到还有下一页，建议翻页后继续点"采集本页"）` : base;
+}
+
+async function init(): Promise<void> {
   const url = new URL(window.location.href);
   const sellerId = getSellerId(url);
   if (!sellerId) return; // 不是 me= 店铺全品列表页，不激活
 
-  const { button, status } = createPanel();
+  const panel = createPanel();
+  const site = resolveSite(url.href);
 
-  button.addEventListener('click', () => {
-    void handleCapture(url, sellerId, status, button);
+  if (!site) {
+    panel.status.textContent = '未识别的站点，暂不支持此站点';
+    panel.collectButton.disabled = true;
+    return;
+  }
+
+  // 以下三个处理函数写成 const 箭头函数（而非函数声明）并放在 `site`/`sellerId`
+  // 的 null 检查之后：TypeScript 只在这种写法下才会把外层已收窄的 `string | null`
+  // → `string` 带进闭包，写成 hoisted 的 function 声明拿不到这份收窄。
+
+  let pending = await loadPendingItems(site, sellerId);
+  panel.submitButton.disabled = pending.length === 0;
+  panel.status.textContent = describeAccumulated(pending.length, hasNextPage(document));
+
+  const handleCollect = async (): Promise<void> => {
+    const items = parseStorefrontPage(document);
+    if (items.length === 0) {
+      panel.status.textContent = '未识别到任何商品，页面结构可能已变化';
+      return;
+    }
+
+    pending = mergeItems(pending, items);
+    await savePendingItems(site, sellerId, pending);
+    panel.submitButton.disabled = pending.length === 0;
+    panel.status.textContent = describeAccumulated(pending.length, hasNextPage(document));
+  };
+
+  const handleSubmit = async (): Promise<void> => {
+    if (pending.length === 0) return;
+
+    panel.collectButton.disabled = true;
+    panel.submitButton.disabled = true;
+    panel.status.textContent = `提交中…（合并 ${pending.length} 个商品）`;
+
+    try {
+      const message: CaptureMessage = {
+        type: 'CAPTURE_REPORT',
+        sellerId,
+        site,
+        items: pending,
+        pageContext: buildPageContext(url),
+      };
+
+      const result = (await chrome.runtime.sendMessage(message)) as CaptureResult;
+      panel.status.textContent = describeResult(result);
+
+      if (result.outcome === 'success') {
+        pending = [];
+        await clearPendingItems(site, sellerId);
+      }
+    } catch {
+      // sendMessage 本身抛出（如 background 未响应）：按网络异常处理，保留已
+      // 采集的数据，允许运营重新点"提交上报"（PR #68 复审 P2——按钮不能因异常
+      // 路径永久停在禁用态）。
+      panel.status.textContent = '插件内部通信异常，已采集的数据仍会保留，可重新点"提交上报"';
+    } finally {
+      panel.collectButton.disabled = false;
+      panel.submitButton.disabled = pending.length === 0;
+    }
+  };
+
+  const handleReset = async (): Promise<void> => {
+    pending = [];
+    await clearPendingItems(site, sellerId);
+    panel.submitButton.disabled = true;
+    panel.status.textContent = describeAccumulated(0, hasNextPage(document));
+  };
+
+  panel.collectButton.addEventListener('click', () => {
+    void handleCollect();
+  });
+  panel.submitButton.addEventListener('click', () => {
+    void handleSubmit();
+  });
+  panel.resetLink.addEventListener('click', (event) => {
+    event.preventDefault();
+    void handleReset();
   });
 }
 
-async function handleCapture(
-  url: URL,
-  sellerId: string,
-  status: HTMLElement,
-  button: HTMLButtonElement,
-): Promise<void> {
-  button.disabled = true;
-  status.textContent = '采集中…';
-
-  const items = parseStorefrontPage(document);
-  if (items.length === 0) {
-    status.textContent = '未识别到任何商品，页面结构可能已变化';
-    button.disabled = false;
-    return;
-  }
-
-  const site = resolveSite(url.href);
-  if (!site) {
-    status.textContent = '未识别的站点，暂不支持此站点';
-    button.disabled = false;
-    return;
-  }
-
-  if (hasNextPage(document)) {
-    status.textContent = '采集中（检测到还有下一页，建议翻页后再次采集）…';
-  }
-
-  const message: CaptureMessage = {
-    type: 'CAPTURE_REPORT',
-    sellerId,
-    site,
-    items,
-    pageContext: url.search.replace(/^\?/, ''),
-  };
-
-  const result = (await chrome.runtime.sendMessage(message)) as CaptureResult;
-  status.textContent = describeResult(result);
-  button.disabled = false;
-}
-
-init();
+void init();

@@ -4,6 +4,7 @@
 // 面向用户的中文提示，不需要按状态码各写一套文案解析逻辑。
 
 import type { AsinReportRequest } from './build-report';
+import { appendIdempotencyConflictLog } from './idempotency-log';
 
 export interface AsinReportResponse {
   report_id: number;
@@ -30,9 +31,12 @@ export interface SendReportOptions {
   maxRetries?: number;
   /** 每次重试前的退避毫秒数，长度应 >= maxRetries；默认 [1000, 2000, 4000]。 */
   backoffMs?: number[];
+  /** 每次尝试的超时毫秒数，默认 15000。超时按可重试的瞬时失败处理。 */
+  timeoutMs?: number;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const DEFAULT_TIMEOUT_MS = 15000;
 
 /**
  * 发送一次已经冻结好的请求体。**调用方负责保证同一个 body 在所有重试之间不变**
@@ -48,25 +52,35 @@ export async function sendReport(
   const sleep = options.sleep ?? defaultSleep;
   const maxRetries = options.maxRetries ?? 3;
   const backoffMs = options.backoffMs ?? [1000, 2000, 4000];
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     let response: Response;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      response = await fetchImpl(`${baseUrl}/api/competitor/asin-reports`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-      });
-    } catch {
-      // 网络层错误（断网、DNS 失败等）：fetch 本身抛异常，视为可重试的瞬时失败。
-      if (attempt < maxRetries) {
-        await sleep(backoffMs[attempt] ?? backoffMs[backoffMs.length - 1] ?? 4000);
-        continue;
+      try {
+        response = await fetchImpl(`${baseUrl}/api/competitor/asin-reports`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch {
+        // 网络层错误（断网、DNS 失败等）与超时（AbortController 触发后 fetch 同样
+        // 以异常告终）在这里表现相同，都视为可重试的瞬时失败——规范承诺的"超时后
+        // 按 1s/2s/4s 重试"正是靠这个 AbortSignal 触发的（PR #68 复审 P2）。
+        if (attempt < maxRetries) {
+          await sleep(backoffMs[attempt] ?? backoffMs[backoffMs.length - 1] ?? 4000);
+          continue;
+        }
+        return { kind: 'network_error' };
       }
-      return { kind: 'network_error' };
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (response.ok) {
@@ -79,13 +93,21 @@ export async function sendReport(
     }
 
     if (response.status === 409) {
-      const message = await readMessage(response);
-      return { kind: 'idempotency_conflict', message };
+      const raw = await readJsonSafely(response);
+      // 原始响应体写进有界环形缓冲区（design.md 决策 5 / tasks.md 6.4）：这是
+      // 定位理论上"不应发生"的 request_id 冲突所需的证据。写失败不影响本次上报
+      // 结果的判定，吞掉异常即可。
+      await appendIdempotencyConflictLog({
+        requestId: body.request_id,
+        status: response.status,
+        responseBody: raw,
+      }).catch(() => undefined);
+      return { kind: 'idempotency_conflict', message: extractMessage(raw, response.status) };
     }
 
     if (response.status === 422) {
-      const message = await readMessage(response);
-      return { kind: 'rejected', message };
+      const raw = await readJsonSafely(response);
+      return { kind: 'rejected', message: extractMessage(raw, response.status) };
     }
 
     // 5xx 与其余未分类状态码：视为瞬时失败，按同一套退避重试——服务端偶发抖动
@@ -102,11 +124,17 @@ export async function sendReport(
   return { kind: 'network_error' };
 }
 
-async function readMessage(response: Response): Promise<string> {
+async function readJsonSafely(response: Response): Promise<unknown> {
   try {
-    const body = (await response.json()) as { message?: string };
-    return body.message ?? `请求失败（HTTP ${response.status}）`;
+    return await response.json();
   } catch {
-    return `请求失败（HTTP ${response.status}）`;
+    return null;
   }
+}
+
+function extractMessage(raw: unknown, status: number): string {
+  if (raw && typeof raw === 'object' && typeof (raw as { message?: unknown }).message === 'string') {
+    return (raw as { message: string }).message;
+  }
+  return `请求失败（HTTP ${status}）`;
 }

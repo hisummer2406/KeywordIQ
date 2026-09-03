@@ -47,11 +47,23 @@ pnpm run test        # vitest
 
 ## 使用
 
+采集与上报是**两步**，不是一步：多页商品必须先在本地合并齐全，再合并成**一次**
+上报，不能逐页各发一次请求——逐页上报会让第一页单独落定该卖家的基线，第二页的
+存量商品因此被服务端误判成"新发现"（PR #68 复审 P1）。
+
 1. 打开一个**已经在 KeywordIQ 里关注**的 Amazon 卖家的 `me=` 店铺全品列表页
-2. 页面右上角会出现一个悬浮面板，点"采集并上报给 KeywordIQ"
-3. 面板会显示结果（新发现数量、是否重复、或失败原因）
-4. 如果店铺有多页商品，翻到下一页后可以再次点击采集——两次结果会分别上报，
-   不会互相覆盖
+2. 页面右上角会出现一个悬浮面板，点"采集本页"——只在本地解析并累积当前页可见的
+   商品，不发起网络请求；面板显示已累积的商品总数
+3. 如果店铺有多页商品，翻到下一页后再次点"采集本页"，新页面的条目会并入已累积
+   的结果（按 ASIN 去重，不覆盖或丢弃前面几页已采集的条目）
+4. 所有页面都采集完后，点"提交上报"——这时才把累积的全部条目合并为一次请求发出，
+   面板显示结果（新发现数量、是否重复、或失败原因）
+5. 提交失败（网络异常、令牌过期）时已累积的数据不会丢失，修好问题后重新点
+   "提交上报"即可，不需要重新采集；只有服务端判定为幂等冲突（插件自身缺陷）时
+   才需要点"清空已采集，重新开始"
+
+`page_context` 只携带页码、排序这类无害的导航上下文，`me=` 链接里的 `ds=` 等
+会话签名参数在解析处即丢弃，不读取、不存储、不参与请求（PR #68 复审 P1）。
 
 ## 已知限制
 
@@ -69,15 +81,17 @@ extension/
   manifest.json       # Manifest V3
   options.html         # 设置页
   src/
-    site-map.ts        # 站点码手工镜像（对齐 app/site_registry.py）
-    parse-storefront.ts# DOM 解析（纯函数）
-    build-report.ts     # 组装符合后端契约的请求体
-    auth.ts             # token / API 地址的本地存取
-    report-client.ts    # 发请求 + 失败分类 + 重试
-    background.ts       # service worker：唯一发网络请求的地方
-    content-script.ts   # 注入店铺列表页的入口
-    messages.ts          # content script ↔ background 的消息形状
-    options.ts           # 设置页脚本
+    site-map.ts             # 站点码手工镜像（对齐 app/site_registry.py）
+    parse-storefront.ts     # DOM 解析（纯函数）
+    capture-accumulator.ts  # 多页合并去重 + page_context 白名单（纯函数）
+    build-report.ts          # 组装符合后端契约的请求体
+    auth.ts                  # token / API 地址的本地存取
+    idempotency-log.ts       # 409 幂等冲突的环形缓冲区日志
+    report-client.ts         # 发请求 + 失败分类 + 重试 + 超时
+    background.ts            # service worker：唯一发网络请求的地方
+    content-script.ts        # 注入店铺列表页的入口，多页采集在此累积
+    messages.ts               # content script ↔ background 的消息形状
+    options.ts                # 设置页脚本
   test/                # vitest，覆盖除真机 DOM 结构外的全部逻辑
   scripts/build.mjs    # esbuild 打包脚本
 ```
