@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.concurrency import run_in_threadpool
 
 from app.common.errors import (
     CODE_COMPETITOR_GROUP_DUPLICATE,
@@ -438,7 +439,7 @@ async def commit(db: AsyncSession, user_id: int, req: CommitRequest) -> CommitRe
 
 
 def purge_expired_previews(session_factory: sessionmaker = SessionFactory) -> int:
-    """清理过期的预览暂存行。挂在 import_queue.py 已有的轮询循环上，不新开定时器。
+    """清理过期的预览暂存行。挂在 ``app/jobs/poller.py`` 的轮询循环上，不新开定时器。
 
     自建会话——调用方是同步轮询任务，不复用请求作用域的会话。
     """
@@ -449,3 +450,17 @@ def purge_expired_previews(session_factory: sessionmaker = SessionFactory) -> in
         return result.rowcount or 0
     finally:
         session.close()
+
+
+async def purge_expired_previews_round() -> bool:
+    """轮询 job：清理过期的竞对导入预览暂存行（``competitor_watch_preview``）。
+
+    是维护性任务，恒返回 ``False``——它每一轮都会被执行到，但不参与"整轮要不要重来"
+    的判定，见 ``app/jobs/poller.py``。异常就地吞掉，不连累同一轮里排在它之后的
+    排队接手——那是两件事，绑在一起意味着这里出错就没人接排队批次了。
+    """
+    try:
+        await run_in_threadpool(purge_expired_previews)
+    except Exception:
+        logger.exception("清理过期竞对预览时出错，本轮跳过")
+    return False
