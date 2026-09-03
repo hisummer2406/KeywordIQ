@@ -38,7 +38,11 @@
 
 ## 📚 业务知识库
 
-- [亚马逊跨境电商核心指标指南](./knowledge/amazon-cross-border-ecommerce-metrics.md)：市场、竞争、流量、转化、广告、销售、利润、库存八类指标，以及选品重点关注的六个指标。
+[`knowledge/`](./knowledge/README.md) 放稳定可复用的业务知识（指标定义、分析方法、数据源
+含义），与 `openspec/`（产品行为与接口契约的权威来源）、`CLAUDE.md`（工程约定与实现决策）
+职责分开，边界与写作约定见索引。
+
+- [亚马逊跨境电商核心指标指南](./knowledge/amazon-cross-border-ecommerce-metrics.md)：市场、竞争、流量、转化、广告、销售、利润、库存八类指标，以及选品重点关注的六个指标。每项均标注在 KeywordIQ 的可得性——八类里六类是外部输入，产品没有对应数据源。
 
 ---
 
