@@ -40,8 +40,10 @@ pnpm run test        # vitest
    `localStorage` 与插件的 `chrome.storage.local` 互不相通，只是巧合地取了
    同一个名字）
 2. 点插件图标右键 → "选项"（或 `chrome://extensions` 里该插件的"扩展程序选项"）
-3. 填入 API 地址（本地开发通常是 `http://localhost:8000`，生产环境填实际域名）
-   与上一步复制的令牌，点保存
+3. 填入 API 地址（本地开发通常是 `http://localhost:8000`，生产环境填实际域名）、
+   上一步复制的令牌，以及**单次上报条数上限**——必须与部署此服务的后端环境变量
+   `COMPETITOR_MAX_REPORT_ITEMS` 一致（默认 200，向管理员确认；不知道就先留
+   默认值），填错的表现见下文"已知限制"。三项都填完后点保存
 
 **令牌有效期 24 小时**，过期后插件会提示"登录已过期"，重新做一遍上面的步骤即可。
 
@@ -73,12 +75,16 @@ pnpm run test        # vitest
   见 design.md 决策 4
 - `ship_to_region`（配送地区码）本次未采集，见 design.md Open Questions
 - 只做"被动采集"，不做后台自动巡检（P3b）；不上架 Chrome Web Store
-- **单个卖家的累积条目数超过服务端上限（`COMPETITOR_MAX_REPORT_ITEMS`，默认
-  200）时无法在一次会话里采完整个店铺**：插件会拒绝并入会导致超限的那一页，
-  提示先提交已采集的部分。分批分别提交不是可行的绕过方式——那会重新引入"首批
-  建立基线、后续批次的存量商品被误判成新发现"的问题（PR #68 复审 P1 的核心
-  修复点），本变更没有解决"单一卖家商品数超过这个上限"这个场景，见
-  `extension/src/capture-accumulator.ts` 的 `mergeItemsWithCap` 注释
+- **单个卖家的商品数超过单次上报上限时，插件无法完整采集这家店**（PR #68 三次
+  复审 P1，见 design.md 决策 7）：撞上限后插件会**硬性阻止**继续采集和提交
+  （"采集本页"/"提交上报"一起锁死），已采集的部分不会被提交——不是"建议先提交
+  部分"，因为提交一份不完整的批次会给该卖家落定基线，之后继续采集剩下的商品
+  再提交时会被判成"新发现"（与多页合并要修的是同一类基线污染，只是触发路径
+  不同）。此时只能点"清空已采集，重新开始"放弃这次采集
+- **这个上限是运行时配置，不是写死的默认值**：必须在插件设置页填一份与后端
+  `COMPETITOR_MAX_REPORT_ITEMS` 一致的镜像值（未配置时兜底 200）——部署方把
+  服务端上限改了而插件这边没有跟着改，插件的判断会基于过期的值，表现是提交
+  时收到迟来的 422，或者翻页翻到一半就被过早拒绝
 
 ## 目录结构
 
@@ -91,7 +97,7 @@ extension/
     parse-storefront.ts     # DOM 解析（纯函数）
     capture-accumulator.ts  # 多页合并去重 + page_context 白名单（纯函数）
     build-report.ts          # 组装符合后端契约的请求体
-    auth.ts                  # token / API 地址的本地存取
+    auth.ts                  # token / API 地址 / 单次上报条数上限的本地存取
     idempotency-log.ts       # 409 幂等冲突的环形缓冲区日志
     report-client.ts         # 发请求 + 失败分类 + 重试 + 超时
     background.ts            # service worker：唯一发网络请求的地方

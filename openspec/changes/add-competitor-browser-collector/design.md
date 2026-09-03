@@ -110,29 +110,46 @@ export const DOMAIN_TO_SITE: Record<string, string> = {
 （tasks.md 收尾一节会写一条"新增站点时该改哪两个文件"的说明，同时补一句到
 `app/site_registry.py` 的模块 docstring，指回这份镜像的位置）。
 
-### 决策 3：`request_id` 的生成时机——每次真正重新读取 DOM 才生成新值，网络失败重试复用原值
+### 决策 3：`request_id` 的生成时机——每次真正重新读取 DOM 才生成新值，重试（自动或手动）复用原值
+
+> **本节已按 PR #68 二次复审 P1 的修复重写**：初版实现里 `request_id` 由
+> `background.ts` 在每条消息上各自生成，多页采集改成"采集/提交"两步流程后，
+> 这个设计在"提交失败、运营不经过重新采集、直接再点一次提交上报"这条路径上
+> 出现了裂缝——见下文"关键纪律"之后的说明。
 
 服务端契约（`competitor-asin-ingest`）把这件事的边界写得很清楚：**幂等重试**要
 重发已经序列化的原请求体（同一个 `request_id`）；**重新采集**（哪怕是同一个卖家、
 同一批 ASIN）要换新的 `request_id`，因为它是另一次观测。
 
-插件侧的落地：
+插件侧的落地（`extension/src/capture-accumulator.ts` 的 `freezeRequest`，
+`extension/src/content-script.ts` 调用）：
 
 ```
-1. content script 解析出本次 DOM 快照 → 生成一个 request_id（crypto.randomUUID()）
-   与 captured_at（此刻），连同解析结果一起交给 background script
-2. background script 序列化出完整请求体后即固定下来，网络失败/超时的重试
-   全部重发这同一份已序列化的请求体（同一个 request_id、同一个 captured_at）
-3. 重试次数上限 3 次，指数退避（1s/2s/4s），超过上限后提示运营手动重试
-   （手动重试 = 重新点一次插件按钮，会重新执行步骤 1，生成新的 request_id——
-   这是"重新采集"，不是"重试"，语义上是对的：运营手动触发时页面很可能已经变化）
+1. content script 点"采集本页"解析出本次 DOM 快照，与此前已累积的条目按 ASIN
+   合并去重（多页翻页场景，条目持久化在 `chrome.storage.local`），无论合并
+   结果是否带来新内容，都把已冻结的 request_id/captured_at 重置为
+   null——这是"重新触发一次采集"
+2. content script 点"提交上报"时：若当前批次的 request_id/captured_at 还是
+   null（尚未提交过），此刻才生成一对新值（crypto.randomUUID() +
+   captured_at）并随批次一起持久化（chrome.storage.local）；若已经非 null
+   （上一次提交失败、这次是"直接再点提交"，没有经过步骤 1），原样复用
+3. 冻结好的 requestId/capturedAt 随 CaptureMessage 一起交给 background，
+   background 不生成、只透传给 buildReportRequest——它是无状态的 service
+   worker，没有能力区分"这是同一批条目的重新提交"还是"一次全新观测"
+4. background 里 sendReport 的自动重试（网络失败/超时，指数退避 1s/2s/4s，
+   上限 3 次）全部复用这同一份已序列化请求体，不受影响；自动重试耗尽后，
+   运营手动再点一次"提交上报"（没有先点"采集本页"）会走到上面第 2 步的
+   "原样复用"分支——这正是本节修复要保证的：不能让"服务端其实已经收到、
+   只是响应在重试里全部丢了"这种情况在手动重试时产生第二条观测记录
 ```
 
-**关键纪律**：`request_id` 在"一次解析结果被序列化为请求体"这个时间点生成并冻结，
-之后的自动重试绝不重新生成；只有回到步骤 1（重新解析 DOM）才会有新值。这与设计
-决策的措辞完全对应"重新读取 DOM 后继续复用原 request_id 不是重试"——本设计通过
-"先解析、后冻结、重试不重新解析"的结构，让这条边界在代码结构上就是成立的，不依赖
-写代码的人记住这条规则。
+**关键纪律**：`request_id` 在"一批累积条目**首次**被序列化为待发送的请求体"这个
+时间点生成并冻结，之后无论是自动重试还是运营手动重新点击提交，只要没有经过
+"重新触发一次采集"（点"采集本页"），就必须复用同一对值；只有重新采集（无论合并
+结果是否带来新内容）才会作废、在下次提交时重新生成。这与 spec 原文"`request_id`
+在一次采集结果被冻结为请求体时生成、重试复用、重新采集换新"完全对应——冻结与
+复用的判断逻辑集中在 `freezeRequest` 一个纯函数里（`extension/test/
+capture-accumulator.test.ts` 覆盖），不依赖写代码的人在每个调用点记住这条规则。
 
 ### 决策 4：DOM 解析——手工维护选择器，无法自动化测试，验收方式是人工真机验证
 
@@ -169,13 +186,18 @@ export const DOMAIN_TO_SITE: Record<string, string> = {
 
 ### 决策 6：网络请求发自后台 service worker，不发自 content script；API 地址可配置
 
-content script 只负责 DOM 解析与页面内 UI，解析结果通过 `chrome.runtime.sendMessage`
-交给 background（MV3 service worker），由 background 持有 `getAuthToken()`、执行
-`fetch`、做决策 3 的 `request_id` 冻结与决策 5 的重试/错误分类，再把结果消息传回
-content script 展示。**不在 content script 里直接 `fetch`**：content script 与
-被注入的 Amazon 页面共享执行上下文的网络策略认知，容易与页面自身的 CSP/网络行为
-纠缠；把网络逻辑集中在 background 也让"一次采集对应一次冻结的请求体"这条纪律
-只需要在一个地方（background 的消息处理器）维护。
+content script 负责 DOM 解析、页面内 UI，以及决策 3 的 `request_id`/`captured_at`
+冻结（`freezeRequest`，冻结值随批次一起持久化在 `chrome.storage.local`）；解析
+结果连同已冻结的这两个字段通过 `chrome.runtime.sendMessage` 交给
+background（MV3 service worker），由 background 持有 `getAuthToken()`、执行
+`fetch`、做决策 5 的重试/错误分类，再把结果消息传回 content script 展示。
+**不在 content script 里直接 `fetch`**：content script 与被注入的 Amazon 页面
+共享执行上下文的网络策略认知，容易与页面自身的 CSP/网络行为纠缠；把网络逻辑
+集中在 background 也让"重试与错误分类"这条纪律只需要在一个地方（background 的
+消息处理器）维护——但幂等键的冻结/复用判断本身留在 content script（PR #68
+二次复审 P1 之后的结论）：background 是无状态的 service worker，每条消息都当作
+独立事件处理，没有能力判断"这是同一批条目的重新提交"，这个判断只有持有跨消息
+持久化状态的一方（content script，靠 `chrome.storage.local`）才做得了。
 
 API 地址（开发环境 `http://localhost:8000`、生产环境实际域名）随 token 一起在
 options page 配置、存进 `chrome.storage.local`（键名 `keywordiq_api_base`），
@@ -193,6 +215,43 @@ CORS 之前，需要同时给插件的来源开白名单，或改为 `optional_h
 做法）——本次不做后者，因为当前唯一的调用方就是这个插件，声明动态权限请求的复杂度
 换不回实际收益。
 
+### 决策 7：单次上报条数上限——客户端预检并整批拒绝，上限是运行时配置不是协议常量
+
+> 本节是 PR #68 三次复审新增的两项修复（P1 + P2）合起来的设计记录，初版没有
+> 这条决策。
+
+服务端 `COMPETITOR_MAX_REPORT_ITEMS`（`.env.example`，默认 200）对单次上报的
+条目数整批拒绝、不截断。多页累积（决策 3）理论上可以攒出任意多条目，如果不做
+客户端预检，运营翻完好几页之后点"提交上报"才会撞上一个 422——而且这份"超限"
+批次此时已经无法拆分成可提交的更小批次（决策 3 的合并结果是一个整体）。
+
+**预检本身**（`extension/src/capture-accumulator.ts` 的 `mergeItemsWithCap`）：
+每次"采集本页"合并前先算一次合并后的条目数，若会超过上限，整批拒绝这一页的
+并入、保留此前已累积的条目不变——与服务端"超限整批拒绝，不截断"同一条纪律，
+不做部分合并制造一份"看起来采集完整、实际悄悄丢了几个商品"的批次。
+
+**撞上限之后是硬性阻止，不是"建议先提交部分"**（PR #68 三次复审 P1）：初版的
+提示是"请先点提交上报，提交已采集的部分"，这条提示本身自相矛盾——同一段文案
+里又承认分批提交会污染基线。问题在于：这批不完整的条目一旦被提交，就会给该
+卖家落定基线；运营大概率会紧接着继续采集剩下的商品并再次提交，那一批因为
+`first_seen_at > baseline_at` 会被判成"新发现"，与决策 1 提到的"手动重试换新
+request_id"是完全不同的另一条基线污染路径（决策 3 修的是"同一批条目重复提交"，
+这里是"同一个卖家的第二批条目"）。插件目前没有能安全分批建立基线的协议，所以
+选择在这里硬性止步：撞上限后 `pending.capped` 落为 `true`，"采集本页"与
+"提交上报"两个按钮一起锁死，只能点"清空已采集，重新开始"放弃这次采集。这是
+一个已知的产品限制（记在 `extension/README.md`），不是本变更要解决的场景。
+
+**上限本身是运行时配置，插件不能把默认值 200 当协议常量写死**（PR #68 三次
+复审 P2）：部署方可以把 `COMPETITOR_MAX_REPORT_ITEMS` 改成任意正整数，插件若
+硬编码 200，服务端调低时插件会等到提交才收到迟来的 422，服务端调高时插件又会
+过早拒绝、白白把能一次提交的采集拆成不必要的多次。本变更的既有非目标是"不改动
+任何后端代码"（见 Non-Goals），因此没有新增一个只读配置端点的选项；退而求其次
+让运营在 options page 里手填一份镜像值（`auth.ts` 的
+`getMaxReportItems()`/`setMaxReportItems()`，未配置时兜底 200），与 API 地址、
+token 走同一条本地配置路径。**这是已知的漂移风险**——运营不去手动同步这个值，
+插件的判断就会继续基于过期的镜像，表现是"响亮失败"（提交时收到 422 或过早拒绝）
+而不是"安静的数据错误"，可接受程度与决策 2 的站点映射漂移风险同一类。
+
 ## Risks / Trade-offs
 
 - **[风险] 鉴权占位方案的每日重新粘贴体验差** → 缓解：这是有意的临时状态，proposal
@@ -204,9 +263,19 @@ CORS 之前，需要同时给插件的来源开白名单，或改为 `optional_h
 - **[风险] 手写站点映射表与 `site_registry.py` 漂移** → 缓解：决策 2 的固定断言测试
   + 文档指回，但这是人工纪律不是自动化保证，新增站点时如果漏改插件这边，表现是
   "该站点的卖家永远上报失败"而不是静默错误，属于"响亮失败"而非"安静失败"，可接受
-- **[权衡] 插件代码不接入现有的前端 CI/门禁** → 这是全新技术栈决定的，`pnpm
-  lint`/`tsc`/`vitest` 的门禁范围不覆盖 `extension/` 目录；tasks.md 需要为这个目录
-  单独定义"提交前跑什么"（哪怕只是 `tsc --noEmit` 与一份独立的 vitest 配置）
+- **[权衡] 插件代码起初未接入 GitHub Actions**（PR #68 二次复审 P2 已修）→
+  本地提交门禁（`.claude/hooks/pre_commit.py` 的 `EXTENSION_PREFIX` 判据）能挡住
+  经这个 harness 提交的改动，但挡不住其他智能体或直接 `git push` 的场景；
+  `.github/workflows/ci.yml` 现已新增 `extension` job（typecheck + test +
+  build），结构照抄既有的 `frontend` job
+- **[风险] 单批上限的镜像值可能与服务端运行时配置漂移**（决策 7）→ 缓解：与决策 2
+  的站点映射同一类风险——人工纪律而非自动化保证，表现是"响亮失败"（提交时收到
+  迟来的 422，或翻页翻到一半就被过早拒绝）而非安静的数据错误，可接受
+- **[产品限制] 单个卖家商品数超过单批上限时，插件目前无法完整采集这家店**（决策 7）
+  → 这不是本变更范围内要解决的场景：分批提交会重新引入基线污染，本变更选择在
+  撞上限时硬性阻止提交、要求运营放弃这次采集，而不是设计一个更复杂的安全分批
+  协议——真要支持大店铺需要服务端配合（比如允许在同一个基线批次内分片提交），
+  是另一个决定
 
 ## Open Questions
 
