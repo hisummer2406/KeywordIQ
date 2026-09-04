@@ -2,6 +2,7 @@
 // 条数上限），并提供「从网页同步令牌」这条主路径。手动填写令牌是折叠起来的兜底。
 
 import {
+  clearWebOrigin,
   getApiBaseUrl,
   getAuthToken,
   getMaxReportItems,
@@ -130,7 +131,15 @@ async function init(): Promise<void> {
       }
 
       await setApiBaseUrl(apiBaseValue);
-      if (webOriginValue) await setWebOrigin(webOriginValue);
+      // 留空必须**清掉**已存的旧值，不能只是"不写入"：不清的话，用户曾经填过一个
+      // 独立网页地址、现在清空输入框想回到"跟随 API 地址"，storage 里那个旧值会
+      // 原样留着，getWebOrigin() 继续读到它——"留空回退 API 地址"这条契约就没有
+      // 兑现（PR #73 审核意见 P1）。
+      if (webOriginValue) {
+        await setWebOrigin(webOriginValue);
+      } else {
+        await clearWebOrigin();
+      }
       await setMaxReportItems(maxReportItems);
       status.textContent = '已保存';
     })();
