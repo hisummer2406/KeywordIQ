@@ -1,5 +1,5 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Card, Input, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd';
+import { MoreOutlined, PlusOutlined } from '@ant-design/icons';
+import { Button, Card, Dropdown, Input, Modal, Radio, Select, Space, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { formatSiteLabel } from '@/pages/Analysis/siteLabel';
 import type { KeywordGroup } from '@/services/library';
@@ -44,7 +44,9 @@ export default function GroupBar({
   onDelete,
 }: Props) {
   const [draft, setDraft] = useState<NameDraft | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<KeywordGroup | null>(null);
   const [busy, setBusy] = useState(false);
+  const activeGroup = groups.find((group) => group.group_id === activeId);
 
   const submit = async () => {
     if (!draft) return;
@@ -75,76 +77,75 @@ export default function GroupBar({
       await onDelete(group);
     } catch {
       // 同上：删除失败时不通知主屏刷新（分组还在），提示交给全局出口。
-      return;
+      return false;
     }
     // 不指定选中项：删掉的可能正是当前分组，交给主屏回落到第一个。
     onChanged();
+    return true;
   };
 
+  const groupMenu = (group: KeywordGroup) => ({
+    items: [
+      { key: 'rename', label: '重命名' },
+      { type: 'divider' as const },
+      { key: 'delete', label: <Typography.Text type="danger">删除分组</Typography.Text> },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === 'rename') {
+        setDraft({ mode: 'rename', groupId: group.group_id, name: group.name });
+      } else if (key === 'delete') {
+        setDeleteTarget(group);
+      }
+    },
+  });
+
   return (
-    <Card size="small" title="分组" styles={{ body: { padding: 12 } }}>
+    <Card
+      size="small"
+      title={
+        <Space size={8}>
+          <span>分组</span>
+          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+            {groups.length ? `${groups.length} 个清单` : '建立清单后开始盯盘'}
+          </Typography.Text>
+        </Space>
+      }
+      extra={
+        <Space size={4}>
+          <Button type="primary" icon={<PlusOutlined />} disabled={!sites.length} onClick={() => setDraft({ mode: 'create', site: sites[0]?.code ?? '', name: '' })}>
+            新建分组
+          </Button>
+          {activeGroup && (
+            <Dropdown menu={groupMenu(activeGroup)} trigger={['click']}>
+              <Button type="text" icon={<MoreOutlined />} aria-label="当前分组操作" />
+            </Dropdown>
+          )}
+        </Space>
+      }
+      styles={{ body: { padding: 10 } }}
+    >
       {groups.length === 0 && (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
           还没有分组。新建一个，再到「关键词市场分析」勾选结果行加入词库。
         </Typography.Paragraph>
       )}
 
-      {/* 新建按钮跟在芯片流的末尾，不单独占一行——这一块越矮，表格越早开始。 */}
-      <Space size={[8, 8]} wrap>
-        {groups.map((group) => {
-          const active = group.group_id === activeId;
-          return (
-            <Space.Compact key={group.group_id}>
-              <Button
-                type={active ? 'primary' : 'default'}
-                onClick={() => onSelect(group.group_id)}
-              >
-                <Tag
-                  color={active ? 'blue' : 'default'}
-                  style={{ marginInlineEnd: 4, borderColor: 'transparent' }}
-                >
-                  {group.site}
-                </Tag>
-                {group.name}
-                <Typography.Text
-                  type={active ? undefined : 'secondary'}
-                  style={{ marginInlineStart: 6, color: active ? '#fff' : undefined }}
-                >
-                  {group.item_count}
-                </Typography.Text>
-              </Button>
-              <Button
-                icon={<EditOutlined />}
-                title={`重命名「${group.name}」`}
-                onClick={() =>
-                  setDraft({ mode: 'rename', groupId: group.group_id, name: group.name })
-                }
-              />
-              {/*
-                删组连带删掉全部条目且不可撤销，故这里**要**二次确认——与分析屏
-                「重置条件」那种只影响一份表单的按钮不是一回事。
-              */}
-              <Popconfirm
-                title={`删除「${group.name}」`}
-                description={`组内 ${group.item_count} 个词会一并删除，且不可撤销。`}
-                okText="删除"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-                onConfirm={() => remove(group)}
-              >
-                <Button danger icon={<DeleteOutlined />} title={`删除「${group.name}」`} />
-              </Popconfirm>
-            </Space.Compact>
-          );
-        })}
-        <Button
-          icon={<PlusOutlined />}
-          disabled={!sites.length}
-          onClick={() => setDraft({ mode: 'create', site: sites[0]?.code ?? '', name: '' })}
-        >
-          新建分组
-        </Button>
-      </Space>
+      <Radio.Group
+        value={activeId}
+        onChange={(event) => onSelect(event.target.value)}
+        optionType="button"
+        buttonStyle="solid"
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
+      >
+        {groups.map((group) => (
+          <Radio.Button key={group.group_id} value={group.group_id}>
+            <Tag color={group.group_id === activeId ? 'blue' : 'default'} style={{ marginInlineEnd: 6, borderColor: 'transparent' }}>
+              {group.site}
+            </Tag>
+            {group.name} · {group.item_count} 词
+          </Radio.Button>
+        ))}
+      </Radio.Group>
 
       <Modal
         open={draft !== null}
@@ -177,6 +178,20 @@ export default function GroupBar({
           onChange={(e) => draft && setDraft({ ...draft, name: e.target.value })}
           onPressEnter={submit}
         />
+      </Modal>
+
+      <Modal
+        open={deleteTarget !== null}
+        title={`删除「${deleteTarget?.name ?? ''}」`}
+        okText="删除"
+        okButtonProps={{ danger: true }}
+        cancelText="取消"
+        onOk={async () => {
+          if (deleteTarget && (await remove(deleteTarget))) setDeleteTarget(null);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      >
+        组内 {deleteTarget?.item_count ?? 0} 个词会一并删除，且不可撤销。
       </Modal>
     </Card>
   );

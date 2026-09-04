@@ -47,6 +47,11 @@ function setup(groups = GROUPS) {
   return handlers;
 }
 
+async function openActions() {
+  fireEvent.click(screen.getByRole('button', { name: '当前分组操作' }));
+  await screen.findByText('重命名');
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -57,13 +62,13 @@ describe('分组管理区', () => {
     // 站点必须露出来：这一屏没有站点选择器，站点只能从分组上读到
     expect(screen.getByText('US')).toBeTruthy();
     expect(screen.getByText('DE')).toBeTruthy();
-    expect(screen.getByText('主推词')).toBeTruthy();
-    expect(screen.getByText('8')).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /主推词/ })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /8 词/ })).toBeTruthy();
   });
 
   it('点分组即切换', async () => {
     const { onSelect } = setup();
-    fireEvent.click(screen.getByText('竞品词'));
+    fireEvent.click(screen.getByRole('radio', { name: /竞品词/ }));
     expect(onSelect).toHaveBeenCalledWith(8);
   });
 
@@ -83,7 +88,8 @@ describe('分组管理区', () => {
   it('重命名保留原名做初值，且不碰站点', async () => {
     const { onRename, onChanged } = setup();
 
-    fireEvent.click(screen.getByTitle('重命名「主推词」'));
+    await openActions();
+    fireEvent.click(screen.getByText('重命名'));
     const input = screen.getByDisplayValue('主推词');
     fireEvent.change(input, { target: { value: '改过的' } });
     await act(async () => {
@@ -99,7 +105,8 @@ describe('分组管理区', () => {
   it('删除要二次确认并说明会带走多少个词', async () => {
     const { onDelete } = setup();
 
-    fireEvent.click(screen.getByTitle('删除「主推词」'));
+    await openActions();
+    fireEvent.click(screen.getByText('删除分组'));
 
     expect(screen.getByText(/组内 8 个词会一并删除/)).toBeTruthy();
     expect(onDelete).not.toHaveBeenCalled();
@@ -108,7 +115,8 @@ describe('分组管理区', () => {
   it('确认删除后不指定选中项，交给主屏回落', async () => {
     const { onDelete, onChanged } = setup();
 
-    fireEvent.click(screen.getByTitle('删除「主推词」'));
+    await openActions();
+    fireEvent.click(screen.getByText('删除分组'));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /删\s*除/ }));
     });
@@ -143,7 +151,8 @@ describe('分组管理区', () => {
     const { onDelete, onChanged } = setup();
     onDelete.mockRejectedValue(new Error('boom'));
 
-    fireEvent.click(screen.getByTitle('删除「主推词」'));
+    await openActions();
+    fireEvent.click(screen.getByText('删除分组'));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /删\s*除/ }));
     });

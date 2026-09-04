@@ -94,8 +94,8 @@ describe('分组区', () => {
     // 「头部竞对」同时出现在分组芯片与表格行的分组下拉选中项里(行的 group_name 恰好
     // 同名),故用 getAllByText。
     await renderSettled();
-    await waitFor(() => expect(screen.getAllByText('头部竞对').length).toBeGreaterThan(0));
-    expect(screen.getByText('全部关注')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('radio', { name: /头部竞对/ })).toBeTruthy());
+    expect(screen.getByRole('radio', { name: /全部关注/ })).toBeTruthy();
   });
 
   it('分组管理区横铺在表格上方,不做侧栏', async () => {
@@ -107,6 +107,25 @@ describe('分组区', () => {
       .closest('.ant-card') as HTMLElement;
     const table = document.querySelector('.ant-table') as HTMLElement;
     expect(bar.contains(table)).toBe(false);
+  });
+
+  it('改名和删除收进分组的操作菜单，删除仍会二次确认', async () => {
+    await renderSettled();
+    const group = await screen.findByRole('radio', { name: /头部竞对/ });
+    await act(async () => {
+      group.click();
+    });
+    const actions = await screen.findByRole('button', { name: '当前分组操作' });
+    await act(async () => {
+      actions.click();
+    });
+    const remove = await screen.findByText('删除分组');
+    expect(screen.getByText('重命名')).toBeTruthy();
+    await act(async () => {
+      remove.click();
+    });
+    expect(screen.getByText(/组内 2 个卖家会变为未分组/)).toBeTruthy();
+    expect(deleteGroup).not.toHaveBeenCalled();
   });
 });
 
@@ -176,7 +195,7 @@ describe('空状态', () => {
       success: true, data: [], total: 0, watch_count: 0, max_watch: 3000,
     });
     await renderSettled();
-    const chip = await screen.findByText('头部竞对');
+    const chip = await screen.findByRole('radio', { name: /头部竞对/ });
     await act(async () => {
       chip.click();
     });
