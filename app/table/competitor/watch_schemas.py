@@ -94,6 +94,22 @@ class WatchOut(BaseModel):
     )
 
 
+class AsinDetailResponse(BaseModel):
+    """一个 Amazon ASIN 的详情。两个时刻的可信度不同，字段文档必须说清楚。"""
+
+    first_seen_at: datetime = Field(description="该卖家名下首次见到这个 ASIN 的时刻，真实数据")
+    seller_last_reported_at: datetime | None = Field(
+        default=None,
+        description=(
+            "该卖家最近一次被采集的时刻——**卖家级近似值，不是这个 ASIN 专属的**。"
+            "同一卖家名下其他 ASIN 共享同一个值。当前 schema 没有条目级的"
+            "「每次出现在哪些上报里」记录，只能给到这个粒度。界面展示时必须带上"
+            "这句说明，不能只给一个裸时间戳"
+        ),
+    )
+    success: bool = True
+
+
 class WatchListResponse(BaseModel):
     """ProTable 契约 {data,total,success} + 配额回显。"""
 
