@@ -99,35 +99,30 @@ export const layout: RunTimeLayoutConfig = ({ initialState, setInitialState }) =
     fixedHeader: true,
 
     /**
-     * 顶栏：蓝→青渐变底 + 白字。
+     * 顶栏：白底专业导航，品牌蓝只服务于当前状态。
      *
      * **渐变靠 `colorBgHeader` 实现不了**：这个 token 落到 CSS 的 `background-color`，
      * 而 `linear-gradient(...)` 是 `background-image` 的值，塞进去整条声明会被丢弃、
-     * 顶栏保持白色——不报错，只是没效果。所以底色分两步：token 里给一个**兜底纯色**
-     * （渐变没生效时至少是深蓝而不是白底白字），渐变本身在 global.less 里用
-     * `background-image` 单独加。
+     * 顶栏保持白色——不报错，只是没效果。当前设计有意用纯白底，若以后确有渐变需求，
+     * 需在 global.less 里单独用 `background-image` 实现。
      *
      * 其余 token 是文字与选中态。ProLayout 的 `ant-pro-base-menu-horizontal-menu-item`
-     * 盖掉了 antd 横向菜单默认的「主色 + 下边框」选中样式，只靠文字色区分；深色底下
-     * 必须自己把这套配足，否则选中项与未选中项都是白字，完全分不出来。
+     * 盖掉了 antd 横向菜单默认的部分选中样式，因此这里明确给出品牌蓝文字与浅蓝底。
      *
      * 能用 token 就不写选择器：token 是 ProLayout 给的调节口，跟着组件版本走；手写
      * `ant-pro-base-*` 这类内部类名，升级即失效。渐变那一条是没有 token 才落到 CSS 的。
      */
     token: {
       header: {
-        // 兜底纯色 = 渐变的起点色
-        colorBgHeader: '#2f7fd6',
-        colorHeaderTitle: '#ffffff',
-        // 底色提亮后，未选中项的白字不能再压到 0.8——那样在浅蓝上会糊掉
-        colorTextMenu: 'rgba(255, 255, 255, 0.90)',
-        colorTextMenuSelected: '#ffffff',
-        colorTextMenuActive: '#ffffff',
-        colorBgMenuItemSelected: 'rgba(255, 255, 255, 0.18)',
-        colorBgMenuItemHover: 'rgba(255, 255, 255, 0.10)',
-        // 右上角账号区：图标与文字同样要反色，否则深底上留一块看不见的深色文字
-        colorTextRightActionsItem: 'rgba(255, 255, 255, 0.80)',
-        colorBgRightActionsItemHover: 'rgba(255, 255, 255, 0.10)',
+        colorBgHeader: '#ffffff',
+        colorHeaderTitle: '#172b4d',
+        colorTextMenu: '#5b6576',
+        colorTextMenuSelected: '#1677ff',
+        colorTextMenuActive: '#1677ff',
+        colorBgMenuItemSelected: '#eaf4ff',
+        colorBgMenuItemHover: '#f4f8ff',
+        colorTextRightActionsItem: '#5b6576',
+        colorBgRightActionsItemHover: '#f4f8ff',
       },
     },
     // 未登录访问受保护页 → 跳登录。

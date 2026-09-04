@@ -16,17 +16,15 @@ import { Avatar, Dropdown, Space, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 
 /**
- * 深色渐变顶栏上的「玻璃」样式：半透白底 + 白字。
+ * 白色顶栏的账号区：头像保留品牌蓝提示，角色保留为低对比边框标签。
  *
- * 这里刻意**不再按角色配色**（曾经 admin 红 / operator 蓝 / analyst 绿）。顶栏改成蓝青
- * 渐变后，任何实色标签都在跟背景抢注意力——红底标签压在青色上尤其刺眼。而角色本来就
- * 以中文全称写着（「超级管理员」），颜色不承载任何它没说的信息，是纯装饰；装饰与背景
- * 冲突时删掉装饰。
+ * 角色本来就以中文全称写着，颜色不承载额外信息；不再按角色配色，避免和导航选中态争夺
+ * 注意力。
  */
-const GLASS: React.CSSProperties = {
-  background: 'rgba(255, 255, 255, 0.18)',
-  borderColor: 'rgba(255, 255, 255, 0.35)',
-  color: '#ffffff',
+const AVATAR_STYLE: React.CSSProperties = {
+  background: '#eff6ff',
+  border: '1px solid #bfdbfe',
+  color: '#1677ff',
 };
 
 export interface RightContentProps {
@@ -76,13 +74,11 @@ export default function RightContent({ currentUser, onLogout }: RightContentProp
 
   return (
     <Dropdown menu={{ items }} placement="bottomRight" trigger={['click']}>
-      {/* 顶栏是深色渐变，这一整块必须自己反色：ProLayout 的 header token 只管它内置的
-          右侧操作项，管不到 rightContentRender 里的自定义内容。漏了的表现是深底上一块
-          几乎读不出来的深色文字。 */}
-      <Space size={8} style={{ cursor: 'pointer', padding: '0 12px' }}>
-        <Avatar size="small" icon={<UserOutlined />} style={GLASS} />
-        <Typography.Text style={{ color: '#ffffff' }}>{currentUser.username}</Typography.Text>
-        <Tag style={{ ...GLASS, marginInlineEnd: 0 }}>{roleLabel}</Tag>
+      {/* 这是自定义内容，ProLayout 的右侧 token 不会自动影响其中的文字与标签。 */}
+      <Space className="header-account" size={8}>
+        <Avatar size="small" icon={<UserOutlined />} style={AVATAR_STYLE} />
+        <Typography.Text className="header-account-name">{currentUser.username}</Typography.Text>
+        <Tag className="header-account-role">{roleLabel}</Tag>
       </Space>
     </Dropdown>
   );
