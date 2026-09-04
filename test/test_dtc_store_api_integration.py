@@ -319,6 +319,44 @@ async def test_商品清单的include是行集合维度(db):
     assert (listed.total, delisted.total, both.total) == (1, 1, 2)
 
 
+async def test_商品详情的价格与名次历史按时间倒序(db):
+    """详情页要看的是"最近发生了什么"，不是从头翻起（PR #74 审核 P1）。
+
+    `price_history_stmt`/`rank_history_stmt` 一度是升序，前端原样渲染会把最早的一次
+    调价排在最上面——这条钉住排序方向，不依赖前端再排一次。
+    """
+    users = await db.run_sync(_seed_users)
+    await _add(db, users["owner"])
+    now = datetime.now(UTC)
+    await _seed_products(db, first_fetch_at=now, rows=[(1, now, now)])
+
+    older = now - timedelta(days=2)
+    newer = now - timedelta(hours=1)
+    for observed_at, price in ((older, "8.99"), (newer, "12.99")):
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_store_price"
+                "(domain,variant_id,observed_at,product_id,sku,price,compare_at_price,available) "
+                "VALUES (:d,1,:obs,1,'SKU-A',:price,NULL,true)"
+            ),
+            {"d": DOMAIN, "obs": observed_at, "price": price},
+        )
+    for captured_on, rank in ((older.date(), 50), (newer.date(), 12)):
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_store_rank(domain,captured_on,rank,product_id) "
+                "VALUES (:d,:c,:r,1)"
+            ),
+            {"d": DOMAIN, "c": captured_on, "r": rank},
+        )
+
+    result = await service.product_history(db, users["owner"], DOMAIN, 1)
+
+    # 最新的一条排第一——价格与名次两个列表都要满足
+    assert [str(p.price) for p in result.prices] == ["12.99", "8.99"]
+    assert [r.rank for r in result.ranks] == [12, 50]
+
+
 async def test_分组可同时装卖家与独立站(db):
     """分组是纯标签，MUST NOT 因成员类型分裂成两套分组体系。"""
     users = await db.run_sync(_seed_users)
