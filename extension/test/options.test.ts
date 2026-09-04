@@ -5,7 +5,11 @@ import { installChromeStub } from './chrome-stub';
 function renderOptionsDom(): void {
   document.body.innerHTML = `
     <input id="api-base" type="text" />
+    <input id="web-origin" type="text" />
+    <div id="token-state"></div>
+    <button id="sync-token"></button>
     <input id="token" type="password" />
+    <button id="save-token"></button>
     <input id="max-report-items" type="number" />
     <button id="save"></button>
     <p id="status"></p>
@@ -94,5 +98,123 @@ describe('options page', () => {
     expect(requestSpy).toHaveBeenCalledWith({ origins: ['http://localhost:8000/*'] });
     expect(containsSpy).not.toHaveBeenCalled();
     expect(document.getElementById('status')!.textContent).toBe('已保存');
+  });
+
+  it('先设独立网页地址、再清空并保存：getWebOrigin 必须回退到 API 地址，不能留着旧值（PR #73 审核意见 P1）', async () => {
+    await loadOptionsModule();
+
+    // 第一次保存：API :8000 + 独立网页地址 :8001
+    (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+    (document.getElementById('web-origin') as HTMLInputElement).value = 'http://localhost:8001';
+    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
+    document.getElementById('save')!.dispatchEvent(new Event('click'));
+    await flush();
+
+    const { getWebOrigin } = await import('../src/auth');
+    expect(await getWebOrigin()).toBe('http://localhost:8001');
+
+    // 第二次保存：清空网页地址输入框，API 地址不变
+    (document.getElementById('web-origin') as HTMLInputElement).value = '';
+    document.getElementById('save')!.dispatchEvent(new Event('click'));
+    await flush();
+
+    // 必须真的回退到 API 地址，而不是继续返回已经清空的 :8001——
+    // 不清除 storage 里的旧值，这条"留空回退"的契约就从未生效过
+    expect(await getWebOrigin()).toBe('http://localhost:8000');
+  });
+
+  describe('从网页同步令牌', () => {
+    /** 让同步能成功：授权 + 有标签页 + 页面里有这个令牌。 */
+    function withWebSession(token: string | null): void {
+      (chrome as any).tabs.query = vi.fn(async () => [{ id: 1 }]);
+      (chrome as any).scripting.executeScript = vi.fn(async () => [{ result: token }]);
+    }
+
+    it('网页已登录时取回令牌并存下，运营不必手动粘贴', async () => {
+      withWebSession('from-web');
+      await loadOptionsModule();
+
+      (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+      (document.getElementById('web-origin') as HTMLInputElement).value = 'http://localhost:8001';
+      document.getElementById('sync-token')!.dispatchEvent(new Event('click'));
+      await flush();
+
+      const { getAuthToken } = await import('../src/auth');
+      expect(await getAuthToken()).toBe('from-web');
+      expect(document.getElementById('status')!.textContent).toBe('已同步令牌');
+    });
+
+    it('申请的是「网页地址」的权限，不是 API 地址的（两者在本地开发下是不同来源）', async () => {
+      withWebSession('from-web');
+      const requestSpy = vi.spyOn(chrome.permissions, 'request');
+      await loadOptionsModule();
+
+      (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+      (document.getElementById('web-origin') as HTMLInputElement).value = 'http://localhost:8001';
+      document.getElementById('sync-token')!.dispatchEvent(new Event('click'));
+      await flush();
+
+      expect(requestSpy).toHaveBeenCalledWith({ origins: ['http://localhost:8001/*'] });
+    });
+
+    it('网页地址留空时退回 API 地址，与 getWebOrigin() 的回退规则一致', async () => {
+      withWebSession('from-web');
+      const requestSpy = vi.spyOn(chrome.permissions, 'request');
+      await loadOptionsModule();
+
+      (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+      document.getElementById('sync-token')!.dispatchEvent(new Event('click'));
+      await flush();
+
+      expect(requestSpy).toHaveBeenCalledWith({ origins: ['http://localhost:8000/*'] });
+    });
+
+    it('没有标签页与未登录给出不同的提示，不合并成一句「同步失败」', async () => {
+      (chrome as any).tabs.query = vi.fn(async () => []);
+      await loadOptionsModule();
+      (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+      document.getElementById('sync-token')!.dispatchEvent(new Event('click'));
+      await flush();
+      const noTab = document.getElementById('status')!.textContent ?? '';
+      expect(noTab).toContain('没有找到');
+
+      renderOptionsDom();
+      vi.resetModules();
+      withWebSession(null);
+      await loadOptionsModule();
+      (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+      document.getElementById('sync-token')!.dispatchEvent(new Event('click'));
+      await flush();
+      const notLoggedIn = document.getElementById('status')!.textContent ?? '';
+      expect(notLoggedIn).toContain('尚未登录');
+
+      // 两句话必须真的不同：合并之后运营无从知道该去开网页还是该去登录
+      expect(notLoggedIn).not.toBe(noTab);
+    });
+
+    it('权限被拒绝时不同步，也不写入任何令牌', async () => {
+      chrome.permissions.request = vi.fn().mockResolvedValue(false);
+      withWebSession('from-web');
+      await loadOptionsModule();
+
+      (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+      document.getElementById('sync-token')!.dispatchEvent(new Event('click'));
+      await flush();
+
+      const { getAuthToken } = await import('../src/auth');
+      expect(await getAuthToken()).toBeNull();
+      expect(document.getElementById('status')!.textContent).toContain('未授予');
+    });
+  });
+
+  it('手动填写令牌仍可用（兜底路径：自动同步在真机上总有失败的可能）', async () => {
+    await loadOptionsModule();
+
+    (document.getElementById('token') as HTMLInputElement).value = 'manual-token';
+    document.getElementById('save-token')!.dispatchEvent(new Event('click'));
+    await flush();
+
+    const { getAuthToken } = await import('../src/auth');
+    expect(await getAuthToken()).toBe('manual-token');
   });
 });

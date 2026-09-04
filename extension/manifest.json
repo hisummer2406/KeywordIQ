@@ -22,7 +22,7 @@
     }
   },
   "options_page": "options.html",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_scripts": [
     {

@@ -29,4 +29,10 @@ export type CaptureResult =
   | { outcome: 'idempotency_conflict'; message: string }
   | { outcome: 'network_error' }
   | { outcome: 'missing_token' }
+  // 令牌同步失败的三种成因各自成一个结局，**不合并**：运营要做的事完全不同
+  // （重新授权 / 打开网页 / 在网页上登录）。合并成一个就只能给出一句放之四海皆准
+  // 的提示，而那句话在三种情况下都不足以让人知道下一步该干什么。
+  | { outcome: 'sync_no_permission' }
+  | { outcome: 'sync_no_tab' }
+  | { outcome: 'sync_not_logged_in' }
   | { outcome: 'missing_base_url' };
