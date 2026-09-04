@@ -39,6 +39,7 @@ from app.table.competitor.seller_ref_parser import (
     parse_seller_ref,
 )
 from app.table.competitor.watch_schemas import (
+    AsinDetailResponse,
     CommitRequest,
     CommitResult,
     GroupCreateRequest,
@@ -224,6 +225,20 @@ async def update_watch(
         await db.rollback()
         raise NotFoundError("关注记录不存在")
     await db.commit()
+
+
+async def asin_detail(
+    db: AsyncSession, user_id: int, seller_id: str, site: str, asin: str
+) -> AsinDetailResponse:
+    """一个 Amazon ASIN 的详情。私有性由 `asin_detail_stmt` 里 join `UserSellerWatch`
+    承担——非本人关注的卖家一律 404，不是 403（id 连续，403 等于确认了 id 存在）。
+    """
+    row = (await db.execute(crud.asin_detail_stmt(user_id, seller_id, site, asin))).first()
+    if row is None:
+        raise NotFoundError("未找到该商品的采集记录")
+    return AsinDetailResponse(
+        first_seen_at=row.first_seen_at, seller_last_reported_at=row.seller_last_reported_at
+    )
 
 
 async def remove_watches(

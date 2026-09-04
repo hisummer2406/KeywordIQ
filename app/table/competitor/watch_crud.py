@@ -186,6 +186,39 @@ def watches_stmt(user_id: int, group_id: int | None, offset: int, limit: int):
     )
 
 
+def asin_detail_stmt(user_id: int, seller_id: str, site: str, asin: str):
+    """一个 Amazon ASIN 的详情：首次发现时刻（真实数据）+ 卖家级最近采集时刻（近似值）。
+
+    **私有性由 join `UserSellerWatch` 承担**，不是查完再判断——不这样写的话，任何人
+    传一个别人关注的 `(seller_id, site)` 都能查到数据，共享层的 `competitor_seller_asin`
+    本身不区分是谁在关注。`_last_reported_at_subq()` 复用卖家清单同一个查询，两处
+    "最近采集于"必须来自同一个定义，不然同一个卖家在两处显示不同的值。
+    """
+    return (
+        select(
+            CompetitorSellerAsin.first_seen_at,
+            _last_reported_at_subq().label("seller_last_reported_at"),
+        )
+        .select_from(CompetitorSellerAsin)
+        .join(
+            CompetitorSeller,
+            (CompetitorSeller.seller_id == CompetitorSellerAsin.seller_id)
+            & (CompetitorSeller.site == CompetitorSellerAsin.site),
+        )
+        .join(
+            UserSellerWatch,
+            (UserSellerWatch.seller_id == CompetitorSellerAsin.seller_id)
+            & (UserSellerWatch.site == CompetitorSellerAsin.site)
+            & (UserSellerWatch.user_id == user_id),
+        )
+        .where(
+            CompetitorSellerAsin.seller_id == seller_id,
+            CompetitorSellerAsin.site == site,
+            CompetitorSellerAsin.asin == asin,
+        )
+    )
+
+
 def watches_in_group_count_stmt(user_id: int, group_id: int | None):
     stmt = (
         select(func.count())

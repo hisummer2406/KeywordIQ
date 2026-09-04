@@ -3,13 +3,14 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
 
-const { listNewArrivals, getProductHistory } = vi.hoisted(() => ({
+const { listNewArrivals, getProductHistory, getAsinDetail } = vi.hoisted(() => ({
   listNewArrivals: vi.fn(),
   getProductHistory: vi.fn(),
+  getAsinDetail: vi.fn(),
 }));
 
 vi.mock('@umijs/max', () => ({ useAccess: () => ({}) }));
-vi.mock('@/services/competitor', () => ({ listNewArrivals, getProductHistory }));
+vi.mock('@/services/competitor', () => ({ listNewArrivals, getProductHistory, getAsinDetail }));
 
 import NewArrivalsTab from './NewArrivalsTab';
 
@@ -38,6 +39,11 @@ beforeEach(() => {
     currency: 'USD',
     prices: [],
     ranks: [],
+  });
+  getAsinDetail.mockResolvedValue({
+    success: true,
+    first_seen_at: '2026-08-02T00:00:00Z',
+    seller_last_reported_at: null,
   });
 });
 
@@ -147,7 +153,7 @@ describe('点开一行看详情', () => {
     expect(getProductHistory).toHaveBeenCalledWith('example.com', 1);
   });
 
-  it('点击 Amazon 行不触发任何请求——Amazon 侧的详情仍是已知缺口（issue #65）', async () => {
+  it('点击 Amazon 行触发详情请求，sellerId/site/asin 分别取 source_key/site/product_key', async () => {
     listNewArrivals.mockResolvedValue({
       success: true,
       data: [
@@ -167,6 +173,8 @@ describe('点开一行看详情', () => {
 
     await user.click(await screen.findByText('一个新品'));
 
+    expect(getAsinDetail).toHaveBeenCalledWith('A1TZ946F8HZTNY', 'US', 'B0H8N7QNW4');
+    // 独立站的详情组件不该跟着开——同一时刻只应有一个抽屉打开
     expect(getProductHistory).not.toHaveBeenCalled();
   });
 });
