@@ -100,6 +100,29 @@ describe('options page', () => {
     expect(document.getElementById('status')!.textContent).toBe('已保存');
   });
 
+  it('先设独立网页地址、再清空并保存：getWebOrigin 必须回退到 API 地址，不能留着旧值（PR #73 审核意见 P1）', async () => {
+    await loadOptionsModule();
+
+    // 第一次保存：API :8000 + 独立网页地址 :8001
+    (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
+    (document.getElementById('web-origin') as HTMLInputElement).value = 'http://localhost:8001';
+    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
+    document.getElementById('save')!.dispatchEvent(new Event('click'));
+    await flush();
+
+    const { getWebOrigin } = await import('../src/auth');
+    expect(await getWebOrigin()).toBe('http://localhost:8001');
+
+    // 第二次保存：清空网页地址输入框，API 地址不变
+    (document.getElementById('web-origin') as HTMLInputElement).value = '';
+    document.getElementById('save')!.dispatchEvent(new Event('click'));
+    await flush();
+
+    // 必须真的回退到 API 地址，而不是继续返回已经清空的 :8001——
+    // 不清除 storage 里的旧值，这条"留空回退"的契约就从未生效过
+    expect(await getWebOrigin()).toBe('http://localhost:8000');
+  });
+
   describe('从网页同步令牌', () => {
     /** 让同步能成功：授权 + 有标签页 + 页面里有这个令牌。 */
     function withWebSession(token: string | null): void {
