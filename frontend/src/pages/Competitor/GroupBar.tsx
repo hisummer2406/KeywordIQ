@@ -1,5 +1,5 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Card, Input, Modal, Popconfirm, Space, Typography } from 'antd';
+import { MoreOutlined, PlusOutlined } from '@ant-design/icons';
+import { Button, Card, Dropdown, Input, Modal, Radio, Space, Typography } from 'antd';
 import { useState } from 'react';
 import type { CompetitorGroup } from '@/services/competitor';
 
@@ -42,7 +42,9 @@ export default function GroupBar({
   onDelete,
 }: Props) {
   const [draft, setDraft] = useState<NameDraft | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CompetitorGroup | null>(null);
   const [busy, setBusy] = useState(false);
+  const activeGroup = groups.find((group) => group.group_id === activeId);
 
   const submit = async () => {
     if (!draft) return;
@@ -70,71 +72,66 @@ export default function GroupBar({
     try {
       await onDelete(group);
     } catch {
-      return;
+      return false;
     }
     // 删组不取消关注,只解除归属——回落到「全部关注」而不是某个具体分组,
     // 因为被删分组下的关注记录此刻已经"未分组"了。
     onChanged();
+    return true;
   };
 
+  const groupMenu = (group: CompetitorGroup) => ({
+    items: [
+      { key: 'rename', label: '重命名' },
+      { type: 'divider' as const },
+      { key: 'delete', label: <Typography.Text type="danger">删除分组</Typography.Text> },
+    ],
+    onClick: ({ key }: { key: string }) => {
+      if (key === 'rename') {
+        setDraft({ mode: 'rename', groupId: group.group_id, name: group.name });
+      } else if (key === 'delete') {
+        setDeleteTarget(group);
+      }
+    },
+  });
+
   return (
-    <Card size="small" title="分组" styles={{ body: { padding: 12 } }}>
-      <Space size={[8, 8]} wrap>
-        <Button
-          type={activeId === undefined ? 'primary' : 'default'}
-          onClick={() => onSelect(undefined)}
-        >
-          全部关注
-          <Typography.Text
-            type={activeId === undefined ? undefined : 'secondary'}
-            style={{ marginInlineStart: 6, color: activeId === undefined ? '#fff' : undefined }}
-          >
-            {totalWatchCount}
+    <Card
+      size="small"
+      title={
+        <Space size={8}>
+          <span>分组</span>
+          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
+            全部关注与自定义清单
           </Typography.Text>
-        </Button>
-
-        {groups.map((group) => {
-          const active = group.group_id === activeId;
-          return (
-            <Space.Compact key={group.group_id}>
-              <Button
-                type={active ? 'primary' : 'default'}
-                onClick={() => onSelect(group.group_id)}
-              >
-                {group.name}
-                <Typography.Text
-                  type={active ? undefined : 'secondary'}
-                  style={{ marginInlineStart: 6, color: active ? '#fff' : undefined }}
-                >
-                  {group.watch_count}
-                </Typography.Text>
-              </Button>
-              <Button
-                icon={<EditOutlined />}
-                title={`重命名「${group.name}」`}
-                onClick={() =>
-                  setDraft({ mode: 'rename', groupId: group.group_id, name: group.name })
-                }
-              />
-              {/* 删组连带解除全部归属（不取消关注),仍需二次确认——不可撤销的表单变更。 */}
-              <Popconfirm
-                title={`删除「${group.name}」`}
-                description={`组内 ${group.watch_count} 个卖家会变为未分组,关注关系本身不受影响。`}
-                okText="删除"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-                onConfirm={() => remove(group)}
-              >
-                <Button danger icon={<DeleteOutlined />} title={`删除「${group.name}」`} />
-              </Popconfirm>
-            </Space.Compact>
-          );
-        })}
-
-        <Button icon={<PlusOutlined />} onClick={() => setDraft({ mode: 'create', name: '' })}>
-          新建分组
-        </Button>
-      </Space>
+        </Space>
+      }
+      extra={
+        <Space size={4}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setDraft({ mode: 'create', name: '' })}>新建分组</Button>
+          {activeGroup && (
+            <Dropdown menu={groupMenu(activeGroup)} trigger={['click']}>
+              <Button type="text" icon={<MoreOutlined />} aria-label="当前分组操作" />
+            </Dropdown>
+          )}
+        </Space>
+      }
+      styles={{ body: { padding: 10 } }}
+    >
+      <Radio.Group
+        value={activeId ?? 0}
+        onChange={(event) => onSelect(event.target.value === 0 ? undefined : event.target.value)}
+        optionType="button"
+        buttonStyle="solid"
+        style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
+      >
+        <Radio.Button value={0}>全部关注 · {totalWatchCount} 位卖家</Radio.Button>
+        {groups.map((group) => (
+          <Radio.Button key={group.group_id} value={group.group_id}>
+            {group.name} · {group.watch_count} 位卖家
+          </Radio.Button>
+        ))}
+      </Radio.Group>
 
       <Modal
         open={draft !== null}
@@ -159,6 +156,20 @@ export default function GroupBar({
             分组不绑定站点,同一个分组里可以混着放 US/GB/DE 各站点的卖家。
           </Typography.Paragraph>
         )}
+      </Modal>
+
+      <Modal
+        open={deleteTarget !== null}
+        title={`删除「${deleteTarget?.name ?? ''}」`}
+        okText="删除"
+        okButtonProps={{ danger: true }}
+        cancelText="取消"
+        onOk={async () => {
+          if (deleteTarget && (await remove(deleteTarget))) setDeleteTarget(null);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      >
+        组内 {deleteTarget?.watch_count ?? 0} 个卖家会变为未分组，关注关系本身不受影响。
       </Modal>
     </Card>
   );
