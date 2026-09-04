@@ -107,6 +107,7 @@ class AsinDetailResponse(BaseModel):
             "这句说明，不能只给一个裸时间戳"
         ),
     )
+    success: bool = True
 
 
 class WatchListResponse(BaseModel):

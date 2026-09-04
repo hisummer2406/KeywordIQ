@@ -113,3 +113,56 @@ def test_replace_group模式set子句含group_id与note():
     compiled = str(stmt.compile(compile_kwargs={"literal_binds": False})).lower().replace(" ", "")
     assert "group_id=excluded.group_id" in compiled
     assert "note=excluded.note" in compiled
+
+
+# ---------- ASIN 详情响应契约（PR #75 审核 P2） ----------
+#
+# 前端 services/competitor.ts 把 AsinDetailResponse.success 声明为必填，但后端一度
+# 没有这个字段——真实 JSON 不会返回它。前端 mock 都手写了 success: true，把契约
+# 不一致掩盖了下来，只有真正走一遍序列化才能发现。用 TestClient 打真实的 HTTP 层
+# （而不是直接调 service 函数），这样才能验证 FastAPI 的 response_model 序列化
+# 结果，不是绕过它直接读 Python 对象。
+
+
+def test_ASIN详情响应体含success字段():
+    from datetime import UTC, datetime
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.auth.simple_auth import simple_auth
+    from app.common.error_handlers import register_error_handlers
+    from app.table.competitor import watch_api as api_mod
+    from app.table.competitor.watch_schemas import AsinDetailResponse
+    from database import get_async_db
+
+    class _StubUser:
+        is_super = True
+        permission_codes: set[str] = set()
+        id = 1
+
+    async def _fake_asin_detail(*_args, **_kwargs):
+        return AsinDetailResponse(
+            first_seen_at=datetime(2026, 8, 2, tzinfo=UTC),
+            seller_last_reported_at=None,
+        )
+
+    import pytest as _pytest
+
+    monkeypatch = _pytest.MonkeyPatch()
+    monkeypatch.setattr(api_mod.service, "asin_detail", _fake_asin_detail)
+    try:
+        app = FastAPI()
+        register_error_handlers(app)
+        app.include_router(api_mod.competitor_router, prefix="/api/competitor")
+        app.dependency_overrides[get_async_db] = lambda: None
+        app.dependency_overrides[simple_auth.get_current_user] = lambda: _StubUser()
+
+        r = TestClient(app).get("/api/competitor/watches/A1/US/B0X/detail")
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        assert body["first_seen_at"] is not None
+    finally:
+        monkeypatch.undo()
