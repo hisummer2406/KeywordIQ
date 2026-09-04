@@ -8,6 +8,16 @@
 `user:manage` 权限点，收紧后它就成了「勾了也不生效」的复选框，比没有这个权限点更糟：
 角色编辑界面会让人以为把它给了运营，运营就能管用户。同批移除的还有 `role:manage`
 ——它从加入起就没有任何代码读过，是纯粹的死配置。
+
+**`admin` 角色默认拥有 `PERMISSIONS` 里的全部权限**（见下方 `ROLES["admin"]`），除了
+登记在 `SUPER_ONLY_PERMISSIONS` 里的例外。这个例外是为 `opportunity:view` 引入的
+（issue #76）：`role_code == 'admin'` 与 `is_super == True` 是两个独立字段（见
+`user_crud.create_user` 的「显式指定角色优先，否则才按 `is_super` 赋默认角色」），
+"仅超管可见"指的是后者。若不把新权限点放进 `SUPER_ONLY_PERMISSIONS`，它会被
+`ROLES["admin"]` 的"全部权限"定义自动吸收——一个 `admin` 角色但 `is_super=False`
+的用户也会看到，这与"仅超管可见"的要求相反。默认（不放进这个集合）仍是"三个内置
+角色按各自既有矩阵获得，admin 隐含全部"，这是常态；放进去是例外，加了就要在权限点
+自己的注释里写明为什么。
 """
 from typing import Final
 
@@ -20,9 +30,10 @@ UPLOAD_IMPORT: Final = "upload:import"
 # 不给两屏各开一个 `growth:*` / `library:*`——我的词库管理的是用户自己的私有清单，
 # 「禁止某人管理自己的收藏夹」不是会真实发生的授权需求，那样的权限点只会全员常开。
 #
-# 前身叫 `toolbox:view`，覆盖四屏。外观专利与全球商标库拆去「侵权查询」菜单后**不再由
-# 任何权限点把守**（只要求已登录）：它们没有后端端点，罩着它们的权限点对它们不生效，
-# 与被移除的 `user:manage` 同类。接上数据源、有了真实端点再新增，那时是加法。
+# 前身叫 `toolbox:view`，覆盖四屏。外观专利与全球商标库拆去「风险核查」菜单（issue #76
+# 前叫「侵权查询」）后**不再由任何权限点把守**（只要求已登录）：它们没有后端端点，
+# 罩着它们的权限点对它们不生效，与被移除的 `user:manage` 同类。接上数据源、有了真实
+# 端点再新增，那时是加法。
 #
 # 注意它与 `user:manage` 不是一回事，别照那个先例把它也删掉：`user:manage` 被删是因为
 # 后端根本不读它（勾了也不生效），而这个是逐路由真执行的，只是三个内置角色恰好都授予了。
@@ -32,6 +43,9 @@ KEYWORD_VIEW: Final = "keyword:view"
 # 竞对监控是独立数据域（自己的表、自己的用户隔离逻辑），不塞进 KEYWORD_VIEW——每个用户的
 # 关注池互相独立，不是「全体共用一个开关」的授权粒度，与 ANALYSIS_VIEW 等同一档次。
 COMPETITOR_VIEW: Final = "competitor:view"
+# 机会中心（issue #76）：承接确定性 Signal / 候选机会 / 验证推进 / 风险核查这条主动式
+# 工作流的入口。上线初期没有任何内置角色自动获得它，见下方 SUPER_ONLY_PERMISSIONS。
+OPPORTUNITY_VIEW: Final = "opportunity:view"
 
 # code -> 中文名
 PERMISSIONS: Final[dict[str, str]] = {
@@ -40,11 +54,16 @@ PERMISSIONS: Final[dict[str, str]] = {
     UPLOAD_IMPORT: "上传/导入数据",
     KEYWORD_VIEW: "查看关键词工具",
     COMPETITOR_VIEW: "查看竞对监控",
+    OPPORTUNITY_VIEW: "查看机会中心",
 }
+
+# 默认不授予任何内置角色（含 admin）的权限点——只有 is_super 能用。
+# 见文件头部 docstring："admin = 全部权限" 这条默认规则在这里被显式挖掉例外。
+SUPER_ONLY_PERMISSIONS: Final[frozenset[str]] = frozenset({OPPORTUNITY_VIEW})
 
 # ---- 内置角色 ----  code -> (中文名, 权限集合)
 ROLES: Final[dict[str, tuple[str, set[str]]]] = {
-    "admin": ("超级管理员", set(PERMISSIONS.keys())),
+    "admin": ("超级管理员", set(PERMISSIONS.keys()) - SUPER_ONLY_PERMISSIONS),
     "operator": (
         "运营",
         {ANALYSIS_VIEW, ANALYSIS_EXPORT, UPLOAD_IMPORT, KEYWORD_VIEW, COMPETITOR_VIEW},

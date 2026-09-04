@@ -174,8 +174,9 @@ def test_decode_malformed_token_returns_none():
 
 
 def test_role_permission_matrix_matches_spec():
-    # 矩阵与 design 决策 4b 一致
-    assert P.ROLES["admin"][1] == set(P.PERMISSIONS.keys())
+    # 矩阵与 design 决策 4b 一致；admin 是「全部权限减去 super-only 例外」，不是
+    # 无条件的全部——见 test_opportunity_view_is_super_only 那条测试的注释
+    assert P.ROLES["admin"][1] == set(P.PERMISSIONS.keys()) - P.SUPER_ONLY_PERMISSIONS
     assert P.ROLES["operator"][1] == {
         "analysis:view", "analysis:export", "upload:import", "keyword:view",
         "competitor:view",
@@ -183,6 +184,31 @@ def test_role_permission_matrix_matches_spec():
     assert P.ROLES["analyst"][1] == {
         "analysis:view", "analysis:export", "keyword:view", "competitor:view",
     }
+
+
+def test_opportunity_view_is_super_only():
+    """机会中心权限点默认不授予任何内置角色，只有 is_super 能看到（issue #76）。
+
+    `role_code == 'admin'` 与 `is_super == True` 是两个独立字段——一个 admin 角色但
+    `is_super=False` 的用户不该看到机会中心。若把 `opportunity:view` 漏掉不放进
+    `SUPER_ONLY_PERMISSIONS`，`ROLES["admin"]` 的"全部权限"定义会自动把它吸收进去，
+    这条测试就是拦住那种回退的回归。
+    """
+    assert P.OPPORTUNITY_VIEW in P.PERMISSIONS
+    assert P.OPPORTUNITY_VIEW in P.SUPER_ONLY_PERMISSIONS
+    for role in ("admin", "operator", "analyst"):
+        assert P.OPPORTUNITY_VIEW not in P.ROLES[role][1]
+
+    # is_super 兜底仍然放行——它绕过 permission_codes 直接判定
+    dep = simple_auth.require_permission(P.OPPORTUNITY_VIEW)
+    su = _super()
+    assert dep(current_user=su) is su
+
+    # admin 角色、is_super=False 的用户被拒
+    admin_not_super = _make_user("admin", P.ROLES["admin"][1], is_super=False, uid=4)
+    with pytest.raises(HTTPException) as exc:
+        dep(current_user=admin_not_super)
+    assert exc.value.status_code == 403
 
 
 def test_工具箱权限点已随菜单重构消失():
@@ -199,8 +225,9 @@ def test_工具箱权限点已随菜单重构消失():
         assert "keyword:view" in P.ROLES[role][1]
 
 
-def test_侵权查询没有权限点():
-    """外观专利与全球商标库没有后端端点，罩着它们的权限点对它们不生效。
+def test_风险核查没有权限点():
+    """外观专利与全球商标库（菜单名"风险核查"，原名"侵权查询"）没有后端端点，罩着它们的
+    权限点对它们不生效。
 
     等接上数据源、有了真实端点再新增——那时是加法，不会留下失效的历史勾选
     （`user:manage` 就是那样变成「勾了也不生效」的复选框的）。

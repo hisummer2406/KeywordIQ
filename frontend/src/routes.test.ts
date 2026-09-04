@@ -28,19 +28,20 @@ const routes: Route[] = configuredRoutes;
 const topLevel = routes.filter((r) => r.name && !r.hideInMenu && r.layout !== false);
 
 describe('顶栏一级菜单', () => {
-  it('五项，顺序固定：看数据的在前，喂数据的在最后', () => {
+  it('六项，顺序固定：机会中心排最前，其余按既有相对顺序，喂数据/管数据的在最后', () => {
     expect(topLevel.map((r) => r.name)).toEqual([
-      'ABA数据选品',
+      '机会中心',
+      '关键词市场分析',
       '关键词工具',
       '竞对监控',
-      '侵权查询',
-      '数据上传',
+      '风险核查',
+      '数据管理',
     ]);
   });
 
-  it('分析查询屏与竞对监控是单页顶层，没有子项', () => {
+  it('关键词市场分析、竞对监控与机会中心是单页顶层，没有子项', () => {
     // 有子项就长出左侧栏，见本文件头部注释与 design.md 决策 2
-    for (const name of ['ABA数据选品', '竞对监控']) {
+    for (const name of ['机会中心', '关键词市场分析', '竞对监控']) {
       const node = topLevel.find((r) => r.name === name)!;
       expect(node.routes).toBeUndefined();
     }
@@ -60,16 +61,21 @@ describe('顶栏一级菜单', () => {
 });
 
 describe('权限', () => {
+  it('机会中心挂 canViewOpportunity——当前唯一默认不授予任何内置角色的权限点', () => {
+    const node = topLevel.find((r) => r.name === '机会中心')!;
+    expect(node.access).toBe('canViewOpportunity');
+  });
+
   it('关键词工具挂 canViewKeyword，两个子屏继承父级不再各挂一个', () => {
     const node = topLevel.find((r) => r.name === '关键词工具')!;
     expect(node.access).toBe('canViewKeyword');
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });
 
-  it('侵权查询没有 access，只要求已登录', () => {
+  it('风险核查没有 access，只要求已登录', () => {
     // 两个子屏没有后端端点，罩着它们的权限点对它们不生效，就是「勾了也不生效」的复选框。
     // 接上数据源、有了真实端点再加——那时是加法，不会留下失效的历史勾选。
-    const node = topLevel.find((r) => r.name === '侵权查询')!;
+    const node = topLevel.find((r) => r.name === '风险核查')!;
     expect(node.access).toBeUndefined();
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });
