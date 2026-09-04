@@ -201,8 +201,9 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 
 ## 顶栏菜单：按数据域命名，不设按排除法命名的容器
 
-顶栏五项，顺序固定：**ABA数据选品 → 关键词工具 → 竞对监控 → 侵权查询 → 数据上传**
-（前四项「看数据」，上传是唯一「喂数据」的，排最后）。路由与菜单在
+顶栏六项，顺序固定：**机会中心 → 关键词市场分析 → 关键词工具 → 竞对监控 → 风险核查 →
+数据管理**（机会中心是主动式工作流的入口排最前，中间三项「看 ABA 与竞对数据」，
+风险核查次之，数据管理是唯一「喂数据/管数据」的，排最后）。路由与菜单在
 `frontend/src/routes.ts`——它从 `.umirc.ts` 抽出来单独成文件是为了**可测**
 （`src/routes.test.ts`；直接 import `.umirc.ts` 会经 `@umijs/max` 拽进 esbuild，
 jsdom 下启动即崩）。
@@ -211,17 +212,36 @@ jsdom 下启动即崩）。
 「工具箱」的一级菜单，定义是「不属于选品主线的其他东西」——名字说的是它不是什么，
 因而不给新功能提供任何归属判据：下一个功能只能问「它像不像已经在里面的那些」，而那个
 问题没有答案。它最后装了四个屏，两个读 ABA 事实表、两个读根本不存在的专利/商标库；
-竞对监控没有放进去，就是它已经没有原则的证据。已拆成「关键词工具」与「侵权查询」两项。
+竞对监控没有放进去，就是它已经没有原则的证据。已拆成「关键词工具」与「侵权查询」两项，
+「侵权查询」后来（issue #76）又改名「风险核查」。
 
-**单页顶层（`/analysis`、`/competitor`）不得加二级菜单。** 布局是 `layout: 'mix'` +
-`splitMenus`，顶层节点一有子项就长出约 208px 的左侧栏。按数据域，增长榜与词库本该并进
-`ABA数据选品`，正是这条否决了它——分析查询屏是全产品最宽的表，横向裁掉的列找不回来
-（与「我的词库」「竞对监控」两屏拒绝侧栏形态的是同一笔账）。
+**单页顶层（`/opportunity`、`/analysis`、`/competitor`）不得加二级菜单。** 布局是
+`layout: 'mix'` + `splitMenus`，顶层节点一有子项就长出约 208px 的左侧栏。按数据域，
+增长榜与词库本该并进 `关键词市场分析`（原名 ABA数据选品），正是这条否决了它——分析
+查询屏是全产品最宽的表，横向裁掉的列找不回来（与「我的词库」「竞对监控」两屏拒绝侧栏
+形态的是同一笔账）。机会中心的六个状态同理不拆二级路由，用页内 Tab 承载。
 
-**侵权查询（`/ip`，外观专利 + 全球商标库）只是占位屏**：仓库里没有任何专利/商标数据，
-**不发请求、无后端端点**。因此它**没有权限点**，只要求已登录——给没有端点的屏开权限点，
-就是再造一遍 `user:manage` 那种「勾了也不生效」的复选框。接上数据源、有了真实端点再加，
-那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有 access」的整齐而补一个。
+**机会中心（`/opportunity`，issue #76）是承接"确定性 Signal → 候选机会 → 验证推进 →
+风险核查"这条主动式工作流的入口**，不叫「AI Agent」或「聊天助手」——那是技术实现，
+不是用户任务。**权限点 `opportunity:view` 是当前唯一一个默认不授予任何内置角色
+（含 admin）的权限点**，只有 `is_super=true` 能看到，即便某个用户角色码是 `admin`
+也不例外——`role_code == 'admin'` 与 `is_super == True` 是两个独立字段（见
+`user_crud.create_user`）。落地这条规则时踩过一个陷阱：`app/auth/permissions.py` 的
+`ROLES["admin"]` 历来定义成 `set(PERMISSIONS.keys())`（动态取全部权限），若把
+`OPPORTUNITY_VIEW` 直接塞进 `PERMISSIONS` 而不处理，admin 角色会自动继承它——因此
+新增了 `SUPER_ONLY_PERMISSIONS` 集合，`ROLES["admin"]` 改为
+`set(PERMISSIONS.keys()) - SUPER_ONLY_PERMISSIONS`，把这个权限点显式排除在"admin 隐含
+全部权限"这条默认规则之外。当前页面只有导航与权限骨架，不发任何请求——信号计算、机会
+评分、验证流程分别在 issue #7 / #13 / #24 / #25 / #38 / #54 / #55 里逐步接入，接入前
+MUST NOT 展示编造的 0 值或结论。
+
+**风险核查（`/ip`，外观专利 + 全球商标库，原名「侵权查询」）只是占位屏**：仓库里没有
+任何专利/商标数据，**不发请求、无后端端点**。因此它**没有权限点**，只要求已登录——给
+没有端点的屏开权限点，就是再造一遍 `user:manage` 那种「勾了也不生效」的复选框。issue
+#76 曾把"仅超管可见"列为这个菜单的一个可选项，但没有采纳——没有端点的屏，"谁能看"不是
+一个真实的授权需求，与机会中心那种"有真实权限边界待将来接入端点"的情况不同。接上数据源、
+有了真实端点再加权限点，那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有
+access」的整齐而补一个。
 
 把它放进顶栏是自觉取舍：产品最空的一块因此成了最显眼的一块，换来的是「这块在做」这个
 路线图信号可见。
@@ -628,10 +648,13 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`、
   `require_super`）。
 - **RBAC**：`role`/`permission`/`role_permission`（M2M），`user_center.role_id`（每用户一角色）。
-  权限点只有五个：`analysis:view`/`analysis:export`/`upload:import`/`keyword:view`/
-  `competitor:view`；内置角色
+  权限点有六个：`analysis:view`/`analysis:export`/`upload:import`/`keyword:view`/
+  `competitor:view`/`opportunity:view`；内置角色
   admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
-  is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。
+  is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。**`opportunity:view` 是例外**：默认不
+  授予任何内置角色（含 admin），只有 `is_super=true` 能用，`permissions.py` 的
+  `SUPER_ONLY_PERMISSIONS` 集合把它排除在"admin 隐含全部权限"这条默认规则之外
+  （见上文「顶栏菜单」一节机会中心部分）。
 - **用户管理是「不可授予」的能力，不走权限点**：`/api/user/*` 五个端点一律
   `Depends(simple_auth.require_super())`，判据只看 `is_super`，**不看角色码**。前端入口在
   右上角头像下拉里（`components/RightContent`），顶栏不出现（`/user` 路由 `hideInMenu`，

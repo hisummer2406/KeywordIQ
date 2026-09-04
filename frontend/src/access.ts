@@ -25,10 +25,15 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     // 独立权限点,不复用 keyword:view——每个用户的关注池互相独立,不是"全体共用一个开关"
     // 的授权粒度(design.md 决策 6)。
     canViewCompetitor: has('competitor:view'),
-    //「侵权查询」（外观专利 / 全球商标库）**故意没有权限工厂项**，路由直接用 isLogin。
-    // 它们没有后端端点，罩着它们的权限点对它们不生效，就成了「勾了也不生效」的复选框
-    // （`user:manage` 正是这样被删掉的）。接上数据源、有了真实端点再加——那时是加法，
-    // 不会留下失效的历史勾选。别为了「每个菜单都有权限项」的整齐而补一个。
+    // 机会中心（issue #76）：当前唯一一个默认不授予任何内置角色的权限点，只有 is_super
+    // 能看到——即便某个用户的角色码是 admin，只要 is_super 为假就看不到，与其余按角色
+    // 矩阵授予的权限点不同档次（add-opportunity-center-nav/design.md 决策 1）。
+    canViewOpportunity: has('opportunity:view'),
+    //「风险核查」（外观专利 / 全球商标库，原名"侵权查询"）**故意没有权限工厂项**，
+    // 路由直接用 isLogin。它们没有后端端点，罩着它们的权限点对它们不生效，就成了
+    // 「勾了也不生效」的复选框（`user:manage` 正是这样被删掉的）。接上数据源、有了
+    // 真实端点再加——那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有权限项」
+    // 的整齐而补一个。
     // 只认 is_super，不认 admin 角色码——把角色码也算进来，等于让「谁能管用户」
     // 变成一件改角色配置就能改变的事，而这正是收紧要排除的
     canManageUsers: isSuper,

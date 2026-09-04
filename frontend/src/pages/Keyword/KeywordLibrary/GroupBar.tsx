@@ -85,7 +85,7 @@ export default function GroupBar({
     <Card size="small" title="分组" styles={{ body: { padding: 12 } }}>
       {groups.length === 0 && (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-          还没有分组。新建一个，再到「ABA数据选品」勾选结果行加入词库。
+          还没有分组。新建一个，再到「关键词市场分析」勾选结果行加入词库。
         </Typography.Paragraph>
       )}
 
