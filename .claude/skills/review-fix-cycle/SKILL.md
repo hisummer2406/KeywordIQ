@@ -65,12 +65,38 @@ bug，但即便是真 bug，**给出的理由也可能是反的**——一次审
   换成不依赖时区的判据（比如"有没有这个字段"而不是"这个字段格式化出来是什么"），
   实在要比较时间就走带时区的 ISO 字符串或时间戳数值，不走本地化格式化输出。
 
+**临时撤销前后要保护工作区原状。** 这个 skill 假设你在正在修 PR 的 worktree 里，
+那里本来就可能有尚未提交的修复；把它误删或恢复不完整，比没有做红测更糟。先只对
+本次要临时改动的文件记录 staged 与 unstaged 基线，恢复后逐份比回去：
+
+```bash
+git diff -- <目标文件> > /tmp/review-fix-unstaged.before
+git diff --cached -- <目标文件> > /tmp/review-fix-staged.before
+
+# 临时还原 bug → 确认测试红 → 恢复修复
+
+git diff -- <目标文件> > /tmp/review-fix-unstaged.after
+git diff --cached -- <目标文件> > /tmp/review-fix-staged.after
+diff -u /tmp/review-fix-unstaged.before /tmp/review-fix-unstaged.after
+diff -u /tmp/review-fix-staged.before /tmp/review-fix-staged.after
+```
+
+两次 `diff` 都无输出才表示临时实验没有留下额外改动。只改精确目标，且绝不以
+`--force`、重置整个 worktree 这类方式图省事；若这个文件正在被别的会话写，改用测试
+替身或先协调，不要在共享文件上做临时撤销。
+
 ## 5. 跑定向检查，全量交给门禁和 CI
 
 只跑改动涉及的文件/用例——后端 `ruff check <改动文件>`、`pytest -k <用例名或文件>`；
 前端同理只跑改动文件的 `eslint`/`vitest`。`git commit` 会触发提交门禁跑一遍相关范围
 的全量检查，PR 上的 CI 还会用真库再跑一遍——这两道已经是全量的兜底，不需要在这
 之前自己再跑一次全量论证"应该没问题"。
+
+**但被跳过的集成测试不是通过。** 评审修到数据库查询、迁移、权限 SQL 或导入路径时，
+先看 pytest 的 pass/skip 汇总；没有 `TEST_DATABASE_URL` 导致的 skip 只能写成「本地未
+验证」，不能在回复里叫「测试全绿」。需要本地证据时按 [local-db](../local-db/SKILL.md)
+确认共享测试库可用，再带 `TEST_DATABASE_URL` 跑**定向**集成用例；不要为了这一条修复
+无故重跑全量，也不要 drop 共享库。
 
 ## 6. 提交
 
@@ -99,14 +125,16 @@ gh pr comment <PR号> --body-file <文件>
 ## 9. 等 CI，报告结果
 
 ```bash
+SHA=$(git rev-parse HEAD)
 gh pr view <PR号> --json mergeable,mergeStateStatus
-gh api repos/<owner>/<repo>/actions/runs -q '.workflow_runs[] | select(.head_branch=="<分支>") | .id'
+gh run list --commit "$SHA" --json databaseId,headSha,status,conclusion,workflowName --limit 20
 ```
 
 推送会触发新一轮 CI，而这个仓库的 CI 配置了 `cancel-in-progress`——上一次推送
-触发的那次 run 会被取消，这是正常行为，不是失败。**认准最新那次 run 的 id**，
-轮询它到 `completed` 再汇总每个 job 的结论；查到一半 run 还没触发起来（`gh run
-list` 还没反映出最新一次推送）就多等几秒再查，不要拿旧 run 的结论当新结论用。
+触发的那次 run 会被取消，这是正常行为，不是失败。**只认当前 `HEAD` 的 SHA 对应的
+run**，再轮询它到 `completed` 并汇总每个 job 的结论；同一分支的旧 run 即使是绿的，
+也不能证明这次提交通过。查到一半新 run 还没出现就多等几秒、用同一个 `$SHA` 重查，
+不要退回按分支名挑一条旧 run。
 
 ## 循环
 
