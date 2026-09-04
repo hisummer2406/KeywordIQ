@@ -21,6 +21,7 @@ from app.auth.simple_auth import simple_auth
 from app.common.errors import BadRequestError
 from app.table.competitor import watch_service as service
 from app.table.competitor.watch_schemas import (
+    AsinDetailResponse,
     CommitRequest,
     CommitResult,
     GroupCreateRequest,
@@ -93,6 +94,21 @@ async def list_watches(
 ) -> WatchListResponse:
     """主表格查询：ProTable 契约 + 配额回显。"""
     return await service.list_watches(db, user.id, req)
+
+
+@competitor_router.get(
+    "/watches/{seller_id}/{site}/{asin}/detail", response_model=AsinDetailResponse
+)
+async def get_asin_detail(
+    seller_id: str,
+    site: str,
+    asin: str,
+    db: AsyncSession = Depends(get_async_db),
+    user=Depends(_require_view),
+) -> AsinDetailResponse:
+    """上新流点开一条 Amazon 行看到的详情：首次发现时刻（真实）+ 卖家级最近采集时刻
+    （近似值，两者可信度不同，见 `AsinDetailResponse` 字段文档）。"""
+    return await service.asin_detail(db, user.id, seller_id, site, asin)
 
 
 @competitor_router.patch("/watches/{watch_id}")
