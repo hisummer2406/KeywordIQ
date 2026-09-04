@@ -54,11 +54,16 @@ export async function setWebOrigin(origin: string): Promise<void> {
 /**
  * 清掉独立设置过的网页来源，回到"回退 API 地址"这条默认规则。
  *
- * **必须真的删掉这个 key，不能写入空字符串。** `getWebOrigin()` 判定"是否已独立
- * 配置"的依据是 `value.length > 0`——空字符串同样会落进这个分支导致误判，但更根本
- * 的问题是：不删的话，用户在设置页把网页地址输入框清空并保存，storage 里的旧值
- * 原样还在，`getWebOrigin()` 会继续返回那个用户已经明确要求删掉的地址，回退规则
- * 因此从未生效过。这正是"清空网页地址应当回退到 API 地址"这条契约的唯一实现点。
+ * PR #73 审核前的原始 bug 不是"写入空字符串会出错"——`getWebOrigin()` 判定依据是
+ * `value.length > 0`，空字符串的 `length` 是 0，写入空字符串同样会落回 API 地址那条
+ * 分支，效果与本函数相同。原始 bug 是**根本没有写入任何东西**：`options.ts` 的保存
+ * 处理器只在输入框非空时才调用 `setWebOrigin()`，留空时既不 `set` 也不 `remove`，
+ * storage 里的旧值就原样留着，`getWebOrigin()` 继续读到它。
+ *
+ * 之所以选择真正 `remove` 这个 key，而不是改成 `setWebOrigin('')`：删除 key 让
+ * "未单独配置网页地址"直接对应"这个 key 不存在"，不必留一个空字符串在 storage 里
+ * 让下一个读它的人再判断一次"这个空字符串算不算配置过"——纯粹是数据整洁，不是
+ * 本函数存在的必要条件。
  */
 export async function clearWebOrigin(): Promise<void> {
   await chrome.storage.local.remove(WEB_ORIGIN_KEY);
