@@ -43,8 +43,25 @@ export function installChromeStub(): void {
     },
   };
 
+  // tabs / scripting 的默认行为是"什么都没有"：没有标签页、注入返回空。
+  // session-sync 的用例按需在自己的 beforeEach 里覆盖成具体场景——与 permissions
+  // 的用法一致，默认值只保证不写这两项的用例不会因为 undefined 而崩。
+  const tabs = {
+    async query(_query: { url?: string }): Promise<{ id?: number }[]> {
+      return [];
+    },
+  };
+
+  const scripting = {
+    async executeScript(_injection: unknown): Promise<{ result?: unknown }[]> {
+      return [];
+    },
+  };
+
   (globalThis as { chrome?: unknown }).chrome = {
     storage: { local: storageLocal },
     permissions,
+    tabs,
+    scripting,
   };
 }
