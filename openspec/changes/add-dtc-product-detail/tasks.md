@@ -29,8 +29,8 @@
 
 ## 4. 验证
 
-- [ ] 4.1 提交门禁：`pnpm lint` + `pnpm tsc` + `pnpm test` 全绿
-- [ ] 4.2 CI
-- [ ] 4.3 人工实测交给用户：真实浏览器里点开 blessrich.com 的某个上新商品，核对
+- [x] 4.1 提交门禁：`pnpm lint` + `pnpm tsc` + `pnpm test` 全绿
+- [x] 4.2 CI
+- [ ] 4.3 人工实测交给用户（已并入 issue #72 第五节）：真实浏览器里点开 blessrich.com 的某个上新商品，核对
       价格历史与名次历史显示正确（本地已有真实抓取数据，见 2026-09-04 的
       `docker exec` 核对记录）
