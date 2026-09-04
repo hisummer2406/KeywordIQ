@@ -1,172 +1,95 @@
 ---
 name: close-change
-description: PR 评审通过、要合并时用——合并、清理 worktree/分支、归档 openspec 变更、把没做完的人工验收项转移到验收清单 issue、判断并关闭触发本次变更的原始 issue、扫一遍还有没有别的残留。当用户说"复审通过，合并 PR""合并并清理""收尾"之类，或一个 openspec 变更的代码已经合进 v2 但 `openspec/changes/` 下还留着它时使用。
+description: PR 评审通过、要合并并收尾时用——合并到 v2、清理对应 worktree 与分支、归档 OpenSpec 变更。默认走一分钟内完成的快路径；只有确有未完成的人工验收项或原 Issue 已被完整解决时，才额外更新验收清单或关闭 Issue。当用户说"复审通过，合并 PR"、"合并并清理"、"收尾"，或一个 OpenSpec 变更的代码已经合进 v2 但 `openspec/changes/` 下仍留目录时使用。
 ---
 
 # 合一个变更的尾
 
-`start-change` 管认领、建 worktree、开 PR；这个 skill 接着往下——从"评审通过"
-到"这个变更在这个仓库里已经不留任何痕迹（除了它自己在主 spec 和 git log 里的
-记录）"。中间那段 `start-change` 只写到"git 层面三样清理"，本会话里
-`openspec archive` 这一步被漏做过两次——都是在开始下一个变更、`openspec list`
-冒出一条早就合并完的旧变更时才发现。这个 skill 把那之后的步骤接上。
+`start-change` 管认领、建 worktree、开 PR；本 skill 从评审通过走到变更归档。收尾的默认目标是让代码、分支和 OpenSpec 同步结束，**不是顺手完成所有项目管理写作**。人工验收转移、关闭原 Issue 都有价值，但只有实际触发条件成立时才做。
 
-## 0. 先确认入口并同步 `v2`
+## 0. 先确认，不等待
 
-这个 skill 有两个入口：PR 还没合并，或 PR 已合并、只遗留 OpenSpec 目录。**先按
-变更 ID 找到关联 PR，不要把一个猜测的 PR 号直接交给 `gh pr merge`。**没有关联 PR、PR
-的 base 不是 `v2`，或状态既不是 `OPEN` 也不是 `MERGED`，都先停下来核对，不能继续收尾。
-
-开始前主工作区必须干净：
+主工作区必须干净：
 
 ```bash
 git status --short --untracked-files=all
 ```
 
-若有输出，先确认每一项属于谁，并暂停在这里：不属于本次收尾的修改、worktree 或
-`change/*` 分支只报告，不能为了让工作区看起来干净而删除、暂存、提交或移动它们，也
-不能在混有它们的主工作区继续 `pull`、归档或提交。等所有者处理，或在用户明确指定的
-干净工作区继续。
+若有输出，先确认归属；不属于本次收尾的内容只报告，不能删除、暂存或移动。不要在混有它们的主工作区继续 `pull`、归档或提交。
 
-对已定位的 PR 查询状态、base 和合并提交：
+用户已给出 PR 号时直接使用；否则才从变更 ID 查关联 PR。一次取回所需状态：
 
 ```bash
-gh pr view <PR号> --json number,state,baseRefName,mergedAt,mergeCommit,url
+gh pr view <PR号> --json number,state,baseRefName,mergedAt,mergeCommit,reviewDecision,mergeStateStatus,url
+gh pr checks <PR号>
 ```
 
-- `OPEN`：确认 `baseRefName` 是 `v2`，再运行
-  `gh pr view <PR号> --json reviewDecision,mergeStateStatus` 与 `gh pr checks <PR号>`，
-  确认评审和当前 `HEAD` 的 CI 都已通过，才进入第 1 节。
-- `MERGED`：跳过第 1 节，记录 `mergeCommit.oid`，直接同步本地 `v2`。
+- PR 的 base 不是 `v2`，或状态既非 `OPEN` 也非 `MERGED`：停止并核对。
+- `OPEN` 的 PR 若评审或 CI 未通过：报告当前状态并结束本次运行，**不在 skill 内等待 CI**。
+- `MERGED`：记录合并提交，跳过第 1 节。
 
-无论是哪一种，归档前都在主工作区同步并确认合并提交已在当前 `HEAD`：
-
-```bash
-git switch v2
-git fetch origin
-git pull --ff-only origin v2
-git merge-base --is-ancestor <合并提交> HEAD
-```
-
-最后一条没有输出才表示确认成功；失败时不要归档，因为本地看到的还不是已合并版本。
-
-## 1. 合并（仅尚未合并的 PR）
+## 1. 合并（仅 OPEN 且已绿）
 
 ```bash
 gh pr merge <PR号> --merge --delete-branch=false
+gh pr view <PR号> --json state,mergedAt,mergeCommit
 ```
 
-**用 `--merge`，不用 squash 或 rebase。** squash 会重写提交，本地
-`change/<id>` 分支的提交因此不再是 `v2` 的祖先，后面 `git branch -d` 的保护
-会拒绝删除——这时人会改用 `-D`，而那道"没合并进去的分支删不掉"的保护就此
-作废。`--delete-branch=false` 是因为远端分支的删除留给后面单独做（有时
-GitHub 会在合并时自动删，有时不会，第 2 步会核对）。
+使用 `--merge` 而非 squash/rebase：本地 `change/<id>` 分支仍是 v2 祖先，后续 `git branch -d` 才能作为保护闸。合并结果不是 `MERGED` 时停止，不要继续清理。
 
-合并完核对一下，别想当然：
+## 2. 同步 v2 并清理本变更的 git 资源
 
 ```bash
-gh pr view <PR号> --json state,mergedAt,mergeCommit -q \
-  '"state=\(.state) merged=\(.mergedAt) commit=\(.mergeCommit.oid[0:7])"'
-git rev-list --parents -n1 <合并提交> | wc -w   # 应该是 3（提交本身 + 两个父）
+git switch v2
+git pull --ff-only origin v2
+git merge-base --is-ancestor <合并提交> HEAD
+
+git worktree remove ~/.claude-worktrees/<变更id>
+git branch -d "change/<变更id>"
+git push origin --delete "change/<变更id>"
 ```
 
-两个父确认了这是真的合并提交，`branch -d` 的保护才有意义。随后按第 0 节同步
-本地 `v2` 并确认该合并提交已在 `HEAD`；不要依赖旧的本地分支状态。
+`merge-base` 无输出才表示本地已包含合并提交。若 worktree 或远端分支已被其他流程删除，分别用 `git worktree prune` 或记为已清理；不要把正常的“不存在”当失败。只处理本变更的资源，别人的 worktree 和分支一律不碰。
 
-## 2. git 层面清理三样
+核对本变更已无残留：
 
-这部分是 `start-change` 4.3 已经写过的——已同步的 `v2` 上执行 `worktree remove`、
-`branch -d`、远端 `push --delete`，三样都核对到空。细节见那份文档，这里不重复。
+```bash
+git worktree list | grep '<变更id>'
+git branch --list "change/<变更id>"
+git ls-remote --heads origin "change/<变更id>"
+```
 
-**有时候前两样已经不用你做了。** 别的会话（本仓库里经常是 Codex）可能已经先
-把 worktree 目录删了，这种情况下 `git worktree remove` 会报"不是一个工作树"，
-用 `git worktree prune` 把陈旧登记清掉就好，不是错误。远端分支同理，GitHub 有
-时会在合并时顺手删掉，`push --delete` 报"远端分支不存在"也是正常结果，不是
-需要处理的失败。
+三条均应无输出。
 
-## 3. 归档 openspec 变更
+## 3. 归档并提交（默认必做）
 
 ```bash
 openspec archive <变更id> -y
-```
-
-**这一步最容易漏**——本会话漏过两次，都是因为合并完直接一头扎进下一个任务，
-`openspec list` 冒出一条早就合并完的旧变更时才想起来。合并 PR 之后、去做别的
-事之前，先把这一步走完。
-
-`tasks.md` 里如果还有没勾的项（通常是"人工实测交给用户"那类自动化验证不了的），
-先把已经确认做完的（提交门禁、CI）补勾上，见第 4 步处理没法自动完成的那些，再
-归档——`openspec archive` 对未完成任务只会警告不会阻止，但让记录反映真实完成
-度还是值得做的。
-
-**archive 工具会做一次安全检查**：如果这次变更的 spec delta 里，某条
-`MODIFIED Requirement` 一个旧场景标题都没保留（哪怕新写的场景在语义上完全
-覆盖了旧的），它会判断成"可能悄悄丢了场景"而拒绝归档，报"current spec
-contains scenario(s) not present in the modified block"。这不是误报要绕过的
-限制——它在提醒你确认这次改动是不是真的要让某个场景消失。多数时候答案是
-"没有要丢的，只是拆分/改写时换了标题"，这时候把其中至少一个新场景的标题改回
-旧的就够了（内容不用改，标题对上即可）。这个坑在本会话里踩过一次，第二次
-写 spec delta 时就直接照着这条教训、从一开始保留了旧标题。
-
-归档完核对：
-
-```bash
-openspec list   # 应该不再出现这个变更
 openspec validate --strict --all
+git add openspec/
+git commit -m "docs(openspec): 归档 <变更id>"
+git push origin v2
 ```
 
-前一条只说明活跃变更消失；后一条才检查归档后的主 spec 与其余 OpenSpec 内容仍一致。
-两项都通过后再提交、推送——这也是文档改动，不需要开新 PR，直接进 `v2`。
+归档前只补勾**已实际完成**的任务；未完成的人工验收项按第 4 节处理。`archive` 若提示某个旧场景标题没有被保留，先核对是否真的要删除该场景；只是改写时保留至少一个旧标题再重试。归档与验证通过后，显式提交并推送归档结果，不能只停在工作树里。
 
-## 4. 没法自动验证的项不能就地消失
+## 4. 仅在有未完成的人工验收项时转移
 
-`tasks.md` 里那些"人工实测交给用户"的条目，归档之后会被埋进
-`openspec/changes/archive/`，事实上等于丢失——除非先把它们转移到一个活的地方。
+只有 `tasks.md` 仍有无法自动验证的人工项时才执行：找到现有的长期验收清单 Issue（`gh issue list` 搜关键词，不硬编码编号），以简短 checklist 追加“页面/账号类型/要观察的行为”，然后在 `tasks.md` 标明已转移并再执行第 3 节归档。
 
-这个仓库习惯把这类验收项收进一条专门的、长期开着的 issue（本会话里是 #72，
-标题类似"上线前人工验收清单"）。找到这条 issue（`gh issue list` 搜关键词，
-别硬编码具体编号——每个仓库/每个阶段这条 issue 可能是别的号），在里面加一节，
-把这次变更没法自动化验证的项列进去，写清楚要点开哪个页面、看哪个具体行为。
-`tasks.md` 里原来那一条改成指向这条 issue，不要留着一个孤零零的未勾选框——
-读的人不知道"没做"和"转移到别处了"是两回事。
+找不到合适的活跃验收 Issue 时，报告并请用户指定去处或确认新建；不能让未完成项随归档消失。没有这类任务时完全跳过本节。
 
-找不到活跃验收清单 issue 时，先报告并请用户指定去处或确认新建；不能因为归档工具
-允许未完成任务就让验收项消失。
+## 5. 仅在原 Issue 被本次完整解决时关闭
 
-## 5. 触发这次变更的原始 issue，该关就关
-
-多数变更是在回应某条已有 issue。变更合并之后，回去看那条 issue 是不是因为这次
-合并**彻底**解决了——如果这条 issue 本身还分几半、这次只做完一半，先别关，等
-全部做完再关（本会话的 issue #65 就是先做完独立站半留着开、Amazon 半合并后
-才关）。
-
-真要关的话，关闭评论里写清楚：做了什么、如果分了几半分别是哪个 PR 做的、关键
-的取舍决定是什么（比如"近似值 vs 新建明细表"这种，其中的推理值得被检索到，
-不该只留在 PR 描述里、下次没人会想到去翻旧 PR）。
+若原 Issue 还包含后续能力、后续 PR 或未完成验收，保持打开。只有范围已完整兑现时才：
 
 ```bash
-gh issue comment <issue号> --body-file <文件>
-gh issue close <issue号> --reason completed
+gh issue comment <Issue号> --body "已由 PR #<PR号> 实现并合并至 v2。"
+gh issue close <Issue号> --reason completed
 ```
 
-## 6. 扫一遍还有没有别的残留
+需要补充关键取舍时再扩写评论；不要为每次收尾生成长篇复述。用户未要求关闭且范围是否完成不明确时，报告判断，不擅自关闭。
 
-不只是这次变更自己的三样，做一次更宽的核对：
+## 6. 最后报告
 
-```bash
-git worktree list
-git branch --list 'change/*'
-git ls-remote --heads origin | grep 'change/'
-openspec list
-gh pr list --state open --json number,title
-git status --short --untracked-files=all   # 仅报告剩余内容及其归属
-```
-
-**别人的 worktree 不要碰**，尤其是其他 agent（本仓库常见的是 Codex）留下的
-只读评审 checkout。它们经常会在评审对象合并之后由它自己清掉，但不总是立刻——
-看到一个还在，只报告"这是谁的、对应哪个 PR、那个 PR 合没合"，不要因为看着像
-残留就顺手删掉。除非用户明确说了要清理这一类，处理别人的工作区不是这个 skill
-的范围。
-
-同样地，主工作区若仍有不属于本次收尾的文件修改，只报告它们；"本次收尾完成"不等于
-"替其他会话清空工作区"。
+报告 PR、归档提交、已清理的本变更资源，以及被转移或仍待人工验收的事项。不要为了“扫干净”再枚举或删除其他会话的 worktree、分支或未跟踪文件。
