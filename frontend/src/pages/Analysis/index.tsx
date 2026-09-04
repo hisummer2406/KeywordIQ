@@ -206,7 +206,7 @@ export default function AnalysisPage() {
   );
 
   return (
-    <PageContainer title="ABA数据选品">
+    <PageContainer title="关键词市场分析">
       <Card size="small" styles={{ body: { padding: 16 } }}>
         <ScopeBar
           sites={sites}

@@ -126,10 +126,10 @@ export default function KeywordLibraryPage() {
    * 用户引向「去加词」，而他真正缺的是先建一个组。
    */
   const emptyText = !active
-    ? '还没有分组。先在上面新建一个分组，再到「ABA数据选品」把关心的词加进来'
+    ? '还没有分组。先在上面新建一个分组，再到「关键词市场分析」把关心的词加进来'
     : scopeHasNoDates
       ? '这个站点还没有导入任何数据，暂时无法盯盘'
-      : '这个分组还没有词。到「ABA数据选品」勾选结果行，点「加入词库」即可加入';
+      : '这个分组还没有词。到「关键词市场分析」勾选结果行，点「加入词库」即可加入';
 
   return (
     <PageContainer title="我的词库">
