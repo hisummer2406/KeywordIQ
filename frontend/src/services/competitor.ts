@@ -406,3 +406,21 @@ export async function getProductHistory(domain: string, productId: number) {
     { method: 'GET' },
   );
 }
+
+/**
+ * 一个 Amazon ASIN 的详情。两个时刻的可信度不同——`sellerLastReportedAt` 是**卖家级
+ * 近似值**，不是这个 ASIN 专属的，界面必须把这句说明带上，不能只给一个裸时间戳。
+ * 见 `AsinDetailDrawer.tsx`。
+ */
+export interface AsinDetailResponse {
+  success: boolean;
+  first_seen_at: string;
+  seller_last_reported_at: string | null;
+}
+
+export async function getAsinDetail(sellerId: string, site: string, asin: string) {
+  return request<AsinDetailResponse>(
+    `/api/competitor/watches/${encodeURIComponent(sellerId)}/${encodeURIComponent(site)}/${encodeURIComponent(asin)}/detail`,
+    { method: 'GET' },
+  );
+}

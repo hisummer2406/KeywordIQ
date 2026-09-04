@@ -4,6 +4,7 @@ import { Alert, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useRef, useState } from 'react';
 import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
 import { listNewArrivals, type NewArrivalRow } from '@/services/competitor';
+import AsinDetailDrawer from './AsinDetailDrawer';
 import ProductDetailDrawer from './ProductDetailDrawer';
 
 /**
@@ -20,10 +21,11 @@ import ProductDetailDrawer from './ProductDetailDrawer';
  * Amazon 侧还没有数据时就已经按两类形状写好，接入时零改动，本身就是这个形状设计对了
  * 的证据。
  *
- * **点开一行看详情**：独立站已实现（`ProductDetailDrawer`，展示变体价格与店内名次历史，
- * 见该组件顶部为什么选表格不选图表）。**Amazon 侧仍是已知缺口**——卡在"最近一次采集
- * 时刻"要不要新增条目级明细表这个未决问题，跟踪见 issue #65，点击 Amazon 行不触发
- * 任何交互。
+ * **点开一行看详情**：两类来源都已实现，但数据形状完全不同，各用一个组件——
+ * `ProductDetailDrawer`（独立站：变体价格与店内名次历史，见该组件顶部为什么选表格
+ * 不选图表）、`AsinDetailDrawer`（Amazon：首次发现时刻 + 卖家级近似的最近采集时刻，
+ * 见该组件顶部为什么后者不是这个 ASIN 专属的）。同一时刻只会有一个抽屉打开——
+ * `detailRow` 是唯一的状态源，由它的 `source` 决定渲染哪一个。
  */
 
 const TIME_KIND_META = {
@@ -46,6 +48,9 @@ export default function NewArrivalsTab() {
   const actionRef = useRef<ActionType>();
   const [days, setDays] = useState(7);
   const [detailRow, setDetailRow] = useState<NewArrivalRow | null>(null);
+
+  const dtcRow = detailRow?.source === 'DTC' ? detailRow : null;
+  const amazonRow = detailRow?.source === 'AMAZON' ? detailRow : null;
 
   return (
     <>
@@ -85,13 +90,8 @@ export default function NewArrivalsTab() {
         // 空流只能证明「已采集范围内没有新发现/新上架」，不能证明真的没有——尤其是
         // Amazon 侧，被动采集的覆盖率取决于运营的浏览习惯。措辞不承诺没有真实新品。
         locale={{ emptyText: '当前时间范围内暂无上架/新发现记录' }}
-        // 只有独立站行可点开详情——Amazon 侧仍是已知缺口，见组件顶部注释。
-        // cursor 与 onCell 只在 DTC 行生效，避免让 Amazon 行显得可点却没有反应。
-        onRow={(row) =>
-          row.source === 'DTC'
-            ? { onClick: () => setDetailRow(row), style: { cursor: 'pointer' } }
-            : {}
-        }
+        // 两类来源都可点开——具体渲染哪个抽屉由 detailRow.source 决定，见组件顶部注释。
+        onRow={(row) => ({ onClick: () => setDetailRow(row), style: { cursor: 'pointer' } })}
         columns={[
           {
             title: '来源',
@@ -143,10 +143,19 @@ export default function NewArrivalsTab() {
       />
 
       <ProductDetailDrawer
-        open={detailRow !== null}
-        domain={detailRow?.source_key ?? null}
-        productId={detailRow ? Number(detailRow.product_key) : null}
-        title={detailRow?.title ?? ''}
+        open={dtcRow !== null}
+        domain={dtcRow?.source_key ?? null}
+        productId={dtcRow ? Number(dtcRow.product_key) : null}
+        title={dtcRow?.title ?? ''}
+        onClose={() => setDetailRow(null)}
+      />
+
+      <AsinDetailDrawer
+        open={amazonRow !== null}
+        sellerId={amazonRow?.source_key ?? null}
+        site={amazonRow?.site ?? null}
+        asin={amazonRow?.product_key ?? null}
+        title={amazonRow?.title ?? ''}
         onClose={() => setDetailRow(null)}
       />
     </>

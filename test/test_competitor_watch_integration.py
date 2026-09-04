@@ -101,6 +101,91 @@ async def _preview(db, user_id, text_=_SAMPLE_TEXT, fallback_site=None):
     )
 
 
+# ---------- ASIN 详情（issue #65 Amazon 那半） ----------
+
+_ASIN_SELLER = "AS2G99DA1EUF"
+_ASIN_SITE = "US"
+_ASIN = "B0AAAAAAAA"
+
+
+def _seed_asin_detail(db, *, watch_owner=True):
+    """一个卖家、一个 ASIN、两次上报（时间不同，用于区分"首次发现"与"最近采集"）。"""
+
+    def _user(name):
+        return db.execute(
+            text("INSERT INTO analysis.user_center(user_name,hashed_pwd,is_active,is_super) "
+                 "VALUES (:n,'x',true,false) RETURNING id"),
+            {"n": name},
+        ).scalar()
+
+    owner = _user("asin-detail-owner")
+    other = _user("asin-detail-other")
+    db.execute(
+        text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
+             "VALUES (:s,:t,:b) ON CONFLICT DO NOTHING"),
+        {"s": _ASIN_SELLER, "t": _ASIN_SITE, "b": datetime(2026, 8, 1, tzinfo=UTC)},
+    )
+    if watch_owner:
+        db.execute(
+            text("INSERT INTO analysis.user_seller_watch(user_id,seller_id,site,priority) "
+                 "VALUES (:u,:s,:t,1)"),
+            {"u": owner, "s": _ASIN_SELLER, "t": _ASIN_SITE},
+        )
+
+    first_seen = datetime(2026, 8, 2, tzinfo=UTC)
+    db.execute(
+        text("INSERT INTO analysis.competitor_seller_asin"
+             "(seller_id,site,asin,first_seen_at) VALUES (:s,:t,:a,:f)"),
+        {"s": _ASIN_SELLER, "t": _ASIN_SITE, "a": _ASIN, "f": first_seen},
+    )
+    # 两次上报：更早的一次与首次发现同天，更晚的一次是"最近采集"该取到的值
+    for i, reported_at in enumerate((first_seen, datetime(2026, 8, 20, tzinfo=UTC))):
+        db.execute(
+            text("INSERT INTO analysis.competitor_asin_report"
+                 "(user_id,request_id,request_hash,seller_id,site,reported_at,item_count,new_count) "
+                 "VALUES (:u,:rid,'h',:s,:t,:r,1,0)"),
+            {"u": owner, "rid": f"seed-{i}", "s": _ASIN_SELLER, "t": _ASIN_SITE, "r": reported_at},
+        )
+    db.flush()
+    return {"owner": owner, "other": other}
+
+
+async def test_已关注卖家的ASIN详情(db):
+    seed = await db.run_sync(_seed_asin_detail)
+
+    detail = await service.asin_detail(db, seed["owner"], _ASIN_SELLER, _ASIN_SITE, _ASIN)
+
+    assert detail.first_seen_at == datetime(2026, 8, 2, tzinfo=UTC)
+    # 最近采集时刻取两次上报里更晚的那次——卖家级近似值，与该 ASIN 本身无关
+    assert detail.seller_last_reported_at == datetime(2026, 8, 20, tzinfo=UTC)
+
+
+async def test_非本人关注的卖家返回404不是403(db):
+    seed = await db.run_sync(_seed_asin_detail)
+
+    with pytest.raises(service.NotFoundError):
+        await service.asin_detail(db, seed["other"], _ASIN_SELLER, _ASIN_SITE, _ASIN)
+
+
+async def test_卖家只被采集过一次时最近采集时刻不为空(db):
+    def _seed_once(db):
+        seed = _seed_asin_detail(db, watch_owner=True)
+        # 删掉第二次上报，只留首次那一条
+        db.execute(
+            text("DELETE FROM analysis.competitor_asin_report "
+                 "WHERE seller_id = :s AND request_id = 'seed-1'"),
+            {"s": _ASIN_SELLER},
+        )
+        db.flush()
+        return seed
+
+    seed = await db.run_sync(_seed_once)
+
+    detail = await service.asin_detail(db, seed["owner"], _ASIN_SELLER, _ASIN_SITE, _ASIN)
+
+    assert detail.seller_last_reported_at == datetime(2026, 8, 2, tzinfo=UTC)
+
+
 # ---------- 分组 ----------
 
 
