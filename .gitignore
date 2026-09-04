@@ -1,6 +1,10 @@
 .venv/
 .idea/
 .vscode/
+.agents/
+.codex/
+.workbuddy/
+plugins/
 .claude/*
 !.claude/settings.json
 # 提交门禁与项目 skill 是团队资产（规则、流程），不是个人配置，随代码走。
