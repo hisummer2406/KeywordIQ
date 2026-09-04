@@ -27,16 +27,97 @@ describe('handleCapture', () => {
     installChromeStub();
     stubRuntimeMessaging();
     vi.resetModules();
+    // `vi.mock` 的工厂只求值一次，`sendReport` 这个替身因此在整个文件里是同一个，
+    // 调用记录会跨用例累积。此前没暴露，纯粹是因为两条 `not.toHaveBeenCalled()`
+    // 恰好排在所有会调用它的用例之前——也就是说这个文件隐式依赖用例顺序，在中间
+    // 插入任何一条会发请求的用例都会让它们失败，而失败信息（"expected 0, got 4"）
+    // 指不到真正的原因。用 clearAllMocks 清掉调用记录；它不清实现，
+    // 各用例自己的 mockResolvedValue(Once) 照常生效。
+    vi.clearAllMocks();
   });
 
-  it('未配置 token 时返回 missing_token，不发起请求', async () => {
+  /** 让网页来源处于「已授权 + 有标签页 + localStorage 里是这个令牌」的状态。 */
+  async function withWebSession(token: string | null): Promise<void> {
+    const c = globalThis as any;
+    await c.chrome.permissions.request({ origins: ['http://localhost:8000/*'] });
+    c.chrome.tabs.query = vi.fn(async () => [{ id: 1 }]);
+    c.chrome.scripting.executeScript = vi.fn(async () => [{ result: token }]);
+  }
+
+  it('未配置 token 且没有网页标签页时返回 sync_no_tab，不发起请求', async () => {
     const { sendReport } = await import('../src/report-client');
     const { handleCapture } = await import('../src/background');
 
     const result = await handleCapture(baseMessage);
 
-    expect(result).toEqual({ outcome: 'missing_token' });
+    // 不再是 missing_token：现在会先试着从网页会话同步一次，且失败原因要能分辨出
+    // 是「没开网页」还是「没登录」——两者要运营做的事不同
+    expect(result).toEqual({ outcome: 'sync_no_tab' });
     expect(sendReport).not.toHaveBeenCalled();
+  });
+
+  it('未配置 token 但网页已登录时自动同步并正常上报，无需手动粘贴', async () => {
+    const { setApiBaseUrl } = await import('../src/auth');
+    const { sendReport } = await import('../src/report-client');
+    const { handleCapture } = await import('../src/background');
+    await setApiBaseUrl('http://localhost:8000');
+    await withWebSession('synced-token');
+    vi.mocked(sendReport).mockResolvedValueOnce({
+      kind: 'success',
+      response: { accepted: 1, new_asins: 1, baseline_established: false, duplicate_of: null },
+    } as any);
+
+    expect(await handleCapture(baseMessage)).toMatchObject({ outcome: 'success' });
+    expect(vi.mocked(sendReport).mock.calls[0]![1]).toBe('synced-token');
+  });
+
+  it('网页开着但未登录时返回 sync_not_logged_in，与「没开网页」分开', async () => {
+    const { setApiBaseUrl } = await import('../src/auth');
+    const { handleCapture } = await import('../src/background');
+    await setApiBaseUrl('http://localhost:8000');
+    await withWebSession(null);
+
+    expect(await handleCapture(baseMessage)).toEqual({ outcome: 'sync_not_logged_in' });
+  });
+
+  it('401 后同步到不同令牌：用完全相同的请求体重试一次（幂等键不变，不产生第二条观测）', async () => {
+    const { setAuthToken, setApiBaseUrl } = await import('../src/auth');
+    const { sendReport } = await import('../src/report-client');
+    const { handleCapture } = await import('../src/background');
+    await setAuthToken('stale-token');
+    await setApiBaseUrl('http://localhost:8000');
+    await withWebSession('fresh-token');
+
+    vi.mocked(sendReport).mockResolvedValueOnce({ kind: 'auth_error' } as any);
+    vi.mocked(sendReport).mockResolvedValueOnce({
+      kind: 'success',
+      response: { accepted: 1, new_asins: 0, baseline_established: false, duplicate_of: null },
+    } as any);
+
+    expect(await handleCapture(baseMessage)).toMatchObject({ outcome: 'success' });
+
+    const calls = vi.mocked(sendReport).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]![1]).toBe('stale-token');
+    expect(calls[1]![1]).toBe('fresh-token');
+    // 重试的请求体必须逐字段相同——尤其 request_id 与 captured_at。重新生成幂等键
+    // 会让服务端把这次重试当成另一次观测，一次真实采集被记成两次。
+    expect(calls[1]![2]).toEqual(calls[0]![2]);
+  });
+
+  it('401 但网页会话也过期（同步回同一个令牌）时不重试', async () => {
+    const { setAuthToken, setApiBaseUrl } = await import('../src/auth');
+    const { sendReport } = await import('../src/report-client');
+    const { handleCapture } = await import('../src/background');
+    await setAuthToken('same-token');
+    await setApiBaseUrl('http://localhost:8000');
+    await withWebSession('same-token');
+
+    vi.mocked(sendReport).mockResolvedValueOnce({ kind: 'auth_error' } as any);
+
+    expect(await handleCapture(baseMessage)).toEqual({ outcome: 'auth_error' });
+    // 用同一个坏令牌再打一次纯属浪费一个请求，还让运营多等一轮
+    expect(vi.mocked(sendReport)).toHaveBeenCalledTimes(1);
   });
 
   it('已配置 token 但未配置 API 地址时返回 missing_base_url', async () => {

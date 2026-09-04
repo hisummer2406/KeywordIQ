@@ -113,8 +113,15 @@ function describeResult(result: CaptureResult): string {
       return '请先在插件设置页配置访问令牌';
     case 'missing_base_url':
       return '请先在插件设置页配置 API 地址';
+    // 同步失败的三种成因分开说：运营要做的事完全不同，合并成一句等于没说
+    case 'sync_no_permission':
+      return '插件尚未获得访问 KeywordIQ 网页的权限，请到插件设置页点"从网页同步令牌"并在弹窗中允许';
+    case 'sync_no_tab':
+      return '没有找到已打开的 KeywordIQ 网页，请先打开它（并确认插件设置页里的「网页地址」填对了）';
+    case 'sync_not_logged_in':
+      return '找到了 KeywordIQ 网页，但那里尚未登录。请先在那个页面登录，再回来点"提交上报"——已采集的数据仍会保留';
     case 'auth_error':
-      return '登录已过期，请重新粘贴访问令牌（在插件设置页）——本次已采集的数据仍会保留，重新粘贴后再点"提交上报"即可';
+      return '登录已过期，且 KeywordIQ 网页的登录也已失效。请在网页上重新登录，已采集的数据仍会保留，登录后再点"提交上报"即可';
     case 'idempotency_conflict':
       return `上报异常：${result.message}。请点"清空已采集，重新开始"后重新采集`;
     case 'rejected':

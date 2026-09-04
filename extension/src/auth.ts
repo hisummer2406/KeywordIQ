@@ -1,12 +1,16 @@
-// 鉴权占位方案：运营手动从已登录的 KeywordIQ 网页复制一个 JWT，粘贴进 options
-// page，存进 chrome.storage.local。这是刻意的临时方案——正式方案（读网页会话 /
-// 独立 Personal Access Token / 插件内登录）是另一个尚未拍板的决定，本模块是
-// 唯一需要在方案定下来后重写的地方（design.md 决策 1）。
+// 鉴权：令牌从已登录的 KeywordIQ 网页会话同步而来（session-sync.ts），手动粘贴
+// 仍作为兜底保留。所有取值都经由本模块——这正是 design.md 决策 1 当初把耦合点收在
+// 一个函数上的目的：换鉴权方案不必碰 DOM 解析、请求组装与幂等逻辑。
+//
+// **仍未解决的三条**（要解决必须改后端，见本变更 design.md「明确不做」）：令牌仍是
+// 24 小时期的网页 JWT；仍是全权限的；无法在不动该用户账号的前提下单独收回插件权限。
 
 import { MAX_REPORT_ITEMS } from './capture-accumulator';
 
 const TOKEN_KEY = 'keywordiq_token';
+const TOKEN_SYNCED_AT_KEY = 'keywordiq_token_synced_at';
 const API_BASE_KEY = 'keywordiq_api_base';
+const WEB_ORIGIN_KEY = 'keywordiq_web_origin';
 const MAX_REPORT_ITEMS_KEY = 'keywordiq_max_report_items';
 
 export async function getAuthToken(): Promise<string | null> {
@@ -16,7 +20,35 @@ export async function getAuthToken(): Promise<string | null> {
 }
 
 export async function setAuthToken(token: string): Promise<void> {
-  await chrome.storage.local.set({ [TOKEN_KEY]: token });
+  await chrome.storage.local.set({
+    [TOKEN_KEY]: token,
+    [TOKEN_SYNCED_AT_KEY]: new Date().toISOString(),
+  });
+}
+
+/** 令牌是什么时候拿到的。设置页据此回答"这个令牌是不是很久以前的了"。 */
+export async function getTokenSyncedAt(): Promise<string | null> {
+  const result = await chrome.storage.local.get(TOKEN_SYNCED_AT_KEY);
+  const value = result[TOKEN_SYNCED_AT_KEY];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * 读取网页会话用的来源。**独立于 API 地址，不能复用**（本变更 design 决策 1）：
+ * 本地开发下网页在 `:8001`、API 在 `:8000`，是两个来源；复用会去一个从未写入过
+ * 令牌的来源读 localStorage，读到空——表现与"用户没登录"一模一样，而原因完全不同。
+ *
+ * 未配置时回退到 API 地址：生产经 nginx 同域托管 SPA 与 `/api`，那时两者确实相同。
+ */
+export async function getWebOrigin(): Promise<string | null> {
+  const result = await chrome.storage.local.get(WEB_ORIGIN_KEY);
+  const value = result[WEB_ORIGIN_KEY];
+  if (typeof value === 'string' && value.length > 0) return value.replace(/\/+$/, '');
+  return getApiBaseUrl();
+}
+
+export async function setWebOrigin(origin: string): Promise<void> {
+  await chrome.storage.local.set({ [WEB_ORIGIN_KEY]: origin.replace(/\/+$/, '') });
 }
 
 export async function getApiBaseUrl(): Promise<string | null> {
