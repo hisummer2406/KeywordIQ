@@ -1282,3 +1282,8 @@ ruff 根本看不见它。`git commit -a` 与 `git commit -- <路径>` 提交的
   修在根源、补红绿验证过的回归测试、提交、回复、等 CI。假设已经在 PR 开着的分支/
   worktree 里，认领/建 worktree/归档不归它管，那是 `start-change` 的事。一次修复
   后评审可能再来一轮，回到第 1 步同样走一遍，直到通过。
+- **`close-change`** —— 评审通过、要合并时用：合并、git 层面清理三样（细节见
+  `start-change` 4.3）、**`openspec archive`**（本会话漏做过两次，合并完先做这步
+  再去做别的事）、把没法自动验证的人工验收项转移到验收清单 issue 而不是让它随
+  归档一起消失、判断并关闭触发这次变更的原始 issue、扫一遍还有没有别的残留（别人
+  的 worktree 尤其是 Codex 的评审 checkout 不要碰）。
