@@ -4,6 +4,7 @@ import { Alert, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useRef, useState } from 'react';
 import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
 import { listNewArrivals, type NewArrivalRow } from '@/services/competitor';
+import ProductDetailDrawer from './ProductDetailDrawer';
 
 /**
  * 上新流：两类来源合并成一个流。
@@ -19,9 +20,10 @@ import { listNewArrivals, type NewArrivalRow } from '@/services/competitor';
  * Amazon 侧还没有数据时就已经按两类形状写好，接入时零改动，本身就是这个形状设计对了
  * 的证据。
  *
- * **尚未实现：点开一行看详情**（独立站的变体/价格历史、Amazon 的采集元数据）。这不是
- * Amazon 分支特有的缺口——DTC 行同样没有这个交互，`competitor-storefront-watch` spec 里
- * 「查看条目详情」那条场景目前对两类来源都不成立，是遗留缺口，不在本变更范围内补。
+ * **点开一行看详情**：独立站已实现（`ProductDetailDrawer`，展示变体价格与店内名次历史，
+ * 见该组件顶部为什么选表格不选图表）。**Amazon 侧仍是已知缺口**——卡在"最近一次采集
+ * 时刻"要不要新增条目级明细表这个未决问题，跟踪见 issue #65，点击 Amazon 行不触发
+ * 任何交互。
  */
 
 const TIME_KIND_META = {
@@ -43,6 +45,7 @@ const SOURCE_META = {
 export default function NewArrivalsTab() {
   const actionRef = useRef<ActionType>();
   const [days, setDays] = useState(7);
+  const [detailRow, setDetailRow] = useState<NewArrivalRow | null>(null);
 
   return (
     <>
@@ -82,6 +85,13 @@ export default function NewArrivalsTab() {
         // 空流只能证明「已采集范围内没有新发现/新上架」，不能证明真的没有——尤其是
         // Amazon 侧，被动采集的覆盖率取决于运营的浏览习惯。措辞不承诺没有真实新品。
         locale={{ emptyText: '当前时间范围内暂无上架/新发现记录' }}
+        // 只有独立站行可点开详情——Amazon 侧仍是已知缺口，见组件顶部注释。
+        // cursor 与 onCell 只在 DTC 行生效，避免让 Amazon 行显得可点却没有反应。
+        onRow={(row) =>
+          row.source === 'DTC'
+            ? { onClick: () => setDetailRow(row), style: { cursor: 'pointer' } }
+            : {}
+        }
         columns={[
           {
             title: '来源',
@@ -130,6 +140,14 @@ export default function NewArrivalsTab() {
           });
           return { data: res.data ?? [], total: res.total ?? 0, success: res.success !== false };
         }}
+      />
+
+      <ProductDetailDrawer
+        open={detailRow !== null}
+        domain={detailRow?.source_key ?? null}
+        productId={detailRow ? Number(detailRow.product_key) : null}
+        title={detailRow?.title ?? ''}
+        onClose={() => setDetailRow(null)}
       />
     </>
   );
