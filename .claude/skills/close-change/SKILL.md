@@ -11,7 +11,46 @@ description: PR 评审通过、要合并时用——合并、清理 worktree/分
 `openspec archive` 这一步被漏做过两次——都是在开始下一个变更、`openspec list`
 冒出一条早就合并完的旧变更时才发现。这个 skill 把那之后的步骤接上。
 
-## 1. 合并
+## 0. 先确认入口并同步 `v2`
+
+这个 skill 有两个入口：PR 还没合并，或 PR 已合并、只遗留 OpenSpec 目录。**先按
+变更 ID 找到关联 PR，不要把一个猜测的 PR 号直接交给 `gh pr merge`。**没有关联 PR、PR
+的 base 不是 `v2`，或状态既不是 `OPEN` 也不是 `MERGED`，都先停下来核对，不能继续收尾。
+
+开始前主工作区必须干净：
+
+```bash
+git status --short --untracked-files=all
+```
+
+若有输出，先确认每一项属于谁，并暂停在这里：不属于本次收尾的修改、worktree 或
+`change/*` 分支只报告，不能为了让工作区看起来干净而删除、暂存、提交或移动它们，也
+不能在混有它们的主工作区继续 `pull`、归档或提交。等所有者处理，或在用户明确指定的
+干净工作区继续。
+
+对已定位的 PR 查询状态、base 和合并提交：
+
+```bash
+gh pr view <PR号> --json number,state,baseRefName,mergedAt,mergeCommit,url
+```
+
+- `OPEN`：确认 `baseRefName` 是 `v2`，再运行
+  `gh pr view <PR号> --json reviewDecision,mergeStateStatus` 与 `gh pr checks <PR号>`，
+  确认评审和当前 `HEAD` 的 CI 都已通过，才进入第 1 节。
+- `MERGED`：跳过第 1 节，记录 `mergeCommit.oid`，直接同步本地 `v2`。
+
+无论是哪一种，归档前都在主工作区同步并确认合并提交已在当前 `HEAD`：
+
+```bash
+git switch v2
+git fetch origin
+git pull --ff-only origin v2
+git merge-base --is-ancestor <合并提交> HEAD
+```
+
+最后一条没有输出才表示确认成功；失败时不要归档，因为本地看到的还不是已合并版本。
+
+## 1. 合并（仅尚未合并的 PR）
 
 ```bash
 gh pr merge <PR号> --merge --delete-branch=false
@@ -31,11 +70,12 @@ gh pr view <PR号> --json state,mergedAt,mergeCommit -q \
 git rev-list --parents -n1 <合并提交> | wc -w   # 应该是 3（提交本身 + 两个父）
 ```
 
-两个父确认了这是真的合并提交，`branch -d` 的保护才有意义。
+两个父确认了这是真的合并提交，`branch -d` 的保护才有意义。随后按第 0 节同步
+本地 `v2` 并确认该合并提交已在 `HEAD`；不要依赖旧的本地分支状态。
 
 ## 2. git 层面清理三样
 
-这部分是 `start-change` 4.3 已经写过的——切回 `v2` 拉最新、`worktree remove`、
+这部分是 `start-change` 4.3 已经写过的——已同步的 `v2` 上执行 `worktree remove`、
 `branch -d`、远端 `push --delete`，三样都核对到空。细节见那份文档，这里不重复。
 
 **有时候前两样已经不用你做了。** 别的会话（本仓库里经常是 Codex）可能已经先
@@ -72,9 +112,11 @@ contains scenario(s) not present in the modified block"。这不是误报要绕�
 
 ```bash
 openspec list   # 应该不再出现这个变更
+openspec validate --strict --all
 ```
 
-然后照常提交、推送——这也是文档改动，不需要开新 PR，直接进 `v2`。
+前一条只说明活跃变更消失；后一条才检查归档后的主 spec 与其余 OpenSpec 内容仍一致。
+两项都通过后再提交、推送——这也是文档改动，不需要开新 PR，直接进 `v2`。
 
 ## 4. 没法自动验证的项不能就地消失
 
@@ -87,6 +129,9 @@ openspec list   # 应该不再出现这个变更
 把这次变更没法自动化验证的项列进去，写清楚要点开哪个页面、看哪个具体行为。
 `tasks.md` 里原来那一条改成指向这条 issue，不要留着一个孤零零的未勾选框——
 读的人不知道"没做"和"转移到别处了"是两回事。
+
+找不到活跃验收清单 issue 时，先报告并请用户指定去处或确认新建；不能因为归档工具
+允许未完成任务就让验收项消失。
 
 ## 5. 触发这次变更的原始 issue，该关就关
 
@@ -114,7 +159,7 @@ git branch --list 'change/*'
 git ls-remote --heads origin | grep 'change/'
 openspec list
 gh pr list --state open --json number,title
-git status --short --untracked-files=all   # 主仓工作树本身该是干净的
+git status --short --untracked-files=all   # 仅报告剩余内容及其归属
 ```
 
 **别人的 worktree 不要碰**，尤其是其他 agent（本仓库常见的是 Codex）留下的
@@ -122,3 +167,6 @@ git status --short --untracked-files=all   # 主仓工作树本身该是干净�
 看到一个还在，只报告"这是谁的、对应哪个 PR、那个 PR 合没合"，不要因为看着像
 残留就顺手删掉。除非用户明确说了要清理这一类，处理别人的工作区不是这个 skill
 的范围。
+
+同样地，主工作区若仍有不属于本次收尾的文件修改，只报告它们；"本次收尾完成"不等于
+"替其他会话清空工作区"。
