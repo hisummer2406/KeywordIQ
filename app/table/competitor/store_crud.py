@@ -519,22 +519,27 @@ def new_arrivals_stmt(user_id: int, *, days: int):
 
 
 def price_history_stmt(domain: str, product_id: int):
+    """一个商品的调价序列，**倒序**——详情页要看的是"最近发生了什么"，不是从头翻起。
+
+    唯一调用方是 `product_history`（PR #74 新增的详情抽屉），改这个排序不影响其他路径。
+    """
     return (
         select(CompetitorStorePrice)
         .where(
             CompetitorStorePrice.domain == domain,
             CompetitorStorePrice.product_id == product_id,
         )
-        .order_by(CompetitorStorePrice.observed_at)
+        .order_by(CompetitorStorePrice.observed_at.desc())
     )
 
 
 def rank_history_stmt(domain: str, product_id: int):
+    """一个商品的店内名次走势，**倒序**——理由同 `price_history_stmt`。"""
     return (
         select(CompetitorStoreRank.captured_on, CompetitorStoreRank.rank)
         .where(
             CompetitorStoreRank.domain == domain,
             CompetitorStoreRank.product_id == product_id,
         )
-        .order_by(CompetitorStoreRank.captured_on)
+        .order_by(CompetitorStoreRank.captured_on.desc())
     )

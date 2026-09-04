@@ -115,6 +115,71 @@ describe('ProductDetailDrawer', () => {
     expect(await screen.findByText('网络异常')).toBeInTheDocument();
   });
 
+  it('切换商品时旧响应不得覆盖新抽屉（PR #74 审核 P1：竞态）', async () => {
+    // 商品 1 的请求先发出、后到达；商品 2 后发出、先到达——模拟"关掉 A 立刻打开 B，
+    // A 的慢响应此时仍在飞"。不设防的话 A 落地时会用 A 的数据覆盖正在展示的 B。
+    let resolveFirst: (value: any) => void;
+    let resolveSecond: (value: any) => void;
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const second = new Promise((resolve) => {
+      resolveSecond = resolve;
+    });
+    getProductHistory.mockImplementationOnce(() => first).mockImplementationOnce(() => second);
+
+    const { rerender } = render(
+      <ProductDetailDrawer
+        open
+        domain="blessrich.com"
+        productId={1}
+        title="商品一"
+        onClose={() => undefined}
+      />,
+    );
+    rerender(
+      <ProductDetailDrawer
+        open
+        domain="blessrich.com"
+        productId={2}
+        title="商品二"
+        onClose={() => undefined}
+      />,
+    );
+
+    // 商品 2 的响应先到——正常展示
+    resolveSecond!({
+      success: true,
+      domain: 'blessrich.com',
+      product_id: 2,
+      currency: 'USD',
+      prices: [
+        { observed_at: '2026-09-01T00:00:00Z', variant_id: 2, sku: 'SKU-B', price: '5.00', compare_at_price: null, available: true },
+      ],
+      ranks: [],
+    });
+    expect(await screen.findByText('$5.00')).toBeInTheDocument();
+
+    // 商品 1 的响应姗姗来迟——不该覆盖已经在展示的商品 2
+    resolveFirst!({
+      success: true,
+      domain: 'blessrich.com',
+      product_id: 1,
+      currency: 'USD',
+      prices: [
+        { observed_at: '2026-09-01T00:00:00Z', variant_id: 1, sku: 'SKU-A', price: '99.00', compare_at_price: null, available: true },
+      ],
+      ranks: [],
+    });
+    // 给迟到的 .then 一个机会跑完
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(screen.getByText('$5.00')).toBeInTheDocument();
+    expect(screen.queryByText('$99.00')).not.toBeInTheDocument();
+  });
+
   it('未打开时不发起请求', () => {
     render(
       <ProductDetailDrawer

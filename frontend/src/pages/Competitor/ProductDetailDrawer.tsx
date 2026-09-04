@@ -36,13 +36,28 @@ export default function ProductDetailDrawer({ open, domain, productId, title, on
 
   useEffect(() => {
     if (!open || !domain || productId === null) return;
+    // 关掉商品 A 的抽屉立刻打开商品 B：A 的慢响应此时仍在飞，若不设防它落地时会
+    // 用 A 的数据覆盖已经在展示 B 的抽屉——界面上是"B 的标题 + A 的历史"，或者
+    // B 明明还在等却被 A 提前结束了 loading。`cancelled` 只在这次 effect 的
+    // cleanup（下一次 open/domain/productId 变化，或组件卸载）时置位，三个
+    // 回调落地前都要重新检查。
+    let cancelled = false;
     setLoading(true);
     setError(null);
     setData(null);
     getProductHistory(domain, productId)
-      .then(setData)
-      .catch((e: any) => setError(e?.message || '加载失败'))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch((e: any) => {
+        if (!cancelled) setError(e?.message || '加载失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open, domain, productId]);
 
   const currency = data?.currency ?? null;
