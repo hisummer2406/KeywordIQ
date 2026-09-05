@@ -88,7 +88,10 @@ sudo ln -sf /etc/nginx/sites-available/keywordiq /etc/nginx/sites-enabled/keywor
 sudo nginx -t && sudo systemctl reload nginx
 
 uv run python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次登录后请修改
-./start.sh
+
+# 后端托管为 systemd 服务（崩溃自动拉起、开机自启；此前靠手动 start.sh）
+sudo cp etc/keywordiq.service /etc/systemd/system/keywordiq.service   # 按本机改 User 与路径
+sudo systemctl daemon-reload && sudo systemctl enable --now keywordiq
 ```
 
 后续发布用 `./deploy.sh`（`uv sync` → 迁移 → 构建前端 → 发布产物 → reload nginx）：
@@ -99,8 +102,13 @@ uv run python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次�
 ./deploy.sh --yes            # 不交互确认迁移（无人值守）
 ```
 
-> **后端重启**：仓库暂未提供 systemd unit。`deploy.sh` 检测到 `${SERVICE_NAME}.service`
-> 才会重启后端，否则跳过并提示手动重启（停掉旧 uvicorn 后跑 `./start.sh`）。
+> **后端重启**：装了 `etc/keywordiq.service` 后，`deploy.sh` 第 6 步会自动
+> `systemctl restart keywordiq`。未安装该 unit 时 deploy.sh 跳过后端重启并提示手动处理
+> （停掉旧 uvicorn 后跑 `./start.sh`）。
+>
+> **已知边界**：进程在导入中途被杀（崩溃/OOM/发布重启）时，该批次记录会停留在
+> `PROCESSING`（回收逻辑只覆盖 `UPLOADING`/`QUEUED`）。数据无损——事实写入在单事务里
+> 回滚、OSS 对象仍在，重新上传同一期即可恢复；受影响的只是历史屏里那一行状态。
 
 ---
 

@@ -1,0 +1,46 @@
+# /etc/systemd/system/keywordiq.service
+#
+# 部署形态：宿主机 nginx + systemd 托管的 uvicorn（start.sh 拉起，4 workers）。
+# nginx 反代 127.0.0.1:8000，见 etc/keywordiq-nginx.conf 的 upstream。
+#
+# 安装（首次，仅一次）：
+#   sudo cp etc/keywordiq.service /etc/systemd/system/keywordiq.service
+#   # 按本机实际修改下方 User/Group 与 /opt/keywordiq 路径
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now keywordiq
+# 之后发布走 ./deploy.sh——第 6 步检测到本服务会自动 restart。
+#
+# 为什么要托管：此前后端靠人手动 start.sh，服务器重启后不会自己回来、
+# 进程崩溃无人拉起。systemd 补上这两件事，不新增任何活动部件。
+#
+# 已知边界（有意写在这里）：进程在导入中途被杀时，该批次记录会停留在
+# PROCESSING（回收逻辑只覆盖 UPLOADING/QUEUED）。数据无损——事实写入在单事务里
+# 回滚，OSS 对象仍在，重新上传同一期即可恢复；脏的只是历史屏里那一行状态。
+
+[Unit]
+Description=KeywordIQ API (uvicorn, 4 workers, via start.sh)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# 运行账号：不用 root。仓库内 logs/、uploads/ 的属主须与之一致（deploy 也在该账号下执行）。
+User=ecs-user
+Group=ecs-user
+# 应用按相对路径写 logs/、读 static/ 与 .env——WorkingDirectory 必须是仓库根。
+WorkingDirectory=/opt/keywordiq
+# systemd 环境没有 shell 的 PATH，而 start.sh 用裸命令 uvicorn（在 .venv/bin 下）。
+Environment=PATH=/opt/keywordiq/.venv/bin:/usr/bin:/bin
+# 前缀 - 表示文件缺失不报错。与 start.sh 里的 export 互为冗余但无害（值相同）。
+EnvironmentFile=-/opt/keywordiq/.env
+# 单一事实来源：启动参数都在 start.sh 里，unit 只负责调用与托管，不复制一份。
+ExecStart=/opt/keywordiq/start.sh
+# 崩溃自动拉起。重启风暴由 systemd 默认限速兜底（10s 内 5 次启动失败即停止重试），
+# 那种情况下 journalctl -u keywordiq 是第一现场。
+Restart=always
+RestartSec=5
+# SIGTERM 后给 uvicorn 最多 30s 优雅退出（lifespan 会取消轮询任务、关闭两个连接池）。
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
