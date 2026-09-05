@@ -98,11 +98,12 @@
 
 ## 7. 旧部署路径退役
 
-- [x] 7.1 `etc/keywordiq.service` 在这个 worktree 里从未存在（它是主仓库工作树里一份
-  **未提交**的文件，此前某次会话新增但没进 git，本 worktree 分支自 `v2` 最后一次提交
-  切出，不含这份未提交改动）。按 design.md 决策 8（依赖 Docker 原生 `restart` 策略，
-  不需要额外 systemd unit）——主仓库里那份未提交文件已被这个决定取代，建议不要提交它，
-  但由用户自行决定去留，本次改动不代为删除主仓库里不属于这个分支的文件。
+- [x] 7.1 `etc/keywordiq.service` 最初只是主仓库工作树里一份未提交的文件，本 worktree
+  开出时不含它；合并本分支进 `v2` 前发现 `v2` 上又有一次独立提交（`1cff6e2`）把它连同
+  CLAUDE.md 的 systemd 说明真正提交了进去，与本变更的 merge 因此在 CLAUDE.md 冲突。
+  按 design.md 决策 8（依赖 Docker 原生 `restart` 策略，不需要额外 systemd unit，经用户
+  确认）：合并时移除了 `etc/keywordiq.service`、保留本分支的 CLAUDE.md 版本，并同步
+  更新了 README.md 里引用该文件的安装步骤（另一处遗漏，随手一并改掉）。
 - [x] 7.2 `deploy.sh` 重写：`uv sync`/裸 `alembic`/`systemctl restart` 替换为
   `docker compose build` → `docker compose run --rm app alembic upgrade head`
   （`db` 不对宿主机暴露端口，迁移必须在容器内跑）→ `docker compose up -d`；nginx

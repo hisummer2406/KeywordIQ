@@ -19,7 +19,7 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     canViewAnalysis: has('analysis:view'),
     canExport: has('analysis:export'),
     canUpload: has('upload:import'),
-    // 「关键词工具」下两屏（持续增长市场、我的词库）共用的容器级权限点。不给两屏各开一个
+    // 「词库工具」下两屏（增长市场、我的词库）共用的容器级权限点。不给两屏各开一个
     // ——词库管理的是用户自己的私有清单，「禁止某人管理自己的收藏夹」不是真实的授权需求。
     canViewKeyword: has('keyword:view'),
     // 独立权限点,不复用 keyword:view——每个用户的关注池互相独立,不是"全体共用一个开关"
@@ -29,7 +29,7 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     // 能看到——即便某个用户的角色码是 admin，只要 is_super 为假就看不到，与其余按角色
     // 矩阵授予的权限点不同档次（add-opportunity-center-nav/design.md 决策 1）。
     canViewOpportunity: has('opportunity:view'),
-    //「风险核查」（外观专利 / 全球商标库，原名"侵权查询"）**故意没有权限工厂项**，
+    //「风险核查」（审核待办 / 外观专利 / 商标查询 / 风险案例，原名"侵权查询"）**故意没有权限工厂项**，
     // 路由直接用 isLogin。它们没有后端端点，罩着它们的权限点对它们不生效，就成了
     // 「勾了也不生效」的复选框（`user:manage` 正是这样被删掉的）。接上数据源、有了
     // 真实端点再加——那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有权限项」
