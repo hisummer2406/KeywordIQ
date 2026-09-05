@@ -28,17 +28,21 @@ uv run pytest test/
 uv add <package>          # runtime
 uv add --dev <package>    # dev-only
 
-# Production deployment (host nginx + uvicorn; no containers)
-./deploy.sh                            # Full release: uv sync → migrate → build SPA → publish → reload nginx
+# Production deployment (Docker Compose: app + self-hosted PostgreSQL + Netdata；
+# host nginx 只托管前端 SPA 产物并反代 /api，不再直接管理裸 uvicorn 进程)
+./deploy.sh                            # Full release: build image → migrate (in container) → build SPA → publish → reload nginx
 ./deploy.sh --skip-migrate             # Frontend-only release
-./start.sh                             # Start backend directly (4 uvicorn workers)
-tail -f logs/app.log | grep -i import  # Monitor import logs
+docker compose up -d                   # 拉起/切换容器（restart: unless-stopped，崩溃与宿主机重启由 Docker 自动拉起）
+docker compose logs app --tail 100 -f  # Monitor app logs（不再是 tail logs/app.log；容器内 logs/ 仍挂宿主机目录，两种方式都能看）
+./start.sh                             # 仅供非容器环境（本地开发/应急）直接起 uvicorn，生产不再使用
 
 # Database operations
 # Uses PostgreSQL with schema "analysis"
 # Connection: sync (psycopg2) + async (asyncpg) engines both configured
 
-# Database migrations (Alembic)
+# Database migrations (Alembic)——本地开发直连数据库时用这组；
+# 生产的自建 db 服务不对宿主机暴露端口，生产迁移走 `docker compose run --rm app alembic ...`
+# （deploy.sh 已封装），下面这组裸命令在生产环境够不到 db。
 uv run alembic upgrade head          # 应用迁移
 uv run alembic downgrade -1          # 回滚一步
 uv run alembic upgrade head --sql    # 只生成 SQL，不连库（离线预览）
@@ -121,7 +125,9 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 要点：
 
 - **日期选择器与分页总数走 `site_data_stats`**（不在 8 亿行上实时聚合）；类目下拉走
-  `category_stats` 物化视图。查询代码在 `app/table/analysis/analysis_crud.py`（纯 SQL 组装）
+  `category_stats`（按站点/周期/日期分片的普通表，2026-08-05 由物化视图改造而来，见
+  迁移 `f5a6b7c8d9e0`——旧视图统计粒度比筛选粗一层、刷新代价与数据总量同阶，改表后
+  导入只需重算当期切片）。查询代码在 `app/table/analysis/analysis_crud.py`（纯 SQL 组装）
   → `analysis_service.py`（作用域解析、`ScopeError`）→ `analysis_api.py`
   （`POST /search`、`GET /scope`、`GET /categories`，均 `require_permission(analysis:view)`；
   另有 `POST /export`，权限点是 `analysis:export`）。
@@ -928,30 +934,38 @@ try/catch 也能让用户看见失败。确需静默的场景在请求上显式�
 `fact_daily` / `fact_weekly` / `site_data_stats` / `import_batch`）。
 V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随 V1 退役删除。
 
-**物化视图**：`category_stats` — 按 (站点, 周期) 提供类目下拉选项与计数，导入后由
-`import_service._refresh_category_stats` 刷新。
+**`category_stats` / `brand_stats`**：普通表，按 (站点, 周期, 日期) 分片提供类目/品牌
+下拉选项与计数，导入后由 `import_service._rebuild_filter_stats` 只重算当期切片（不是
+物化视图——2026-08-05 迁移 `f5a6b7c8d9e0` 已经改造过一次，原因见该迁移文件说明：
+旧视图统计粒度比筛选粗一层、且 `REFRESH` 代价与数据总量同阶）。
 
 ### Performance Optimizations
 
 1. **Connection Pooling**: `database.py` 在模块级建了**两个**引擎，各自持有独立的池，
-   服务的负载性质不同，故**分开配置**（`DB_*` 与 `DB_ASYNC_*`）。RDS 的
-   `max_connections=400` 是硬顶，全局上限算式是：
+   服务的负载性质不同，故**分开配置**（`DB_*` 与 `DB_ASYNC_*`）。自
+   `dockerize-selfhosted-infra` 变更起 PostgreSQL 自建、与应用同机部署（不再是独立的
+   阿里云 RDS），自建 `db` 容器的 `max_connections`（`.env` 的 `PG_MAX_CONNECTIONS`，
+   起点值 120）是硬顶，全局上限算式是：
 
    ```
    (DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers        # 同步：导入 COPY、导出游标、迁移
    + (DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers   # 异步：查询与鉴权
    ```
 
-   `start.sh` 固定 4 workers。当前取值 (20+10)×4 + (20+10)×4 = 240，占硬顶六成。
-   **RDS 只有 2 vCPU**：PG 同时真正能执行的查询受核心数限制（约 4 个），池开大不提升
-   吞吐，只会把「快速可见的失败」换成「整体缓慢劣化」。目标取值是同步 2+3、异步 8+8
-   （上限 84），但降池是行为改变，须先观测 `pg_stat_activity` 的 `active` 峰值再落。
+   `start.sh`/Dockerfile 固定 4 workers。当前取值 (2+3)×4 + (8+8)×4 = 84，为
+   `PG_MAX_CONNECTIONS=120` 留出约三分之一余量给 psql/alembic/运维脚本。
+   **应用与数据库现在共享同一组 4 vCPU**（不再是"数据库在独立机器"）：PG 同时真正能
+   执行的查询仍受核心数限制，池开大不提升吞吐，只会把「快速可见的失败」换成「整体缓慢
+   劣化」，且现在这组核心还要分给应用进程，比独立 RDS 时期更紧——这是本次迁移直接采用
+   目标值起步、而非在旧值上"以后再降"的原因（`openspec/changes/
+   dockerize-selfhosted-infra/design.md` 决策 5）。
 
    **`THREAD_POOL_LIMIT`（默认 32）与连接池无关，调池时不要跟着一起动。** anyio 的默认
    线程限流器被三类工作共用，只有第一类占连接：同步 `def` 端点（导出）与健康检查探活、
    bcrypt 哈希/校验（每次登录 ~247 ms，不占连接）、同步 `BackgroundTask`（导入，一条线程
-   占住整场）。它曾按 `DB_POOL_SIZE + DB_MAX_OVERFLOW` 推导——那样把同步池降到 2+3 会让
-   它塌到 5，一个导入在跑就只剩 4 条线程给全部登录。
+   占住整场）。它曾按 `DB_POOL_SIZE + DB_MAX_OVERFLOW` 推导——同步池降到 2+3 后若仍然
+   那样推导，限流器会塌到 5，一个导入在跑就只剩 4 条线程给全部登录，故两者已彻底拆开、
+   互不联动。
 2. **Query Optimization**:
    - 无筛选的分页总数直接读 `site_data_stats` 的 `row_count + dropped_count`（O(1)，
      不在事实表上聚合）。这两个预存值同时也是**分段分页的分界线**，与事实/掉榜写入在同一
@@ -964,7 +978,7 @@ V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随
    - 每次查询都被约束在**单一站点、单一视图**内；时间维上，带筛选走单一事实切片，无筛选
      走行窗口（天 7 期 / 周 4 期）。掉榜段读的是导入时算定的 `fact_dropped`，查询侧不做
      反连接——那正是决策 1 要避开的「每翻一页重算一次」
-   - 类目下拉读 `category_stats` 物化视图，不实时聚合
+   - 类目下拉读 `category_stats`（按日期分片的普通表，导入后只重算当期切片），不实时聚合
 3. **Import**: 走 `COPY` 流式装载到 UNLOGGED 暂存表，内存有界；不再有 pandas 分块或多进程分片
    （V1 的 `BATCH_SIZE`/`MAX_WORKERS`/`FILE_SPLIT_LINES` 等配置已随 V1 一并删除）。
    导入以 `pg_try_advisory_lock` 串行化，同一时刻只跑一个。
@@ -1005,14 +1019,24 @@ MAX_FILE_SIZE=3221225472  # 3GB
 OSS_ENABLED=false
 IMPORT_QUEUE_POLL_SECONDS=30  # 排队批次多久接手一轮；0 = 不自动接手
 
-# Connection pool（两个引擎各自独立配置，上限是两组相加再 × 4 workers）
-DB_POOL_SIZE=20            # 同步：导入 COPY / 导出游标 / 迁移
-DB_MAX_OVERFLOW=10
-DB_ASYNC_POOL_SIZE=20      # 异步：查询与鉴权
-DB_ASYNC_MAX_OVERFLOW=10
+# Connection pool（两个引擎各自独立配置，上限是两组相加再 × 4 workers；
+# 自建 PG 与应用同机部署后取值即目标值，见 Performance Optimizations 一节）
+DB_POOL_SIZE=2             # 同步：导入 COPY / 导出游标 / 迁移
+DB_MAX_OVERFLOW=3
+DB_ASYNC_POOL_SIZE=8       # 异步：查询与鉴权
+DB_ASYNC_MAX_OVERFLOW=8
 
 # 线程池上限（导出/探活/bcrypt/同步后台任务共用，与连接池无关）
 THREAD_POOL_LIMIT=32
+
+# 自建 PostgreSQL 容器（docker-compose.yml 的 `db` 服务读取，不经 config.py）
+POSTGRES_DB=amazon_search
+POSTGRES_PASSWORD=change-me-in-production
+PGDATA_HOST_PATH=./pgdata   # bind mount，不用具名卷——备份/灾难恢复要能直接摸到文件
+PG_MAX_CONNECTIONS=120
+PG_SHARED_BUFFERS=2GB
+PG_EFFECTIVE_CACHE_SIZE=4GB
+PG_WORK_MEM=16MB
 ```
 
 ## Production Environment
@@ -1020,14 +1044,22 @@ THREAD_POOL_LIMIT=32
 | Category | Spec |
 |----------|------|
 | App Server | Alibaba Cloud ECS · Alibaba Cloud Linux 3.2104 LTS 64-bit · 4 vCPU / 8 GiB RAM |
-| Database | Alibaba Cloud RDS PostgreSQL 15.0 · 2C4G · max_connections = 400 |
+| Database | 自建 PostgreSQL 15.x（Docker 容器，与 App Server 同一台 ECS，见 `docker-compose.yml`）· `max_connections` 由 `.env` 的 `PG_MAX_CONNECTIONS` 配置，起点 120 |
+
+应用与数据库不再是两台独立机器——`dockerize-selfhosted-infra` 变更之前是阿里云 RDS
+PostgreSQL 15.0（2C4G，独立机器），出于省去 RDS 托管溢价的考虑改为自建、同机部署。
+详见 `openspec/changes/dockerize-selfhosted-infra/design.md`。
 
 **Capacity implications for code changes:**
-- RDS max 400 connections shared across all app processes; 全局上限是**两个引擎各自的池相加**
+- `PG_MAX_CONNECTIONS`（起点 120）是全局上限的硬顶；全局上限是**两个引擎各自的池相加**
   再乘 workers：`(DB_POOL_SIZE + DB_MAX_OVERFLOW + DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers`
-  （`start.sh` 固定 4 workers，当前取值算下来是 240）。改任一组前先核对这个算式
-- 4 vCPU 上 nginx、4 个 uvicorn worker 与导入任务共享 CPU；导入已由咨询锁串行化，勿再引入并行分片而不实测
-- 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame
+  （`start.sh`/Dockerfile 固定 4 workers，当前取值算下来是 84）。改任一组前先核对这个算式
+- **应用与数据库现在共享同一组 4 vCPU / 8 GiB**（此前数据库在独立的 RDS 机器上，不与
+  应用争抢）：nginx、4 个 uvicorn worker、导入任务、自建 PostgreSQL 进程本身、以及
+  Netdata 监控容器全部挤在这台机器上；导入已由咨询锁串行化，勿再引入并行分片而不实测
+- 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame。
+  自建 PostgreSQL 的 `shared_buffers`/`effective_cache_size`/`work_mem`（`.env` 的
+  `PG_*` 系列）同样要在这 8 GiB 里核算，不能只顾应用侧内存
 
 ## Important Constraints
 

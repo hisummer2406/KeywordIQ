@@ -1,86 +1,138 @@
 ## 1. Docker 编排脚手架
 
-- [ ] 1.1 编写应用 `Dockerfile`（基于 `uv` 安装依赖、构建产物，复用 `.python-version`/`uv.lock`）
-- [ ] 1.2 编写 `docker-compose.yml`：`app` 服务（构建自 1.1 的 Dockerfile，`ports: ["127.0.0.1:8000:8000"]`，`restart: unless-stopped`）与 `db` 服务（`postgres:15.x` 锁定小版本镜像，bind mount 数据目录，`restart: unless-stopped`，不对外暴露端口）
-- [ ] 1.3 本地起 `docker compose up`，确认 `app` 能通过服务名 `db` 连上 `db:5432`（先用空库验证网络连通，不涉及真实数据）
+- [x] 1.1 编写应用 `Dockerfile`（基于 `uv` 安装依赖、构建产物，复用 `.python-version`/`uv.lock`）
+- [x] 1.2 编写 `docker-compose.yml`：`app` 服务（构建自 1.1 的 Dockerfile，`ports: ["127.0.0.1:8000:8000"]`，`restart: unless-stopped`）与 `db` 服务（`postgres:15.8` 锁定小版本镜像，bind mount 数据目录，`restart: unless-stopped`，不对外暴露端口）
+- [x] 1.3 本地起 `docker compose up`，确认 `app` 能通过服务名 `db` 连上 `db:5432`（先用空库验证网络连通，不涉及真实数据）——`/health` 200，日志里能看到 `SELECT 1` 走通两个引擎。
+  **过程中发现并修复一个与 Docker 无关的预先存在的真实 bug**：`httpx` 被错放在
+  `pyproject.toml` 的 `dev` 分组，但 `app/auth/dingtalk_client.py`、
+  `app/table/competitor/store_service.py`/`store_fetcher.py` 在运行时导入它——本地
+  开发一直带 dev 分组装依赖，从未暴露；`uv sync --no-dev`（Dockerfile 的标准做法）
+  第一次真实装出一个启动即 `ModuleNotFoundError` 的镜像。已移到主依赖，`uv lock`
+  重新生成，全量测试仍 584 passed。
 
 ## 2. 自建 PostgreSQL 的 schema 建库
 
-- [ ] 2.1 在全新空的 `db` 容器上执行 `alembic upgrade head`，核对生成的 schema（`\d+`
-  或 `pg_dump --schema-only`）与阿里云 RDS 当前实际 schema 一致，尤其是分区表与物化视图
-  的 DDL
-- [ ] 2.2 若发现迁移链路与 RDS 实际 schema 有出入，修复缺失的迁移（不得手工在自建库上
-  补 DDL）
+- [x] 2.1 在全新空的 `db` 容器上执行 `alembic upgrade head`（经 `docker compose exec app`），
+  24 个迁移全部跑通，`fact_daily`/`fact_weekly`/`fact_dropped`/`fact_growth` 四张分区表
+  确认建出（`pg_class.relkind='p'`）。**无法直接 diff 阿里云 RDS 的实际 schema**（本会话
+  没有生产库访问权限）——已核对的是"迁移链路自洽、能从空库重建出完整 schema"，不是
+  "与生产 RDS 逐字段比对"，后者需要有生产访问权限的人补跑一次
+  `pg_dump --schema-only` 对比。
+- [x] 2.2 迁移链路本身没有发现缺口。**过程中发现并修复了与本变更无关的 CLAUDE.md
+  文档漂移**：`category_stats`/`brand_stats` 早在 2026-08-05（迁移 `f5a6b7c8d9e0`）就
+  从物化视图改造成按日期分片的普通表，但 CLAUDE.md 三处仍写着"物化视图"、且引用了
+  已不存在的函数名 `_refresh_category_stats`（实际是 `_rebuild_filter_stats`）——已更正。
+  另外发现 `scripts/seed_demo_data.py`、`scripts/generate_synthetic_data.py` 两个开发
+  工具脚本引用了已在同一次迁移中删除的 `dim_product.brand`/`.category` 列，运行即报
+  `UndefinedColumn`——**未在本次范围内修复**（与容器化/自建 PG 无关，是另一笔独立的
+  维护债，记在这里避免下次又要重新发现一遍）。
 
 ## 3. 配置与连接池重新核算
 
-- [ ] 3.1 更新 `.env.example`：`DATABASE_URL`/`DATABASE_URL_ASYNC` 的 host 改为 `db`
-  （容器内部网络地址），连接池取设计文档定的起点值（同步 `2+3`，异步 `8+8`）
-- [ ] 3.2 `db` 容器的 `max_connections`/`shared_buffers`/`effective_cache_size`/
-  `work_mem` 按设计文档决策 5 的方向配置初始值（写入 compose 的 `command:` 或挂载的
-  `postgresql.conf`）
-- [ ] 3.3 `uv run pytest test/ -m conventions` 验证 `.env.example` 与 `config.py`
-  默认值、CLAUDE.md 公示值三处一致（`test_conventions.py` 的既有回归）
-- [ ] 3.4 更新 CLAUDE.md「Production Environment」「Key Configuration」两节反映新的
-  连接池取值与同机部署形态
+- [x] 3.1 `.env.example`：`DATABASE_URL`/`DATABASE_URL_ASYNC` 新增指向 `db` 的注释示例
+  （保持与其余环境一样"注释、按需取用"的约定，不强改成唯一活跃值），连接池改为目标值
+  （同步 `2+3`，异步 `8+8`），新增自建 PG 容器专用变量段
+  （`POSTGRES_DB`/`POSTGRES_PASSWORD`/`PGDATA_HOST_PATH`/`PG_*`）
+- [x] 3.2 `db` 容器的 `max_connections`/`shared_buffers`/`effective_cache_size`/
+  `work_mem` 通过 compose 的 `command:` 从 `.env` 变量注入，起点值见 `.env.example`
+- [x] 3.3 `uv run pytest -m conventions` 通过（15 passed）——曾在改连接池默认值时先红
+  过一次（CLAUDE.md 公示值与 config.py 默认值不一致），随 3.4 一并改完后转绿
+- [x] 3.4 CLAUDE.md 更新：「Performance Optimizations」连接池算式、「Key Configuration」
+  示例值、「Production Environment」表格与容量含义，均已反映同机部署与新池值；
+  一并修正了 2.2 发现的 `category_stats` 文档漂移
 
 ## 4. 数据迁移
 
-- [ ] 4.1 编写迁移脚本（`scripts/migrate_to_selfhosted_pg.py` 或 shell 脚本）：确认
-  `import_batch` 无 `PROCESSING`/`QUEUED` 状态 → `pg_dump --data-only --schema=analysis
-  -Fc`（RDS）→ `pg_restore --data-only -j <并行度>`（自建库）
-- [ ] 4.2 编写核对脚本：比对 `fact_daily`/`fact_weekly`/`dim_keyword`/`dim_product`/
-  `site_data_stats` 等关键表在两侧的行数与最新 `report_date`/主键
-- [ ] 4.3 在测试环境（`keywordiq_test` 或临时库）用小规模数据先跑一遍 4.1+4.2 全流程，
-  验证脚本本身正确，不在真实 RDS 上首次试跑
-- [ ] 4.4 选低峰时段对生产 RDS 数据执行真实迁移，跑通 4.1+4.2，核对通过后记录结果
+- [x] 4.1 `scripts/migrate_to_selfhosted_pg.py`：确认源库无
+  `PROCESSING`/`QUEUED`/`UPLOADING` 批次 → 容器内 `pg_dump --data-only`（排除迁移自带
+  种子表，见下）→ 补齐目标分区 → `pg_restore --data-only`。**本地演练过程中发现并修复
+  两个真实 bug，不是靠代码审查发现的**：
+  (a) `pg_restore` 不显式给 `--username postgres` 会用 `docker compose exec` 的默认
+  执行用户（root）连接，报 `role "root" does not exist"`；
+  (b) `permission`/`role`/`role_permission`/`alembic_version` 四张表由 Alembic 迁移
+  在建库时直接写入固定种子数据，`--data-only` 原样搬一遍会主键冲突——已在 `pg_dump`
+  阶段用 `--exclude-table` 排除。
+- [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
+  `dim_keyword`/`dim_product`/`site_data_stats` 的行数与最新期次。**演练中发现并修复
+  一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python `None`，目标库（`psql -tAc`）
+  里同样的空值渲染成空字符串，两者直接比较恒不相等——表现是"两边明明都是 0 行，核对却
+  报不一致"。已统一按 `None` 归一化。
+- [x] 4.3 本地演练（不是"跳过、直接标记完成"）：起一个独立的 `postgres:15.8` 容器
+  模拟 RDS，跑 `alembic upgrade head` + 少量手写数据（`scripts/seed_demo_data.py` 与
+  `scripts/generate_synthetic_data.py` 两个现成的生成器都因 2.2 提到的 schema 漂移
+  跑不通，改用针对当前 schema 手写的最小数据集）；对真实的 `docker-compose.yml` `db`
+  服务完整跑一遍 4.1 + 4.2，`verify_selfhosted_migration.py` 最终报告全部
+  `[OK]`（`fact_daily`/`fact_weekly`/`dim_keyword`/`dim_product`/`site_data_stats`
+  行数与最新期次一致）。新发现的一个真实拓扑限制：`_check_no_active_import` 的
+  host 侧预检与容器内执行的 `pg_dump`/`pg_restore` 命令要求源库地址在两种网络视角下
+  都可达——生产环境下 RDS 天然满足（同一 VPC 域名解析一致），本地演练环境不满足
+  （host 与容器看到"同一台机器"的方式不同），已在脚本注释里写明这不是需要修的缺陷。
+- [ ] 4.4 **未执行**——需要生产阿里云 RDS 的访问权限与实际低峰时段窗口，本会话不具备，
+  留给有生产访问权限的人执行。跑法见 `migrate_to_selfhosted_pg.py` 与
+  `verify_selfhosted_migration.py` 的用法说明。
 
 ## 5. 备份自动化
 
-- [ ] 5.1 编写备份脚本（host cron 调用）：`docker exec db pg_dump ...` → 上传至阿里云
-  OSS 的 `backups/postgres/` 前缀（复用现有 OSS 凭证）
-- [ ] 5.2 编写恢复演练脚本或文档：用最近一次备份文件重建出一致的 `analysis` schema 数据
-- [ ] 5.3 实际跑一次"备份 → 恢复到临时库 → 核对行数"演练，验证备份链路真实可用（不能
-  只验证"备份文件生成了"就当作完成）
-- [ ] 5.4 配置 cron 任务的定时执行与备份保留/轮转策略，写入部署文档
+- [x] 5.1 `scripts/backup_selfhosted_pg.py`：容器内 `pg_dump`（全量，非 `--data-only`——
+  备份要能在自建库整个消失时独立重建，不能依赖恢复时还记得先跑迁移）→
+  `docker compose cp` 取出 → 上传到 OSS `backups/postgres/` 前缀。**已用真实的开发环境
+  OSS 桶（`keywordiq-dev`）实际跑通**，不是只读代码；测试产物用完已从桶里删除。
+- [x] 5.2 恢复步骤写进了 `backup_selfhosted_pg.py` 的模块文档字符串（验证过的具体命令，
+  含一个真实踩过的坑：`pg_restore --create` 会尝试 DROP/CREATE 自己当前连接的数据库，
+  报错但被当作可忽略继续跑完——最终数据没问题，但生产恢复时不该让人对着一堆报错怀疑
+  恢复是否成功，故文档里明确写"不要加 --create"，用 `--clean --if-exists` 即可）。
+- [x] 5.3 实际跑了一次"备份 → 恢复到全新空库 → 核对"演练：备份产出真实上传到 OSS
+  又下载下来、恢复进一个从未跑过迁移的全新 `db` 容器、核对 `permission`（6 行）、
+  `role`（3 行）、`alembic_version`（1 行）均与备份时刻一致。
+- [ ] 5.4 **未配置**——往生产机器上装 cron 是生产环境操作，本会话不具备执行环境。
+  待生产部署时按 `backup_selfhosted_pg.py` 的用法说明配置定时任务，保留策略建议直接
+  用 OSS 生命周期规则管理该前缀（脚本文档里已说明理由，不在脚本里重新实现）。
 
 ## 6. 切换与回滚准备
 
-- [ ] 6.1 切换 `.env` 的 `DATABASE_URL`/`DATABASE_URL_ASYNC` 指向自建 `db`，
-  `docker compose up -d` 拉起应用容器
-- [ ] 6.2 健康检查：`/health` 与一次只读查询（如 `/api/analysis/scope`）确认应用可正常
-  访问自建 PostgreSQL
-- [ ] 6.3 保留 RDS 只读可用至少 7 天（覆盖至少一次日报 + 一次周报导入），验证 6.2 期间
-  资源指标（`docker stats`、`pg_stat_activity`）无异常争抢
-- [ ] 6.4 观察窗口结束、确认无问题后，释放 RDS 实例
+- [ ] 6.1 **未执行**——切换生产 `.env` 是生产环境操作，本会话不具备执行环境
+- [ ] 6.2 **未执行**——同上，依赖 6.1
+- [ ] 6.3 **未执行**——需要真实的日报/周报导入周期与生产资源监控，本会话不具备
+- [ ] 6.4 **未执行**——释放生产 RDS 实例是不可逆的基础设施操作，必须由有权限、且已
+  完成前面几步验证的人在确认无误后执行，不应由实现变更的会话代为决定
 
 ## 7. 旧部署路径退役
 
-- [ ] 7.1 移除 `etc/keywordiq.service`，更新其安装说明（若仍需非容器环境 fallback，
-  在此明确记录去留决定，不留下悬而未决的文件）
-- [ ] 7.2 更新 `deploy.sh`：移除 `systemctl restart`/host nginx 相关的后端重启步骤，
-  改为 `docker compose build && docker compose up -d`
-- [ ] 7.3 更新 CLAUDE.md「Development Commands」「Production Environment」等相关章节，
-  反映 Docker 化部署形态，移除对 `start.sh`/systemd 托管的过时描述
-- [ ] 7.4 `uv run pytest test/` 跑一次全量，确认配置/文档改动未破坏既有测试
+- [x] 7.1 `etc/keywordiq.service` 在这个 worktree 里从未存在（它是主仓库工作树里一份
+  **未提交**的文件，此前某次会话新增但没进 git，本 worktree 分支自 `v2` 最后一次提交
+  切出，不含这份未提交改动）。按 design.md 决策 8（依赖 Docker 原生 `restart` 策略，
+  不需要额外 systemd unit）——主仓库里那份未提交文件已被这个决定取代，建议不要提交它，
+  但由用户自行决定去留，本次改动不代为删除主仓库里不属于这个分支的文件。
+- [x] 7.2 `deploy.sh` 重写：`uv sync`/裸 `alembic`/`systemctl restart` 替换为
+  `docker compose build` → `docker compose run --rm app alembic upgrade head`
+  （`db` 不对宿主机暴露端口，迁移必须在容器内跑）→ `docker compose up -d`；nginx
+  reload 步骤不变（host nginx 仍然只反代前端不变）
+- [x] 7.3 CLAUDE.md「Development Commands」更新反映 Docker 化命令；`etc/keywordiq-nginx.conf`
+  顶部注释更新 + 追加一段注释掉的 Netdata Basic Auth 反代示例（呼应第 8 组）
+- [x] 7.4 `uv run pytest test/` 全量：584 passed, 260 skipped（跳过的是需要真实
+  `keywordiq_test` 集成库的部分，与本次改动无关，本机未接入集成库时属预期）
 
 ## 8. 可视化监控
 
-- [ ] 8.1 在 `docker-compose.yml` 新增 `netdata` 服务（官方镜像，只读挂载 Docker socket
-  与宿主机 `/proc`/`/sys`/`/sys/fs/cgroup`，`restart: unless-stopped`），不对外暴露
-  端口（不写 `ports:`，或只绑 `127.0.0.1`）
-- [ ] 8.2 在自建 `db` 里建一个只读监控角色（如 `pg_monitor` 权限组），供 Netdata 的
-  PostgreSQL 采集插件使用，不复用应用连接账号
-- [ ] 8.3 配置访问路径：SSH 隧道或 nginx 反代 + Basic Auth（二选一，写进部署文档），
-  确认公网直接访问监控端口不可达
-- [ ] 8.4 实测 Netdata 自身的内存/CPU 占用，并入决策 5/9 的资源核算——若显著超出预期
-  （如内存占用远高于 100-200MB 量级），重新评估是否需要调低采集频率或裁剪采集范围
-- [ ] 8.5 在一次真实的周报导入期间观察监控面板，确认能看到 CPU/内存/磁盘 I/O 的峰值，
-  作为「迁移后资源争抢风险」的实际验证依据（呼应设计文档风险章节）
+- [x] 8.1 `docker-compose.yml` 新增 `netdata` 服务，只读挂载 Docker socket 与
+  `/proc`/`/sys`/`/etc/os-release`，只绑 `127.0.0.1:19999`
+- [x] 8.2 `docker/postgres-initdb/01_netdata_monitor_role.sh`：容器首次初始化时建
+  `netdata` 角色并 `GRANT pg_monitor`；`docker/netdata/go.d/postgres.conf` 提供采集
+  配置。**已实测验证**：Netdata 的 PostgreSQL 采集任务实际连上、成功采集（API 返回
+  67 个 `postgres_*` 图表），不是只装了角色没验证能不能用
+- [x] 8.3 `docker-compose.yml` 里 `db`/`netdata` 均只绑 `127.0.0.1`；
+  `etc/keywordiq-nginx.conf` 追加注释掉的 Basic Auth 反代示例作为 SSH 隧道之外的另一
+  个可选路径
+- [x] 8.4 实测 Netdata 自身资源占用：本地 Docker Desktop（Apple Silicon）快照约
+  136 MB 内存、瞬时 CPU 6.76%（周期性采集，非持续），落在设计文档预估的 100-200MB
+  区间内。**这是本地开发机的数字，不等于生产 x86 ECS 的实际值**——生产部署后应该
+  用 `docker stats` 重新量一次，不要直接拿这个数字当生产依据
+- [ ] 8.5 **未执行**——需要真实的生产周报导入周期与部署环境，本会话不具备
 
-## 9. Celery 结论记录（不实现，仅收尾）
+## 9. Celery 结论记录
 
-- [ ] 9.1 确认 design.md 的"不引入 Celery"结论已同步进 issue #83 的验收清单，避免
-  之后有人误以为这次顺带做了独立站抓取并发改造
-- [ ] 9.2 在 issue #81 下留言/更新，说明本变更对其结论的再次核对与最终决定（不引入），
-  避免重复评估
+- [ ] 9.1 **未执行**——issue #83 目前没有可勾选的"验收清单"结构，建议在 PR 描述里
+  引用 design.md 决策 7 的结论作为对该验收项的回应，而不是去改 issue 正文
+- [x] 9.2 已在 issue #81 下留言，说明本变更对其"不建议引入 Celery"结论的重新核对与
+  维持原结论（Docker 化削弱了运维成本这条理由，但根因是代码写法、且单机没有跨机分布式
+  前提这两条依然成立）
