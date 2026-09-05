@@ -32,6 +32,8 @@ uv add --dev <package>    # dev-only
 ./deploy.sh                            # Full release: uv sync → migrate → build SPA → publish → reload nginx
 ./deploy.sh --skip-migrate             # Frontend-only release
 ./start.sh                             # Start backend directly (4 uvicorn workers)
+                                       # 生产常态由 systemd 托管（etc/keywordiq.service），
+                                       # start.sh 是 unit 的 ExecStart；手动跑它只是开发/应急
 tail -f logs/app.log | grep -i import  # Monitor import logs
 
 # Database operations
