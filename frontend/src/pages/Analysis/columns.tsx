@@ -1,4 +1,4 @@
-import { FacebookOutlined, GoogleOutlined } from '@ant-design/icons';
+import { FacebookOutlined, GoogleOutlined, TikTokOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
@@ -8,6 +8,7 @@ import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
 import { facebookAdLibraryUrl } from './facebookAdLibraryUrl';
 import { googleTrendsUrl } from './googleTrendsUrl';
+import { tiktokAdLibraryUrl } from './tiktokAdLibraryUrl';
 import TopProductCards from './TopProductCards';
 
 /**
@@ -27,7 +28,7 @@ import TopProductCards from './TopProductCards';
  *
  * 类目同样按名次下发（`top1~3_category`），已作为独立一列展示，位置在品牌之前。
  *
- * **「操作」是恒定的最末列**（issue #78 V0：Google 搜索趋势 + Meta 广告库外链），
+ * **「操作」是恒定的最末列**（issue #78 V0：Google 搜索趋势 + Meta/TikTok 广告库外链），
  * 品牌不再是最后一列。
  * 这条置换是刻意的：操作类的列（跳转、后续可能追加的行内按钮）习惯上靠右收尾，新增
  * 操作项时只在这一列内追加，不会像数据列那样牵动"往哪插入不挤走谁"的顺序讨论。
@@ -274,11 +275,18 @@ export function buildColumns(
       width: 130,
       render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
     },
-    // 「操作」是恒定的最末列（issue #78 V0：Google 搜索趋势；同批加入 Meta 广告库）。
-    // 两项都是**直接新标签页跳转的外链**，不做抽屉/弹窗——那是这一屏在与用户对齐后砍掉的
-    // 方案（内嵌趋势图受 X-Frame-Options 限制做不到，摘要抽屉又多一次点击换不来实质信息，
-    // 不如直接跳转）。两条链接同一套降级原则：站点码拿不到时不渲染对应入口，宁可空着，
-    // 也不给一个打不开或打到错误地区的链接——因此两项各自独立判空，不共用一次判定。
+    // 「操作」是恒定的最末列（issue #78 V0：Google 搜索趋势 + Meta 广告库 + TikTok
+    // 广告库）。三项都是**直接新标签页跳转的外链**，不做抽屉/弹窗——那是这一屏在与用户
+    // 对齐后砍掉的方案（内嵌趋势图受 X-Frame-Options 限制做不到，摘要抽屉又多一次点击
+    // 换不来实质信息，不如直接跳转）。三条链接同一套降级原则：站点码拿不到/不在覆盖范围
+    // 时不渲染对应入口，宁可空着，也不给一个打不开或打到错误地区的链接——因此三项各自
+    // 独立判空，不共用一次判定。
+    //
+    // **TikTok 那一项与另外两项体验不同，必须诚实标注**：实测 TikTok 广告库的搜索结果
+    // 不支持深链接——URL 能把国家/关键词/日期都预填好，但落地页不会自动查询，显示
+    // "0 条"，要用户自己在页面上再点一次 Search 才会出真实结果（详见
+    // tiktokAdLibraryUrl.ts）。图标 title 里点破这一点，避免用户把"还没点搜索"
+    // 误读成"这个词确实没有广告在投"。
     {
       title: '操作',
       dataIndex: 'operations',
@@ -286,8 +294,9 @@ export function buildColumns(
       render: (_, r) => {
         const trendsUrl = googleTrendsUrl(r.keyword, siteCode);
         const adLibraryUrl = facebookAdLibraryUrl(r.keyword, siteCode);
-        if (!trendsUrl && !adLibraryUrl) return PLACEHOLDER;
-        // 上下排列：这一列窄，横向摆两个图标会挤压相邻列；纵向堆叠不占额外横向空间。
+        const tiktokUrl = tiktokAdLibraryUrl(r.keyword, siteCode);
+        if (!trendsUrl && !adLibraryUrl && !tiktokUrl) return PLACEHOLDER;
+        // 上下排列：这一列窄，横向摆图标会挤压相邻列；纵向堆叠不占额外横向空间。
         return (
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             {trendsUrl && (
@@ -310,6 +319,17 @@ export function buildColumns(
                 aria-label="查看 Meta 广告库"
               >
                 <FacebookOutlined />
+              </a>
+            )}
+            {tiktokUrl && (
+              <a
+                href={tiktokUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在 TikTok 广告库中查看该词的竞品投放证据（打开后需要再点一次页面上的 Search 才会出结果）"
+                aria-label="查看 TikTok 广告库"
+              >
+                <TikTokOutlined />
               </a>
             )}
           </span>

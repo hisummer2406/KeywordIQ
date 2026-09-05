@@ -68,7 +68,7 @@ describe('buildColumns', () => {
     expect(container.textContent).toBe('power bank');
   });
 
-  it('操作列渲染 Google 搜索趋势 + Meta 广告库两条直达链接，新标签页打开（issue #78 V0，不做抽屉）', () => {
+  it('操作列在 US 只渲染 Google 趋势 + Meta 广告库两条（TikTok 广告库不覆盖美国）', () => {
     const col = buildColumns('DAY', 'amazon.com', 'US').find((c) => c.title === '操作')!;
     const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
     const links = [...container.querySelectorAll('a')];
@@ -82,6 +82,7 @@ describe('buildColumns', () => {
     expect(adLibrary.getAttribute('href')).toBe(
       'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=power+bank&search_type=keyword_unordered',
     );
+    expect(links.some((a) => a.getAttribute('href')?.includes('library.tiktok.com'))).toBe(false);
     for (const a of links) {
       expect(a.getAttribute('target')).toBe('_blank');
       expect(a.getAttribute('rel')).toContain('noopener');
@@ -90,7 +91,20 @@ describe('buildColumns', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 
-  it('操作列拿不到站点码时两条入口都不渲染', () => {
+  it('操作列在 GB 渲染三条入口，TikTok 那一条的 title 诚实标注需要再点一次 Search', () => {
+    const col = buildColumns('DAY', 'amazon.co.uk', 'GB').find((c) => c.title === '操作')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    const links = [...container.querySelectorAll('a')];
+    expect(links).toHaveLength(3);
+
+    const tiktok = links.find((a) => a.getAttribute('href')?.includes('library.tiktok.com'))!;
+    expect(tiktok.getAttribute('href')).toContain('region=GB');
+    expect(tiktok.getAttribute('href')).toContain('adv_name=power+bank');
+    // 深链接不自动查询这件事必须点破，不能让用户以为跳转就等于看到了结果
+    expect(tiktok.getAttribute('title')).toContain('再点一次页面上的 Search');
+  });
+
+  it('操作列拿不到站点码时三条入口都不渲染', () => {
     const col = buildColumns('DAY', 'amazon.com').find((c) => c.title === '操作')!;
     const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
     expect(container.querySelector('a')).toBeNull();
