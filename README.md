@@ -71,15 +71,17 @@ pnpm dev                    # 默认 http://localhost:8000，/api 反代到后�
 
 ### 生产部署
 
-部署形态是**宿主机 nginx + uvicorn**（不使用容器）：nginx 托管前端 SPA 产物并反代 `/api`
-到本机 uvicorn（4 workers）。
+部署形态是 **Docker Compose（应用 + 自建 PostgreSQL + Netdata）+ host nginx**：
+nginx 托管前端 SPA 产物并反代 `/api` 到应用容器（`127.0.0.1:8000`），数据库与监控都是
+容器、不对公网暴露端口。详见 `openspec/changes/dockerize-selfhosted-infra/design.md`。
 
 ```bash
 # 首次部署
 git clone <project-repo> && cd KeywordIQ
-uv sync
-cp .env.example .env        # 填写生产配置：数据库、ADMIN_SECRET_KEY、OSS_*、ENABLED_SITES 等
-uv run alembic upgrade head
+cp .env.example .env        # 填写生产配置：POSTGRES_*/PG_*、ADMIN_SECRET_KEY、OSS_*、ENABLED_SITES 等
+docker compose build app
+docker compose up -d db
+docker compose run --rm app alembic upgrade head   # db 不对宿主机暴露端口，迁移必须在容器内跑
 cd frontend && pnpm install && pnpm build && cd ..
 rsync -a --delete frontend/dist/ /var/www/keywordiq/
 
@@ -87,11 +89,12 @@ sudo cp etc/keywordiq-nginx.conf /etc/nginx/sites-available/keywordiq
 sudo ln -sf /etc/nginx/sites-available/keywordiq /etc/nginx/sites-enabled/keywordiq
 sudo nginx -t && sudo systemctl reload nginx
 
-uv run python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次登录后请修改
-./start.sh
+docker compose run --rm app python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次登录后请修改
+docker compose up -d   # 拉起应用容器（restart: unless-stopped，崩溃/宿主机重启由 Docker 自动拉起，不需要额外的 systemd unit）
 ```
 
-后续发布用 `./deploy.sh`（`uv sync` → 迁移 → 构建前端 → 发布产物 → reload nginx）：
+后续发布用 `./deploy.sh`（构建镜像 → 容器内迁移 → 构建前端 → 发布产物 → reload nginx →
+切换容器到新镜像）：
 
 ```bash
 ./deploy.sh                  # 全量发布
@@ -99,8 +102,13 @@ uv run python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次�
 ./deploy.sh --yes            # 不交互确认迁移（无人值守）
 ```
 
-> **后端重启**：仓库暂未提供 systemd unit。`deploy.sh` 检测到 `${SERVICE_NAME}.service`
-> 才会重启后端，否则跳过并提示手动重启（停掉旧 uvicorn 后跑 `./start.sh`）。
+> **备份**：自建 PostgreSQL 没有阿里云 RDS 那样的自动备份，用
+> `scripts/backup_selfhosted_pg.py` 挂 cron 定时执行，产物存到 OSS（脚本文档里同时给了
+> 验证过的恢复命令）。
+>
+> **已知边界**：进程在导入中途被杀（崩溃/OOM/发布重启）时，该批次记录会停留在
+> `PROCESSING`（回收逻辑只覆盖 `UPLOADING`/`QUEUED`）。数据无损——事实写入在单事务里
+> 回滚、OSS 对象仍在，重新上传同一期即可恢复；受影响的只是历史屏里那一行状态。
 
 ---
 

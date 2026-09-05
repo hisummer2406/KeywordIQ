@@ -28,20 +28,22 @@ const routes: Route[] = configuredRoutes;
 const topLevel = routes.filter((r) => r.name && !r.hideInMenu && r.layout !== false);
 
 describe('顶栏一级菜单', () => {
-  it('六项，顺序固定：机会中心排最前，其余按既有相对顺序，喂数据/管数据的在最后', () => {
+  it('八项四字，顺序固定：机会中心排最前，其余按既有相对顺序，喂数据/管数据的在最后', () => {
     expect(topLevel.map((r) => r.name)).toEqual([
       '机会中心',
-      '关键词市场分析',
-      '关键词工具',
+      '市场分析',
+      '词库工具',
       '竞对监控',
+      '产品档案',
       '风险核查',
+      '定价核算',
       '数据管理',
     ]);
   });
 
-  it('关键词市场分析、竞对监控与机会中心是单页顶层，没有子项', () => {
+  it('市场分析、竞对监控与机会中心是单页顶层，没有子项', () => {
     // 有子项就长出左侧栏，见本文件头部注释与 design.md 决策 2
-    for (const name of ['机会中心', '关键词市场分析', '竞对监控']) {
+    for (const name of ['机会中心', '市场分析', '竞对监控', '产品档案', '定价核算']) {
       const node = topLevel.find((r) => r.name === name)!;
       expect(node.routes).toBeUndefined();
     }
@@ -54,7 +56,7 @@ describe('顶栏一级菜单', () => {
         .map((r) => [r.path, r.routes!.find((c) => c.redirect)?.redirect]),
     ).toEqual([
       ['/keyword', '/keyword/growth'],
-      ['/ip', '/ip/patent'],
+      ['/ip', '/ip/review'],
       ['/upload', '/upload/file'],
     ]);
   });
@@ -66,8 +68,8 @@ describe('权限', () => {
     expect(node.access).toBe('canViewOpportunity');
   });
 
-  it('关键词工具挂 canViewKeyword，两个子屏继承父级不再各挂一个', () => {
-    const node = topLevel.find((r) => r.name === '关键词工具')!;
+  it('词库工具挂 canViewKeyword，两个子屏继承父级不再各挂一个', () => {
+    const node = topLevel.find((r) => r.name === '词库工具')!;
     expect(node.access).toBe('canViewKeyword');
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });

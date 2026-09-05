@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { listGroups, getLibraryScope, watchGroup, createGroup, renameGroup, deleteGroup, removeItems, getSites } =
@@ -94,10 +94,17 @@ describe('进屏即查', () => {
   it('分组管理区列出分组，带站点与词数', async () => {
     // 这一屏没有站点选择器，站点只能从分组上读到——漏掉站点，用户就无从判断
     // 表格里的排名属于哪个市场。
+    //
+    // 分组名/站点/词数在页面上出现不止一处（下面「站点由分组决定」那条说明文字
+    // 同样会带出这几个值），plain getByText 在全页范围内会因此撞成多个匹配；
+    // 这里直接定位分组管理区自己的芯片（.ant-radio-button-label），只在这一个
+    // 元素范围内断言，与它是否在别处重复出现无关。
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
-    expect(screen.getByText('US')).toBeTruthy();
-    expect(screen.getByText('3')).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('.ant-radio-button-label')).toBeTruthy());
+    const chip = document.querySelector('.ant-radio-button-label') as HTMLElement;
+    expect(within(chip).getByText('US')).toBeTruthy();
+    expect(chip.textContent).toContain('主推词');
+    expect(chip.textContent).toContain('3');
   });
 
   it('站点由分组决定，界面写明这一点', async () => {
@@ -203,9 +210,13 @@ describe('横向宽度', () => {
     // 侧栏形态下盯盘表格有近 400px 被裁进横向滚动（1920 视口实测）。分组一览有价值，
     // 但代价必须落在纵向：纵向可以滚，横向被裁掉的列是找不回来的。
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
+    // 同上一个用例：分组名在页面上不止一处，定位分组管理区自己的芯片而非用
+    // 文本匹配，避免撞上「站点由分组决定」那条说明文字里的同一个分组名。
+    await waitFor(() => expect(document.querySelector('.ant-radio-button-label')).toBeTruthy());
 
-    const bar = screen.getByText('主推词').closest('.ant-card') as HTMLElement;
+    const bar = (document.querySelector('.ant-radio-button-label') as HTMLElement).closest(
+      '.ant-card',
+    ) as HTMLElement;
     const table = document.querySelector('.ant-table') as HTMLElement;
     // 管理区与表格是上下两块（同一个父容器里的兄弟节点），不是左右分栏
     expect(bar.contains(table)).toBe(false);
