@@ -167,16 +167,22 @@ class Settings(BaseSettings):
     #
     #     (同步池 + 同步溢出) × workers + (异步池 + 异步溢出) × workers
     #
-    # start.sh 固定 4 个 worker。两个引擎服务的负载性质完全不同，因此**分开配置**——
-    # 早先共用一组取值，使算式被系统性低估一半（文档长期写着 (池+溢出)×workers）。
+    # start.sh / Dockerfile 固定 4 个 worker。两个引擎服务的负载性质完全不同，因此
+    # **分开配置**——早先共用一组取值，使算式被系统性低估一半（文档长期写着
+    # (池+溢出)×workers）。
+    #
+    # 自 dockerize-selfhosted-infra 变更起，PostgreSQL 与应用同机部署（同一组
+    # 4 vCPU/8 GiB），取值直接采用此前记录的目标值而非"数据库在独立 RDS"时期的
+    # 20/10——PostgreSQL 进程本身现在也要在这组核心上跑，池子越大只会把
+    # "快速可见的失败（pool_timeout）"换成"整体缓慢劣化"。
     #
     # 同步引擎：导入的 COPY（psycopg2 原始游标，asyncpg 无等价接口）、导出的服务端
     # 游标、Alembic 迁移。都是低并发长事务。
-    DB_POOL_SIZE: int = 20  # 连接池大小
-    DB_MAX_OVERFLOW: int = 10  # 最大溢出连接
+    DB_POOL_SIZE: int = 2  # 连接池大小
+    DB_MAX_OVERFLOW: int = 3  # 最大溢出连接
     # 异步引擎：面向请求的查询与鉴权路径。
-    DB_ASYNC_POOL_SIZE: int = 20
-    DB_ASYNC_MAX_OVERFLOW: int = 10
+    DB_ASYNC_POOL_SIZE: int = 8
+    DB_ASYNC_MAX_OVERFLOW: int = 8
     # 超时与回收两个引擎共用——它们与负载性质无关，只与网络和 RDS 空闲策略有关。
     DB_POOL_TIMEOUT: int = 30  # 连接超时时间（秒）
     DB_POOL_RECYCLE: int = 1800  # 连接回收时间
