@@ -22,14 +22,16 @@ Docker 编排管理（取代裸 `start.sh` + systemd）。详见 issue #83。
   成立，给出明确的引入/不引入决定（**不预设结论**）
 - **BREAKING**：现有 `etc/keywordiq.service`（systemd unit）与 `deploy.sh`/`start.sh`
   的部署路径被本变更取代，需要明确废弃或降级为非容器环境的 fallback
+- 新增可视化监控：单容器 Netdata，自动发现 Docker 容器、自建 PostgreSQL、宿主机系统
+  指标，补上 RDS 控制台监控图表消失后的观测缺口
 
 ## Capabilities
 
 ### New Capabilities
 - `containerized-deployment`：应用与自建 PostgreSQL 的容器化部署与运维形态——容器编排
   拆分、镜像构建、自建 PG 的初始化与备份、数据从阿里云 RDS 的迁移路径、同机资源共享下
-  的连接池与线程池核算。是否引入 Celery/Redis 的评估结论与（若引入）其容器化编排方式
-  也在此能力范围内。
+  的连接池与线程池核算、部署本身的可视化监控（Netdata）。是否引入 Celery/Redis 的评估
+  结论与（若引入）其容器化编排方式也在此能力范围内。
 
 ### Modified Capabilities
 （无。本变更不改动任何既有 API 契约或查询/导入的业务逻辑，只改变其运行时部署与资源
@@ -45,7 +47,7 @@ Docker 编排管理（取代裸 `start.sh` + systemd）。详见 issue #83。
 - 受影响文件：`deploy.sh`、`start.sh`、`etc/keywordiq.service`、`.env.example`
   （`DATABASE_URL`/`DATABASE_URL_ASYNC`/`DB_*` 系列）、CLAUDE.md 的
   「Production Environment」「Key Configuration」两节
-- 依赖变化：新增 Docker/Docker Compose 作为部署依赖；若引入 Celery，新增 `celery`、
-  `redis` 客户端库与 Redis 服务
+- 依赖变化：新增 Docker/Docker Compose 作为部署依赖；新增 Netdata 容器作为监控依赖；
+  若引入 Celery，新增 `celery`、`redis` 客户端库与 Redis 服务
 - 不影响：阿里云 OSS 直传导入路径（`OSS_*` 配置与 STS 凭证流程不变）、前端、
   RBAC/鉴权、V2 数据模型与查询层
