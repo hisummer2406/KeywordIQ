@@ -1,3 +1,4 @@
+import { GoogleOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
@@ -5,7 +6,7 @@ import TrendSparkline from '@/components/TrendSparkline';
 import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
-import GoogleTrendsButton from './GoogleTrendsButton';
+import { googleTrendsUrl } from './googleTrendsUrl';
 import TopProductCards from './TopProductCards';
 
 /**
@@ -24,6 +25,10 @@ import TopProductCards from './TopProductCards';
  * 也就必须跟着分开——挂回卡牌里等于把那个配对重新宣称一遍。
  *
  * 类目同样按名次下发（`top1~3_category`），已作为独立一列展示，位置在品牌之前。
+ *
+ * **「操作」是恒定的最末列**（issue #78 V0：Google 搜索趋势入口），品牌不再是最后一列。
+ * 这条置换是刻意的：操作类的列（跳转、后续可能追加的行内按钮）习惯上靠右收尾，新增
+ * 操作项时只在这一列内追加，不会像数据列那样牵动"往哪插入不挤走谁"的顺序讨论。
  */
 
 /** 排名变化：数值变小 = 名次上升。0 与空各有各的呈现，不要混。 */
@@ -145,7 +150,8 @@ export function buildColumns(
       // 拿不到域名（站点列表未加载完）时降级为纯文本，不给一个会跳错的链接。
       render: (_, r) => {
         const url = amazonSearchUrl(r.keyword, siteDomain);
-        const label = url ? (
+        if (!url) return r.keyword;
+        return (
           <a
             href={url}
             target="_blank"
@@ -156,16 +162,6 @@ export function buildColumns(
           >
             {r.keyword}
           </a>
-        ) : (
-          <span style={{ wordBreak: 'break-word' }}>{r.keyword}</span>
-        );
-        // Google 搜索趋势入口（issue #78 V0）与亚马逊搜索链接同挂在关键词单元格里，
-        // 不再单独占一列——两者都是"点这个词还能去哪看"，属于同一类操作。
-        return (
-          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 2, flexWrap: 'wrap' }}>
-            {label}
-            <GoogleTrendsButton keyword={r.keyword} siteCode={siteCode} />
-          </span>
         );
       },
     },
@@ -255,9 +251,9 @@ export function buildColumns(
     // 试过三种分法（卡牌列独吞 / 关键词独吞 / 两列平分），洞只是换位置，没有消失。
     // 全部定宽后，多余宽度由浏览器按比例微调摊给每一列，不再堆在任何一处。
     //
-    // **位置必须在品牌之前。** 品牌列被要求恒在最末（见 analysis-screen-layout），而那条
-    // 要求的理由正是"后来者在末尾追加新列就会把它挤走，且没有检查会报错"——本列就是它
-    // 预言的那个新列。columns.test.tsx 的 `titles.at(-1)` 会拦住放错位置。
+    // **位置必须在品牌之前。**（历史上品牌曾被要求恒在最末，见 analysis-screen-layout；
+    // issue #78 引入「操作」列后，恒在最末的换成了操作列，品牌退到倒数第二——但类目仍需
+    // 排在品牌之前，这条相对顺序没有变。）columns.test.tsx 会拦住放错位置。
     {
       title: '点击前三类目',
       dataIndex: 'top1_category',
@@ -268,12 +264,38 @@ export function buildColumns(
         <RankedList values={[r.top1_category, r.top2_category, r.top3_category]} rows={1} />
       ),
     },
-    // 品牌放在最末列：它是辅助信息，读表时先看排名与商品，品牌是回头才需要的那一眼。
+    // 品牌是辅助信息，读表时先看排名与商品，品牌是回头才需要的那一眼——但它不再是最末列，
+    // 「操作」列排在它后面（见文件头注释）。
     {
       title: '点击前三品牌',
       dataIndex: 'top1_brand',
       width: 130,
       render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
+    },
+    // 「操作」是恒定的最末列（issue #78 V0）。当前只有一项：Google 搜索趋势，直接新标签页
+    // 跳转，**不做抽屉/弹窗**——那是这一屏在与用户对齐后砍掉的方案（内嵌趋势图受
+    // X-Frame-Options 限制做不到，摘要抽屉又多一次点击换不来实质信息，不如直接跳转）。
+    // 站点码拿不到时不渲染入口，原则同关键词单元格的域名降级：宁可空着，也不给一个打不开
+    // 或打到错误地区的链接。
+    {
+      title: '操作',
+      dataIndex: 'operations',
+      width: 64,
+      render: (_, r) => {
+        const url = googleTrendsUrl(r.keyword, siteCode);
+        if (!url) return PLACEHOLDER;
+        return (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="在 Google Trends 中查看该词的站外搜索热度"
+            aria-label="查看 Google 搜索趋势"
+          >
+            <GoogleOutlined />
+          </a>
+        );
+      },
     },
   ]);
 }

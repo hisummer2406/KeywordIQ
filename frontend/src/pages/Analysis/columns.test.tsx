@@ -39,12 +39,14 @@ describe('buildColumns', () => {
     expect(titles.indexOf('点击前三类目')).toBeLessThan(titles.indexOf('点击前三品牌'));
   });
 
-  it('品牌是最后一列', () => {
+  it('操作是最后一列，品牌退居倒数第二（issue #78 引入操作列后的顺序）', () => {
     const titles = buildColumns('DAY').map((c) => c.title);
     expect(titles).toContain('点击前三品牌');
-    // 钉住位置而不只是存在性——列序是刻意的（品牌是回头才看的辅助信息），
-    // 只断言"包含"的话，以后有人在末尾加一列就会无声地把它挤走
-    expect(titles.at(-1)).toBe('点击前三品牌');
+    expect(titles).toContain('操作');
+    // 钉住位置而不只是存在性——列序是刻意的，只断言"包含"的话，
+    // 以后有人在末尾加一列就会无声地把它挤走
+    expect(titles.at(-1)).toBe('操作');
+    expect(titles.at(-2)).toBe('点击前三品牌');
   });
 
   it('关键词渲染成指向该站点亚马逊的链接，新标签页打开', () => {
@@ -66,18 +68,24 @@ describe('buildColumns', () => {
     expect(container.textContent).toBe('power bank');
   });
 
-  it('关键词单元格带 Google 搜索趋势入口（issue #78 V0），站点码缺失时不渲染', () => {
-    const withSite = buildColumns('DAY', 'amazon.com', 'US').find((c) => c.title === '关键词')!;
-    const { container: withContainer } = render(
-      <>{(withSite as any).render(null, { keyword: 'power bank' })}</>,
-    );
-    expect(withContainer.querySelector('button')).not.toBeNull();
+  it('操作列渲染 Google 搜索趋势直达链接，新标签页打开（issue #78 V0，不做抽屉）', () => {
+    const col = buildColumns('DAY', 'amazon.com', 'US').find((c) => c.title === '操作')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    const a = container.querySelector('a')!;
 
-    const withoutSite = buildColumns('DAY', 'amazon.com').find((c) => c.title === '关键词')!;
-    const { container: withoutContainer } = render(
-      <>{(withoutSite as any).render(null, { keyword: 'power bank' })}</>,
+    expect(a.getAttribute('href')).toBe(
+      'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=today+12-m',
     );
-    expect(withoutContainer.querySelector('button')).toBeNull();
+    expect(a.getAttribute('target')).toBe('_blank');
+    expect(a.getAttribute('rel')).toContain('noopener');
+    // 不弹抽屉、不带按钮/弹层——点击即直接跳转
+    expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('操作列拿不到站点码时不渲染入口', () => {
+    const col = buildColumns('DAY', 'amazon.com').find((c) => c.title === '操作')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    expect(container.querySelector('a')).toBeNull();
   });
 });
 
@@ -273,7 +281,7 @@ describe('表头一律居中；内容按列宽是否随行变化决定对齐', (
 
   it('内容宽度固定的列居中', () => {
     const cols = buildColumns('DAY');
-    for (const title of ['排名', '搜索趋势', '排名变化', '排名变化率', '点击前三 ASIN']) {
+    for (const title of ['排名', '搜索趋势', '排名变化', '排名变化率', '点击前三 ASIN', '操作']) {
       expect(cols.find((c) => c.title === title)!.align).toBe('center');
     }
   });
