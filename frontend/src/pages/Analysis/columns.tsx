@@ -5,6 +5,7 @@ import TrendSparkline from '@/components/TrendSparkline';
 import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
+import GoogleTrendsButton from './GoogleTrendsButton';
 import TopProductCards from './TopProductCards';
 
 /**
@@ -117,7 +118,11 @@ function alignColumns(columns: ProColumns<AnalysisRow>[]): ProColumns<AnalysisRo
   }));
 }
 
-export function buildColumns(view: View, siteDomain?: string): ProColumns<AnalysisRow>[] {
+export function buildColumns(
+  view: View,
+  siteDomain?: string,
+  siteCode?: string,
+): ProColumns<AnalysisRow>[] {
   return alignColumns([
     {
       title: '排名',
@@ -140,8 +145,7 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
       // 拿不到域名（站点列表未加载完）时降级为纯文本，不给一个会跳错的链接。
       render: (_, r) => {
         const url = amazonSearchUrl(r.keyword, siteDomain);
-        if (!url) return r.keyword;
-        return (
+        const label = url ? (
           <a
             href={url}
             target="_blank"
@@ -152,6 +156,16 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
           >
             {r.keyword}
           </a>
+        ) : (
+          <span style={{ wordBreak: 'break-word' }}>{r.keyword}</span>
+        );
+        // Google 搜索趋势入口（issue #78 V0）与亚马逊搜索链接同挂在关键词单元格里，
+        // 不再单独占一列——两者都是"点这个词还能去哪看"，属于同一类操作。
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 2, flexWrap: 'wrap' }}>
+            {label}
+            <GoogleTrendsButton keyword={r.keyword} siteCode={siteCode} />
+          </span>
         );
       },
     },

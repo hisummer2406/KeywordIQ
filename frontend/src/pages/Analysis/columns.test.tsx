@@ -65,6 +65,20 @@ describe('buildColumns', () => {
     expect(container.querySelector('a')).toBeNull();
     expect(container.textContent).toBe('power bank');
   });
+
+  it('关键词单元格带 Google 搜索趋势入口（issue #78 V0），站点码缺失时不渲染', () => {
+    const withSite = buildColumns('DAY', 'amazon.com', 'US').find((c) => c.title === '关键词')!;
+    const { container: withContainer } = render(
+      <>{(withSite as any).render(null, { keyword: 'power bank' })}</>,
+    );
+    expect(withContainer.querySelector('button')).not.toBeNull();
+
+    const withoutSite = buildColumns('DAY', 'amazon.com').find((c) => c.title === '关键词')!;
+    const { container: withoutContainer } = render(
+      <>{(withoutSite as any).render(null, { keyword: 'power bank' })}</>,
+    );
+    expect(withoutContainer.querySelector('button')).toBeNull();
+  });
 });
 
 // --------------------------------------------------------------------------
