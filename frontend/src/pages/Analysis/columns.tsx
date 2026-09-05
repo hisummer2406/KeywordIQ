@@ -1,4 +1,4 @@
-import { GoogleOutlined } from '@ant-design/icons';
+import { FacebookOutlined, GoogleOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
@@ -6,6 +6,7 @@ import TrendSparkline from '@/components/TrendSparkline';
 import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
+import { facebookAdLibraryUrl } from './facebookAdLibraryUrl';
 import { googleTrendsUrl } from './googleTrendsUrl';
 import TopProductCards from './TopProductCards';
 
@@ -26,7 +27,8 @@ import TopProductCards from './TopProductCards';
  *
  * 类目同样按名次下发（`top1~3_category`），已作为独立一列展示，位置在品牌之前。
  *
- * **「操作」是恒定的最末列**（issue #78 V0：Google 搜索趋势入口），品牌不再是最后一列。
+ * **「操作」是恒定的最末列**（issue #78 V0：Google 搜索趋势 + Meta 广告库外链），
+ * 品牌不再是最后一列。
  * 这条置换是刻意的：操作类的列（跳转、后续可能追加的行内按钮）习惯上靠右收尾，新增
  * 操作项时只在这一列内追加，不会像数据列那样牵动"往哪插入不挤走谁"的顺序讨论。
  */
@@ -272,28 +274,45 @@ export function buildColumns(
       width: 130,
       render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
     },
-    // 「操作」是恒定的最末列（issue #78 V0）。当前只有一项：Google 搜索趋势，直接新标签页
-    // 跳转，**不做抽屉/弹窗**——那是这一屏在与用户对齐后砍掉的方案（内嵌趋势图受
-    // X-Frame-Options 限制做不到，摘要抽屉又多一次点击换不来实质信息，不如直接跳转）。
-    // 站点码拿不到时不渲染入口，原则同关键词单元格的域名降级：宁可空着，也不给一个打不开
-    // 或打到错误地区的链接。
+    // 「操作」是恒定的最末列（issue #78 V0：Google 搜索趋势；同批加入 Meta 广告库）。
+    // 两项都是**直接新标签页跳转的外链**，不做抽屉/弹窗——那是这一屏在与用户对齐后砍掉的
+    // 方案（内嵌趋势图受 X-Frame-Options 限制做不到，摘要抽屉又多一次点击换不来实质信息，
+    // 不如直接跳转）。两条链接同一套降级原则：站点码拿不到时不渲染对应入口，宁可空着，
+    // 也不给一个打不开或打到错误地区的链接——因此两项各自独立判空，不共用一次判定。
     {
       title: '操作',
       dataIndex: 'operations',
-      width: 64,
+      width: 48,
       render: (_, r) => {
-        const url = googleTrendsUrl(r.keyword, siteCode);
-        if (!url) return PLACEHOLDER;
+        const trendsUrl = googleTrendsUrl(r.keyword, siteCode);
+        const adLibraryUrl = facebookAdLibraryUrl(r.keyword, siteCode);
+        if (!trendsUrl && !adLibraryUrl) return PLACEHOLDER;
+        // 上下排列：这一列窄，横向摆两个图标会挤压相邻列；纵向堆叠不占额外横向空间。
         return (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="在 Google Trends 中查看该词的站外搜索热度"
-            aria-label="查看 Google 搜索趋势"
-          >
-            <GoogleOutlined />
-          </a>
+          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            {trendsUrl && (
+              <a
+                href={trendsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在 Google Trends 中查看该词的站外搜索热度"
+                aria-label="查看 Google 搜索趋势"
+              >
+                <GoogleOutlined />
+              </a>
+            )}
+            {adLibraryUrl && (
+              <a
+                href={adLibraryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在 Meta 广告库中查看该词的竞品投放证据"
+                aria-label="查看 Meta 广告库"
+              >
+                <FacebookOutlined />
+              </a>
+            )}
+          </span>
         );
       },
     },
