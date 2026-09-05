@@ -189,7 +189,7 @@ export default function KeywordLibraryPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="keyword_id"
-        columns={buildWatchColumns(view, siteDomain)}
+        columns={buildWatchColumns(view, siteDomain, active?.site)}
         search={false}
         options={false}
         dateFormatter="string"
