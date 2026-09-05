@@ -68,21 +68,29 @@ describe('buildColumns', () => {
     expect(container.textContent).toBe('power bank');
   });
 
-  it('操作列渲染 Google 搜索趋势直达链接，新标签页打开（issue #78 V0，不做抽屉）', () => {
+  it('操作列渲染 Google 搜索趋势 + Meta 广告库两条直达链接，新标签页打开（issue #78 V0，不做抽屉）', () => {
     const col = buildColumns('DAY', 'amazon.com', 'US').find((c) => c.title === '操作')!;
     const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
-    const a = container.querySelector('a')!;
+    const links = [...container.querySelectorAll('a')];
+    expect(links).toHaveLength(2);
 
-    expect(a.getAttribute('href')).toBe(
+    const trends = links.find((a) => a.getAttribute('href')?.includes('trends.google.com'))!;
+    expect(trends.getAttribute('href')).toBe(
       'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=today+12-m',
     );
-    expect(a.getAttribute('target')).toBe('_blank');
-    expect(a.getAttribute('rel')).toContain('noopener');
+    const adLibrary = links.find((a) => a.getAttribute('href')?.includes('facebook.com'))!;
+    expect(adLibrary.getAttribute('href')).toBe(
+      'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=power+bank&search_type=keyword_unordered',
+    );
+    for (const a of links) {
+      expect(a.getAttribute('target')).toBe('_blank');
+      expect(a.getAttribute('rel')).toContain('noopener');
+    }
     // 不弹抽屉、不带按钮/弹层——点击即直接跳转
     expect(container.querySelector('button')).toBeNull();
   });
 
-  it('操作列拿不到站点码时不渲染入口', () => {
+  it('操作列拿不到站点码时两条入口都不渲染', () => {
     const col = buildColumns('DAY', 'amazon.com').find((c) => c.title === '操作')!;
     const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
     expect(container.querySelector('a')).toBeNull();
