@@ -56,6 +56,19 @@
 - **THEN** 将 `DATABASE_URL`/`DATABASE_URL_ASYNC` 改回指向 RDS 并重启应用容器即可恢复
   服务，且此时 RDS 仍保持只读可用、未被释放
 
+### Requirement: 自建部署有可视化监控
+自建 Docker 部署 SHALL 提供可视化监控面板，覆盖宿主机系统指标、各容器（`app`/`db`）
+运行状态与自建 PostgreSQL 指标，作为阿里云 RDS 控制台监控图表消失后的等价替代。
+
+#### Scenario: 面板可见关键指标
+- **WHEN** 访问监控面板
+- **THEN** 能看到宿主机 CPU/内存/磁盘/网络、`app`/`db` 各容器的资源占用、以及自建
+  PostgreSQL 的连接数/查询等指标，且这些指标是自动采集的，不需要额外手工打点
+
+#### Scenario: 监控面板不对公网暴露
+- **WHEN** 从公网直接访问该 ECS 的公网 IP 与监控面板端口
+- **THEN** 无法访问到监控面板；面板只能通过内部网络、SSH 隧道或加了鉴权的反代路径访问
+
 ### Requirement: 自建 PostgreSQL 有可运行的备份
 自建 PostgreSQL SHALL 有自动化备份机制，备份产物存储在应用所在机器之外，作为 RDS 原有
 自动备份能力消失后的等价替代。
