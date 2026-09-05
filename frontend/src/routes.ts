@@ -33,7 +33,7 @@ export const routes = [
   {
     // 承接"确定性 Signal → 候选机会 → 验证推进 → 风险核查"这条主动式工作流的入口
     // （issue #76）。**不叫"AI Agent"或"聊天助手"**——那是技术实现，不是用户任务。
-    // 排最前是 issue 明确要求的：它是产品导航要演进去的方向，其余五项相对顺序不变。
+    // 排最前是 issue 明确要求的：它是产品导航要演进去的方向，既有菜单相对顺序不变。
     //
     // 单页顶层（无子项），六个状态（待处理信号/候选机会/验证中/风险待核查/已通过/
     // 已否决）用页内 Tab 承载，不拆成带独立路径的二级路由——理由与"分析屏不长侧栏"
@@ -57,7 +57,7 @@ export const routes = [
     //
     // 原名「ABA数据选品」，issue #76 改名「关键词市场分析」——路由、组件、权限点均不变，
     // 只是换了个不那么依赖内部数据源缩写的名字。
-    name: '关键词市场分析',
+    name: '市场分析',
     path: '/analysis',
     component: './Analysis',
     icon: 'BarChart',
@@ -67,14 +67,14 @@ export const routes = [
     // 两屏的共同点是**主题**（都是 ABA 关键词的透镜），不是「都不属于主线」。
     // 共用容器级权限点 keyword:view，不给两屏各开一个——词库管理的是用户自己的私有
     // 清单，「禁止某人管理自己的收藏夹」不是真实的授权需求。
-    name: '关键词工具',
+    name: '词库工具',
     path: '/keyword',
     icon: 'Appstore',
     access: 'canViewKeyword',
     routes: [
       { path: '/keyword', redirect: '/keyword/growth' },
       {
-        name: '持续增长市场',
+        name: '增长市场',
         path: '/keyword/growth',
         component: './Keyword/GrowthMarket',
         icon: 'RiseOutlined',
@@ -99,11 +99,18 @@ export const routes = [
     access: 'canViewCompetitor',
   },
   {
+    // 跨来源产品档案的独立入口；业务尚未接入，保持全宽。
+    name: '产品档案',
+    path: '/products',
+    component: './Products',
+    icon: 'ProfileOutlined',
+  },
+  {
     // 名字取**使用场景**（卖家嘴里说的是「查侵权」）而非数据域（「知识产权」）。
     // 原名「侵权查询」，issue #76 改名「风险核查」——为承接未来商标/专利之外的其他
-    // 风险信号（如竞对监控的合规风险）留出更宽的名字，路由与两个子屏都不变。
+    // 风险信号（如竞对监控的合规风险）留出更宽的名字，路由不变。
     //
-    // **仍然故意没有 access**，只要求已登录（外层 ProLayout 已保证）。两个子屏没有
+    // **仍然故意没有 access**，只要求已登录（外层 ProLayout 已保证）。四个子屏没有
     // 后端端点，罩着它们的权限点对它们不生效，就是「勾了也不生效」的复选框
     // （`user:manage` 正是这样被删掉的）。issue #76 的表格把"仅超管可见"列为一个可选项
     // （"可保持"），但本仓库已有的先例（本条注释与被删除的 `user:manage`）明确反对给
@@ -112,12 +119,13 @@ export const routes = [
     // 整齐而补一个。
     //
     // 进顶栏是自觉的取舍：产品最空的一块因此成了最显眼的一块，换来的是「这块在做」这个
-    // 路线图信号可见。两个屏自己把「数据源尚未接入」写在脸上，不发请求。
+    // 路线图信号可见。四个屏自己把「数据源尚未接入」写在脸上，不发请求。
     name: '风险核查',
     path: '/ip',
     icon: 'SafetyCertificate',
     routes: [
-      { path: '/ip', redirect: '/ip/patent' },
+      { path: '/ip', redirect: '/ip/review' },
+      { name: '审核待办', path: '/ip/review', component: './IP/Review' },
       {
         name: '外观专利',
         path: '/ip/patent',
@@ -125,12 +133,20 @@ export const routes = [
         icon: 'FileProtect',
       },
       {
-        name: '全球商标库',
+        name: '商标查询',
         path: '/ip/trademark',
         component: './IP/Trademark',
         icon: 'Trademark',
       },
+      { name: '风险案例', path: '/ip/cases', component: './IP/Cases' },
     ],
+  },
+  {
+    // 计算、记录和费用配置用页内 Tab，渠道比较保留全宽。
+    name: '定价核算',
+    path: '/pricing',
+    component: './Pricing',
+    icon: 'CalculatorOutlined',
   },
   // 旧「工具箱」地址不落空。只给有真实数据的两屏留重定向——没有人会去书签一个写着
   // 「数据源尚未接入」的屏，逐条保留只会让这份路由表越来越长。
@@ -145,7 +161,7 @@ export const routes = [
     // 原名「数据上传」，issue #76 改名「数据管理」——为将来接入 SP-API/第三方连接器
     // （届时不只是"上传文件"）预留语义空间，路由、组件、权限点都不变。
     //
-    // 排在最后一位是有意的：它是六个一级菜单里唯一「喂数据/管数据」的屏，前面五项都是
+    // 排在最后一位是有意的：它是八个一级菜单里唯一「喂数据/管数据」的屏，前面七项都是
     // 「看数据」，夹在中间会把同类的几块拆开。顶栏顺序会被读成主线先后，
     // 支持功能压在末尾即可——**不要**改成藏进头像下拉（那是 `用户管理` 的位置，
     // 判据是低频管理动作）：上传是日常操作，还带一个要盯的进度看板和二级菜单。
@@ -158,7 +174,7 @@ export const routes = [
     routes: [
       // 旧地址 /upload 仍可用，重定向到上传屏，不让既有书签落空
       { path: '/upload', redirect: '/upload/file' },
-      { name: '上传文件', path: '/upload/file', component: './Upload', icon: 'Upload' },
+      { name: '文件导入', path: '/upload/file', component: './Upload', icon: 'Upload' },
       { name: '导入历史', path: '/upload/history', component: './ImportHistory', icon: 'History' },
     ],
   },
