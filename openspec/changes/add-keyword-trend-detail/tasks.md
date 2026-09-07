@@ -98,5 +98,5 @@
   另修了本次新增的 `KeywordTrendDrawer/index.test.tsx` 因未 mock `@umijs/max` 依赖链
   触发的 esbuild 环境报错。最终 `pnpm lint`、`pnpm tsc`、`pnpm test`（43 个文件、
   413 条用例）全部通过，提交门禁放行
-- [ ] 5.3 提交、开 PR（`--base v2`），关联 issue #86，附 spec delta 文件列表、
+- [x] 5.3 提交、开 PR #87（`--base v2`），关联 issue #86，附 spec delta 文件列表、
   查询计划验证证据、已知未覆盖风险
