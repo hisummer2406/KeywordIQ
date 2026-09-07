@@ -115,6 +115,27 @@ class SimpleAuth:
         return _require
 
     @staticmethod
+    def require_any_permission(*permissions: str):
+        """RBAC 权限依赖工厂：持有 ``permissions`` 里任一权限点即放行。
+
+        给跨域共用、不携带任何域私有数据的只读端点用（如关键词排名趋势详情：市场分析屏
+        与我的词库屏各自的权限点不同，但端点本身只读一个公共的历史排名，接受任一权限点
+        不构成"取并集绕过检查"）。与 :meth:`require_permission` 同构，只是把 AND 换成 OR。
+        """
+
+        def _require(current_user: UserCenter = Depends(simple_auth.get_current_user)) -> UserCenter:
+            if current_user.is_super or any(
+                p in current_user.permission_codes for p in permissions
+            ):
+                return current_user
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"缺少权限：{' 或 '.join(permissions)}",
+            )
+
+        return _require
+
+    @staticmethod
     def check_permission(user: UserCenter, permission: str) -> None:
         """按需校验权限，供 `require_permission` 的依赖注入覆盖不到的场景用：
         某个权限点要不要求，取决于请求体的内容（例如"只在勾了某个筛选开关时才需要"），

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { listGroups, getLibraryScope, watchGroup, createGroup, renameGroup, deleteGroup, removeItems, getSites } =
@@ -94,10 +94,30 @@ describe('进屏即查', () => {
   it('分组管理区列出分组，带站点与词数', async () => {
     // 这一屏没有站点选择器，站点只能从分组上读到——漏掉站点，用户就无从判断
     // 表格里的排名属于哪个市场。
+    //
+    // **分组名与站点/词数不是各自独立的文本节点。** GroupBar 把
+    // `{group.name} · {group.item_count} 词` 写在同一个元素里，DOM 里是三个相邻的
+    // 兄弟文本节点，会被拼成整串「主推词 · 3 词」——精确匹配 '主推词' 或 '3' 都找不到
+    // 任何元素（这不是本次改动引入的：v2 主干当前的 CI 就是这样红的，见
+    // `gh run view` 对最近一次合并的 CI 记录）。
+    //
+    // **改成正则子串匹配后新踩了另一个坑，必须一并说明**：页面自身在分组条下方还有
+    // 一句「{分组名} · 站点 {站点} （由分组决定）· 共 N 个词」，同样含有分组名与站点码
+    // 这两个子串——不限定查询范围的话，`/主推词/`、`'US'` 都会在两处各命中一次，
+    // `getByText` 因命中多个元素直接抛错（`findByText` 的超时包装会把这个"多个匹配"
+    // 错误吞掉、重试到超时后再抛出一个更笼统的"找不到"，字面上完全看不出真正原因是
+    // "太多个"而不是"零个"，排查时只能靠 `pnpm exec vitest run` 直接跑这个文件看完整
+    // 报错）。用 `within` 限定在分组选择器（`.ant-radio-group`）范围内，只问 GroupBar
+    // 自己渲染的那一份。
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
-    expect(screen.getByText('US')).toBeTruthy();
-    expect(screen.getByText('3')).toBeTruthy();
+    const groupPicker = await waitFor(() => {
+      const el = document.querySelector('.ant-radio-group');
+      if (!el) throw new Error('分组选择器还没渲染出来');
+      return el as HTMLElement;
+    });
+    const chip = within(groupPicker).getByText(/主推词/);
+    expect(chip.textContent).toContain('3');
+    expect(within(groupPicker).getByText('US')).toBeTruthy();
   });
 
   it('站点由分组决定，界面写明这一点', async () => {
@@ -203,12 +223,14 @@ describe('横向宽度', () => {
     // 侧栏形态下盯盘表格有近 400px 被裁进横向滚动（1920 视口实测）。分组一览有价值，
     // 但代价必须落在纵向：纵向可以滚，横向被裁掉的列是找不回来的。
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('主推词')).toBeTruthy());
+    // 定位管理区用「新建分组」按钮而不是分组名文本：后者依赖分组列表异步加载完成
+    // 才会出现，前者与分组数据无关、渲染即挂载，断言与"数据有没有加载完"这件事无关，
+    // 只回答"管理区和表格是不是两块独立的容器"。
+    const newGroupButton = await screen.findByRole('button', { name: /新建分组/ });
 
-    const bar = screen.getByText('主推词').closest('.ant-card') as HTMLElement;
+    const bar = newGroupButton.closest('.ant-card') as HTMLElement;
     const table = document.querySelector('.ant-table') as HTMLElement;
     // 管理区与表格是上下两块（同一个父容器里的兄弟节点），不是左右分栏
     expect(bar.contains(table)).toBe(false);
-    expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy();
   });
 });
