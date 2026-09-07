@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { listGroups, getLibraryScope, watchGroup, createGroup, renameGroup, deleteGroup, removeItems, getSites } =
@@ -66,6 +66,15 @@ async function renderSettled() {
   await act(async () => {
     render(<KeywordLibraryPage />);
   });
+}
+
+/** 手动控制 resolve 时机，用来卡住网络往返、模拟"activeId 已变、表格还没重新加载完成"的窗口。 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 /**
@@ -227,5 +236,63 @@ describe('横向宽度', () => {
     // 管理区与表格是上下两块（同一个父容器里的兄弟节点），不是左右分栏
     expect(bar.contains(table)).toBe(false);
     expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy();
+  });
+});
+
+describe('操作列链接的站点不能领先于表格实际加载的数据', () => {
+  // 切分组时 activeId 先于表格重新加载完成变化：setActiveId 是同步的，reloadScope
+  // 与随后的 reload(true) 都要等一轮网络往返。这段窗口内若操作列链接跟着新 activeId
+  // 走，会把仍显示的旧分组的词按新站点拼链接，跳到错误地区（Codex 审核 PR #85）。
+  it('切分组的网络往返还没完成时，操作列仍按当前显示的行的站点拼链接', async () => {
+    const GROUP_DE = {
+      group_id: 2,
+      site: 'DE',
+      name: '德语词',
+      item_count: 1,
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+    };
+    listGroups.mockResolvedValue([GROUP, GROUP_DE]);
+    getSites.mockResolvedValue([
+      { code: 'US', name: '美国', domain: 'amazon.com' },
+      { code: 'DE', name: '德国', domain: 'amazon.de' },
+    ]);
+
+    await renderSettled();
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(1));
+
+    const trendsLink = () => screen.getByRole('link', { name: /查看 Google 搜索趋势/ }) as HTMLAnchorElement;
+    await waitFor(() => expect(trendsLink().href).toContain('geo=US'));
+
+    // 卡住这次切组触发的 getLibraryScope，制造"activeId 已经是 DE、表格还没重新
+    // 加载完成"的窗口
+    const scopeDeferred = deferred<{ site: string; view: 'DAY'; dates: string[] }>();
+    getLibraryScope.mockReturnValueOnce(scopeDeferred.promise);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: /德语词/ }));
+    });
+
+    // 这段窗口内 watchGroup 还没被再次调用，表格里仍是 US 那批行——链接必须仍指向 US，
+    // 不能因为 activeId 已经变成 DE 就提前跳过去
+    expect(watchGroup).toHaveBeenCalledTimes(1);
+    expect(trendsLink().href).toContain('geo=US');
+
+    watchGroup.mockResolvedValueOnce({
+      success: true,
+      data: [row({ keyword: 'kabel' })],
+      total: 1,
+      group_id: 2,
+      site: 'DE',
+      view: 'DAY',
+      date: '2026-08-15',
+    });
+    await act(async () => {
+      scopeDeferred.resolve({ site: 'DE', view: 'DAY', dates: ['2026-08-15'] });
+    });
+
+    // 网络往返完成、表格重新加载出 DE 那批行之后，链接才跟着变成 DE
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(trendsLink().href).toContain('geo=DE'));
   });
 });
