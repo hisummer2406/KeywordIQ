@@ -117,7 +117,11 @@ function alignColumns(columns: ProColumns<AnalysisRow>[]): ProColumns<AnalysisRo
   }));
 }
 
-export function buildColumns(view: View, siteDomain?: string): ProColumns<AnalysisRow>[] {
+export function buildColumns(
+  view: View,
+  siteDomain?: string,
+  onOpenTrend?: (row: AnalysisRow) => void,
+): ProColumns<AnalysisRow>[] {
   return alignColumns([
     {
       title: '排名',
@@ -161,7 +165,22 @@ export function buildColumns(view: View, siteDomain?: string): ProColumns<Analys
       // 加宽后小图同步变宽（见 TrendSparkline 的 width 默认值）：这一列的信息密度取决于
       // 横向像素——七个点的排名标签是交替错开排的，宽度越大同侧标签间距越松。
       width: 240,
-      render: (_, r) => <TrendSparkline view={view} values={r.trend} dates={r.trend_dates} />,
+      render: (_, r) => {
+        const sparkline = <TrendSparkline view={view} values={r.trend} dates={r.trend_dates} />;
+        // **整格可点，不只是有折线的部分**：无历史数据（只显示占位符）的行同样要能打开
+        // 详情——关键词身份已知就该能查，不该要求这一行先有非空的小图（issue #86）。
+        if (!onOpenTrend) return sparkline;
+        return (
+          <div
+            role="button"
+            title="查看关键词 ABA 排名趋势详情"
+            style={{ cursor: 'pointer' }}
+            onClick={() => onOpenTrend(r)}
+          >
+            {sparkline}
+          </div>
+        );
+      },
     },
     {
       title: '排名变化',

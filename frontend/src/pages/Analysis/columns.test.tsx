@@ -1,5 +1,5 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { buildColumns, totalColumnWidth } from './columns';
 import { TREND_COLORS } from '@/components/trendColors';
 
@@ -281,5 +281,37 @@ describe('列宽必须真正生效', () => {
     const cols = buildColumns('DAY');
     const category = cols.find((c) => c.title === '点击前三类目')!.width;
     expect(category).toBe(cols.find((c) => c.title === '点击前三品牌')!.width);
+  });
+});
+
+// --------------------------------------------------------------------------
+// 排名趋势详情入口（issue #86）：搜索趋势列可点开详情，含无小图的行
+// --------------------------------------------------------------------------
+
+describe('搜索趋势列的详情入口', () => {
+  it('不传 onOpenTrend 时按原样渲染小图，不包一层可点击容器', () => {
+    const { container } = cell('DAY', '搜索趋势', listedRow);
+    expect(container.querySelector('[role="button"]')).toBeNull();
+  });
+
+  it('传入 onOpenTrend 时点击整格触发回调，且带上完整的行数据', () => {
+    const onOpenTrend = vi.fn();
+    const col: any = buildColumns('DAY', undefined, onOpenTrend).find((c) => c.title === '搜索趋势');
+    const { container } = render(<>{col.render(null, listedRow)}</>);
+
+    const trigger = container.querySelector('[role="button"]')!;
+    expect(trigger).toBeTruthy();
+    fireEvent.click(trigger);
+    expect(onOpenTrend).toHaveBeenCalledWith(listedRow);
+  });
+
+  it('没有历史数据（小图只显示占位符）的行同样可以点开详情', () => {
+    const onOpenTrend = vi.fn();
+    const emptyTrendRow = { ...listedRow, trend: [], trend_dates: [] };
+    const col: any = buildColumns('DAY', undefined, onOpenTrend).find((c) => c.title === '搜索趋势');
+    const { container } = render(<>{col.render(null, emptyTrendRow)}</>);
+
+    fireEvent.click(container.querySelector('[role="button"]')!);
+    expect(onOpenTrend).toHaveBeenCalledWith(emptyTrendRow);
   });
 });

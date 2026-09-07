@@ -12,6 +12,7 @@ import { useAccess, useModel } from '@umijs/max';
 import { Alert, Button, Card, Col, Row, Select, Space, Tooltip, Typography, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { type AnalysisRow, type View } from '@/services/analysis';
+import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
 import AddToLibraryModal from './AddToLibraryModal';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
@@ -60,6 +61,14 @@ export default function AnalysisPage() {
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
   const [libraryModalOpen, setLibraryModalOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useCachedState('filterOpen', false);
+
+  /**
+   * 排名趋势详情：一次只开一行的详情，不进会话快照——与选中行同理，切走再切回清空是
+   * 预期行为。来源锚点取**生效作用域**（`appliedRef.current`），不是草稿：详情要保留的
+   * 是用户当下看到的这份数据的日期语境，草稿可能已经改了站点/日期但还没点查询。
+   */
+  const [trendTarget, setTrendTarget] = useState<AnalysisRow | null>(null);
+  const openTrend = (row: AnalysisRow) => setTrendTarget(row);
 
   const session = useAnalysisSession();
   const { initialSnapshot, restored } = session;
@@ -201,7 +210,7 @@ export default function AnalysisPage() {
     [sites, appliedRef, query.appliedSig],
   );
   const columns = useMemo(
-    () => buildColumns(appliedView, appliedDomain),
+    () => buildColumns(appliedView, appliedDomain, openTrend),
     [appliedView, appliedDomain],
   );
 
@@ -488,6 +497,18 @@ export default function AnalysisPage() {
         onClose={() => setLibraryModalOpen(false)}
         onAdded={() => setSelectedKeywordIds([])}
       />
+
+      {trendTarget && (
+        <KeywordTrendDrawer
+          open={!!trendTarget}
+          onClose={() => setTrendTarget(null)}
+          keywordId={trendTarget.keyword_id}
+          keyword={trendTarget.keyword}
+          site={appliedRef.current?.site ?? ''}
+          view={appliedView}
+          on={appliedRef.current?.date}
+        />
+      )}
     </PageContainer>
   );
 }

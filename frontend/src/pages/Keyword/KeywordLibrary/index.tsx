@@ -2,7 +2,8 @@ import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { Button, Card, Popconfirm, Radio, Select, Space, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
-import type { View } from '@/services/analysis';
+import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
+import type { AnalysisRow, View } from '@/services/analysis';
 import {
   createGroup,
   deleteGroup,
@@ -52,6 +53,8 @@ export default function KeywordLibraryPage() {
   const [scopeHasNoDates, setScopeHasNoDates] = useState(false);
 
   const [selected, setSelected] = useState<number[]>([]);
+  /** 排名趋势详情：站点取自当前分组，锚定期取当前盯盘期次（不是"今天"）。 */
+  const [trendTarget, setTrendTarget] = useState<AnalysisRow | null>(null);
 
   const active = groups.find((g) => g.group_id === activeId);
   const siteDomain = sites.find((s) => s.code === active?.site)?.domain;
@@ -189,7 +192,7 @@ export default function KeywordLibraryPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="keyword_id"
-        columns={buildWatchColumns(view, siteDomain)}
+        columns={buildWatchColumns(view, siteDomain, setTrendTarget)}
         search={false}
         options={false}
         dateFormatter="string"
@@ -221,6 +224,20 @@ export default function KeywordLibraryPage() {
           };
         }}
       />
+
+      {trendTarget && active && (
+        <KeywordTrendDrawer
+          open={!!trendTarget}
+          onClose={() => setTrendTarget(null)}
+          keywordId={trendTarget.keyword_id}
+          keyword={trendTarget.keyword}
+          site={active.site}
+          view={view}
+          on={date}
+          // 这个词已经在当前分组里，不重复提供「加入词库」入口。
+          hideAddToLibrary
+        />
+      )}
     </PageContainer>
   );
 }
