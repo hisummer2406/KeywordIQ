@@ -62,10 +62,13 @@
   - 范围切换（近 30 天 / 全部可用历史）与日/周切换均复用同一个来源锚点 `on`，用递增
     请求序号防止旧请求覆盖新结果（未用 AbortController——umi `request` 无现成取消口子）
   - 「加入词库」按钮，复用 `AddToLibraryModal`；`hideAddToLibrary` 时不渲染
-- [x] 3.3 vitest（未在本会话执行，见任务 5.2 说明）：
-  `TrendTimelineChart.test.tsx`（6 条：无数据/全非在榜/相邻连线/隔缺口不连线/单点/
-  掉榜不连线）、`index.test.tsx`（8 条：来源锚点请求、无有效点显示无数据、加载失败
-  不等同无数据、切视图复用同一锚点、旧请求不覆盖新结果、`hideAddToLibrary` 两态）
+- [x] 3.3 vitest（提交门禁触发全量前端测试后，经用户明确授权直接跑 `pnpm exec vitest`
+  排查失败，见任务 5.2）：`TrendTimelineChart.test.tsx`（6 条）、`index.test.tsx`
+  （7 条：来源锚点请求、无有效点显示无数据、加载失败不等同无数据、切视图复用同一
+  锚点、旧请求不覆盖新结果、`hideAddToLibrary` 两态），全部通过。排查中发现
+  `index.test.tsx` 因未 mock `@/services/library`（`AddToLibraryModal` 间接 `import
+  { request } from '@umijs/max'`）而触发一个与本文件逻辑无关的 esbuild 环境不变量
+  报错，仿 `AddToLibraryModal.test.tsx` 加 mock 后解决
 
 ## 4. 前端：接入两个入口
 
@@ -76,17 +79,24 @@
 - [x] 4.3 `frontend/src/pages/Keyword/KeywordLibrary/columns.tsx`（`buildWatchColumns`
   透传同一个 `onOpenTrend`）与 `index.tsx`（来源锚点取当前 `date`/`view`/`active.site`，
   传 `hideAddToLibrary`）
-- [x] 4.4 vitest（未执行，见 5.2）：`columns.test.tsx` 新增 3 条覆盖点击入口与无小图
+- [x] 4.4 vitest（已执行并通过，见 5.2）：`columns.test.tsx` 新增 3 条覆盖点击入口与无小图
   行同样可点开
 
 ## 5. 收尾
 
 - [x] 5.1 CLAUDE.md 补一节：端点契约、五态分类算法要点、`require_any_permission` 的
   用法与"何时该用它而不是新增权限点"的判据
-- [ ] 5.2 全量回归：**后端已跑**（`uv run pytest test/ -q`，`TEST_DATABASE_URL` 指向
+- [x] 5.2 全量回归：**后端**（`uv run pytest test/ -q`，`TEST_DATABASE_URL` 指向
   `keywordiq_test`）：`874 passed, 1 skipped`（较基线 843 新增 31 条，跳过项同基线、
-  与本变更无关）；`uv run ruff check .` 全部通过。**前端 vitest/tsc/lint 本会话未跑**
-  ——按仓库既定约定（[[run-targeted-tests-not-full-suite]]）这类命令留给用户或 CI 执行，
-  新增/改动的前端文件已列在本文件第 3、4 组，供 CI 跑一遍核对
+  与本变更无关）；`uv run ruff check .` 全部通过。**前端**：首次提交被本地门禁的
+  `pnpm test` 拦下，报错定位到 `KeywordLibrary/index.test.tsx` 两处与本变更无关的
+  失败——询问用户后，用户明确授权直接跑 `pnpm exec vitest run <文件>` 排查（按仓库
+  既定约定 [[run-targeted-tests-not-full-suite]]，未获授权前不主动跑）。核实两处均为
+  `v2` 主干当前 CI 已经存在的失败（`gh run view` 对最近一次合并的 CI 记录核对），与
+  GroupBar 分组名文本被拆成多个兄弟文本节点、以及同一段文本在页面上出现两处相关，
+  修的是测试查询方式（改用正则子串匹配 + `within` 限定查询范围），不改产品行为；
+  另修了本次新增的 `KeywordTrendDrawer/index.test.tsx` 因未 mock `@umijs/max` 依赖链
+  触发的 esbuild 环境报错。最终 `pnpm lint`、`pnpm tsc`、`pnpm test`（43 个文件、
+  413 条用例）全部通过，提交门禁放行
 - [ ] 5.3 提交、开 PR（`--base v2`），关联 issue #86，附 spec delta 文件列表、
   查询计划验证证据、已知未覆盖风险
