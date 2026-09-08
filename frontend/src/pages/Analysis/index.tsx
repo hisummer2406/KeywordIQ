@@ -10,7 +10,7 @@ import {
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import { useAccess, useModel } from '@umijs/max';
 import { Alert, Button, Card, Col, Row, Select, Space, Tooltip, Typography, message } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type AnalysisRow, type View } from '@/services/analysis';
 import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
 import AddToLibraryModal from './AddToLibraryModal';
@@ -120,6 +120,15 @@ export default function AnalysisPage() {
    * 关闭抽屉而变化，届时抽屉会把仍在展示的旧行 `keyword_id` 配上新站点/视图/日期重新
    * 发请求——跨站点必 422，同站点也会把数据按错误的日期语境解析（PR #87 复审 P2，
    * 修复第一版把冻结做在了渲染处读取 `loadedSite` 等活状态，仍然会被后续响应覆盖）。
+   *
+   * `openTrend` 必须用 `useCallback` 而不是每次渲染都新建一个闭包：它被烤进下面
+   * `columns` 的 `useMemo`，而那个 memo 的依赖列表里没有（也不该有）`loadedSite`
+   * 这三个高频变化的活状态——`columns` 要的是"作用域变了才重建列"，不是"结果一到就
+   * 重建列"。会话复原时首次渲染 `loadedSite` 等仍是初始的 `undefined`，`runRequest`
+   * 随后才异步把它们填上；若 `openTrend` 不是 `useCallback` 记忆的稳定引用，`columns`
+   * 的 memo 不会因为这几个状态变化而重算，烤进去的还是复原首次渲染那个永远读到
+   * `undefined` 的旧闭包——点击行时守卫静默 return，抽屉打不开，直到某个真正触发
+   * `columns` 重算的依赖（如切视图）恰好也发生（PR #87 复审第三轮 P2）。
    */
   interface TrendTarget {
     row: AnalysisRow;
@@ -128,10 +137,13 @@ export default function AnalysisPage() {
     date?: string;
   }
   const [trendTarget, setTrendTarget] = useState<TrendTarget | null>(null);
-  const openTrend = (row: AnalysisRow) => {
-    if (!loadedSite || !loadedView) return; // 一期数据都没有时表格本就是空的，点不到行
-    setTrendTarget({ row, site: loadedSite, view: loadedView, date: loadedDate ?? undefined });
-  };
+  const openTrend = useCallback(
+    (row: AnalysisRow) => {
+      if (!loadedSite || !loadedView) return; // 一期数据都没有时表格本就是空的，点不到行
+      setTrendTarget({ row, site: loadedSite, view: loadedView, date: loadedDate ?? undefined });
+    },
+    [loadedSite, loadedView, loadedDate],
+  );
 
   /**
    * 解析首屏用哪个作用域与哪份筛选。
@@ -226,7 +238,7 @@ export default function AnalysisPage() {
   );
   const columns = useMemo(
     () => buildColumns(appliedView, appliedDomain, openTrend, appliedRef.current?.site),
-    [appliedView, appliedDomain, appliedRef, query.appliedSig],
+    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend],
   );
 
   return (
