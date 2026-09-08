@@ -62,14 +62,6 @@ export default function AnalysisPage() {
   const [libraryModalOpen, setLibraryModalOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useCachedState('filterOpen', false);
 
-  /**
-   * 排名趋势详情：一次只开一行的详情，不进会话快照——与选中行同理，切走再切回清空是
-   * 预期行为。来源锚点取**生效作用域**（`appliedRef.current`），不是草稿：详情要保留的
-   * 是用户当下看到的这份数据的日期语境，草稿可能已经改了站点/日期但还没点查询。
-   */
-  const [trendTarget, setTrendTarget] = useState<AnalysisRow | null>(null);
-  const openTrend = (row: AnalysisRow) => setTrendTarget(row);
-
   const session = useAnalysisSession();
   const { initialSnapshot, restored } = session;
 
@@ -117,6 +109,29 @@ export default function AnalysisPage() {
   clearCategoryFiltersRef.current = query.clearCategoryFilters;
 
   const { appliedRef, actionRef, appliedView, loadedSite, loadedView, loadedDate } = query;
+
+  /**
+   * 排名趋势详情：一次只开一行的详情，不进会话快照——与选中行同理，切走再切回清空是
+   * 预期行为。
+   *
+   * **点击那一刻把行与它所属的作用域一起冻结进 `trendTarget`，不是分开存。**
+   * `loadedSite`/`loadedView`/`loadedDate` 是随最近一次响应更新的活状态：若打开详情后、
+   * 抽屉关闭前又有一轮查询完成（哪怕是这次点击之前就在飞的旧请求），三者会先于用户手动
+   * 关闭抽屉而变化，届时抽屉会把仍在展示的旧行 `keyword_id` 配上新站点/视图/日期重新
+   * 发请求——跨站点必 422，同站点也会把数据按错误的日期语境解析（PR #87 复审 P2，
+   * 修复第一版把冻结做在了渲染处读取 `loadedSite` 等活状态，仍然会被后续响应覆盖）。
+   */
+  interface TrendTarget {
+    row: AnalysisRow;
+    site: string;
+    view: View;
+    date?: string;
+  }
+  const [trendTarget, setTrendTarget] = useState<TrendTarget | null>(null);
+  const openTrend = (row: AnalysisRow) => {
+    if (!loadedSite || !loadedView) return; // 一期数据都没有时表格本就是空的，点不到行
+    setTrendTarget({ row, site: loadedSite, view: loadedView, date: loadedDate ?? undefined });
+  };
 
   /**
    * 解析首屏用哪个作用域与哪份筛选。
@@ -498,20 +513,17 @@ export default function AnalysisPage() {
         onAdded={() => setSelectedKeywordIds([])}
       />
 
-      {trendTarget && loadedSite && loadedView && (
+      {trendTarget && (
         <KeywordTrendDrawer
           open={!!trendTarget}
           onClose={() => setTrendTarget(null)}
-          keywordId={trendTarget.keyword_id}
-          keyword={trendTarget.keyword}
-          // 站点/视图/日期取表格里这批行实际所属的那次响应，不是 appliedRef/appliedView：
-          // `apply()` 把后两者同步改到新作用域、随后才发一轮网络往返，这段窗口内表格
-          // 显示的仍是旧作用域那批行，trendTarget 若来自切换前仍在渲染的旧行，用
-          // appliedRef 会把它的 keyword_id 配上新站点/视图/日期，要么 422，要么把数据
-          // 按错误的日期语境解析（PR #87 复审 P2）。
-          site={loadedSite}
-          view={loadedView}
-          on={loadedDate ?? undefined}
+          keywordId={trendTarget.row.keyword_id}
+          keyword={trendTarget.row.keyword}
+          // 站点/视图/日期取点击那一刻冻结进 trendTarget 的值，不是活状态——见上方
+          // trendTarget 的注释（PR #87 复审 P2）。
+          site={trendTarget.site}
+          view={trendTarget.view}
+          on={trendTarget.date}
           canAddToLibrary={access.canViewKeyword}
         />
       )}

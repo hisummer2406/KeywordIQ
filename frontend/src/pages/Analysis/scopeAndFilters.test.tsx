@@ -379,6 +379,14 @@ describe('分析查询屏 · 作用域与筛选', () => {
       await act(async () => {
         resolveSecond({ success: true, data: [], total: 0, site: 'DE', view: 'DAY', date: '2026-07-16' });
       });
+
+      // 表格随后真的切到了 DE（loadedSite 变了），但抽屉在打开那一刻已经把 US/DAY/
+      // 2026-07-18 冻结进 trendTarget——不应因为 loadedSite 事后变化就改用新站点重新
+      // 发请求（PR #87 复审第二轮 P2：第一版修复只护住了"点击当下读到的值"，没护住
+      // "点击之后 loadedSite 才变化"这一步，抽屉的 site/view/on props 当时仍直接读活
+      // 状态，会在这里触发第二次以 DE 发起的 getKeywordTrend）。
+      await settle();
+      expect(getKeywordTrend).toHaveBeenCalledTimes(1);
     });
   });
 });

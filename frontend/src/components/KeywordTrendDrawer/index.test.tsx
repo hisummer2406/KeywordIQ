@@ -151,4 +151,26 @@ describe('KeywordTrendDrawer', () => {
     await screen.findByText('2026年07月10日');
     expect(screen.queryByText('加入词库')).not.toBeInTheDocument();
   });
+
+  it('切视图后新响应落地前，留存的旧数据仍按它自己的视图展示，不被新视图重新格式化（PR #87 复审第二轮 P2）', async () => {
+    getKeywordTrend.mockResolvedValueOnce(baseResponse());
+    setup();
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
+    await screen.findByText('2026年07月10日'); // DAY 格式：来自初次响应
+
+    // 卡住切到按周触发的第二次请求（永不 resolve），制造"viewState 已经是 WEEK、
+    // data 还是旧的 DAY 响应"这段窗口——这条用例只关心这段窗口内的展示是否正确，
+    // 不需要观察请求最终落地后的状态（那属于既有用例"切换视图后仍使用同一个来源
+    // 锚点重新请求"覆盖的范围）。
+    getKeywordTrend.mockImplementationOnce(() => new Promise(() => {}));
+
+    fireEvent.click(screen.getByText('按周'));
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
+
+    // 这段窗口内界面留存的仍是第一次响应（DAY/2026-07-10），必须仍按 DAY 格式展示
+    // ——若误按新选中的 WEEK 重新格式化，同一个日期会显示成"2026年第 N 周"，把 DAY
+    // 历史读成了 WEEK 历史。
+    expect(screen.getByText('2026年07月10日')).toBeInTheDocument();
+    expect(screen.queryByText(/2026年第\d+周/)).not.toBeInTheDocument();
+  });
 });

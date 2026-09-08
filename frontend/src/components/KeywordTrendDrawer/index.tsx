@@ -158,33 +158,38 @@ export default function KeywordTrendDrawer({
         {/* `data !== null` 排除首次挂载、请求还没回来的那一瞬间——那时不该说"暂无数据"，
             只是"还没查完"，两者含义不同。 */}
         {!errored && !loading && data !== null && data.on === null && (
-          <Alert type="info" showIcon message={`该站点 ${viewState === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
+          <Alert type="info" showIcon message={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
         )}
 
+        {/* 下面这段一律读 `data.view`（响应自带的视图），不读 `viewState`（用户当前选中
+            的视图）：切换 DAY/WEEK 时 `viewState` 立即变、`data` 要等新响应回来才换，
+            中间这段窗口里 `loading` 只包住小图（见下方 Spin），若统计文字与日期格式化
+            仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
+            ——数字没变但含义被读反了（PR #87 复审 P2）。 */}
         {!errored && data !== null && data.on !== null && (
           <>
             <Space size={32} wrap style={{ fontSize: 13 }}>
               <div>
                 <Text type="secondary">实际使用的锚定期：</Text>
-                <Text strong>{formatScopeDateLabel(data.on, viewState)}</Text>
+                <Text strong>{formatScopeDateLabel(data.on, data.view)}</Text>
               </div>
               <div>
                 <Text type="secondary">实际数据覆盖范围：</Text>
                 {data.coverage ? (
                   <Text>
-                    {formatScopeDateLabel(data.coverage.start, viewState)} ～{' '}
-                    {formatScopeDateLabel(data.coverage.end, viewState)}
+                    {formatScopeDateLabel(data.coverage.start, data.view)} ～{' '}
+                    {formatScopeDateLabel(data.coverage.end, data.view)}
                   </Text>
                 ) : (
                   <Text type="secondary">无数据</Text>
                 )}
               </div>
-              <StatLine label="区间最好排名" stat={data.best_ranking} view={viewState} />
-              <StatLine label="最近可用排名" stat={data.latest_available} view={viewState} />
+              <StatLine label="区间最好排名" stat={data.best_ranking} view={data.view} />
+              <StatLine label="最近可用排名" stat={data.latest_available} view={data.view} />
             </Space>
 
             <Spin spinning={loading}>
-              <TrendTimelineChart points={data.points} view={viewState} />
+              <TrendTimelineChart points={data.points} view={data.view} />
             </Spin>
 
             <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c' }}>

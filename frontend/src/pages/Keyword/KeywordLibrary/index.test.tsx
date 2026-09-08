@@ -367,8 +367,26 @@ describe('详情抽屉不能领先于表格实际加载的视图/日期', () => 
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalled());
     expect(getKeywordTrend.mock.calls[0][0]).toMatchObject({ view: 'DAY', on: '2026-08-15' });
 
+    // 制造"表格随后真的切到了 WEEK"这一步——默认的 watchGroup mock 固定回 DAY，这里
+    // 显式让下一次调用回 WEEK，才能观察到 loadedView 真的变化之后抽屉是否跟着变。
+    watchGroup.mockResolvedValueOnce({
+      success: true,
+      data: [row()],
+      total: 1,
+      group_id: 1,
+      site: 'US',
+      view: 'WEEK',
+      date: '2026-08-11',
+    });
+
     await act(async () => {
       scopeDeferred.resolve({ site: 'US', view: 'WEEK', dates: ['2026-08-11'] });
     });
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(2));
+
+    // 抽屉在打开那一刻已经把 DAY/2026-08-15 冻结进 trendTarget——loadedView 事后真的
+    // 变成 WEEK 不应该让抽屉重新以 WEEK 发请求（PR #87 复审第二轮 P2：第一版修复只护住
+    // 了"点击当下读到的值"，没护住"点击之后 loadedView 才变化"这一步）。
+    expect(getKeywordTrend).toHaveBeenCalledTimes(1);
   });
 });
