@@ -56,7 +56,59 @@
 
 ---
 
+## Code Review Rules
+
+> 本节是 Codex 自动审核的运行时配置：Codex 审核只读 AGENTS.md，不读 CLAUDE.md。
+> 内容是 CLAUDE.md 对应条目的审核视角浓缩；CLAUDE.md 相关约定变更时**须同步更新本节**，
+> 防止两份副本分叉。只标记结构性、数据正确性问题；格式与 lint 归 CI 管，不要报。
+
+### 数据写入纪律
+
+- **事实表（`fact_daily` / `fact_weekly` / `fact_dropped` / `fact_growth`）只追加，不得原地 UPDATE。**
+  排名类字段全部在写入时算定，这是按月归档与死元组归零的前提。唯一例外是同一期重复导入
+  （先删该期切片再重写）。对事实表的 UPDATE 一律标记。
+- **维度/价格数据仅在取值真变时写入。** `dim_product` 的 UPSERT 带
+  `WHERE ... IS DISTINCT FROM EXCLUDED.*` 不是冗余；`competitor_store_price` 仅在
+  price/compare_at_price/available 变化时追加。删掉这类守卫造成约 30 倍写放大，且测试照样绿。
+- **站点码唯一事实来源是 `app/site_registry.py`**（英国是 `GB` 不是 `UK`）。别处硬编码站点
+  列表、为站点元数据建库表，都是开第二事实来源。非法/缺失站点码必须报错（422），
+  不得回退 `DEFAULT_SITE`。
+
+### 分区与迁移
+
+- **写事实表前必须调用 `app.table.analysis.partitioning.ensure_fact_partitions`**（幂等，无条件调）。
+  新增分区表必须登记进 `PARTITIONED_TABLES`；竞对监控的普通表（`competitor_*`、
+  `user_store_watch` 等）**不得登记**——登记即被按月保留清理整月 DROP，而价格与名次历史
+  越久越值钱（三个月窗口是为八亿行 ABA 事实表定的）。
+- **分区表与物化视图的迁移必须手写。** autogenerate 会把事实表产成普通表并静默丢掉
+  `PARTITION BY`。新增模型必须登记进 `migration_scope.py` 的 `V2_TABLES`，漏登的表
+  autogenerate 静默忽略、不报错。
+- **列注释参与 autogenerate 比对**，模型注释与库不一致会产生常驻假差异，掩盖真差异
+  （曾盖住 `user_center` 时间戳丢时区）。
+
+### 查询与分页
+
+- **分页排序必须带完整次级键**（如上新流的 `source, source_key, site, product_key`）。
+  `published_at` 精度有限、同一时刻多条是常态，无次级键时同一行会在两页各出现一次——
+  小数据量下测不出来，须对 `ORDER BY` 子句做结构性断言。
+- **`fact_weekly` 的分区列是 `report_date_week`，不是 `report_date`。**
+  照日报列名写周报查询直接 `UndefinedColumn`。
+
+### 竞对监控
+
+- **下架判定只在 `catalog_complete` 为真时做**（Shopify：翻页自然终止 + 取到的商品数不少于
+  `/meta.json` 声称的 `published_products_count`）。被动 ASIN 上报是推模型，
+  "这次没见到"≠"已下架"，不得据此判定下架。
+- **新品判定看 `product_id` 在不在库里，不看 `published_at`**——商户批量重新发布会让日期
+  整体跳变，据此判定会伪造一批假上新。
+- **零条有效 ASIN 的上报整批拒绝（422），不得落定空基线**——否则下一次正常上报会把该卖家
+  全部存量商品误判成新发现，界面表现只是数字突然涌出一批，不报错。
+
+---
+
 ## 维护
 
 `CLAUDE.md` 是唯一事实来源。**新增约定写进 `CLAUDE.md`，不要写进这里**；
 只有当某条约定确实只对某一种运行环境成立时，才在本文件加一条差异说明。
+（「Code Review Rules」一节属后者：它是 Codex 审核运行时的专属配置，随 CLAUDE.md
+对应条目同步维护。）
