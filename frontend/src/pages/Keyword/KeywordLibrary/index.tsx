@@ -52,9 +52,15 @@ export default function KeywordLibraryPage() {
   const [scopeHasNoDates, setScopeHasNoDates] = useState(false);
 
   const [selected, setSelected] = useState<number[]>([]);
+  /** 表格里那批行实际所属的站点，取自请求成功时后端回传的 `WatchResponse.site`——
+   * 不能用 `active?.site`：切分组时 `activeId` 先于表格重新加载完成变化（`switchGroup`
+   * 里 `setActiveId` 是同步的，`reloadScope` 与随后的 `reload(true)` 都要等一轮网络
+   * 往返），这段窗口内表格显示的仍是上一个分组的行，若操作列的链接跟着新 `activeId`
+   * 走，会把旧分组的词按新站点拼链接，跳到错误地区。 */
+  const [loadedSite, setLoadedSite] = useState<string | undefined>();
 
   const active = groups.find((g) => g.group_id === activeId);
-  const siteDomain = sites.find((s) => s.code === active?.site)?.domain;
+  const siteDomain = sites.find((s) => s.code === loadedSite)?.domain;
 
   /** 拉分组列表，并在需要时选中一个（首屏与增删之后都走这里）。 */
   const reloadGroups = async (prefer?: number) => {
@@ -189,7 +195,7 @@ export default function KeywordLibraryPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="keyword_id"
-        columns={buildWatchColumns(view, siteDomain)}
+        columns={buildWatchColumns(view, siteDomain, loadedSite)}
         search={false}
         options={false}
         dateFormatter="string"
@@ -214,6 +220,8 @@ export default function KeywordLibraryPage() {
             perPage: params.pageSize,
             ...toSortParams(sort),
           });
+          // 操作列的链接必须跟着这批行实际所属的站点走，见上方 loadedSite 的注释。
+          setLoadedSite(res.site);
           return {
             data: res.data ?? [],
             total: res.total ?? 0,
