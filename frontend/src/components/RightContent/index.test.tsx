@@ -65,6 +65,39 @@ describe('顶栏账号区', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  /**
+   * SSO 账号的 username 是钉钉 userid（一串数字），不是人看的名字。
+   * display_name 存在时必须优先展示它，username 只是没有 display_name 时的退路
+   * （本地账号的常态）。
+   */
+  it('有 display_name 时优先展示它，而不是 username', async () => {
+    render(<RightContent currentUser={user({ display_name: '张三' })} onLogout={vi.fn()} />);
+
+    expect(screen.getByText('张三')).toBeInTheDocument();
+    expect(screen.queryByText('alice')).not.toBeInTheDocument();
+  });
+
+  it('没有 display_name 时退回 username', async () => {
+    render(<RightContent currentUser={user({ display_name: null })} onLogout={vi.fn()} />);
+
+    expect(screen.getByText('alice')).toBeInTheDocument();
+  });
+
+  it('有 avatar_url 时头像用它渲染成 img', () => {
+    const { container } = render(
+      <RightContent currentUser={user({ avatar_url: 'https://static.dingtalk.com/a.png' })} onLogout={vi.fn()} />,
+    );
+
+    const img = container.querySelector('img');
+    expect(img).toHaveAttribute('src', 'https://static.dingtalk.com/a.png');
+  });
+
+  it('没有 avatar_url 时不渲染 img，回落到图标', () => {
+    const { container } = render(<RightContent currentUser={user()} onLogout={vi.fn()} />);
+
+    expect(container.querySelector('img')).toBeNull();
+  });
+
   it('退出登录始终在，且调用传入的回调', async () => {
     const onLogout = vi.fn();
     render(<RightContent currentUser={user()} onLogout={onLogout} />);

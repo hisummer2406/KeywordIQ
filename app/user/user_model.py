@@ -26,6 +26,13 @@ class UserCenter(Base):
     display_name: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="展示用名称；SSO 账号取自身份源的姓名"
     )
+    # 头像地址。**与 display_name 刻意不同**：display_name 已建档账号不回写（回写要处理
+    # 用户名唯一约束的连锁影响），头像没有唯一约束顾虑，故每次 SSO 登录都刷新——头像换了
+    # 却在系统里显示旧照片，比显示名滞后更容易让人觉得"认错人"。本地账号恒为 NULL，
+    # 前端回落到默认头像图标。
+    avatar_url: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="头像地址；SSO 账号每次登录同步身份源头像"
+    )
     # 外部身份源标识。NULL 表示本地账号（可用密码登录），'dingtalk' 表示钉钉扫码建立。
     external_idp: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="外部身份源；NULL 表示本地账号"

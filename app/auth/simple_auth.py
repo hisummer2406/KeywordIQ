@@ -137,6 +137,8 @@ def serialize_user(user: UserCenter) -> dict:
         "username": user.user_name,
         # 展示名：SSO 账号取自钉钉姓名；本地账号通常为空，前端回落到 username。
         "display_name": user.display_name,
+        # 头像：SSO 账号每次登录同步身份源头像；本地账号恒为 None，前端回落到默认图标。
+        "avatar_url": user.avatar_url,
         # 账号来源。None = 本地账号（可用密码登录）。
         "external_idp": user.external_idp,
         "role": user.role_code,
