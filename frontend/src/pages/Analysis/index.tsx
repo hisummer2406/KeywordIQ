@@ -201,8 +201,8 @@ export default function AnalysisPage() {
     [sites, appliedRef, query.appliedSig],
   );
   const columns = useMemo(
-    () => buildColumns(appliedView, appliedDomain),
-    [appliedView, appliedDomain],
+    () => buildColumns(appliedView, appliedDomain, appliedRef.current?.site),
+    [appliedView, appliedDomain, appliedRef, query.appliedSig],
   );
 
   return (
