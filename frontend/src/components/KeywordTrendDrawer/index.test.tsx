@@ -173,4 +173,26 @@ describe('KeywordTrendDrawer', () => {
     expect(screen.getByText('2026年07月10日')).toBeInTheDocument();
     expect(screen.queryByText(/2026年第\d+周/)).not.toBeInTheDocument();
   });
+
+  it('切范围（近30天/全部可用历史）新响应落地前，不展示上一个范围的统计数值（PR #87 复审第四轮 P2）', async () => {
+    getKeywordTrend.mockResolvedValueOnce(baseResponse());
+    setup();
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
+    // 「实际使用的锚定期」行——唯一不带括号/不与其他日期拼接的精确匹配，见文件内其他
+    // 用例同样的取法。
+    await screen.findByText('2026年07月10日');
+
+    // 卡住切到「全部可用历史」触发的第二次请求（永不 resolve），制造"range 状态已经是
+    // ALL、data 仍是上一次 RECENT_30D 响应"这段窗口。与 view 不同，range 直接决定了
+    // coverage/最好排名/最近可用排名这些数值本身（不是同一份数据换个格式化），继续显示
+    // 会让用户把 30 天窗口的结果误当成"全部可用历史"的结果。
+    getKeywordTrend.mockImplementationOnce(() => new Promise(() => {}));
+
+    fireEvent.click(screen.getByText('全部可用历史'));
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
+
+    // 这段窗口内统计区必须整段不显示，不能留存上一次响应的数值
+    expect(screen.queryByText('2026年07月10日')).not.toBeInTheDocument();
+    expect(screen.queryByText('区间最好排名：')).not.toBeInTheDocument();
+  });
 });
