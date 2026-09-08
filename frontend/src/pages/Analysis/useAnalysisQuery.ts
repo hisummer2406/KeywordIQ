@@ -51,6 +51,10 @@ export interface AnalysisQueryState {
   appliedRef: MutableRefObject<SearchBody | null>;
   appliedView: View;
   appliedSig: string;
+  /** 表格里这批行实际所属的站点/视图/日期，详情抽屉专用——理由见同名 state 定义处。 */
+  loadedSite: string | undefined;
+  loadedView: View | undefined;
+  loadedDate: string | null | undefined;
   actionRef: MutableRefObject<ActionType | undefined>;
   resultTotal: number;
   pendingRebuild: boolean;
@@ -108,6 +112,21 @@ export function useAnalysisQuery(options: {
   const [appliedView, setAppliedView] = useCachedState('appliedView', 'DAY' as View);
   // 生效条件的签名，与草稿签名比较得出 dirty，不额外维护脏标记
   const [appliedSig, setAppliedSig] = useCachedState('appliedSig', '');
+
+  /**
+   * 表格里这批行实际所属的站点/视图/日期，取自最近一次成功响应（`SearchResponse.
+   * site/view/date`，复原分支取的是与那批缓存行匹配的请求体，效果同源）——不能用
+   * `appliedRef.current`/`appliedView`：`apply()` 把它们同步改到新作用域，随后才
+   * `reload(true)` 发一轮网络往返，这段窗口内表格显示的仍是旧作用域那批行。详情抽屉
+   * 若跟着新 `appliedRef`/`appliedView` 走，会把仍在渲染的旧行的 keyword_id 配上新
+   * 站点/视图/日期，要么触发后端跨站点校验（422），要么把一份数据按错误的日期语境
+   * 解析（PR #87 复审 P2，与 KeywordLibrary 的 loadedSite/loadedView/loadedDate 同一
+   * 模式）。不进会话快照——与 `trendTarget` 同理，切走再切回清空是预期行为，且 ProTable
+   * 挂载即调 `runRequest`（复原分支同样经过它），首次渲染前就会补齐。
+   */
+  const [loadedSite, setLoadedSite] = useState<string | undefined>();
+  const [loadedView, setLoadedView] = useState<View | undefined>();
+  const [loadedDate, setLoadedDate] = useState<string | null | undefined>();
 
   const [resultTotal, setResultTotal] = useCachedState('resultTotal', 0);
   // 总数缓存与"下次要重算"的标记。ProTable 的 request 同时承担翻页与条件变更两种触发，
@@ -332,7 +351,14 @@ export function useAnalysisQuery(options: {
     // 复原后的第一次请求可能直接拿快照里的行交差（一次性，且核对完整请求标识）。
     // 语义与理由收在 `useAnalysisSession.consumeRestoredRows` 里。
     const restoredRows = consumeRestoredRows(key);
-    if (restoredRows) return { ...restoredRows, success: true };
+    if (restoredRows) {
+      // 这批行就是按 body 这份请求体查出来的（`consumeRestoredRows` 核对过请求标识），
+      // 与真实请求分支同一处理：详情抽屉必须跟着这批行走，不是跟着可能已经变了的 appliedRef。
+      setLoadedSite(body.site);
+      setLoadedView(body.view);
+      setLoadedDate(body.date ?? null);
+      return { ...restoredRows, success: true };
+    }
 
     // 排序只有工具栏一个入口（列上没有 sorter），故不读 ProTable 的 sort 参数——
     // 读了也永远是空对象，那种分支看着像在工作，实际是死代码。
@@ -354,6 +380,11 @@ export function useAnalysisQuery(options: {
     totalRef.current = total;
     setResultTotal(total);
     setPendingRebuild(res.pending_rebuild === true);
+    // 详情抽屉跟着这批行实际所属的站点/视图/日期走，见上方 loadedSite 的注释；
+    // 三者取自响应本身，不是发请求时的闭包值。
+    setLoadedSite(res.site);
+    setLoadedView(res.view);
+    setLoadedDate(res.date);
     const rows = res.data ?? [];
     // 把「这次请求是什么 + 拿回了什么」一并落进快照，供下次挂载短路
     persist({ lastRequest: key, rows, total, needsTotal: needsTotalRef.current });
@@ -369,6 +400,9 @@ export function useAnalysisQuery(options: {
     appliedRef,
     appliedView,
     appliedSig,
+    loadedSite,
+    loadedView,
+    loadedDate,
     actionRef,
     resultTotal,
     pendingRebuild,

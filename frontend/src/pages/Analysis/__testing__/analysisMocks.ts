@@ -28,6 +28,9 @@ export const exportAnalysis = vi.fn();
 export const listGroups = vi.fn();
 export const createGroup = vi.fn();
 export const addItems = vi.fn();
+/** 排名趋势详情抽屉内部调用。不 mock 会走真实实现，命中该组件自身测试同样的
+ * esbuild/@umijs/max 环境坑（见 KeywordTrendDrawer/index.test.tsx 顶部注释）。 */
+export const getKeywordTrend = vi.fn();
 
 export const ROW = {
   keyword_id: 1,

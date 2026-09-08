@@ -116,7 +116,7 @@ export default function AnalysisPage() {
   });
   clearCategoryFiltersRef.current = query.clearCategoryFilters;
 
-  const { appliedRef, actionRef, appliedView } = query;
+  const { appliedRef, actionRef, appliedView, loadedSite, loadedView, loadedDate } = query;
 
   /**
    * 解析首屏用哪个作用域与哪份筛选。
@@ -498,15 +498,20 @@ export default function AnalysisPage() {
         onAdded={() => setSelectedKeywordIds([])}
       />
 
-      {trendTarget && (
+      {trendTarget && loadedSite && loadedView && (
         <KeywordTrendDrawer
           open={!!trendTarget}
           onClose={() => setTrendTarget(null)}
           keywordId={trendTarget.keyword_id}
           keyword={trendTarget.keyword}
-          site={appliedRef.current?.site ?? ''}
-          view={appliedView}
-          on={appliedRef.current?.date}
+          // 站点/视图/日期取表格里这批行实际所属的那次响应，不是 appliedRef/appliedView：
+          // `apply()` 把后两者同步改到新作用域、随后才发一轮网络往返，这段窗口内表格
+          // 显示的仍是旧作用域那批行，trendTarget 若来自切换前仍在渲染的旧行，用
+          // appliedRef 会把它的 keyword_id 配上新站点/视图/日期，要么 422，要么把数据
+          // 按错误的日期语境解析（PR #87 复审 P2）。
+          site={loadedSite}
+          view={loadedView}
+          on={loadedDate ?? undefined}
           canAddToLibrary={access.canViewKeyword}
         />
       )}
