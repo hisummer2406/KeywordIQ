@@ -149,12 +149,13 @@ def test_serialize_user_shape():
         ],
         "is_active": True,
         "is_super": False,
-        # 账号来源与展示名（钉钉 SSO 引入）。本地账号两者皆空——前端据此把「来源」
-        # 显示成「本地」、显示名回落到 username。
+        # 账号来源、展示名与头像（钉钉 SSO 引入）。本地账号三者皆空——前端据此把「来源」
+        # 显示成「本地」、显示名回落到 username、头像回落到默认图标。
         #
         # 这条断言用**精确相等**是有意的：serialize_user 是前后端契约，多一个键少一个键
         # 都该在这里被看见。加字段时更新期望值，不要改成子集断言。
         "display_name": None,
+        "avatar_url": None,
         "external_idp": None,
     }
 

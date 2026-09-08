@@ -157,6 +157,7 @@ async def find_or_create_sso_user(
     external_id: str,
     dingtalk_userid: str,
     display_name: str | None,
+    avatar_url: str | None,
 ) -> UserCenter:
     """按 `(external_idp, external_id)` 找账号，没有就建档。
 
@@ -167,14 +168,15 @@ async def find_or_create_sso_user(
     `external_id` 存的是 unionId 而非企业内 userid——后者管理员可改、离职再入职会换，
     变一次即老账号成孤儿、当事人被当新人重新开号、已配置的角色全部丢失。
 
-    已建档账号**不回写任何属性**：回写会撞上用户名唯一约束（要处理冲突与重命名的连锁
-    影响），而收益只是显示名跟随钉钉侧改名。
+    已建档账号**不回写 display_name / user_name**：回写会撞上用户名唯一约束（要处理
+    冲突与重命名的连锁影响），而收益只是显示名跟随钉钉侧改名。**头像是例外**——见
+    `UserCenterCRUD.sync_avatar`，每次登录都同步。
     """
     crud = UserCenterCRUD(db)
 
     existing = await crud.get_by_external_identity(IDP_DINGTALK, external_id)
     if existing is not None:
-        return existing
+        return await crud.sync_avatar(existing, avatar_url)
 
     taken = await crud.list_user_names()
     user_name = resolve_user_name(normalize_user_name(dingtalk_userid), taken)
@@ -182,6 +184,7 @@ async def find_or_create_sso_user(
     return await crud.create_sso_user(
         user_name=user_name,
         display_name=display_name,
+        avatar_url=avatar_url,
         idp=IDP_DINGTALK,
         external_id=external_id,
         role_code=settings.SSO_DEFAULT_ROLE_CODE,
@@ -205,6 +208,11 @@ async def login_with_auth_code(
     union_id = me.get("unionId")
     if not union_id:
         raise SsoNotEmployeeError(log_detail=f"contact/users/me 未返回 unionId: {me}")
+    # 头像取自这一步（个人 accessToken，只需 openid scope），不取企业侧 user_detail——
+    # 后者受 qyapi_get_member 权限把守，权限没开时 user_detail 会静默返回空字典，
+    # 那样头像会跟着姓名一起消失；这里的来源与权限范围无关，更不容易因为漏勾一个权限
+    # 而整体失效。
+    avatar_url = me.get("avatarUrl")
 
     corp_token = await client.corp_access_token()
     dingtalk_userid = await client.userid_by_unionid(corp_token, union_id)
@@ -219,6 +227,7 @@ async def login_with_auth_code(
         external_id=union_id,
         dingtalk_userid=dingtalk_userid,
         display_name=detail.get("name"),
+        avatar_url=avatar_url,
     )
     if not user.is_active:
         # 与「不在通讯录内」分开：那条是钉钉侧没有你，这条是本系统的管理员停用了你。
