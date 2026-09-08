@@ -44,9 +44,11 @@
 ## 4. 数据迁移
 
 - [x] 4.1 `scripts/migrate_to_selfhosted_pg.py`：确认源库无
-  `PROCESSING`/`QUEUED`/`UPLOADING` 批次 → 容器内 `pg_dump --data-only`（排除迁移自带
-  种子表，见下）→ 补齐目标分区 → `pg_restore --data-only`。**本地演练过程中发现并修复
-  两个真实 bug，不是靠代码审查发现的**：
+  `PROCESSING`/`QUEUED`/`UPLOADING` 批次 → 切源库为只读并断开其余会话
+  （`_quiesce_source`，PR #84 Codex 审核指出原检查与 dump 之间仍有写入窗口后补上，
+  见下）→ 容器内 `pg_dump --data-only`（排除迁移自带种子表，见下）→ 补齐目标分区 →
+  `pg_restore --data-only`。**本地演练过程中发现并修复两个真实 bug，不是靠代码审查
+  发现的**：
   (a) `pg_restore` 不显式给 `--username postgres` 会用 `docker compose exec` 的默认
   执行用户（root）连接，报 `role "root" does not exist"`；
   (b) `permission`/`role`/`role_permission`/`alembic_version` 四张表由 Alembic 迁移
@@ -67,6 +69,13 @@
   host 侧预检与容器内执行的 `pg_dump`/`pg_restore` 命令要求源库地址在两种网络视角下
   都可达——生产环境下 RDS 天然满足（同一 VPC 域名解析一致），本地演练环境不满足
   （host 与容器看到"同一台机器"的方式不同），已在脚本注释里写明这不是需要修的缺陷。
+  **`_quiesce_source` 补上后单独用一个一次性 `postgres:15.8` 容器实测**（不是套进
+  4.3 那套 docker-compose 演练重跑）：确认切只读后旧连接被 `pg_terminate_backend`
+  断开、新连接写入被拒但读取仍正常；顺带跑出打印在函数说明里的那两个回滚指令陷阱
+  （`ALTER DATABASE` 在已继承只读默认值的会话里直接跑会被自己挡下；`SET` 与
+  `ALTER DATABASE` 写进同一条用分号连起来的命令时共享同一个隐式事务、`SET` 不生效）
+  ——最终确认的回滚指令（`PGOPTIONS='-c default_transaction_read_only=off' psql ...`）
+  逐字符跑通。
 - [ ] 4.4 **未执行**——需要生产阿里云 RDS 的访问权限与实际低峰时段窗口，本会话不具备，
   留给有生产访问权限的人执行。跑法见 `migrate_to_selfhosted_pg.py` 与
   `verify_selfhosted_migration.py` 的用法说明。

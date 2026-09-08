@@ -6,7 +6,9 @@
 #
 # 密码写死而非走 .env：这个角色只在 Docker 内部网络内可达（db 不对外暴露端口），
 # Netdata 静态 YAML 配置（docker/netdata/go.d/postgres.conf）本身也不支持 ${VAR}
-# 替换，两处只能手工保持一致。要改密码，两个文件一起改。
+# 替换，两处只能手工保持一致。要改密码，两个文件一起改；要改 POSTGRES_DB 同理——
+# 下面这条 GRANT CONNECT 会跟着 .env 自动生效，但 postgres.conf 里写死的库名不会，
+# 漏改的表现是 Netdata 连一个不存在的库，PostgreSQL 那组监控图表静默消失。
 set -euo pipefail
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
