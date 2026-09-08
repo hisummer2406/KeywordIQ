@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { KeywordTrendPoint } from '@/services/keywordTrend';
 import TrendTimelineChart from './TrendTimelineChart';
@@ -65,5 +65,31 @@ describe('TrendTimelineChart', () => {
 
     expect(container.querySelectorAll('[data-testid="trend-line-segment"]')).toHaveLength(0);
     expect(container.querySelector('[data-testid="trend-point-DROPPED-2026-07-02"]')).toBeTruthy();
+  });
+
+  /**
+   * 悬停留下的 `activeIndex` 是上一次 `points` 数组下的下标；父组件（抽屉）切换范围/
+   * 视图后传入更短的新数组，这个下标可能越界。`points[activeIndex]` 越界时是
+   * `undefined` 不是 `null`——渲染层若只判断 `active !== null` 就会在越界这一刻仍然
+   * 试图解引用 `active.date`，直接抛错崩掉整个抽屉，而不是这里能单独重渲染验证的组件
+   * 边界（PR #87 复审第四轮 P2）。
+   */
+  it('悬停后收到更短的新数组，越界下标不崩溃、也不再显示提示', () => {
+    const longPoints = [
+      point('2026-07-01', 'RANKED', 100),
+      point('2026-07-02', 'RANKED', 90),
+      point('2026-07-03', 'RANKED', 80),
+    ];
+    const { container, rerender } = render(<TrendTimelineChart points={longPoints} view="DAY" />);
+
+    const svg = container.querySelector('svg')!;
+    // jsdom 的 getBoundingClientRect 恒为全零矩形，relX 直接等于 clientX；给一个远大于
+    // 绘图宽度的值，最近点必然落在数组最后一个下标（索引 2）。
+    fireEvent.mouseMove(svg, { clientX: 10000, clientY: 100 });
+    expect(container.querySelector('[data-testid="trend-point-RANKED-2026-07-03"]')).toHaveAttribute('r', '5');
+
+    const shortPoints = [point('2026-07-10', 'RANKED', 50)];
+    expect(() => rerender(<TrendTimelineChart points={shortPoints} view="DAY" />)).not.toThrow();
+    expect(screen.queryByText('2026年07月03日')).not.toBeInTheDocument();
   });
 });

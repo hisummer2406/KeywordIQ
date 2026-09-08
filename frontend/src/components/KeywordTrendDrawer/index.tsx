@@ -145,7 +145,16 @@ export default function KeywordTrendDrawer({
           )}
         </Space>
 
-        {loading && data === null && (
+        {/* 范围（近 30 天 / 全部可用历史）与视图不同，不能沿用"留存旧数据展示"那条
+            纪律：`data.range` 与 `range`（Radio 当前选中值）不一致时，下面这段展示的
+            coverage/最好排名/最近可用排名是**另一个范围窗口的真实数值**，不是同一份
+            数据换个格式化——继续显示会让用户把 30 天窗口的结果误当成"全部可用历史"的
+            结果（PR #87 复审第四轮 P2）。这与 view 的处理刻意不同：view 只影响日期
+            格式化，同一份 `data` 换个 view 标签仍然自洽；range 直接决定了数值本身。
+            一旦请求结算（`!loading`），`data.range` 必然已与 `range` 一致（见下方
+            useEffect：`range` 一变就会带着新值发起新请求、用请求序号丢弃旧响应），
+            这里的判断只在切换范围、新响应还没落地的那段窗口内生效。 */}
+        {loading && (data === null || data.range !== range) && (
           <div style={{ textAlign: 'center', padding: 40 }}>
             <Spin />
           </div>
@@ -165,8 +174,9 @@ export default function KeywordTrendDrawer({
             的视图）：切换 DAY/WEEK 时 `viewState` 立即变、`data` 要等新响应回来才换，
             中间这段窗口里 `loading` 只包住小图（见下方 Spin），若统计文字与日期格式化
             仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
-            ——数字没变但含义被读反了（PR #87 复审 P2）。 */}
-        {!errored && data !== null && data.on !== null && (
+            ——数字没变但含义被读反了（PR #87 复审 P2）。`data.range === range` 见上方
+            大注释——range 与 view 不同，不满足就整段不渲染。 */}
+        {!errored && data !== null && data.range === range && data.on !== null && (
           <>
             <Space size={32} wrap style={{ fontSize: 13 }}>
               <div>

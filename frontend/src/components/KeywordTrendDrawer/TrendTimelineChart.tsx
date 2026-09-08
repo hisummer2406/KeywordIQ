@@ -80,7 +80,11 @@ export default function TrendTimelineChart({
     }
   }
 
-  const active = activeIndex === null ? null : points[activeIndex];
+  // `activeIndex` 可能是切换范围/视图前留下的旧下标：新响应落地后 `points` 换成一个
+  // 更短的数组，旧下标越界。`points[activeIndex]` 此时是 `undefined` 不是 `null`——
+  // 用 `?? null` 兜底，否则下方 `active !== null` 仍判真，渲染时解引用 `active.date`
+  // 直接崩掉整个抽屉（PR #87 复审第四轮 P2）。
+  const active = activeIndex === null ? null : (points[activeIndex] ?? null);
 
   return (
     <Tooltip
