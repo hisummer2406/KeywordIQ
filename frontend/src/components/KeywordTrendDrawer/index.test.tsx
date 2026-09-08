@@ -143,4 +143,12 @@ describe('KeywordTrendDrawer', () => {
     await screen.findByText('2026年07月10日');
     expect(screen.getByText('加入词库')).toBeInTheDocument();
   });
+
+  it('canAddToLibrary 为 false 时不展示加入词库入口（无 keyword:view 权限，PR #87 审核 P2）', async () => {
+    getKeywordTrend.mockResolvedValue(baseResponse());
+    setup({ canAddToLibrary: false });
+
+    await screen.findByText('2026年07月10日');
+    expect(screen.queryByText('加入词库')).not.toBeInTheDocument();
+  });
 });

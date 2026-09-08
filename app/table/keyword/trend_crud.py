@@ -44,9 +44,12 @@ def keyword_history_stmt(site: str, view: str, keyword_id: int, start: date, end
 def keyword_dropped_stmt(site: str, view: str, keyword_id: int, start: date, end: date):
     """单关键词在 [start, end] 内被判定为掉榜的期次（anchor_date 落在区间内）。
 
-    走 ``fact_dropped`` 主键 ``(site, period_type, anchor_date, keyword_id)``：
-    (site, period_type) 等值 + anchor_date 范围做索引扫描，keyword_id 等值在扫描内
-    做 filter——`fact_dropped` 比事实表小一到两个数量级，这个 filter 代价可忽略。
+    走 ``idx_fact_dropped_keyword_history (site, period_type, keyword_id, anchor_date)``
+    ——不是主键 ``(site, period_type, anchor_date, keyword_id)``：主键把 anchor_date
+    排在 keyword_id 之前，一旦 anchor_date 是范围（30 天窗口、更别提"全部可用历史"）
+    keyword_id 就退化成扫描内 filter，代价随该站点/视图/日期窗口内的掉榜行数增长，
+    不随目标关键词的历史行数增长。这张补充索引把 keyword_id 放在 anchor_date 之前，
+    等值条件先收窄到单个关键词，anchor_date 范围只在这个子集内扫描（PR #87 审核）。
     """
     return (
         select(FactDropped.anchor_date, FactDropped.last_ranking)

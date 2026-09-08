@@ -35,6 +35,16 @@ interface Props {
    * ——对同一件事出现两个语义重复的按钮。
    */
   hideAddToLibrary?: boolean;
+  /**
+   * 调用方按 `access.canViewKeyword` 传入，默认 true。
+   *
+   * 「加入词库」调的是词库域的接口（`keyword:view`），与这个抽屉本身要求的
+   * `analysis:view`/`keyword:view` 任一即可不是同一个权限点——市场分析入口只
+   * 持有 `analysis:view` 的用户能打开抽屉，却不该看到一个点了必定 403 的按钮
+   * （PR #87 审核 P2）。我的词库入口本就要求 `keyword:view` 才能进页面，
+   * 不必单独传。
+   */
+  canAddToLibrary?: boolean;
 }
 
 const RANGE_OPTIONS: { label: string; value: TrendRange }[] = [
@@ -66,8 +76,9 @@ function StatLine({ label, stat, view }: { label: string; stat: { date: string; 
 }
 
 export default function KeywordTrendDrawer({
-  open, onClose, keywordId, keyword, site, view, on, hideAddToLibrary,
+  open, onClose, keywordId, keyword, site, view, on, hideAddToLibrary, canAddToLibrary = true,
 }: Props) {
+  const showAddToLibrary = canAddToLibrary && !hideAddToLibrary;
   const [viewState, setViewState] = useState<View>(view);
   const [range, setRange] = useState<TrendRange>('RECENT_30D');
   const [data, setData] = useState<KeywordTrendResponse | null>(null);
@@ -129,7 +140,7 @@ export default function KeywordTrendDrawer({
             value={range}
             onChange={(e) => setRange(e.target.value as TrendRange)}
           />
-          {!hideAddToLibrary && (
+          {showAddToLibrary && (
             <a onClick={() => setLibraryOpen(true)}>加入词库</a>
           )}
         </Space>
@@ -193,7 +204,7 @@ export default function KeywordTrendDrawer({
         )}
       </Space>
 
-      {!hideAddToLibrary && (
+      {showAddToLibrary && (
         <AddToLibraryModal
           open={libraryOpen}
           site={site}
