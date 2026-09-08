@@ -5,8 +5,10 @@
 1. 自建 `db` 容器已跑过 `docker compose exec app alembic upgrade head`，schema
    （含分区表、`category_stats`/`brand_stats` 等）已建好且核对过与 RDS 一致
    （见 openspec/changes/dockerize-selfhosted-infra/design.md 决策 4）
-2. 选在低峰时段执行——迁移窗口内 RDS 上不应有新写入，否则窗口期的写入会丢失
-   （见 design.md 风险「迁移窗口数据不一致」）
+2. 选在低峰时段执行——本脚本会在确认无活跃导入后把源库切为只读（`_quiesce_source`），
+   堵住检查通过到 dump 开始之间的写入窗口，但改不了已经发生的事：切只读之前若源库上
+   还有别的写入在跑，那部分数据依然进不了 dump（见 design.md 风险「迁移窗口数据
+   不一致」）
 
 **用 db 容器自带的 pg_dump/pg_restore，不要求宿主机安装 PostgreSQL 客户端**：
 `postgres:15.x` 镜像本身就带这两个二进制，`docker compose exec db ...` 直接借用，
@@ -29,10 +31,14 @@ design.md「Migration Plan」）。
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 
 _DUMP_PATH_IN_CONTAINER = "/tmp/keywordiq_migration_dump.custom"
+
+# 匹配 postgres(ql)://user:pass@host 形态里的密码段，仅用于打印时脱敏——不用于连接。
+_DSN_PASSWORD_RE = re.compile(r"(postgres(?:ql)?://[^:@/\s]+:)[^@\s]*(@)")
 
 # 这几张表由 Alembic 迁移在建库时直接写入固定的种子数据（RBAC 权限矩阵、迁移版本号），
 # 不是"导入进来的业务数据"。自建库跑过 `alembic upgrade head` 后已经有这些行，
@@ -58,8 +64,55 @@ def _check_no_active_import(source_url: str) -> None:
         )
 
 
+def _quiesce_source(source_url: str) -> None:
+    """把源库切成拒绝新写事务，堵住"检查通过"与"pg_dump 开始"之间的写入窗口。
+
+    `_check_no_active_import` 只查了一次 `import_batch`，既不覆盖用户操作、词库、竞对
+    轮询等其余写路径，也挡不住检查通过后的下一刻才开始的新事务——这两者都会在这段窗口
+    内静默丢入 RDS、却进不了 dump。`default_transaction_read_only` 对新会话立即生效，
+    配合 `pg_terminate_backend` 收尾当前已连接、可能还留有未提交写事务的旧会话，
+    使这段窗口内任何写入要么发生不了、要么在提交前就被切断连接回滚。
+    这也提前落成了 design.md Migration Plan 步骤 6 承诺的终态——观察窗口期间
+    RDS 本就该是只读的；这里只是把它提前到 dump 之前生效。
+
+    若迁移中途放弃、需要继续用 RDS 服务，用 `PGOPTIONS` 带着覆盖值连接，跑
+    `ALTER DATABASE <db> SET default_transaction_read_only = off;` 改回去——不能省
+    `PGOPTIONS`：新连上的会话本身已经继承了库级只读默认值，直接跑这条 `ALTER DATABASE`
+    会被这个只读挡下来（`ALTER DATABASE` 是对系统目录的写操作）；把 `SET
+    default_transaction_read_only = off` 和 `ALTER DATABASE ...` 分两条语句依次执行
+    同样能绕开，但若把两条语句写进同一次调用（同一个 `psql -c "stmt1; stmt2"`），
+    Postgres 的简单查询协议会把它们隐式包进同一个事务，`SET` 生效前 `ALTER DATABASE`
+    所在的事务早已在只读状态下开始——本地演练把这两种失败形态都跑出来过，不是猜测。
+    """
+    import psycopg2
+
+    with psycopg2.connect(source_url) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT current_database()")
+            (db_name,) = cur.fetchone()
+            cur.execute(
+                f'ALTER DATABASE "{db_name}" SET default_transaction_read_only = on'
+            )
+            cur.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                (db_name,),
+            )
+    print(
+        f"已将源库 {db_name} 切为只读并断开其余会话；若需放弃迁移继续用 RDS 服务，"
+        f"跑（PGOPTIONS 不能省，见函数说明）：\n"
+        f"  PGOPTIONS='-c default_transaction_read_only=off' psql \"<source_url>\" -c "
+        f"'ALTER DATABASE \"{db_name}\" SET default_transaction_read_only = off'"
+    )
+
+
+def _redact(arg: str) -> str:
+    return _DSN_PASSWORD_RE.sub(r"\1***\2", arg)
+
+
 def _run(cmd: list[str], *, dry_run: bool) -> None:
-    print(f"$ {' '.join(cmd)}")
+    print(f"$ {' '.join(_redact(c) for c in cmd)}")
     if dry_run:
         return
     subprocess.run(cmd, check=True)
@@ -79,8 +132,10 @@ def main() -> int:
     if not args.dry_run:
         print("确认 RDS 侧没有正在进行的导入...")
         _check_no_active_import(args.source_url)
+        print("\n把源库切为只读，堵住检查通过之后到 dump 开始之间的写入窗口...")
+        _quiesce_source(args.source_url)
     else:
-        print("[--dry-run] 跳过 RDS 侧导入状态检查")
+        print("[--dry-run] 跳过 RDS 侧导入状态检查与只读切换")
 
     print(f"\n从 RDS 导出 analysis schema 的数据到容器内 {_DUMP_PATH_IN_CONTAINER} ...")
     dump_cmd = [

@@ -8,6 +8,7 @@ frontend
 node_modules
 logs
 uploads
+pgdata
 docs
 openspec
 etc

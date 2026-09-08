@@ -180,11 +180,17 @@ issue #81 已经对"是否为独立站抓取并发引入 Celery/Redis"做过完�
   （决策 6）把"故障后能恢复"顶上，不追求"故障不发生"。
 
 - **[风险] 迁移窗口数据不一致**：`pg_dump`/`pg_restore` 之间若应用仍在写 RDS，会丢失
-  窗口期的写入。
-  **缓解**：选低峰时段做迁移；迁移前确认没有导入任务在跑（`import_batch` 无
-  `PROCESSING`/`QUEUED` 状态）；迁移后按关键表（`fact_daily`/`fact_weekly`/
-  `dim_keyword`/`dim_product`/`site_data_stats`）逐一核对行数与最大主键，核对通过才
-  切 `DATABASE_URL`；RDS 保留至少 7 天只读可查，作为回滚与核对基准，确认无误后再释放。
+  窗口期的写入；仅检查 `import_batch` 无在跑批次不够——用户操作、词库、竞对轮询等其余
+  写路径完全不受这个检查约束，检查通过与 dump 开始之间也仍有空隙可以插入新写入。
+  **缓解**：选低峰时段做迁移；`scripts/migrate_to_selfhosted_pg.py` 在确认没有导入任务
+  在跑（`import_batch` 无 `PROCESSING`/`QUEUED`/`UPLOADING`）之后，会把 RDS 切为拒绝新写
+  事务并断开其余会话（`_quiesce_source`），堵住检查与 dump 之间的窗口；这一步切成只读
+  之前若源库上已有别的写入在跑，那部分数据依然进不了 dump，低峰时段仍是前提而非可以
+  跳过的步骤。迁移后按关键表（`fact_daily`/`fact_weekly`/`dim_keyword`/`dim_product`/
+  `site_data_stats`）逐一核对行数与最大主键，核对通过才切 `DATABASE_URL`；RDS 保留至少
+  7 天只读可查，作为回滚与核对基准，确认无误后再释放。**这个只读状态是单向的**：
+  观察窗口内自建库一旦有新写入，RDS 就已经落后，见下文 Migration Plan 步骤 6 的回滚
+  限制——不是"随时能切回去"的安全网。
 
 - **[风险] bind mount 路径被误操作**：PG 数据目录是宿主机普通目录，没有 Docker 卷层面
   的误删保护。
@@ -204,14 +210,21 @@ issue #81 已经对"是否为独立站抓取并发引入 Celery/Redis"做过完�
 
 1. 在 `db` 容器（全新、空库）上跑 `alembic upgrade head`，核对生成的 schema（含分区、
    物化视图）与 RDS 实际 schema 一致（`\d+` 或 `pg_dump --schema-only` 逐项比对）
-2. 确认迁移窗口内没有导入任务在跑（`import_batch` 表无 `PROCESSING`/`QUEUED`）
+2. 确认迁移窗口内没有导入任务在跑（`import_batch` 表无 `PROCESSING`/`QUEUED`/
+   `UPLOADING`），随后把 RDS 切为拒绝新写事务并断开其余会话——`migrate_to_selfhosted_pg.py`
+   自动做这两步（`_check_no_active_import` + `_quiesce_source`），不需要手工执行
 3. `pg_dump --data-only --schema=analysis -Fc` 导出 RDS 数据；`pg_restore --data-only
    -j <并行度>` 灌入自建库
 4. 核对关键表行数、最大主键/最新 `report_date`、`site_data_stats` 汇总值与 RDS 一致
 5. 切换 `.env` 的 `DATABASE_URL`/`DATABASE_URL_ASYNC` 指向 `db`，`docker compose up -d`
    拉起应用容器，跑一次健康检查（`/health`）与一次只读查询（`/api/analysis/scope`）
 6. RDS 保留只读、不删除，观察窗口（建议 7 天，覆盖至少一次日报 + 一次周报导入）；
-   期间若发现资源争抢或数据问题，改回 `.env` 指向 RDS 即可秒回滚
+   **回滚不是把 `.env` 换回 RDS 这么简单**——切换只在自建库还没有任何新写入的极短
+   窗口内才是无损的；观察窗口内一旦有导入或用户写入落到自建库，RDS 已经落后，改回
+   `.env` 会丢弃这部分写入，服务从至少落后一次日报、一次周报的数据重新起步。真出现
+   资源争抢或数据问题要回滚，必须先把观察窗口内自建库上的写入同步或重放回 RDS
+   （或明确接受这部分数据的损失），配置改回去不能替代这一步——本设计不预先规划反向
+   同步工具，真到了要回滚的那一刻按当时的写入量现场评估
 7. 观察窗口结束、确认无问题后，释放 RDS 实例；同一批清理 `etc/keywordiq.service`、
    更新 `deploy.sh`/CLAUDE.md 反映新部署形态
 
