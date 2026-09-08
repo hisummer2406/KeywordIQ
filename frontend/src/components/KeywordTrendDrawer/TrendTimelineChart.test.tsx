@@ -73,8 +73,12 @@ describe('TrendTimelineChart', () => {
    * `undefined` 不是 `null`——渲染层若只判断 `active !== null` 就会在越界这一刻仍然
    * 试图解引用 `active.date`，直接抛错崩掉整个抽屉，而不是这里能单独重渲染验证的组件
    * 边界（PR #87 复审第四轮 P2）。
+   *
+   * 不断言 Tooltip 内容是否挂在 DOM 上——antd Tooltip 关闭时走退场动画，`forceRender`/
+   * 动画期间节点可能短暂仍在 DOM 里（这条在本地过、CI 上翻红，就是这个环境时序差异），
+   * 断言这个没有意义。真正要守的是"不崩"与"越界后没有任何点被继续标记为悬停中"。
    */
-  it('悬停后收到更短的新数组，越界下标不崩溃、也不再显示提示', () => {
+  it('悬停后收到更短的新数组，越界下标不崩溃、也不再把任何点标记为悬停中', () => {
     const longPoints = [
       point('2026-07-01', 'RANKED', 100),
       point('2026-07-02', 'RANKED', 90),
@@ -90,6 +94,7 @@ describe('TrendTimelineChart', () => {
 
     const shortPoints = [point('2026-07-10', 'RANKED', 50)];
     expect(() => rerender(<TrendTimelineChart points={shortPoints} view="DAY" />)).not.toThrow();
-    expect(screen.queryByText('2026年07月03日')).not.toBeInTheDocument();
+    // 越界的下标 2 在新数组（长度 1）里不对应任何点，唯一剩下的点不应被画成悬停态（r=5）
+    expect(container.querySelector('[data-testid="trend-point-RANKED-2026-07-10"]')).toHaveAttribute('r', '3.5');
   });
 });
