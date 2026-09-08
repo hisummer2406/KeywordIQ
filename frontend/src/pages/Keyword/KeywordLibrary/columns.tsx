@@ -55,6 +55,7 @@ export function buildWatchColumns(
   view: View,
   siteDomain?: string,
   onOpenTrend?: (row: AnalysisRow) => void,
+  siteCode?: string,
 ): ProColumns<LibraryWatchRow>[] {
   const statusColumn: ProColumns<LibraryWatchRow> = {
     title: '状态',
@@ -65,6 +66,6 @@ export function buildWatchColumns(
   };
   return [
     statusColumn,
-    ...(buildAnalysisColumns(view, siteDomain, onOpenTrend) as ProColumns<LibraryWatchRow>[]),
+    ...(buildAnalysisColumns(view, siteDomain, onOpenTrend, siteCode) as ProColumns<LibraryWatchRow>[]),
   ];
 }

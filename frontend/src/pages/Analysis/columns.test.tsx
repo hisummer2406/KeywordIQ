@@ -39,12 +39,14 @@ describe('buildColumns', () => {
     expect(titles.indexOf('点击前三类目')).toBeLessThan(titles.indexOf('点击前三品牌'));
   });
 
-  it('品牌是最后一列', () => {
+  it('操作是最后一列，品牌退居倒数第二（issue #78 引入操作列后的顺序）', () => {
     const titles = buildColumns('DAY').map((c) => c.title);
     expect(titles).toContain('点击前三品牌');
-    // 钉住位置而不只是存在性——列序是刻意的（品牌是回头才看的辅助信息），
-    // 只断言"包含"的话，以后有人在末尾加一列就会无声地把它挤走
-    expect(titles.at(-1)).toBe('点击前三品牌');
+    expect(titles).toContain('操作');
+    // 钉住位置而不只是存在性——列序是刻意的，只断言"包含"的话，
+    // 以后有人在末尾加一列就会无声地把它挤走
+    expect(titles.at(-1)).toBe('操作');
+    expect(titles.at(-2)).toBe('点击前三品牌');
   });
 
   it('关键词渲染成指向该站点亚马逊的链接，新标签页打开', () => {
@@ -64,6 +66,48 @@ describe('buildColumns', () => {
 
     expect(container.querySelector('a')).toBeNull();
     expect(container.textContent).toBe('power bank');
+  });
+
+  it('操作列在 US 只渲染 Google 趋势 + Meta 广告库两条（TikTok 广告库不覆盖美国）', () => {
+    const col = buildColumns('DAY', 'amazon.com', undefined, 'US').find((c) => c.title === '操作')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    const links = [...container.querySelectorAll('a')];
+    expect(links).toHaveLength(2);
+
+    const trends = links.find((a) => a.getAttribute('href')?.includes('trends.google.com'))!;
+    expect(trends.getAttribute('href')).toBe(
+      'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=today+12-m',
+    );
+    const adLibrary = links.find((a) => a.getAttribute('href')?.includes('facebook.com'))!;
+    expect(adLibrary.getAttribute('href')).toBe(
+      'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=US&q=power+bank&search_type=keyword_unordered',
+    );
+    expect(links.some((a) => a.getAttribute('href')?.includes('library.tiktok.com'))).toBe(false);
+    for (const a of links) {
+      expect(a.getAttribute('target')).toBe('_blank');
+      expect(a.getAttribute('rel')).toContain('noopener');
+    }
+    // 不弹抽屉、不带按钮/弹层——点击即直接跳转
+    expect(container.querySelector('button')).toBeNull();
+  });
+
+  it('操作列在 GB 渲染三条入口，TikTok 那一条的 title 诚实标注需要再点一次 Search', () => {
+    const col = buildColumns('DAY', 'amazon.co.uk', undefined, 'GB').find((c) => c.title === '操作')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    const links = [...container.querySelectorAll('a')];
+    expect(links).toHaveLength(3);
+
+    const tiktok = links.find((a) => a.getAttribute('href')?.includes('library.tiktok.com'))!;
+    expect(tiktok.getAttribute('href')).toContain('region=GB');
+    expect(tiktok.getAttribute('href')).toContain('adv_name=power+bank');
+    // 深链接不自动查询这件事必须点破，不能让用户以为跳转就等于看到了结果
+    expect(tiktok.getAttribute('title')).toContain('再点一次页面上的 Search');
+  });
+
+  it('操作列拿不到站点码时三条入口都不渲染', () => {
+    const col = buildColumns('DAY', 'amazon.com').find((c) => c.title === '操作')!;
+    const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
+    expect(container.querySelector('a')).toBeNull();
   });
 });
 
@@ -259,7 +303,7 @@ describe('表头一律居中；内容按列宽是否随行变化决定对齐', (
 
   it('内容宽度固定的列居中', () => {
     const cols = buildColumns('DAY');
-    for (const title of ['排名', '搜索趋势', '排名变化', '排名变化率', '点击前三 ASIN']) {
+    for (const title of ['排名', '搜索趋势', '排名变化', '排名变化率', '点击前三 ASIN', '操作']) {
       expect(cols.find((c) => c.title === title)!.align).toBe('center');
     }
   });

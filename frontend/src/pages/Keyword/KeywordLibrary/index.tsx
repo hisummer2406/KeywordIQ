@@ -55,9 +55,15 @@ export default function KeywordLibraryPage() {
   const [selected, setSelected] = useState<number[]>([]);
   /** 排名趋势详情：站点取自当前分组，锚定期取当前盯盘期次（不是"今天"）。 */
   const [trendTarget, setTrendTarget] = useState<AnalysisRow | null>(null);
+  /** 表格里那批行实际所属的站点，取自请求成功时后端回传的 `WatchResponse.site`——
+   * 不能用 `active?.site`：切分组时 `activeId` 先于表格重新加载完成变化（`switchGroup`
+   * 里 `setActiveId` 是同步的，`reloadScope` 与随后的 `reload(true)` 都要等一轮网络
+   * 往返），这段窗口内表格显示的仍是上一个分组的行，若操作列的链接跟着新 `activeId`
+   * 走，会把旧分组的词按新站点拼链接，跳到错误地区。 */
+  const [loadedSite, setLoadedSite] = useState<string | undefined>();
 
   const active = groups.find((g) => g.group_id === activeId);
-  const siteDomain = sites.find((s) => s.code === active?.site)?.domain;
+  const siteDomain = sites.find((s) => s.code === loadedSite)?.domain;
 
   /** 拉分组列表，并在需要时选中一个（首屏与增删之后都走这里）。 */
   const reloadGroups = async (prefer?: number) => {
@@ -192,7 +198,7 @@ export default function KeywordLibraryPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="keyword_id"
-        columns={buildWatchColumns(view, siteDomain, setTrendTarget)}
+        columns={buildWatchColumns(view, siteDomain, setTrendTarget, loadedSite)}
         search={false}
         options={false}
         dateFormatter="string"
@@ -217,6 +223,8 @@ export default function KeywordLibraryPage() {
             perPage: params.pageSize,
             ...toSortParams(sort),
           });
+          // 操作列的链接必须跟着这批行实际所属的站点走，见上方 loadedSite 的注释。
+          setLoadedSite(res.site);
           return {
             data: res.data ?? [],
             total: res.total ?? 0,
@@ -225,13 +233,17 @@ export default function KeywordLibraryPage() {
         }}
       />
 
-      {trendTarget && active && (
+      {trendTarget && loadedSite && (
         <KeywordTrendDrawer
           open={!!trendTarget}
           onClose={() => setTrendTarget(null)}
           keywordId={trendTarget.keyword_id}
           keyword={trendTarget.keyword}
-          site={active.site}
+          // 站点取表格里这批行实际所属的站点，不是 active.site：切分组时 activeId 先于
+          // 表格重新加载完成变化（见上方 loadedSite 的注释），trendTarget 若来自切换前
+          // 仍在渲染的旧行，active.site 这时已经是新分组的站点，会与 keyword_id 实际
+          // 归属的站点错配，触发后端的跨站点校验（422）。
+          site={loadedSite}
           view={view}
           on={date}
           // 这个词已经在当前分组里，不重复提供「加入词库」入口。
