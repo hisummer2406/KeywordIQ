@@ -26,9 +26,15 @@ import psycopg2
 
 # (表名, 用于核对"最新一条"的列)。fact_growth/fact_dropped 用 anchor_date，
 # 两个事实表天报/周报的分区列名不同（CLAUDE.md 已经踩过这个坑），故分开写。
+#
+# 这四张都是 analysis schema 下唯一持久存数据的事实表——漏掉任一张，那张表若在
+# pg_restore 时因分区缺失/中途出错而少落了数据，核对仍会全绿放行切换（Codex 审核
+# PR #84：本注释曾承诺覆盖 fact_growth/fact_dropped，但下面的元组没有真的写进去）。
 _TABLES_WITH_LATEST_COL = (
     ("fact_daily", "report_date"),
     ("fact_weekly", "report_date_week"),
+    ("fact_dropped", "anchor_date"),
+    ("fact_growth", "anchor_date"),
     ("dim_keyword", None),
     ("dim_product", None),
     ("site_data_stats", None),
