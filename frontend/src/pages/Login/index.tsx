@@ -41,9 +41,12 @@ export default function LoginPage() {
   const { finishLogin } = useLoginRedirect();
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [ssoPending, setSsoPending] = useState(false);
+  // SSO 可用时默认展示钉钉登录，账号密码收进切换链接后面；SSO 不可用则只有密码这一条路，
+  // 不需要切换态。'sso' 只在 ssoEnabled 为真时才有意义，见下方 showSsoPrimary。
+  const [mode, setMode] = useState<'sso' | 'password'>('password');
 
   /**
-   * 探测 SSO 是否可用，决定要不要渲染钉钉按钮。
+   * 探测 SSO 是否可用，决定要不要渲染钉钉按钮、以及默认展示哪种登录方式。
    *
    * 探测失败按「不可用」处理：用户还有密码登录这条路，为一次探测弹红条只会让他困惑。
    * 这也是为什么 `ssoStatus` 声明了 skipErrorHandler——静默是显式的，兜底在这里。
@@ -52,7 +55,12 @@ export default function LoginPage() {
     let alive = true;
     ssoStatus()
       .then((res) => {
-        if (alive) setSsoEnabled(Boolean(res?.enabled));
+        const enabled = Boolean(res?.enabled);
+        if (!alive) return;
+        setSsoEnabled(enabled);
+        // 默认登录方式是钉钉扫码；只在探测完成且确实可用时才切过去，避免探测中的
+        // 一帧闪现密码表单又立刻消失。
+        if (enabled) setMode('sso');
       })
       .catch(() => {
         if (alive) setSsoEnabled(false);
@@ -61,6 +69,8 @@ export default function LoginPage() {
       alive = false;
     };
   }, []);
+
+  const showSsoPrimary = ssoEnabled && mode === 'sso';
 
   const handleSsoLogin = async () => {
     setSsoPending(true);
@@ -105,37 +115,54 @@ export default function LoginPage() {
           title="海眸系统"
           subTitle="Amazon 搜索词数据分析平台"
           onFinish={handleSubmit as any}
+          // 注意：LoginFormPage 内部把 submitter 与自带的 { render: (_, dom) => dom.pop() }
+          // 做浅合并（Object.assign 语义），传 `false` 会被合并成空操作、不改变 render——
+          // 出来的是一个丢了尺寸样式的小按钮，不是「不渲染」。要真正隐藏必须显式覆盖 render。
+          submitter={showSsoPrimary ? { render: () => null } : undefined}
           actions={
             ssoEnabled ? (
               <>
                 <Divider plain style={{ fontSize: 12, color: 'rgba(0,0,0,.45)' }}>
-                  其他登录方式
+                  {showSsoPrimary ? '或' : '其他登录方式'}
                 </Divider>
-                <Button
-                  block
-                  size="large"
-                  icon={<DingtalkOutlined />}
-                  loading={ssoPending}
-                  onClick={handleSsoLogin}
-                >
-                  钉钉登录
-                </Button>
+                <div style={{ textAlign: 'center' }}>
+                  <a onClick={() => setMode(showSsoPrimary ? 'password' : 'sso')}>
+                    {showSsoPrimary ? '使用账号密码登录' : '使用钉钉扫码登录'}
+                  </a>
+                </div>
               </>
             ) : null
           }
         >
-          <ProFormText
-            name="username"
-            fieldProps={{ size: 'large', prefix: <UserOutlined /> }}
-            placeholder="用户名"
-            rules={[{ required: true, message: '请输入用户名' }]}
-          />
-          <ProFormText.Password
-            name="password"
-            fieldProps={{ size: 'large', prefix: <LockOutlined /> }}
-            placeholder="密码"
-            rules={[{ required: true, message: '请输入密码' }]}
-          />
+          {showSsoPrimary ? (
+            <div style={{ padding: '16px 0 8px' }}>
+              <Button
+                type="primary"
+                block
+                size="large"
+                icon={<DingtalkOutlined />}
+                loading={ssoPending}
+                onClick={handleSsoLogin}
+              >
+                钉钉扫码登录
+              </Button>
+            </div>
+          ) : (
+            <>
+              <ProFormText
+                name="username"
+                fieldProps={{ size: 'large', prefix: <UserOutlined /> }}
+                placeholder="用户名"
+                rules={[{ required: true, message: '请输入用户名' }]}
+              />
+              <ProFormText.Password
+                name="password"
+                fieldProps={{ size: 'large', prefix: <LockOutlined /> }}
+                placeholder="密码"
+                rules={[{ required: true, message: '请输入密码' }]}
+              />
+            </>
+          )}
         </LoginFormPage>
       </div>
     </ProConfigProvider>

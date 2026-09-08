@@ -51,7 +51,11 @@ export function watchTableWidth(view: View): number {
   return totalColumnWidth(view) + STATUS_COLUMN_WIDTH + SELECTION_COLUMN_WIDTH;
 }
 
-export function buildWatchColumns(view: View, siteDomain?: string): ProColumns<LibraryWatchRow>[] {
+export function buildWatchColumns(
+  view: View,
+  siteDomain?: string,
+  siteCode?: string,
+): ProColumns<LibraryWatchRow>[] {
   const statusColumn: ProColumns<LibraryWatchRow> = {
     title: '状态',
     dataIndex: 'status',
@@ -61,6 +65,6 @@ export function buildWatchColumns(view: View, siteDomain?: string): ProColumns<L
   };
   return [
     statusColumn,
-    ...(buildAnalysisColumns(view, siteDomain) as ProColumns<LibraryWatchRow>[]),
+    ...(buildAnalysisColumns(view, siteDomain, siteCode) as ProColumns<LibraryWatchRow>[]),
   ];
 }

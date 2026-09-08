@@ -90,9 +90,15 @@ async def db():
 class FakeDingTalk:
     """假的钉钉客户端。`directory` 为 unionId → (userid, 姓名) 的映射；不在其中即"不在通讯录内"。"""
 
-    def __init__(self, union_id: str, directory: dict[str, tuple[str, str]]):
+    def __init__(
+        self,
+        union_id: str,
+        directory: dict[str, tuple[str, str]],
+        avatar_url: str | None = None,
+    ):
         self._union_id = union_id
         self._directory = directory
+        self._avatar_url = avatar_url
         self.calls: list[str] = []
 
     async def exchange_user_token(self, auth_code: str) -> str:
@@ -101,7 +107,7 @@ class FakeDingTalk:
 
     async def contact_me(self, user_access_token: str) -> dict:
         self.calls.append("contact_me")
-        return {"unionId": self._union_id, "nick": "某人"}
+        return {"unionId": self._union_id, "nick": "某人", "avatarUrl": self._avatar_url}
 
     async def corp_access_token(self) -> str:
         self.calls.append("corp_access_token")
@@ -165,6 +171,36 @@ async def test_二次扫码复用同一行不重复建档(db):
 
     assert first["user"].id == second["user"].id
     assert await _count_scoped(db, union) == 1
+
+
+# ---------------- 头像：与 display_name 刻意不同，每次登录都刷新 ----------------
+
+async def test_建档时写入头像(db):
+    union = f"{PREFIX}-union-avatar-1"
+    client = FakeDingTalk(
+        union, {union: (f"{PREFIX}Avatar1", "头像甲")}, avatar_url="https://static.dingtalk.com/a.png"
+    )
+
+    result = await _login(db, client)
+
+    assert result["user"].avatar_url == "https://static.dingtalk.com/a.png"
+
+
+async def test_二次登录头像变化会刷新_不同于display_name的不回写(db):
+    union = f"{PREFIX}-union-avatar-2"
+    client = FakeDingTalk(
+        union, {union: (f"{PREFIX}Avatar2", "头像乙")}, avatar_url="https://static.dingtalk.com/old.png"
+    )
+    first = await _login(db, client)
+    assert first["user"].avatar_url == "https://static.dingtalk.com/old.png"
+
+    changed = FakeDingTalk(
+        union, {union: (f"{PREFIX}Avatar2", "头像乙")}, avatar_url="https://static.dingtalk.com/new.png"
+    )
+    second = await _login(db, changed)
+
+    assert second["user"].id == first["user"].id
+    assert second["user"].avatar_url == "https://static.dingtalk.com/new.png"
 
 
 # ---------------- 6.2 userid 变更不影响归属 ----------------

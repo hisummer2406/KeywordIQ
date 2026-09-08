@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { listGroups, getLibraryScope, watchGroup, createGroup, renameGroup, deleteGroup, removeItems, getSites } =
@@ -68,6 +68,28 @@ async function renderSettled() {
   });
 }
 
+/** 手动控制 resolve 时机，用来卡住网络往返、模拟"activeId 已变、表格还没重新加载完成"的窗口。 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * 分组管理区（GroupBar）所在的卡片。
+ *
+ * 分组名会同时出现在两处——GroupBar 的单选按钮标签，以及表格上方作用域条的
+ * 「{分组名} · 站点 xx（由分组决定）· 共 N 个词」提示——两处都合法存在，
+ * 裸 `getByText(/主推词/)` 因此会撞上"找到多个元素"。「新建分组」按钮只在
+ * GroupBar 里出现一次，用它的最近 `.ant-card` 祖先能精确圈定这一块，不依赖
+ * 分组名文本本身。
+ */
+function groupBarCard() {
+  return screen.getByRole('button', { name: /新建分组/ }).closest('.ant-card') as HTMLElement;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   getSites.mockResolvedValue([{ code: 'US', name: '美国', domain: 'amazon.com' }]);
@@ -94,17 +116,14 @@ describe('进屏即查', () => {
   it('分组管理区列出分组，带站点与词数', async () => {
     // 这一屏没有站点选择器，站点只能从分组上读到——漏掉站点，用户就无从判断
     // 表格里的排名属于哪个市场。
-    //
-    // 分组名/站点/词数在页面上出现不止一处（下面「站点由分组决定」那条说明文字
-    // 同样会带出这几个值），plain getByText 在全页范围内会因此撞成多个匹配；
-    // 这里直接定位分组管理区自己的芯片（.ant-radio-button-label），只在这一个
-    // 元素范围内断言，与它是否在别处重复出现无关。
     await renderSettled();
-    await waitFor(() => expect(document.querySelector('.ant-radio-button-label')).toBeTruthy());
-    const chip = document.querySelector('.ant-radio-button-label') as HTMLElement;
-    expect(within(chip).getByText('US')).toBeTruthy();
-    expect(chip.textContent).toContain('主推词');
-    expect(chip.textContent).toContain('3');
+    await waitFor(() => expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy());
+    // 分组名同时出现在 GroupBar 与表格上方作用域条两处，裸 getByText 会因此撞上
+    // "找到多个元素"——scoped 到 GroupBar 卡片本身，见 groupBarCard() 的说明。
+    const card = within(groupBarCard());
+    expect(card.getByText(/主推词/)).toBeTruthy();
+    expect(card.getByText('US')).toBeTruthy();
+    expect(card.getByText(/3\s*词/)).toBeTruthy();
   });
 
   it('站点由分组决定，界面写明这一点', async () => {
@@ -210,16 +229,70 @@ describe('横向宽度', () => {
     // 侧栏形态下盯盘表格有近 400px 被裁进横向滚动（1920 视口实测）。分组一览有价值，
     // 但代价必须落在纵向：纵向可以滚，横向被裁掉的列是找不回来的。
     await renderSettled();
-    // 同上一个用例：分组名在页面上不止一处，定位分组管理区自己的芯片而非用
-    // 文本匹配，避免撞上「站点由分组决定」那条说明文字里的同一个分组名。
-    await waitFor(() => expect(document.querySelector('.ant-radio-button-label')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy());
 
-    const bar = (document.querySelector('.ant-radio-button-label') as HTMLElement).closest(
-      '.ant-card',
-    ) as HTMLElement;
+    const bar = groupBarCard();
     const table = document.querySelector('.ant-table') as HTMLElement;
     // 管理区与表格是上下两块（同一个父容器里的兄弟节点），不是左右分栏
     expect(bar.contains(table)).toBe(false);
     expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy();
+  });
+});
+
+describe('操作列链接的站点不能领先于表格实际加载的数据', () => {
+  // 切分组时 activeId 先于表格重新加载完成变化：setActiveId 是同步的，reloadScope
+  // 与随后的 reload(true) 都要等一轮网络往返。这段窗口内若操作列链接跟着新 activeId
+  // 走，会把仍显示的旧分组的词按新站点拼链接，跳到错误地区（Codex 审核 PR #85）。
+  it('切分组的网络往返还没完成时，操作列仍按当前显示的行的站点拼链接', async () => {
+    const GROUP_DE = {
+      group_id: 2,
+      site: 'DE',
+      name: '德语词',
+      item_count: 1,
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+    };
+    listGroups.mockResolvedValue([GROUP, GROUP_DE]);
+    getSites.mockResolvedValue([
+      { code: 'US', name: '美国', domain: 'amazon.com' },
+      { code: 'DE', name: '德国', domain: 'amazon.de' },
+    ]);
+
+    await renderSettled();
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(1));
+
+    const trendsLink = () => screen.getByRole('link', { name: /查看 Google 搜索趋势/ }) as HTMLAnchorElement;
+    await waitFor(() => expect(trendsLink().href).toContain('geo=US'));
+
+    // 卡住这次切组触发的 getLibraryScope，制造"activeId 已经是 DE、表格还没重新
+    // 加载完成"的窗口
+    const scopeDeferred = deferred<{ site: string; view: 'DAY'; dates: string[] }>();
+    getLibraryScope.mockReturnValueOnce(scopeDeferred.promise);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: /德语词/ }));
+    });
+
+    // 这段窗口内 watchGroup 还没被再次调用，表格里仍是 US 那批行——链接必须仍指向 US，
+    // 不能因为 activeId 已经变成 DE 就提前跳过去
+    expect(watchGroup).toHaveBeenCalledTimes(1);
+    expect(trendsLink().href).toContain('geo=US');
+
+    watchGroup.mockResolvedValueOnce({
+      success: true,
+      data: [row({ keyword: 'kabel' })],
+      total: 1,
+      group_id: 2,
+      site: 'DE',
+      view: 'DAY',
+      date: '2026-08-15',
+    });
+    await act(async () => {
+      scopeDeferred.resolve({ site: 'DE', view: 'DAY', dates: ['2026-08-15'] });
+    });
+
+    // 网络往返完成、表格重新加载出 DE 那批行之后，链接才跟着变成 DE
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(trendsLink().href).toContain('geo=DE'));
   });
 });

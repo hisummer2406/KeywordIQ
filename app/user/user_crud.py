@@ -240,6 +240,7 @@ class UserCenterCRUD:
         *,
         user_name: str,
         display_name: str | None,
+        avatar_url: str | None,
         idp: str,
         external_id: str,
         role_code: str,
@@ -260,6 +261,7 @@ class UserCenterCRUD:
         user = UserCenter(
             user_name=user_name,
             display_name=display_name or None,
+            avatar_url=avatar_url or None,
             hashed_pwd=None,
             is_active=True,
             is_super=False,
@@ -277,6 +279,24 @@ class UserCenterCRUD:
             raise
 
         logger.info("SSO 建档: id=%s user_name=%s idp=%s", user.id, user.user_name, idp)
+        return user
+
+    async def sync_avatar(self, user: UserCenter, avatar_url: str | None) -> UserCenter:
+        """已建档账号登录时刷新头像。
+
+        **与"已建档账号不回写任何属性"这条既有规则刻意不同**：那条规则是为 display_name /
+        user_name 定的，理由是回写要处理用户名唯一约束的连锁影响；头像没有唯一约束顾虑，
+        且头像换了却在系统里显示旧照片，比显示名滞后更容易让人觉得"认错人"。因此头像
+        每次登录都同步，其余字段仍然不动。
+
+        跳过无变化写入（``IS DISTINCT FROM`` 同一条纪律）：头像地址多数登录不变，
+        无谓的 UPDATE 只会产生死元组。
+        """
+        if avatar_url == user.avatar_url:
+            return user
+        user.avatar_url = avatar_url or None
+        await self.db.commit()
+        await self.db.refresh(user)
         return user
 
     async def verify_password(self, plain_password: str, hashed_password: str) -> bool:
