@@ -136,8 +136,10 @@ MUST NOT 仅认可其中一个权限点而阻断另一个入口的合法用户�
 ### Requirement: 查询规模有界，按单一关键词的历史索引取数
 
 查询 MUST NOT 在全站榜单上做实时聚合或跨关键词扫描；SHALL 按 `(站点, keyword_id, 日期)`
-的既有历史索引与 `fact_dropped` 的既有主键索引取数，查询代价 SHALL 随请求的日期范围增长，
-不随站点总词数增长。
+的既有历史索引，以及 `fact_dropped` 上专为此查询新建的 `idx_fact_dropped_keyword_history
+(site, period_type, keyword_id, anchor_date)` 取数——`fact_dropped` 的主键把
+`anchor_date` 排在 `keyword_id` 之前，不满足这条要求（PR #87 复审 P1）。查询代价
+SHALL 随请求的日期范围增长，不随站点总词数增长。
 
 #### Scenario: 查询代价与站点总词数无关
 

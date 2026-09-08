@@ -22,9 +22,12 @@
 - [x] 2.1 `app/table/keyword/trend_schemas.py`：请求/响应 DTO
   （`KeywordTrendPoint`、`KeywordTrendResponse`，`range: Literal["RECENT_30D","ALL"]`）
 - [x] 2.2 `app/table/keyword/trend_crud.py`：`keyword_history_stmt`（走
-  `idx_fact_*_keyword_history`）、`keyword_dropped_stmt`（走 `fact_dropped` 主键）、
-  `keyword_site_stmt`（校验用）——复用 `analysis_crud.fact_and_datecol`，不改动
-  `analysis_crud.py`
+  `idx_fact_*_keyword_history`）、`keyword_dropped_stmt`（原走 `fact_dropped` 主键，
+  PR #87 复审 P1 指出主键把 `anchor_date` 排在 `keyword_id` 之前、单关键词查询里
+  `anchor_date` 是范围而非等值会导致扫描代价随窗口内掉榜行数增长，已改走新建的
+  `idx_fact_dropped_keyword_history (site, period_type, keyword_id, anchor_date)`，
+  见 design.md 决策 1 与迁移 `9d4eb6834e6b`）、`keyword_site_stmt`（校验用）——复用
+  `analysis_crud.fact_and_datecol`，不改动 `analysis_crud.py`
 - [x] 2.3 `app/table/keyword/trend_service.py`：
   - 站点/keyword_id 一致性校验（不一致 422）
   - 锚定期解析：`_resolve_anchor` 取 `<= on` 的最新一期，取不到退化为全局最新一期
@@ -49,7 +52,10 @@
   `EXPLAIN ANALYZE` 已在 `keywordiq_v2_dev`（410 万行 fact_daily、373 万行
   fact_dropped）上核对：两条查询均走 `Index Scan`（`idx_fact_daily_keyword_history`
   与 `fact_dropped` 主键/掉榜分页索引），无 Seq Scan，执行时间 ~9ms / ~3ms
-  （证据见 PR 描述）
+  （证据见 PR 描述）。**此条 EXPLAIN 证据已被 PR #87 复审 P1 的修复取代**：
+  `keyword_dropped_stmt` 现在走 `idx_fact_dropped_keyword_history` 而非主键，
+  修复提交的验证记录（迁移 upgrade/downgrade 回滚测试、`EXPLAIN` 核对新索引命中）
+  是当前口径的准据，不是这里的旧记录——旧记录仅保留作历史参照，不代表现状。
 
 ## 3. 前端：服务层与抽屉组件
 

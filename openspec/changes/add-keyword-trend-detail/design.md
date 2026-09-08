@@ -19,9 +19,15 @@ issue #86 把产品范围与口径都定完了（时间轴按真实日期、不�
 
 - `idx_fact_{daily,weekly}_keyword_history (site, keyword_id, 日期列)`——为批量趋势建的
   索引，单关键词查询同样命中，前缀 `(site, keyword_id)` 定位到几十/几百行，日期范围再收窄。
-- `fact_dropped` 的主键 `(site, period_type, anchor_date, keyword_id)`——按
-  `site, period_type` 等值 + `anchor_date` 范围做索引扫描，`keyword_id` 等值在扫描内做
-  filter。`fact_dropped` 比事实表小一到两个数量级，这个 filter 代价可忽略。
+- `fact_dropped` 新建的 `idx_fact_dropped_keyword_history (site, period_type, keyword_id,
+  anchor_date)`——**不是**主键 `(site, period_type, anchor_date, keyword_id)`。原计划
+  按主键扫描、把 `keyword_id` 等值当成扫描内 filter，理由是"`fact_dropped` 比事实表小
+  一到两个数量级，filter 代价可忽略"；复审（PR #87 P1）指出这个理由不成立：单关键词
+  历史查询里 `anchor_date` 是范围（`range=ALL` 或 30 天窗口）而非等值，主键把
+  `anchor_date` 排在 `keyword_id` 之前，代价因此随该站点/视图窗口内的掉榜行数增长，
+  不随目标关键词的历史行数增长——违背"只按单个 keyword_id 的历史索引取数，不扫全站
+  榜单"这条前提。新索引把 `keyword_id` 提到 `anchor_date` 之前，先收窄到单个关键词
+  再扫描，主键继续承担既有的写入与掉榜集合唯一性约束，两者并存。
 
 ## Decision 2：五态分类算法，且不信任 `site_data_stats` 在保留下界之前的行
 
