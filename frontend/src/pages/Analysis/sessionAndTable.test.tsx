@@ -7,6 +7,7 @@ import {
   exportAnalysis,
   getBrands,
   getCategories,
+  getKeywordTrend,
   getScope,
   getSites,
   listGroups,
@@ -28,6 +29,7 @@ vi.mock('@/services/analysis', () => ({
 }));
 vi.mock('@/services/upload', () => ({ getSites }));
 vi.mock('@/services/library', () => ({ listGroups, createGroup, addItems }));
+vi.mock('@/services/keywordTrend', () => ({ getKeywordTrend }));
 
 import AnalysisPage from '@/pages/Analysis';
 import { clearSnapshot, readSnapshot, writeSlot } from '@/pages/Analysis/stateCache';
@@ -84,6 +86,45 @@ describe('分析查询屏 · 切走再切回与结果表格', () => {
 
       await renderSettled(false);
       expect(await screen.findByText('coffee maker')).toBeInTheDocument();
+    });
+
+    /**
+     * 复原挂载的首次渲染里 `loadedSite`/`loadedView`/`loadedDate` 仍是初始的
+     * `undefined`（`runRequest` 要等 ProTable 触发请求、拿到复原快照后才异步回填），
+     * `columns` 的 `useMemo` 若不把 `openTrend` 记进依赖，就会把这次渲染读到
+     * `undefined` 的旧闭包烤进列定义——之后 `loadedSite` 等状态就绪，列却不重算，
+     * 点击行时 `openTrend` 的守卫读到的仍是 `undefined`，静默 return（PR #87 复审
+     * 第三轮 P2）。
+     */
+    it('复原后点开趋势详情仍然打开抽屉（不能因为复原首次渲染读到的 loadedSite 是 undefined 就静默失效）', async () => {
+      getKeywordTrend.mockResolvedValue({
+        success: true,
+        keyword_id: 1,
+        keyword: 'coffee maker',
+        site: 'US',
+        view: 'DAY',
+        range: 'RECENT_30D',
+        on: '2026-07-18',
+        coverage: { start: '2026-07-12', end: '2026-07-18' },
+        points: [{ date: '2026-07-18', status: 'RANKED', ranking: 1 }],
+        best_ranking: { date: '2026-07-18', ranking: 1 },
+        latest_available: { date: '2026-07-18', ranking: 1 },
+      });
+
+      await renderSettled(false);
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
+      cleanup();
+      vi.clearAllMocks();
+
+      await renderSettled(false); // 第二次挂载 = 复原
+      await settle();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTitle('查看关键词 ABA 排名趋势详情'));
+      });
+
+      await waitFor(() => expect(getKeywordTrend).toHaveBeenCalled());
+      expect(getKeywordTrend.mock.calls[0][0]).toMatchObject({ site: 'US', on: '2026-07-18' });
     });
 
     it('复原后点「立即查询」仍然真的去查（强制刷新的唯一入口不能被短路吃掉）', async () => {
