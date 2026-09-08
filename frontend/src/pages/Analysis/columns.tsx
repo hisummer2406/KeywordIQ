@@ -1,3 +1,4 @@
+import { FacebookOutlined, GoogleOutlined, TikTokOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
@@ -5,6 +6,9 @@ import TrendSparkline from '@/components/TrendSparkline';
 import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
 import { amazonSearchUrl } from './amazonSearchUrl';
+import { facebookAdLibraryUrl } from './facebookAdLibraryUrl';
+import { googleTrendsUrl } from './googleTrendsUrl';
+import { tiktokAdLibraryUrl } from './tiktokAdLibraryUrl';
 import TopProductCards from './TopProductCards';
 
 /**
@@ -23,6 +27,11 @@ import TopProductCards from './TopProductCards';
  * 也就必须跟着分开——挂回卡牌里等于把那个配对重新宣称一遍。
  *
  * 类目同样按名次下发（`top1~3_category`），已作为独立一列展示，位置在品牌之前。
+ *
+ * **「操作」是恒定的最末列**（issue #78 V0：Google 搜索趋势 + Meta/TikTok 广告库外链），
+ * 品牌不再是最后一列。
+ * 这条置换是刻意的：操作类的列（跳转、后续可能追加的行内按钮）习惯上靠右收尾，新增
+ * 操作项时只在这一列内追加，不会像数据列那样牵动"往哪插入不挤走谁"的顺序讨论。
  */
 
 /** 排名变化：数值变小 = 名次上升。0 与空各有各的呈现，不要混。 */
@@ -121,6 +130,7 @@ export function buildColumns(
   view: View,
   siteDomain?: string,
   onOpenTrend?: (row: AnalysisRow) => void,
+  siteCode?: string,
 ): ProColumns<AnalysisRow>[] {
   return alignColumns([
     {
@@ -260,9 +270,9 @@ export function buildColumns(
     // 试过三种分法（卡牌列独吞 / 关键词独吞 / 两列平分），洞只是换位置，没有消失。
     // 全部定宽后，多余宽度由浏览器按比例微调摊给每一列，不再堆在任何一处。
     //
-    // **位置必须在品牌之前。** 品牌列被要求恒在最末（见 analysis-screen-layout），而那条
-    // 要求的理由正是"后来者在末尾追加新列就会把它挤走，且没有检查会报错"——本列就是它
-    // 预言的那个新列。columns.test.tsx 的 `titles.at(-1)` 会拦住放错位置。
+    // **位置必须在品牌之前。**（历史上品牌曾被要求恒在最末，见 analysis-screen-layout；
+    // issue #78 引入「操作」列后，恒在最末的换成了操作列，品牌退到倒数第二——但类目仍需
+    // 排在品牌之前，这条相对顺序没有变。）columns.test.tsx 会拦住放错位置。
     {
       title: '点击前三类目',
       dataIndex: 'top1_category',
@@ -273,12 +283,74 @@ export function buildColumns(
         <RankedList values={[r.top1_category, r.top2_category, r.top3_category]} rows={1} />
       ),
     },
-    // 品牌放在最末列：它是辅助信息，读表时先看排名与商品，品牌是回头才需要的那一眼。
+    // 品牌是辅助信息，读表时先看排名与商品，品牌是回头才需要的那一眼——但它不再是最末列，
+    // 「操作」列排在它后面（见文件头注释）。
     {
       title: '点击前三品牌',
       dataIndex: 'top1_brand',
       width: 130,
       render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
+    },
+    // 「操作」是恒定的最末列（issue #78 V0：Google 搜索趋势 + Meta 广告库 + TikTok
+    // 广告库）。三项都是**直接新标签页跳转的外链**，不做抽屉/弹窗——那是这一屏在与用户
+    // 对齐后砍掉的方案（内嵌趋势图受 X-Frame-Options 限制做不到，摘要抽屉又多一次点击
+    // 换不来实质信息，不如直接跳转）。三条链接同一套降级原则：站点码拿不到/不在覆盖范围
+    // 时不渲染对应入口，宁可空着，也不给一个打不开或打到错误地区的链接——因此三项各自
+    // 独立判空，不共用一次判定。
+    //
+    // **TikTok 那一项与另外两项体验不同，必须诚实标注**：实测 TikTok 广告库的搜索结果
+    // 不支持深链接——URL 能把国家/关键词/日期都预填好，但落地页不会自动查询，显示
+    // "0 条"，要用户自己在页面上再点一次 Search 才会出真实结果（详见
+    // tiktokAdLibraryUrl.ts）。图标 title 里点破这一点，避免用户把"还没点搜索"
+    // 误读成"这个词确实没有广告在投"。
+    {
+      title: '操作',
+      dataIndex: 'operations',
+      width: 48,
+      render: (_, r) => {
+        const trendsUrl = googleTrendsUrl(r.keyword, siteCode);
+        const adLibraryUrl = facebookAdLibraryUrl(r.keyword, siteCode);
+        const tiktokUrl = tiktokAdLibraryUrl(r.keyword, siteCode);
+        if (!trendsUrl && !adLibraryUrl && !tiktokUrl) return PLACEHOLDER;
+        // 上下排列：这一列窄，横向摆图标会挤压相邻列；纵向堆叠不占额外横向空间。
+        return (
+          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            {trendsUrl && (
+              <a
+                href={trendsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在 Google Trends 中查看该词的站外搜索热度"
+                aria-label="查看 Google 搜索趋势"
+              >
+                <GoogleOutlined />
+              </a>
+            )}
+            {adLibraryUrl && (
+              <a
+                href={adLibraryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在 Meta 广告库中查看该词的竞品投放证据"
+                aria-label="查看 Meta 广告库"
+              >
+                <FacebookOutlined />
+              </a>
+            )}
+            {tiktokUrl && (
+              <a
+                href={tiktokUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="在 TikTok 广告库中查看该词的竞品投放证据（打开后需要再点一次页面上的 Search 才会出结果）"
+                aria-label="查看 TikTok 广告库"
+              >
+                <TikTokOutlined />
+              </a>
+            )}
+          </span>
+        );
+      },
     },
   ]);
 }
