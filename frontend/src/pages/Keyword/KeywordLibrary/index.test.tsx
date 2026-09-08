@@ -1,17 +1,27 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listGroups, getLibraryScope, watchGroup, createGroup, renameGroup, deleteGroup, removeItems, getSites } =
-  vi.hoisted(() => ({
-    listGroups: vi.fn(),
-    getLibraryScope: vi.fn(),
-    watchGroup: vi.fn(),
-    createGroup: vi.fn(),
-    renameGroup: vi.fn(),
-    deleteGroup: vi.fn(),
-    removeItems: vi.fn(),
-    getSites: vi.fn(),
-  }));
+const {
+  listGroups,
+  getLibraryScope,
+  watchGroup,
+  createGroup,
+  renameGroup,
+  deleteGroup,
+  removeItems,
+  getSites,
+  getKeywordTrend,
+} = vi.hoisted(() => ({
+  listGroups: vi.fn(),
+  getLibraryScope: vi.fn(),
+  watchGroup: vi.fn(),
+  createGroup: vi.fn(),
+  renameGroup: vi.fn(),
+  deleteGroup: vi.fn(),
+  removeItems: vi.fn(),
+  getSites: vi.fn(),
+  getKeywordTrend: vi.fn(),
+}));
 
 vi.mock('@umijs/max', () => ({ useAccess: () => ({}) }));
 vi.mock('@/services/library', () => ({
@@ -24,6 +34,9 @@ vi.mock('@/services/library', () => ({
   removeItems,
 }));
 vi.mock('@/services/upload', () => ({ getSites }));
+// 抽屉内部调 getKeywordTrend；不 mock 会走真实实现，命中与 KeywordTrendDrawer 自身
+// 测试同样的 esbuild/@umijs/max 环境坑（见该文件顶部注释）。
+vi.mock('@/services/keywordTrend', () => ({ getKeywordTrend }));
 
 import KeywordLibraryPage from './index';
 
@@ -308,5 +321,54 @@ describe('操作列链接的站点不能领先于表格实际加载的数据', (
     // 网络往返完成、表格重新加载出 DE 那批行之后，链接才跟着变成 DE
     await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(trendsLink().href).toContain('geo=DE'));
+  });
+});
+
+describe('详情抽屉不能领先于表格实际加载的视图/日期', () => {
+  // 切视图时 view 状态先于表格重新加载完成变化：setView 是同步的，reloadScope 与随后的
+  // reload(true) 都要等一轮网络往返。这段窗口内若详情抽屉跟着新 view/最新 date 状态走，
+  // 会把仍在渲染的旧行（DAY）的 keyword_id 配上新视图（WEEK）解析，把 DAY 历史当成 WEEK
+  // 历史显示（PR #87 复审 P2）。
+  it('切视图的网络往返还没完成时，点开的详情仍用当前显示的行所属的视图与日期', async () => {
+    getKeywordTrend.mockResolvedValue({
+      success: true,
+      keyword_id: 11,
+      keyword: 'wireless earbuds',
+      site: 'US',
+      view: 'DAY',
+      range: 'RECENT_30D',
+      on: '2026-08-15',
+      coverage: { start: '2026-08-09', end: '2026-08-15' },
+      points: [{ date: '2026-08-15', status: 'RANKED', ranking: 12 }],
+      best_ranking: { date: '2026-08-15', ranking: 12 },
+      latest_available: { date: '2026-08-15', ranking: 12 },
+    });
+
+    await renderSettled();
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(1));
+
+    // 卡住这次切视图触发的 getLibraryScope，制造"view 已经是 WEEK、表格还没重新
+    // 加载完成"的窗口
+    const scopeDeferred = deferred<{ site: string; view: 'WEEK'; dates: string[] }>();
+    getLibraryScope.mockReturnValueOnce(scopeDeferred.promise);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: '按周' }));
+    });
+
+    // 这段窗口内 watchGroup 还没被再次调用，表格里仍是 DAY 那批行
+    expect(watchGroup).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('查看关键词 ABA 排名趋势详情'));
+    });
+
+    // 抽屉必须按这批行实际所属的 DAY/2026-08-15 取数，不能用已经变成 WEEK 的 view 状态
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalled());
+    expect(getKeywordTrend.mock.calls[0][0]).toMatchObject({ view: 'DAY', on: '2026-08-15' });
+
+    await act(async () => {
+      scopeDeferred.resolve({ site: 'US', view: 'WEEK', dates: ['2026-08-11'] });
+    });
   });
 });

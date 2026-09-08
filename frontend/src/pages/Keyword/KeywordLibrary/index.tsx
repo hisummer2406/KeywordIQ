@@ -55,12 +55,16 @@ export default function KeywordLibraryPage() {
   const [selected, setSelected] = useState<number[]>([]);
   /** 排名趋势详情：站点取自当前分组，锚定期取当前盯盘期次（不是"今天"）。 */
   const [trendTarget, setTrendTarget] = useState<AnalysisRow | null>(null);
-  /** 表格里那批行实际所属的站点，取自请求成功时后端回传的 `WatchResponse.site`——
-   * 不能用 `active?.site`：切分组时 `activeId` 先于表格重新加载完成变化（`switchGroup`
-   * 里 `setActiveId` 是同步的，`reloadScope` 与随后的 `reload(true)` 都要等一轮网络
-   * 往返），这段窗口内表格显示的仍是上一个分组的行，若操作列的链接跟着新 `activeId`
-   * 走，会把旧分组的词按新站点拼链接，跳到错误地区。 */
+  /** 表格里这批行实际所属的站点/视图/期次，取自请求成功时后端回传的 `WatchResponse`——
+   * 不能用 `active?.site` / 当前 `view` / `date` 状态：切分组或切视图时 `activeId`/`view`
+   * 先于表格重新加载完成变化（`switchGroup`/`switchView` 里 `setActiveId`/`setView` 是
+   * 同步的，`reloadScope` 与随后的 `reload(true)` 都要等一轮网络往返），这段窗口内表格
+   * 显示的仍是上一批行，若详情抽屉跟着新状态走，会把旧行的 keyword_id 配上新站点/新
+   * 视图/新日期，要么触发后端跨站点校验（422），要么在 DAY 行上打开一份被当成 WEEK
+   * 解析的历史（PR #87 复审 P2）。三者一起取自同一次响应，不能只补 site。 */
   const [loadedSite, setLoadedSite] = useState<string | undefined>();
+  const [loadedView, setLoadedView] = useState<View | undefined>();
+  const [loadedDate, setLoadedDate] = useState<string | undefined>();
 
   const active = groups.find((g) => g.group_id === activeId);
   const siteDomain = sites.find((s) => s.code === loadedSite)?.domain;
@@ -223,8 +227,11 @@ export default function KeywordLibraryPage() {
             perPage: params.pageSize,
             ...toSortParams(sort),
           });
-          // 操作列的链接必须跟着这批行实际所属的站点走，见上方 loadedSite 的注释。
+          // 操作列的链接与详情抽屉必须跟着这批行实际所属的站点/视图/期次走，见上方
+          // loadedSite 的注释；三者取自响应本身，不是发请求时的闭包值。
           setLoadedSite(res.site);
+          setLoadedView(res.view);
+          setLoadedDate(res.date ?? undefined);
           return {
             data: res.data ?? [],
             total: res.total ?? 0,
@@ -233,19 +240,20 @@ export default function KeywordLibraryPage() {
         }}
       />
 
-      {trendTarget && loadedSite && (
+      {trendTarget && loadedSite && loadedView && loadedDate && (
         <KeywordTrendDrawer
           open={!!trendTarget}
           onClose={() => setTrendTarget(null)}
           keywordId={trendTarget.keyword_id}
           keyword={trendTarget.keyword}
-          // 站点取表格里这批行实际所属的站点，不是 active.site：切分组时 activeId 先于
-          // 表格重新加载完成变化（见上方 loadedSite 的注释），trendTarget 若来自切换前
-          // 仍在渲染的旧行，active.site 这时已经是新分组的站点，会与 keyword_id 实际
-          // 归属的站点错配，触发后端的跨站点校验（422）。
+          // 站点/视图/期次取表格里这批行实际所属的那份响应，不是 active.site / 当前
+          // view / date 状态：切分组或切视图时对应状态先于表格重新加载完成变化（见上方
+          // loadedSite 的注释），trendTarget 若来自切换前仍在渲染的旧行，用当前状态会把
+          // 它的 keyword_id 配上新站点/新视图/新日期，要么 422，要么把 DAY 行的历史按
+          // WEEK 解析（PR #87 复审 P2）。
           site={loadedSite}
-          view={view}
-          on={date}
+          view={loadedView}
+          on={loadedDate}
           // 这个词已经在当前分组里，不重复提供「加入词库」入口。
           hideAddToLibrary
         />

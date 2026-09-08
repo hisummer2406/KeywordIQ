@@ -204,7 +204,14 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 **关键词工具 · 排名趋势详情（`GET /api/keyword/trend`，issue #86）**：单关键词的日/周排名
 历史，市场分析与我的词库共用同一个只读端点，抽屉形式，不设导航菜单。查询固定
 `keyword_id + site + view`，按 `idx_fact_{daily,weekly}_keyword_history` 与
-`fact_dropped` 主键取数，不扫全站榜单。五条要点：
+`idx_fact_dropped_keyword_history`（`site, period_type, keyword_id, anchor_date`）
+取数，不扫全站榜单。**掉榜段不走 `fact_dropped` 的主键**——主键是
+`(site, period_type, anchor_date, keyword_id)`，`anchor_date` 排在 `keyword_id`
+之前，单关键词历史查询里 `anchor_date` 是范围（`range=ALL` 或 30 天窗口）而非等值，
+`keyword_id` 因此退化成扫描内 filter，代价随该站点/视图窗口内的掉榜行数增长，而不是
+随目标关键词的历史行数增长（PR #87 复审 P1）。新建的
+`idx_fact_dropped_keyword_history` 把 `keyword_id` 提到 `anchor_date` 之前，
+把范围先收窄到单个关键词再扫描。五条要点：
 
 - **五态分类，且不信任 `site_data_stats` 在保留下界之前的行。** `retention_service`
   只 `DROP` 事实表/`fact_dropped`/`fact_growth` 的月度分区，**从不清理 `site_data_stats`
