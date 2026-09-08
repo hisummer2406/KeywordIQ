@@ -53,8 +53,6 @@ export default function KeywordLibraryPage() {
   const [scopeHasNoDates, setScopeHasNoDates] = useState(false);
 
   const [selected, setSelected] = useState<number[]>([]);
-  /** 排名趋势详情：站点取自当前分组，锚定期取当前盯盘期次（不是"今天"）。 */
-  const [trendTarget, setTrendTarget] = useState<AnalysisRow | null>(null);
   /** 表格里这批行实际所属的站点/视图/期次，取自请求成功时后端回传的 `WatchResponse`——
    * 不能用 `active?.site` / 当前 `view` / `date` 状态：切分组或切视图时 `activeId`/`view`
    * 先于表格重新加载完成变化（`switchGroup`/`switchView` 里 `setActiveId`/`setView` 是
@@ -65,6 +63,26 @@ export default function KeywordLibraryPage() {
   const [loadedSite, setLoadedSite] = useState<string | undefined>();
   const [loadedView, setLoadedView] = useState<View | undefined>();
   const [loadedDate, setLoadedDate] = useState<string | undefined>();
+
+  /**
+   * 排名趋势详情：一次只开一行。**点击那一刻把行与它当时所属的站点/视图/期次一起冻结**，
+   * 不是分开存——抽屉打开后若又有一轮表格刷新完成（切分组/切视图，甚至点击前就在飞的
+   * 旧请求），`loadedSite`/`loadedView`/`loadedDate` 会先于用户关闭抽屉而变化；若抽屉的
+   * 站点/视图/期次改读这些活状态，会把仍在展示的旧行 `keyword_id` 配上新值重新发请求
+   * （PR #87 复审 P2：第一版修复把冻结做在了渲染处读 `loadedSite` 等活状态，同样会被
+   * 后续响应覆盖，问题不变）。
+   */
+  interface TrendTarget {
+    row: AnalysisRow;
+    site: string;
+    view: View;
+    date?: string;
+  }
+  const [trendTarget, setTrendTarget] = useState<TrendTarget | null>(null);
+  const openTrend = (row: AnalysisRow) => {
+    if (!loadedSite || !loadedView || !loadedDate) return; // 表格本就空，点不到行
+    setTrendTarget({ row, site: loadedSite, view: loadedView, date: loadedDate });
+  };
 
   const active = groups.find((g) => g.group_id === activeId);
   const siteDomain = sites.find((s) => s.code === loadedSite)?.domain;
@@ -202,7 +220,7 @@ export default function KeywordLibraryPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="keyword_id"
-        columns={buildWatchColumns(view, siteDomain, setTrendTarget, loadedSite)}
+        columns={buildWatchColumns(view, siteDomain, openTrend, loadedSite)}
         search={false}
         options={false}
         dateFormatter="string"
@@ -240,20 +258,17 @@ export default function KeywordLibraryPage() {
         }}
       />
 
-      {trendTarget && loadedSite && loadedView && loadedDate && (
+      {trendTarget && (
         <KeywordTrendDrawer
           open={!!trendTarget}
           onClose={() => setTrendTarget(null)}
-          keywordId={trendTarget.keyword_id}
-          keyword={trendTarget.keyword}
-          // 站点/视图/期次取表格里这批行实际所属的那份响应，不是 active.site / 当前
-          // view / date 状态：切分组或切视图时对应状态先于表格重新加载完成变化（见上方
-          // loadedSite 的注释），trendTarget 若来自切换前仍在渲染的旧行，用当前状态会把
-          // 它的 keyword_id 配上新站点/新视图/新日期，要么 422，要么把 DAY 行的历史按
-          // WEEK 解析（PR #87 复审 P2）。
-          site={loadedSite}
-          view={loadedView}
-          on={loadedDate}
+          keywordId={trendTarget.row.keyword_id}
+          keyword={trendTarget.row.keyword}
+          // 站点/视图/期次取点击那一刻冻结进 trendTarget 的值，不是活状态——见上方
+          // trendTarget 的注释（PR #87 复审 P2）。
+          site={trendTarget.site}
+          view={trendTarget.view}
+          on={trendTarget.date}
           // 这个词已经在当前分组里，不重复提供「加入词库」入口。
           hideAddToLibrary
         />
