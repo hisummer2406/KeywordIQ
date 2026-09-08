@@ -62,7 +62,11 @@ class DingTalkClient:
     ):
         self._app_key = app_key
         self._app_secret = app_secret
-        self._http = http_client or httpx.AsyncClient(timeout=_TIMEOUT)
+        # trust_env=False：钉钉的域名是国内直连服务，不该走系统代理。httpx 默认会读
+        # HTTP_PROXY/ALL_PROXY 等环境变量，开发机上常配着代理工具（如本地 Clash），
+        # 一旦是 SOCKS 代理而 socksio 未安装，客户端构造就直接 ImportError；生产环境
+        # 没有配代理的必要，走代理反而多一层生产不存在的不确定性。
+        self._http = http_client or httpx.AsyncClient(timeout=_TIMEOUT, trust_env=False)
         # 企业 accessToken 的进程内缓存。每个 worker 各存一份：4 worker × 每 2 小时
         # 一次换取，可以忽略；落库只是给自己多一份需要保护的秘密。
         self._corp_token: str | None = None

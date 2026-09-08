@@ -240,5 +240,35 @@ describe('登录屏', () => {
       expect(screen.queryByRole('button', { name: /钉钉/ })).not.toBeInTheDocument();
       expect(screen.getByPlaceholderText('用户名')).toBeInTheDocument();
     });
+
+    /**
+     * 默认登录方式是钉钉扫码，账号密码收进切换链接后面——不是并列展示。
+     * SSO 关闭时没有这个切换态，密码表单本就是唯一入口，见上面「不显示钉钉按钮」那条。
+     */
+    it('SSO 开启时默认展示钉钉扫码登录，密码表单收起', async () => {
+      ssoStatusMock.mockResolvedValue({ enabled: true, provider_name: '钉钉' });
+      renderLogin();
+
+      await screen.findByRole('button', { name: /钉钉/ });
+      expect(screen.queryByPlaceholderText('用户名')).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText('密码')).not.toBeInTheDocument();
+    });
+
+    it('可以切换到账号密码登录，再切回钉钉扫码登录', async () => {
+      ssoStatusMock.mockResolvedValue({ enabled: true, provider_name: '钉钉' });
+      renderLogin();
+      const user = userEvent.setup();
+
+      await screen.findByRole('button', { name: /钉钉/ });
+      await user.click(screen.getByText('使用账号密码登录'));
+
+      expect(screen.getByPlaceholderText('用户名')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /钉钉/ })).not.toBeInTheDocument();
+
+      await user.click(screen.getByText('使用钉钉扫码登录'));
+
+      expect(await screen.findByRole('button', { name: /钉钉/ })).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText('用户名')).not.toBeInTheDocument();
+    });
   });
 });

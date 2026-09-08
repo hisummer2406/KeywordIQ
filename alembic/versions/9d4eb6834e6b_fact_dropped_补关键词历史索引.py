@@ -1,8 +1,17 @@
 """fact_dropped 补关键词历史索引
 
 Revision ID: 9d4eb6834e6b
-Revises: 533cd79ca75f
+Revises: ef43bf0d3c92
 Create Date: 2026-09-08 13:04:00.548752
+
+改接在 ef43bf0d3c92（user_center 加 avatar_url 列）之后而非原先的 533cd79ca75f：
+两者在本分支拉出后分别落在 v2 上，形成同一父节点下的两个 head（PR #87 复审第二轮
+CI 报的 "Multiple head revisions"）。这里选择线性重接而非 `alembic merge` 产生
+的双 down_revision 合并节点——仓库迄今没有任何一条迁移用过合并节点，CI 的「降一步
+再升回来」步骤（ci.yml「迁移可回滚性」）用的是不带具体目标的 `alembic downgrade
+-1`，在合并节点处哪一条父分支是"-1"是歧义的（`Ambiguous walk`）。两条迁移改动的
+表互不相关（这条动索引，对方加列），先后顺序不影响正确性，线性重接不需要连带改
+CI 脚本。
 
 PR #87 Codex 审核（P1）：趋势详情的 `keyword_dropped_stmt` 走 `fact_dropped` 主键
 `(site, period_type, anchor_date, keyword_id)`。一旦 `anchor_date` 是范围而非等值
@@ -44,7 +53,7 @@ from config import settings
 
 # revision identifiers, used by Alembic.
 revision: str = '9d4eb6834e6b'
-down_revision: str | None = '533cd79ca75f'
+down_revision: str | None = 'ef43bf0d3c92'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
