@@ -1312,12 +1312,17 @@ ruff 根本看不见它。`git commit -a` 与 `git commit -- <路径>` 提交的
   **drop 测试库前先查 `pg_stat_activity`**，别人可能正在用同一个库。
 - **`verify-import`** —— 用真实体量的报表 CSV 跑一遍端到端导入并逐项断言落库结果。
   改过导入路径就跑一次。
-- **`review-fix-cycle`** —— 取 Codex 审核意见、逐条核实（不是照评审的文字就改）、
-  修在根源、补红绿验证过的回归测试、提交、回复、等 CI。假设已经在 PR 开着的分支/
-  worktree 里，认领/建 worktree/归档不归它管，那是 `start-change` 的事。一次修复
-  后评审可能再来一轮，回到第 1 步同样走一遍，直到通过。
-- **`close-change`** —— 评审通过、要合并时用：合并、git 层面清理三样（细节见
-  `start-change` 4.3）、**`openspec archive`**（本会话漏做过两次，合并完先做这步
-  再去做别的事）、把没法自动验证的人工验收项转移到验收清单 issue 而不是让它随
-  归档一起消失、判断并关闭触发这次变更的原始 issue、扫一遍还有没有别的残留（别人
-  的 worktree 尤其是 Codex 的评审 checkout 不要碰）。
+
+### 项目 command（手动调用）
+
+交付、修复与合并由用户分别触发；流程文件放在 `.claude/commands/`，不另建同名 skill。
+
+- **[`/deliver-pr`](.claude/commands/deliver-pr.md)** —— 按约定检查、commit、push，
+  创建或更新指向 `v2` 的 PR，保留分支/worktree，等待用户手动 `@codex review`。
+- **[`/fix-review [PR号]`](.claude/commands/fix-review.md)** —— 读取 Codex 的普通评论、
+  正式 review 与行内意见，逐项核实、修复、红绿验证、提交、回复并核对当前 SHA 的 CI。
+  不自动触发复审或合并；下一轮由用户再次调用。GitHub 中用 `@claude` 明确要求执行该文件。
+- **[`/close-change [PR号或变更ID]`](.claude/commands/close-change.md)** —— 审核和 CI
+  已通过才合并至 `v2`，转移仍需人工验收的任务、归档 OpenSpec 并推送归档结果，
+  按完成范围手动关闭 Issue，最后清理本变更已合并的分支及干净 worktree。
+  不等待审核、不强制清理、不触碰其他会话资源；已合并的 PR 可重跑以完成剩余收尾。

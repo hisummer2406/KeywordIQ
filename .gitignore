@@ -11,6 +11,11 @@ plugins/
 # settings.local.json 仍然被忽略——那里放个人权限与本机路径。
 !.claude/hooks/
 !.claude/skills/
+!.claude/commands/
+.claude/commands/*
+!.claude/commands/deliver-pr.md
+!.claude/commands/fix-review.md
+!.claude/commands/close-change.md
 .DS_Store
 .env
 logs/*
