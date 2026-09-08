@@ -88,12 +88,19 @@ def _cleanup_container(compose_service: str) -> None:
 
 
 def _upload(local_path: Path, object_key: str) -> None:
-    """复用项目已有的 OSS 凭证配置，不新增一套。"""
+    """复用项目已有的 OSS 凭证配置，不新增一套。
+
+    用 `oss2.resumable_upload` 而不是 `bucket.put_object_from_file`：后者是单次 PutObject，
+    OSS 单个 PutObject 请求的对象大小上限是 5 GiB——决策 5 里满窗数据约 50 GB，全量 dump
+    早晚会超过这个上限，届时 `put_object_from_file` 直接报错、当天备份整个失败。
+    `resumable_upload` 按文件大小自动在简单上传与分片上传之间切换，超过阈值即走分片
+    （`MultipartUpload`），单个分片仍在 5 GiB 以内，不受这个上限约束（Codex 审核 PR #84）。
+    """
     import oss2
 
     auth = oss2.Auth(settings.OSS_ACCESS_KEY_ID, settings.OSS_ACCESS_KEY_SECRET)
     bucket = oss2.Bucket(auth, settings.OSS_ENDPOINT, settings.OSS_BUCKET)
-    bucket.put_object_from_file(object_key, str(local_path))
+    oss2.resumable_upload(bucket, object_key, str(local_path))
 
 
 def main() -> int:

@@ -127,6 +127,18 @@ as_root nginx -t
 as_root systemctl reload nginx
 echo "  nginx 已重载"
 
+# 首次由旧路线（host nginx + systemd 裸 uvicorn）切到本容器化路线时，遗留的
+# keywordiq.service 仍绑在 127.0.0.1:8000——与 app 容器要绑的端口相同，不先停掉它，
+# 下面的 docker compose up -d 会因端口已被占用而起不来。从仓库里删掉
+# etc/keywordiq.service 只影响下次全新安装，不会停掉宿主机上已安装、正在跑的 unit。
+# 用 is-active 判断而非"unit 是否存在"：停过一次之后 is-active 恒为假，后续每次
+# deploy.sh 都会跳过这一步，天然幂等，不需要额外记状态。
+if systemctl is-active --quiet keywordiq.service 2>/dev/null; then
+    warn "  检测到遗留 keywordiq.service 仍占用 127.0.0.1:8000，先停用..."
+    as_root systemctl stop keywordiq.service
+    as_root systemctl disable keywordiq.service 2>/dev/null || true
+fi
+
 # up -d 对已用新镜像 build 过的服务会重建容器；db/netdata 若已在跑且配置未变则不受影响。
 docker compose up -d
 echo "  容器已切换到新镜像（restart: unless-stopped，之后崩溃/宿主机重启由 Docker 自动拉起）"

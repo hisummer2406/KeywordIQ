@@ -216,8 +216,13 @@ issue #81 已经对"是否为独立站抓取并发引入 Celery/Redis"做过完�
 3. `pg_dump --data-only --schema=analysis -Fc` 导出 RDS 数据；`pg_restore --data-only
    -j <并行度>` 灌入自建库
 4. 核对关键表行数、最大主键/最新 `report_date`、`site_data_stats` 汇总值与 RDS 一致
-5. 切换 `.env` 的 `DATABASE_URL`/`DATABASE_URL_ASYNC` 指向 `db`，`docker compose up -d`
-   拉起应用容器，跑一次健康检查（`/health`）与一次只读查询（`/api/analysis/scope`）
+5. 切换 `.env` 的 `DATABASE_URL`/`DATABASE_URL_ASYNC` 指向 `db`，`./deploy.sh` 拉起应用
+   容器，跑一次健康检查（`/health`）与一次只读查询（`/api/analysis/scope`）。**首次由旧
+   路线切过来时，遗留的 `keywordiq.service` 仍绑着 127.0.0.1:8000**，与容器要绑的端口
+   相同——仓库里删掉 `etc/keywordiq.service` 只影响下次全新安装，不会停掉宿主机上已
+   安装、正在跑的 unit，不先停会让容器因端口占用起不来。`deploy.sh` 已在
+   `docker compose up -d` 前自动 `systemctl stop`/`disable` 它（Codex 审核 PR #84），
+   这一步因此不需要手工执行
 6. RDS 保留只读、不删除，观察窗口（建议 7 天，覆盖至少一次日报 + 一次周报导入）；
    **回滚不是把 `.env` 换回 RDS 这么简单**——切换只在自建库还没有任何新写入的极短
    窗口内才是无损的；观察窗口内一旦有导入或用户写入落到自建库，RDS 已经落后，改回
@@ -225,8 +230,9 @@ issue #81 已经对"是否为独立站抓取并发引入 Celery/Redis"做过完�
    资源争抢或数据问题要回滚，必须先把观察窗口内自建库上的写入同步或重放回 RDS
    （或明确接受这部分数据的损失），配置改回去不能替代这一步——本设计不预先规划反向
    同步工具，真到了要回滚的那一刻按当时的写入量现场评估
-7. 观察窗口结束、确认无问题后，释放 RDS 实例；同一批清理 `etc/keywordiq.service`、
-   更新 `deploy.sh`/CLAUDE.md 反映新部署形态
+7. 观察窗口结束、确认无问题后，释放 RDS 实例；同一批清理宿主机上残留的
+   `keywordiq.service` unit 文件本身（第 5 步已停用/禁用，这里是彻底移除，
+   `systemctl disable` 不删文件）、更新 `deploy.sh`/CLAUDE.md 反映新部署形态
 
 ## Open Questions
 

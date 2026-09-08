@@ -55,10 +55,16 @@
   在建库时直接写入固定种子数据，`--data-only` 原样搬一遍会主键冲突——已在 `pg_dump`
   阶段用 `--exclude-table` 排除。
 - [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
-  `dim_keyword`/`dim_product`/`site_data_stats` 的行数与最新期次。**演练中发现并修复
-  一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python `None`，目标库（`psql -tAc`）
-  里同样的空值渲染成空字符串，两者直接比较恒不相等——表现是"两边明明都是 0 行，核对却
-  报不一致"。已统一按 `None` 归一化。
+  `fact_dropped`/`fact_growth`/`dim_keyword`/`dim_product`/`site_data_stats` 的行数与
+  最新期次。**演练中发现并修复一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python
+  `None`，目标库（`psql -tAc`）里同样的空值渲染成空字符串，两者直接比较恒不相等——表现
+  是"两边明明都是 0 行，核对却报不一致"。已统一按 `None` 归一化。**PR #84 Codex 复审
+  发现第二个 bug**：`_TABLES_WITH_LATEST_COL` 的注释写明覆盖 `fact_dropped`/
+  `fact_growth`（两张表用 `anchor_date` 判最新期），但元组本身没有真的把这两张表列
+  进去——若迁移中途出错、这两张表少落了数据，核对仍会全绿放行切换。已补上，并新增
+  `test/test_verify_selfhosted_migration_unit.py` 断言核对清单与
+  `partitioning.PARTITIONED_TABLES` 对齐，往后新增分区事实表却忘了同步进核对脚本会
+  直接测试失败，不必等到真实迁移演练才发现。
 - [x] 4.3 本地演练（不是"跳过、直接标记完成"）：起一个独立的 `postgres:15.8` 容器
   模拟 RDS，跑 `alembic upgrade head` + 少量手写数据（`scripts/seed_demo_data.py` 与
   `scripts/generate_synthetic_data.py` 两个现成的生成器都因 2.2 提到的 schema 漂移
@@ -86,6 +92,13 @@
   备份要能在自建库整个消失时独立重建，不能依赖恢复时还记得先跑迁移）→
   `docker compose cp` 取出 → 上传到 OSS `backups/postgres/` 前缀。**已用真实的开发环境
   OSS 桶（`keywordiq-dev`）实际跑通**，不是只读代码；测试产物用完已从桶里删除。
+  **PR #84 Codex 复审发现一个 bug**：上传用的是 `bucket.put_object_from_file`（单次
+  PutObject），OSS 单个 PutObject 的对象大小上限是 5 GiB，而满窗数据约 50 GB
+  （design.md 决策 1），全量 dump 迟早超过这个上限，届时当天备份直接失败。改用
+  `oss2.resumable_upload`——按文件大小自动在简单上传与分片上传间切换，单个分片仍在
+  5 GiB 以内，不受这个上限约束。本轮未用超过 5 GiB 的 dump 重新实测（本地演练库量级
+  远够不到这个阈值，构造一个真实 5+ GiB 的库超出本轮修复范围），改动本身是 oss2 SDK
+  推荐的标准大文件上传路径。
 - [x] 5.2 恢复步骤写进了 `backup_selfhosted_pg.py` 的模块文档字符串（验证过的具体命令，
   含一个真实踩过的坑：`pg_restore --create` 会尝试 DROP/CREATE 自己当前连接的数据库，
   报错但被当作可忽略继续跑完——最终数据没问题，但生产恢复时不该让人对着一堆报错怀疑
@@ -116,7 +129,15 @@
 - [x] 7.2 `deploy.sh` 重写：`uv sync`/裸 `alembic`/`systemctl restart` 替换为
   `docker compose build` → `docker compose run --rm app alembic upgrade head`
   （`db` 不对宿主机暴露端口，迁移必须在容器内跑）→ `docker compose up -d`；nginx
-  reload 步骤不变（host nginx 仍然只反代前端不变）
+  reload 步骤不变（host nginx 仍然只反代前端不变）。**PR #84 Codex 复审发现一个
+  bug**：旧路线（host nginx + systemd 裸 uvicorn）的 `keywordiq.service` 同样绑
+  `127.0.0.1:8000`，仓库里删掉 `etc/keywordiq.service`（7.1）只影响下次全新安装，不会
+  停掉宿主机上已安装、正在跑的 unit——首次由旧路线切到本容器化路线时，`docker compose
+  up -d` 会因端口已被占用而起不来。已在 `deploy.sh` 里补上：`docker compose up -d`
+  前用 `systemctl is-active --quiet keywordiq.service` 判断，在跑就先
+  `stop`/`disable`；用 is-active 而非"unit 是否存在"判断是为了天然幂等——停过一次后
+  is-active 恒为假，后续每次 `deploy.sh` 都会跳过，不需要额外记状态。design.md
+  Migration Plan 步骤 5 同步更新，说明这一步现在自动发生。
 - [x] 7.3 CLAUDE.md「Development Commands」更新反映 Docker 化命令；`etc/keywordiq-nginx.conf`
   顶部注释更新 + 追加一段注释掉的 Netdata Basic Auth 反代示例（呼应第 8 组）
 - [x] 7.4 `uv run pytest test/` 全量：584 passed, 260 skipped（跳过的是需要真实
