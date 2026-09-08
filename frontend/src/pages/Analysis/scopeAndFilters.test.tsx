@@ -8,6 +8,7 @@ import {
   exportAnalysis,
   getBrands,
   getCategories,
+  getKeywordTrend,
   getScope,
   getSites,
   listGroups,
@@ -29,6 +30,7 @@ vi.mock('@/services/analysis', () => ({
 }));
 vi.mock('@/services/upload', () => ({ getSites }));
 vi.mock('@/services/library', () => ({ listGroups, createGroup, addItems }));
+vi.mock('@/services/keywordTrend', () => ({ getKeywordTrend }));
 
 import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { applyFilters, renderSettled, settle, submit } from './__testing__/analysisHarness';
@@ -321,5 +323,62 @@ describe('分析查询屏 · 作用域与筛选', () => {
     const body = searchAnalysis.mock.calls.at(-1)![0];
     expect(body.site).toBe('DE');
     expect(body.categories).toBeUndefined();
+  });
+
+  describe('详情抽屉不能领先于表格实际加载的作用域', () => {
+    // apply()（立即查询）把 appliedRef/appliedView 同步改到新作用域，随后才发一轮网络
+    // 往返；这段窗口内表格仍显示旧作用域那批行。若点开这些行的详情，抽屉用的必须是这批
+    // 行实际所属的站点/视图/日期，不是已经变了的 appliedRef/appliedView——否则会把旧行
+    // 的 keyword_id 配上新站点，触发后端跨站点校验（422）（PR #87 复审 P2）。
+    it('切站点并点立即查询后、网络往返还没完成时，点开的详情仍用当前显示的行所属的站点', async () => {
+      getKeywordTrend.mockResolvedValue({
+        success: true,
+        keyword_id: 1,
+        keyword: 'coffee maker',
+        site: 'US',
+        view: 'DAY',
+        range: 'RECENT_30D',
+        on: '2026-07-18',
+        coverage: { start: '2026-07-12', end: '2026-07-18' },
+        points: [{ date: '2026-07-18', status: 'RANKED', ranking: 1 }],
+        best_ranking: { date: '2026-07-18', ranking: 1 },
+        latest_available: { date: '2026-07-18', ranking: 1 },
+      });
+
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+
+      const user = userEvent.setup();
+      await user.click(screen.getByText('🇺🇸 美国站（US）'));
+      await act(async () => {
+        await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      });
+
+      // 卡住切到 DE 后「立即查询」触发的第二次 searchAnalysis，制造"appliedRef 已经是
+      // DE、表格还没重新加载完成"的窗口
+      let resolveSecond!: (value: Awaited<ReturnType<typeof searchAnalysis>>) => void;
+      const secondCall = new Promise<Awaited<ReturnType<typeof searchAnalysis>>>((resolve) => {
+        resolveSecond = resolve;
+      });
+      searchAnalysis.mockReturnValueOnce(secondCall);
+
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+      expect(searchAnalysis).toHaveBeenCalledTimes(2);
+
+      // 这段窗口内表格里仍是 US 的 coffee maker 那一行——点开它的详情
+      await act(async () => {
+        fireEvent.click(screen.getByTitle('查看关键词 ABA 排名趋势详情'));
+      });
+
+      // 抽屉必须按这批行实际所属的 US/DAY/2026-07-18 取数，不能用已经变成 DE 的 appliedRef
+      await waitFor(() => expect(getKeywordTrend).toHaveBeenCalled());
+      expect(getKeywordTrend.mock.calls[0][0]).toMatchObject({ site: 'US', on: '2026-07-18' });
+
+      await act(async () => {
+        resolveSecond({ success: true, data: [], total: 0, site: 'DE', view: 'DAY', date: '2026-07-16' });
+      });
+    });
   });
 });

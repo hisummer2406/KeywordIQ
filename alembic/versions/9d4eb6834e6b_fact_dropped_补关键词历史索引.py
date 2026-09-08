@@ -16,6 +16,26 @@ PR #87 Codex 审核（P1）：趋势详情的 `keyword_dropped_stmt` 走 `fact_d
 ——在父表（分区表）上建索引会被 PostgreSQL 递归应用到全部现有叶子分区，`partitioning.
 ensure_fact_partitions` 之后新建的分区同样自动带有该索引，无需在这里或那个函数里
 额外处理。
+
+**这是本迁移唯一与数据量成正比的一步。** `CREATE INDEX IF NOT EXISTS` 是父表层面的
+操作；分区父表的 `CREATE INDEX` 不支持 `CONCURRENTLY`，alembic 又把整个迁移包在一个
+事务里——空库（首次上线）秒级完成，但已装满的库上这一步会长时间持锁，期间
+`fact_dropped` 的读写全部阻塞（写法与迁移 `7b8b046c075e`/`d3e4f5a6b7c8` 第 3.5 步同
+一模式）。已装满的库应当先离线补建再跑本迁移，此时 `IF NOT EXISTS` 会空转而过：
+
+    -- 1) 父表上建"空壳"索引，只改 catalog，不读数据
+    CREATE INDEX idx_fact_dropped_keyword_history ON ONLY analysis.fact_dropped
+           (site, period_type, keyword_id, anchor_date);
+    -- 2) 逐个叶子分区并发建——fact_dropped 只有一级 RANGE(anchor_date) 月度分区、
+    --    没有 fact_daily/fact_weekly 那层站点子分区，叶子就是月分区，不需要中间的
+    --    ONLY + ATTACH 层
+    CREATE INDEX CONCURRENTLY fact_dropped_2026_07_keyword_history
+        ON analysis.fact_dropped_2026_07 (site, period_type, keyword_id, anchor_date);
+    -- 3) 挂回去；全部叶子分区挂齐后父索引自动转为 valid
+    ALTER INDEX analysis.idx_fact_dropped_keyword_history
+        ATTACH PARTITION analysis.fact_dropped_2026_07_keyword_history;
+
+其余保留窗口内的月份分区依此类推。
 """
 from collections.abc import Sequence
 
@@ -32,11 +52,11 @@ SCHEMA = settings.DATABASE_SCHEMA
 
 
 def upgrade() -> None:
-    op.create_index(
-        "idx_fact_dropped_keyword_history", "fact_dropped",
-        ["site", "period_type", "keyword_id", "anchor_date"], schema=SCHEMA,
+    op.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_fact_dropped_keyword_history "
+        f"ON {SCHEMA}.fact_dropped (site, period_type, keyword_id, anchor_date)"
     )
 
 
 def downgrade() -> None:
-    op.drop_index("idx_fact_dropped_keyword_history", table_name="fact_dropped", schema=SCHEMA)
+    op.execute(f"DROP INDEX IF EXISTS {SCHEMA}.idx_fact_dropped_keyword_history")
