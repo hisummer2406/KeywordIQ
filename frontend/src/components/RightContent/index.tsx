@@ -36,6 +36,9 @@ export default function RightContent({ currentUser, onLogout }: RightContentProp
   if (!currentUser) return null;
 
   const roleLabel = currentUser.role_name || currentUser.role || '未分配角色';
+  // 展示名优先：SSO 账号的 username 是钉钉 userid（一串数字），不是人看的名字；
+  // display_name 取自钉钉通讯录姓名。本地账号通常没有 display_name，退回 username。
+  const displayName = currentUser.display_name || currentUser.username;
 
   // 下拉里**只放能点的东西**。此前第一项是一整块只读身份信息（用户名 + 角色 + 超级账号
   // 标记 + 权限计数），已删除：用户名与角色在触发器上就显示着，下拉里是第二遍；剩下的
@@ -76,8 +79,14 @@ export default function RightContent({ currentUser, onLogout }: RightContentProp
     <Dropdown menu={{ items }} placement="bottomRight" trigger={['click']}>
       {/* 这是自定义内容，ProLayout 的右侧 token 不会自动影响其中的文字与标签。 */}
       <Space className="header-account" size={8}>
-        <Avatar size="small" icon={<UserOutlined />} style={AVATAR_STYLE} />
-        <Typography.Text className="header-account-name">{currentUser.username}</Typography.Text>
+        {/* src 缺省或加载失败时，antd Avatar 内置回落到 icon——不用手写 onError。 */}
+        <Avatar
+          size="small"
+          src={currentUser.avatar_url || undefined}
+          icon={<UserOutlined />}
+          style={AVATAR_STYLE}
+        />
+        <Typography.Text className="header-account-name">{displayName}</Typography.Text>
         <Tag className="header-account-role">{roleLabel}</Tag>
       </Space>
     </Dropdown>

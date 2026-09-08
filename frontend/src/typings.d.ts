@@ -19,6 +19,8 @@ declare global {
       avatar?: string;
       /** 展示名。SSO 账号取自身份源姓名；本地账号可能为空。 */
       display_name?: string | null;
+      /** 头像地址。SSO 账号每次登录同步身份源头像；本地账号恒为空，回落到默认图标。 */
+      avatar_url?: string | null;
       /** 外部身份源；null 表示本地账号（可用密码登录）。 */
       external_idp?: string | null;
     };
