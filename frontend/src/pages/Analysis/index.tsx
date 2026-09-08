@@ -507,6 +507,7 @@ export default function AnalysisPage() {
           site={appliedRef.current?.site ?? ''}
           view={appliedView}
           on={appliedRef.current?.date}
+          canAddToLibrary={access.canViewKeyword}
         />
       )}
     </PageContainer>
