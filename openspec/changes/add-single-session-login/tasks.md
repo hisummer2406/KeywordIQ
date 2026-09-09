@@ -75,5 +75,5 @@
 ## 8. 收尾验证
 
 - [x] 8.1 `openspec validate add-single-session-login --strict` 通过
-- [ ] 8.2 按 `start-change` skill 第 4 节提交、开 PR（`--base v2`），PR 说明附变更 id、
-      `Refs #89`、spec delta 文件列表
+- [x] 8.2 按 `start-change` skill 第 4 节提交、开 PR（`--base v2`），PR 说明附变更 id、
+      `Refs #89`、spec delta 文件列表（PR #91）
