@@ -307,7 +307,20 @@ Scenario 仍然遗漏了一步——`migrate_to_selfhosted_pg.py` 的 `_quiesce_
   端点上），不需要改 `deploy.sh` 本身。已加回归测试
   `test/test_error_contract_unit.py::test_health_check_returns_503_when_database_unreachable`
   （monkeypatch `_probe_sync_engine` 抛异常），验证过修复前该测试失败（`200 == 503`
-  断言不成立，与 Codex 描述的失败现象完全一致）、修复后通过。
+  断言不成立，与 Codex 描述的失败现象完全一致）、修复后通过。**PR #84 Codex 第十三轮
+  复审发现第十六个 bug**：清理遗留 unit 的 `is-active`/`is-enabled`/`stop`/`disable`
+  四处判断全部硬编码 `keywordiq.service`，而这段逻辑要清理的正是旧路线（host nginx +
+  systemd 裸 uvicorn）留下的 unit——旧路线本身通过 `SERVICE_NAME` 环境变量支持自定义
+  服务名（默认 `keywordiq`，本 PR 把这个变量连同旧路线一起删掉了）。操作者若当初把
+  服务名改成了别的，硬编码找不到那个 unit：它继续绑着 `127.0.0.1:8000`，
+  `docker compose up -d` 因端口占用起不来；或它仍是 enabled，宿主机下次重启时被
+  systemd 重新拉起，回头跟新容器抢端口——与第六轮 (a) 要修的失败形态相同，只是触发
+  条件从"判断逻辑漏了一半"变成"服务名对不上"。修法是把 `SERVICE_NAME` 以"仅用于清理
+  旧路线遗留 unit"的名义带回 `deploy.sh`（`${SERVICE_NAME:-keywordiq}`），四处判断与
+  操作全部改用这个变量。**验证**：无自动化路径（`systemctl`/`docker compose` 均需要
+  真实宿主机环境，与本文件其余 shell 改动的验证方式一致），用 `bash -n deploy.sh`
+  核对语法，并对照移除前的旧版 `deploy.sh`（`git show 244fc58 -- deploy.sh`）确认
+  `SERVICE_NAME` 默认值与用法完全对齐。
 - [x] 7.3 CLAUDE.md「Development Commands」更新反映 Docker 化命令；`etc/keywordiq-nginx.conf`
   顶部注释更新 + 追加一段注释掉的 Netdata Basic Auth 反代示例（呼应第 8 组）
 - [x] 7.4 `uv run pytest test/` 全量：584 passed, 260 skipped（跳过的是需要真实
