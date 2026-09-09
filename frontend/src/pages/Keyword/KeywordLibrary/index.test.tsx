@@ -390,3 +390,79 @@ describe('详情抽屉不能领先于表格实际加载的视图/日期', () => 
     expect(getKeywordTrend).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('表格 request 乱序落地时不倒灌覆盖较新请求的作用域', () => {
+  // ProTable 允许同一时刻有多个 request 调用同时在飞——旧调用不会被真的取消。
+  // 若一次更早发出的调用（切到 DE 那次）在一次更新的调用（切回 US 那次）之后才落地，
+  // request 里若不核对调用序号，仍会用这次旧响应把 loadedSite 改回 DE，操作列/详情
+  // 抽屉却明明该跟着表格当下实际展示的 US 行走（PR #87 第五轮 P2）。
+  it('切分组两次、较早那次请求较晚落地时，不倒灌覆盖较新请求的站点', async () => {
+    const GROUP_DE = {
+      group_id: 2,
+      site: 'DE',
+      name: '德语词',
+      item_count: 1,
+      created_at: '2026-08-01T00:00:00Z',
+      updated_at: '2026-08-01T00:00:00Z',
+    };
+    listGroups.mockResolvedValue([GROUP, GROUP_DE]);
+    getSites.mockResolvedValue([
+      { code: 'US', name: '美国', domain: 'amazon.com' },
+      { code: 'DE', name: '德国', domain: 'amazon.de' },
+    ]);
+    getKeywordTrend.mockResolvedValue({
+      success: true,
+      keyword_id: 11,
+      keyword: 'wireless earbuds',
+      site: 'US',
+      view: 'DAY',
+      range: 'RECENT_30D',
+      on: '2026-08-15',
+      coverage: { start: '2026-08-09', end: '2026-08-15' },
+      points: [{ date: '2026-08-15', status: 'RANKED', ranking: 12 }],
+      best_ranking: { date: '2026-08-15', ranking: 12 },
+      latest_available: { date: '2026-08-15', ranking: 12 },
+    });
+
+    await renderSettled();
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(1)); // 首屏：US
+
+    // 切到 DE：这次请求（较早发出）先卡住，稍后才落地
+    const olderCall = deferred<Awaited<ReturnType<typeof watchGroup>>>();
+    watchGroup.mockReturnValueOnce(olderCall.promise);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: /德语词/ }));
+    });
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(2));
+
+    // 再切回主推词（US）：这次（较新发出）用默认 mock，立即落地
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: /主推词/ }));
+    });
+    await waitFor(() => expect(watchGroup).toHaveBeenCalledTimes(3));
+
+    // 较早那次（DE）现在才落地——响应里仍带一行，只是站点标成 DE，用来隔离 ProTable
+    // 自身会不会采纳这份陈旧响应去渲染表格（不是本条要守的范围），单独验证 loadedSite
+    // 有没有被这次陈旧响应倒灌覆盖。
+    await act(async () => {
+      olderCall.resolve({
+        success: true,
+        data: [row({ keyword: 'kabel' })],
+        total: 1,
+        group_id: 2,
+        site: 'DE',
+        view: 'DAY',
+        date: '2026-08-15',
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('查看关键词 ABA 排名趋势详情'));
+    });
+
+    // 必须仍是较新那次请求（US）的作用域，不能被较早却后落地的 DE 响应改回去
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalled());
+    expect(getKeywordTrend.mock.calls[0][0]).toMatchObject({ site: 'US', on: '2026-08-15' });
+  });
+});

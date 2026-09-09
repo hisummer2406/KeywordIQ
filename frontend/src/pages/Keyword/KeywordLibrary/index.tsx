@@ -41,6 +41,13 @@ import { toSortParams } from './sort';
  */
 export default function KeywordLibraryPage() {
   const actionRef = useRef<ActionType>();
+  /**
+   * 表格 `request` 的调用序号，与分析查询屏 `useAnalysisQuery.runRequest` 同一模式
+   * 同一理由：ProTable 允许同一时刻有多个 `request` 调用同时在飞，旧调用不会被真的
+   * 取消，可能在更新的调用之后才落地。不核对序号就覆盖 `loadedSite`/`loadedView`/
+   * `loadedDate`，会让它们回退到比表格当下所展示的行更旧的作用域（PR #87 第五轮 P2）。
+   */
+  const requestSeqRef = useRef(0);
 
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [groups, setGroups] = useState<KeywordGroup[]>([]);
@@ -237,6 +244,7 @@ export default function KeywordLibraryPage() {
         locale={{ emptyText }}
         request={async (params, sort) => {
           if (!activeId) return { data: [], total: 0, success: true };
+          const seq = (requestSeqRef.current += 1);
           const res = await watchGroup({
             group_id: activeId,
             view,
@@ -245,11 +253,16 @@ export default function KeywordLibraryPage() {
             perPage: params.pageSize,
             ...toSortParams(sort),
           });
-          // 操作列的链接与详情抽屉必须跟着这批行实际所属的站点/视图/期次走，见上方
-          // loadedSite 的注释；三者取自响应本身，不是发请求时的闭包值。
-          setLoadedSite(res.site);
-          setLoadedView(res.view);
-          setLoadedDate(res.date ?? undefined);
+          // 这次 await 期间已经有更晚的调用发出（seq 被推进），说明这次响应对应的
+          // 站点/视图/期次已经过期，见上方 requestSeqRef 的注释：不采纳它去覆盖
+          // loadedSite/View/Date，但仍把查到的行还给 ProTable 自己的这次调用。
+          if (seq === requestSeqRef.current) {
+            // 操作列的链接与详情抽屉必须跟着这批行实际所属的站点/视图/期次走，见上方
+            // loadedSite 的注释；三者取自响应本身，不是发请求时的闭包值。
+            setLoadedSite(res.site);
+            setLoadedView(res.view);
+            setLoadedDate(res.date ?? undefined);
+          }
           return {
             data: res.data ?? [],
             total: res.total ?? 0,
