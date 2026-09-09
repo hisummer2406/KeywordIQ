@@ -75,6 +75,37 @@ describe('全局 errorHandler', () => {
     expect(pushMock).toHaveBeenCalledWith('/login');
   });
 
+  it('会话被顶替时呈现区别于普通过期的明确原因（issue #89）', () => {
+    setToken('kicked');
+    handler(
+      httpError(
+        401,
+        { success: false, code: 'auth.session_invalid', message: '登录状态已失效', request_id: 'r3' },
+        { headers: { Authorization: 'Bearer kicked' } },
+      ),
+    );
+
+    expect(getToken()).toBeNull();
+    expect(messageWarning).toHaveBeenCalledWith('账号已在其他浏览器登录');
+    expect(pushMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('迟到的旧请求 401 不清理已经生效的新登录状态（issue #89）', () => {
+    // 这张令牌发起请求之后，本浏览器已经通过重新登录换成了另一张——响应此刻才姗姗来迟
+    setToken('fresh-after-relogin');
+    handler(
+      httpError(
+        401,
+        { success: false, code: 'auth.session_invalid', message: '登录状态已失效', request_id: 'r4' },
+        { headers: { Authorization: 'Bearer stale-before-relogin' } },
+      ),
+    );
+
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(messageWarning).not.toHaveBeenCalled();
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
   it('skipErrorHandler 不弹提示，但仍把错误抛给调用方', () => {
     const err = httpError(401, { message: '用户名或密码错误' }, { skipErrorHandler: true });
     locationRef.pathname = '/login';
