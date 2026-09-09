@@ -146,6 +146,29 @@ describe('exportAnalysis', () => {
     expect(clearSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it('res.json() 解析期间才完成重新登录，同样不清理新会话（PR #91 复审第四轮）', async () => {
+    // 令牌比对在拿到 res 时还是一致的；真正的竞态发生在随后 await res.json() 这段
+    // 异步间隙里——必须在真正清理前再判一次，只判一次不够。
+    setToken('stale-before-relogin');
+    const res = {
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      blob: async () => new Blob(['csv']),
+      json: async () => {
+        setToken('fresh-after-relogin');
+        return { success: false, code: 'auth.session_invalid', message: 'x' };
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => res));
+
+    await exportAnalysis({ site: 'US', view: 'DAY' }); // 不应该 reject
+
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(clearSnapshotMock).not.toHaveBeenCalled();
+  });
+
   it('错误体不是 JSON 时用兜底文案，不把解析异常抛给用户', async () => {
     const res = {
       ok: false,
