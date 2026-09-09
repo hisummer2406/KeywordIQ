@@ -86,7 +86,16 @@
   `--db-name`。已抽出 `scripts/_selfhosted_pg_env.py` 的 `default_db_name()`（读
   `.env` 的 `POSTGRES_DB`，取不到回退 `"amazon_search"`）给 `backup_selfhosted_pg.py`
   （5.4 已经这么修过一次）、本脚本与 4.2 的核对脚本三处共用，不再各自复制；本脚本结尾
-  打印的核对命令也带上与本次迁移一致的 `--db-name`。
+  打印的核对命令也带上与本次迁移一致的 `--db-name`。**修完这三处后主动排查同类写法**
+  （grep `default="amazon_search"`），发现 `ensure_target_partitions_for_migration.py`
+  的 `--db-name` 同样硬编码——当前唯一调用方（本脚本）总是显式传 `--db-name`，这条路径
+  不受影响，但该脚本文档明确写着"一般不需要手动跑"（暗示确实存在手动单独重跑的场景，
+  例如迁移中途只有补分区这一步失败），手动跑时会命中同一个坑。**修法与前三处不同**：
+  该脚本要求必须在 `app` 容器内跑（模块 docstring 已经说明），容器里没有 `.env`
+  文件（`.dockerignore` 排除），`POSTGRES_DB` 是 compose `env_file: .env` 直接注入的
+  环境变量——用 `os.environ.get("POSTGRES_DB", ...)`，不能照抄 `_selfhosted_pg_env.
+  default_db_name()`（那是读宿主机 `.env` 文件，容器里找不到文件会静默回退到错误默认值，
+  是同一类 bug 的另一种写法）。
 - [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
   `fact_dropped`/`fact_growth`/`dim_keyword`/`dim_product`/`site_data_stats` 的行数与
   最新期次。**演练中发现并修复一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python
