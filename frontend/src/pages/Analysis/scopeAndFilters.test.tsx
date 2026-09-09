@@ -12,6 +12,7 @@ import {
   getScope,
   getSites,
   listGroups,
+  ROW,
   searchAnalysis,
   seedAnalysisMocks,
   userState,
@@ -365,7 +366,13 @@ describe('分析查询屏 · 作用域与筛选', () => {
       await act(async () => {
         fireEvent.click(submit());
       });
-      expect(searchAnalysis).toHaveBeenCalledTimes(2);
+      // ProTable 的表格请求走一个约 20~30ms 的真实防抖（`useDebounceFn`），不是纯微任务；
+      // `act` 只flush 微任务，不推进真实定时器。裸同步断言在这台机器空闲、`act` 之后
+      // 又恰好被其他同步开销拖过防抖窗口时侥幸成立，负载稍高就先于定时器触发而翻红
+      // （本地实测同一份代码不改动，独立跑与整文件一起跑失败率从 0 到约 75% 不等，
+      // 与本轮改动无关，是这条断言写法本身对系统负载敏感）。改成 `waitFor` 消除这个
+      // 与被测逻辑无关的计时竞争。
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
 
       // 这段窗口内表格里仍是 US 的 coffee maker 那一行——点开它的详情
       await act(async () => {
@@ -387,6 +394,82 @@ describe('分析查询屏 · 作用域与筛选', () => {
       // 状态，会在这里触发第二次以 DE 发起的 getKeywordTrend）。
       await settle();
       expect(getKeywordTrend).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * ProTable 允许同一时刻有多个表格 `request` 调用同时在飞——旧调用不会被真的取消
+     * （`useFetchData` 的 abort 只掐断它自己内部的 debounce race，不掐断已经发出的
+     * `getData` promise 本身）。若一次更早发出的调用在一次更新的调用之后才落地，
+     * `runRequest` 若不核对调用序号，仍会用这次旧响应把 `loadedSite` 改回旧站点，
+     * 表格明明已经在展示新站点的行，之后点开的详情却按旧站点取数（PR #87 第五轮 P2）。
+     */
+    it('切站点两次、较早那次请求较晚落地时，不倒灌覆盖较新请求的站点', async () => {
+      getKeywordTrend.mockResolvedValue({
+        success: true,
+        keyword_id: 1,
+        keyword: 'coffee maker',
+        site: 'US',
+        view: 'DAY',
+        range: 'RECENT_30D',
+        on: '2026-07-18',
+        coverage: { start: '2026-07-12', end: '2026-07-18' },
+        points: [{ date: '2026-07-18', status: 'RANKED', ranking: 1 }],
+        best_ranking: { date: '2026-07-18', ranking: 1 },
+        latest_available: { date: '2026-07-18', ranking: 1 },
+      });
+
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1)); // 首屏：US
+
+      const user = userEvent.setup();
+
+      // 切到 DE 并立即查询：这次请求（较早发出）先卡住，稍后才落地
+      let resolveOlder!: (value: Awaited<ReturnType<typeof searchAnalysis>>) => void;
+      const olderCall = new Promise<Awaited<ReturnType<typeof searchAnalysis>>>((resolve) => {
+        resolveOlder = resolve;
+      });
+      searchAnalysis.mockReturnValueOnce(olderCall);
+
+      await user.click(screen.getByText('🇺🇸 美国站（US）'));
+      await act(async () => {
+        await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      });
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+
+      // 再切回 US 并立即查询：这次（较新发出）用默认 mock，立即落地
+      // 用 site 选择器自己范围内的当前选中值来开下拉——这是本文件唯一一处切换两次的
+      // 用例：第一次切换后 rc-select 的下拉选项列表仍挂在 DOM 里（关闭态但未卸载），
+      // 裸 `getByText('🇩🇪 德国站（DE）')` 会同时命中"当前选中值"与那份残留列表项，
+      // 报"找到多个元素"。
+      const siteSelectValue = () =>
+        document.querySelector('.scope-bar__site .ant-select-selection-item') as HTMLElement;
+      await user.click(siteSelectValue());
+      await act(async () => {
+        await user.click(await screen.findByTitle('🇺🇸 美国站（US）'));
+      });
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
+
+      // 较早那次（DE）现在才落地——响应里仍带同一行，只是站点标成 DE，用来隔离
+      // ProTable 自身会不会采纳这份陈旧响应去渲染表格（不是本条要守的范围），
+      // 单独验证 loadedSite 有没有被这次陈旧响应倒灌覆盖。
+      await act(async () => {
+        resolveOlder({ success: true, data: [ROW], total: 1, site: 'DE', view: 'DAY', date: '2026-07-16' });
+      });
+      await settle();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTitle('查看关键词 ABA 排名趋势详情'));
+      });
+
+      // 必须仍是较新那次请求（US）的作用域，不能被较早却后落地的 DE 响应改回去
+      await waitFor(() => expect(getKeywordTrend).toHaveBeenCalled());
+      expect(getKeywordTrend.mock.calls[0][0]).toMatchObject({ site: 'US', on: '2026-07-18' });
     });
   });
 });
