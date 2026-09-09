@@ -225,7 +225,11 @@ issue #81 已经对"是否为独立站抓取并发引入 Celery/Redis"做过完�
    相同——仓库里删掉 `etc/keywordiq.service` 只影响下次全新安装，不会停掉宿主机上已
    安装、正在跑的 unit，不先停会让容器因端口占用起不来。`deploy.sh` 已在
    `docker compose up -d` 前自动 `systemctl stop`/`disable` 它（Codex 审核 PR #84），
-   这一步因此不需要手工执行
+   这一步因此不需要手工执行。**这一步也是连接池配置生效的那一刻**：若 `.env` 里还留着
+   独立 RDS 时期的 `DB_POOL_SIZE=20`/`DB_MAX_OVERFLOW=10`/`DB_ASYNC_POOL_SIZE=20`/
+   `DB_ASYNC_MAX_OVERFLOW=10`，`config.py` 的启动期校验会在这一步直接拒绝启动（不是
+   等到真把自建 Postgres 的连接吃光了才在生产报错）——按 `.env.example` 的新起点值
+   （2/3/8/8）同步改小（Codex 审核 PR #84 第十五轮）
 6. RDS 保留只读、不删除，观察窗口（建议 7 天，覆盖至少一次日报 + 一次周报导入）；
    **回滚不是把 `.env` 换回 RDS 这么简单**——切换只在自建库还没有任何新写入的极短
    窗口内才是无损的；观察窗口内一旦有导入或用户写入落到自建库，RDS 已经落后，改回
