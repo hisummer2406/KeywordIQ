@@ -103,8 +103,17 @@ docker compose up -d   # 拉起应用容器（restart: unless-stopped，崩溃/�
 ```
 
 > **备份**：自建 PostgreSQL 没有阿里云 RDS 那样的自动备份，用
-> `scripts/backup_selfhosted_pg.py` 挂 cron 定时执行，产物存到 OSS（脚本文档里同时给了
-> 验证过的恢复命令）。
+> `scripts/backup_selfhosted_pg.py` 定时执行，产物存到 OSS（脚本文档里同时给了验证过的
+> 恢复命令）。**这一步同样需要手动安装**（与上面的 nginx 反代配置一样，不随 `./deploy.sh`
+> 自动发生）——`crontab -e` 加一行，例如每天 03:00 执行一次全量备份：
+>
+> ```bash
+> 0 3 * * * cd /path/to/KeywordIQ && $(command -v uv) run python scripts/backup_selfhosted_pg.py >> logs/backup.log 2>&1
+> ```
+>
+> `uv` 用绝对路径是因为 cron 默认 `PATH` 通常找不到它（不同于交互 shell 已把它加进
+> `PATH`）；`cd` 到项目目录是因为 `config.py` 的 `env_file=".env"` 按当前工作目录解析。
+> 保留策略见脚本文档，用 OSS 生命周期规则管理即可，不需要在这条 cron 里额外处理。
 >
 > **已知边界**：进程在导入中途被杀（崩溃/OOM/发布重启）时，该批次记录会停留在
 > `PROCESSING`（回收逻辑只覆盖 `UPLOADING`/`QUEUED`）。数据无损——事实写入在单事务里

@@ -150,11 +150,15 @@ def main() -> int:
 
     print("\n在自建库上补齐源库已用到的分区（alembic upgrade head 只建父表，"
           "子分区按需建，全新库还没有任何历史导入）...")
+    # 显式传 --db-name：此刻 .env 的 DATABASE_URL 仍指向 RDS 源库（第 5 步才切换），
+    # 该脚本因此不复用 .env / SessionFactory，而是按这个库名拼 compose 内部网络的
+    # db 服务地址，确保分区建在自建目标库上而不是重复建在源库上（Codex 审核 PR #84）。
     _run(
         [
             "docker", "compose", "run", "--rm", "app",
             "python", "scripts/ensure_target_partitions_for_migration.py",
             "--source-url", args.source_url,
+            "--db-name", args.db_name,
         ],
         dry_run=args.dry_run,
     )
