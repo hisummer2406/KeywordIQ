@@ -77,8 +77,25 @@ _DSN_PASSWORD_RE = re.compile(r"(postgres(?:ql)?://[^:@/\s]+:)[^@\s]*(@)")
 _MIGRATION_SEEDED_TABLES = ("permission", "role", "role_permission", "alembic_version")
 
 
-def _check_no_active_import(source_url: str) -> None:
-    """确认 RDS 侧没有正在跑的导入。有则中止——迁移期间不该有并发写入。"""
+def _check_no_active_import(source_url: str, *, after_quiesce: bool = False) -> None:
+    """确认源库没有正在跑的导入（PROCESSING/QUEUED/UPLOADING）。有则中止。
+
+    调用两次，语义不同：
+
+    **首次**（`_quiesce_source` 之前）拦的是"迁移前源库本就有导入在跑"——等它跑完
+    或失败即可，不是本脚本造成的问题。
+
+    **`after_quiesce=True`**（`_quiesce_source` 之后）拦的是本脚本自己制造的一种
+    竞态：首次检查通过、`_quiesce_source` 切只读并 `pg_terminate_backend` 断开所有
+    会话之间存在一个非零窗口，若恰好有个导入在这个窗口内开始，它的批次状态在
+    `_execute_locked` 里先于事实写入单独提交为 `PROCESSING`
+    （`app/table/upload/import_service.py`）；随后连接被切断，事实写入那段跟着回滚，
+    但 `PROCESSING` 这次提交已经落地。该批次自己的失败处理原本想把状态改成
+    `FAILED`，但此刻源库已被设成持久只读，这次写入同样失败——批次因此永久卡在
+    `PROCESSING`，且会连同其余数据一起被 `pg_dump --data-only` 原样搬到目标库，
+    没有任何环节会报错（Codex 审核 PR #84 第九轮）。这种情况下"等它跑完"不成立
+    ——连接已断、源库已只读，它不会自己恢复，只能人工核实。
+    """
     import psycopg2
 
     with psycopg2.connect(source_url) as conn, conn.cursor() as cur:
@@ -86,11 +103,22 @@ def _check_no_active_import(source_url: str) -> None:
             "SELECT count(*) FROM analysis.import_batch WHERE status IN ('PROCESSING', 'QUEUED', 'UPLOADING')"
         )
         active = cur.fetchone()[0]
-    if active:
+    if not active:
+        return
+    if after_quiesce:
         raise SystemExit(
-            f"错误：RDS 侧还有 {active} 条批次处于 PROCESSING/QUEUED/UPLOADING，"
-            "先等它们跑完（或失败）再迁移，否则迁移会漏掉这部分写入。"
+            f"错误：源库切为只读、断开旧会话之后，仍有 {active} 条批次处于 "
+            "PROCESSING/QUEUED/UPLOADING——大概率是它恰好在「检查通过」到「断开连接」"
+            "这段窗口内开始，被切断连接后卡在这个状态，且源库已只读，它的失败处理写不进"
+            "新状态，不会自己恢复。不要让它原样进入目标库：先核实这些批次对应的数据是否"
+            "完整（很可能表现为该期数据缺失或写了一半），必要时改回可写"
+            "（见 `_quiesce_source` 说明的 `PGOPTIONS` 回退命令）手动把它们标记为 FAILED，"
+            "确认干净后再重新执行本脚本。"
         )
+    raise SystemExit(
+        f"错误：RDS 侧还有 {active} 条批次处于 PROCESSING/QUEUED/UPLOADING，"
+        "先等它们跑完（或失败）再迁移，否则迁移会漏掉这部分写入。"
+    )
 
 
 def _quiesce_source(source_url: str) -> None:
@@ -170,6 +198,8 @@ def main() -> int:
         _check_no_active_import(args.source_url)
         print("\n把源库切为只读，堵住检查通过之后到 dump 开始之间的写入窗口...")
         _quiesce_source(args.source_url)
+        print("\n复查断开连接后有没有批次恰好卡在「检查通过」到「断开连接」的窗口里...")
+        _check_no_active_import(args.source_url, after_quiesce=True)
     else:
         print("[--dry-run] 跳过 RDS 侧导入状态检查与只读切换")
 
