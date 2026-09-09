@@ -31,13 +31,16 @@ schema，不能依赖恢复时还记得先跑一遍迁移。
     #    pg_restore 当作可忽略继续跑完，实测确认最终数据仍然正确，但命令本身是错的，
     #    生产恢复时不该让人对着一堆报错怀疑恢复有没有成功）。--clean --if-exists
     #    会先清空已有对象再按备份重建，同一条命令对"空库"与"库里已有旧数据"都适用。
-    docker compose exec -T db pg_restore --clean --if-exists \\
-        --username postgres --dbname amazon_search /tmp/restore.custom
+    #    `--dbname amazon_search` 硬编码过默认库名，`POSTGRES_DB` 一旦改过就会连到一个
+    #    不存在的库而失败（Codex 审核 PR #84 第十轮）；改用 `sh -c` 在容器内展开
+    #    `$POSTGRES_DB`，读到的是 `db` 服务自己 `environment:` 里已经注入好的值。
+    docker compose exec -T db sh -c 'pg_restore --clean --if-exists \\
+        --username postgres --dbname "$POSTGRES_DB" /tmp/restore.custom'
 
     # 3. 核对：关键表行数是否符合预期（至少确认 permission/role 等种子表非空，
     #    证明 schema 与种子数据都恢复了，不只是恢复了个空壳）
-    docker compose exec -T db psql -U postgres -d amazon_search \\
-        -tAc "SELECT count(*) FROM analysis.permission"
+    docker compose exec -T db sh -c 'psql -U postgres -d "$POSTGRES_DB" \\
+        -tAc "SELECT count(*) FROM analysis.permission"'
 """
 
 from __future__ import annotations

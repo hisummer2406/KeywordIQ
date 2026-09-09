@@ -208,6 +208,18 @@
   含一个真实踩过的坑：`pg_restore --create` 会尝试 DROP/CREATE 自己当前连接的数据库，
   报错但被当作可忽略继续跑完——最终数据没问题，但生产恢复时不该让人对着一堆报错怀疑
   恢复是否成功，故文档里明确写"不要加 --create"，用 `--clean --if-exists` 即可）。
+  **PR #84 Codex 第十轮复审发现第十二个 bug**：文档字符串里的 `pg_restore`/`psql` 核对
+  命令把库名硬编码成 `--dbname amazon_search`——`--db-name` 这个 CLI 参数本身早已在
+  第四轮修复时改为读 `POSTGRES_DB`（见 5.4 段），但这段供人工照抄的恢复演练命令是纯
+  文本，不会跟着那次修复自动更新。操作者一旦把 `POSTGRES_DB` 改成别的值，在一个全新
+  容器上照抄这两条命令会连到一个不存在的库而失败。改用
+  `docker compose exec -T db sh -c '... --dbname "$POSTGRES_DB" ...'`——`db` 服务的
+  `environment:` 本就注入了 `POSTGRES_DB`（`docker-compose.yml`），让展开发生在容器内
+  读到的正是这个值。已用真实 `postgres:15.8` 容器验证：库名设为非默认值
+  `custom_dbname` 时，旧的硬编码命令报
+  `FATAL: database "amazon_search" does not exist`（退出码 1），改用 `sh -c` 包装后
+  恢复与核对查询均成功（核对查询返回预期行数）。纯文档字符串改动，没有可挂的 pytest
+  路径，验证只能靠这次真实容器操作。
 - [x] 5.3 实际跑了一次"备份 → 恢复到全新空库 → 核对"演练：备份产出真实上传到 OSS
   又下载下来、恢复进一个从未跑过迁移的全新 `db` 容器、核对 `permission`（6 行）、
   `role`（3 行）、`alembic_version`（1 行）均与备份时刻一致。
