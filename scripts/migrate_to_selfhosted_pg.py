@@ -75,12 +75,16 @@ def _quiesce_source(source_url: str) -> None:
     这也提前落成了 design.md Migration Plan 步骤 6 承诺的终态——观察窗口期间
     RDS 本就该是只读的；这里只是把它提前到 dump 之前生效。
 
-    若迁移中途放弃、需要继续用 RDS 服务，用 `PGOPTIONS` 带着覆盖值连接，跑
-    `ALTER DATABASE <db> SET default_transaction_read_only = off;` 改回去——不能省
-    `PGOPTIONS`：新连上的会话本身已经继承了库级只读默认值，直接跑这条 `ALTER DATABASE`
-    会被这个只读挡下来（`ALTER DATABASE` 是对系统目录的写操作）；把 `SET
-    default_transaction_read_only = off` 和 `ALTER DATABASE ...` 分两条语句依次执行
-    同样能绕开，但若把两条语句写进同一次调用（同一个 `psql -c "stmt1; stmt2"`），
+    这个只读设置是持久的（`ALTER DATABASE ... SET`，不是会话级），`.env` 的
+    `DATABASE_URL` 改回指向 RDS 不会自动清掉它——**迁移中途放弃**、或**迁移完成后在
+    design.md Migration Plan 步骤 6 的观察窗口内决定回滚**，两种情况都需要主动解除，
+    否则应用配置层面已经指回 RDS，实际连上去仍然只能读不能写（spec.md「迁移窗口内可
+    回滚」两个场景都要求这一步，Codex 审核 PR #84 第四轮）。用 `PGOPTIONS` 带着覆盖值
+    连接，跑 `ALTER DATABASE <db> SET default_transaction_read_only = off;` 改回去——
+    不能省 `PGOPTIONS`：新连上的会话本身已经继承了库级只读默认值，直接跑这条
+    `ALTER DATABASE` 会被这个只读挡下来（`ALTER DATABASE` 是对系统目录的写操作）；把
+    `SET default_transaction_read_only = off` 和 `ALTER DATABASE ...` 分两条语句依次
+    执行同样能绕开，但若把两条语句写进同一次调用（同一个 `psql -c "stmt1; stmt2"`），
     Postgres 的简单查询协议会把它们隐式包进同一个事务，`SET` 生效前 `ALTER DATABASE`
     所在的事务早已在只读状态下开始——本地演练把这两种失败形态都跑出来过，不是猜测。
     """
@@ -101,7 +105,7 @@ def _quiesce_source(source_url: str) -> None:
             )
     print(
         f"已将源库 {db_name} 切为只读并断开其余会话；若需放弃迁移继续用 RDS 服务，"
-        f"跑（PGOPTIONS 不能省，见函数说明）：\n"
+        f"或迁移完成后在观察窗口内回滚到 RDS，都要跑（PGOPTIONS 不能省，见函数说明）：\n"
         f"  PGOPTIONS='-c default_transaction_read_only=off' psql \"<source_url>\" -c "
         f"'ALTER DATABASE \"{db_name}\" SET default_transaction_read_only = off'"
     )
