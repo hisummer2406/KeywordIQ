@@ -2,9 +2,21 @@
 
 前提（不在本脚本里检查，迁移前必须先手动确认）：
 
-1. 自建 `db` 容器已跑过 `docker compose exec app alembic upgrade head`，schema
-   （含分区表、`category_stats`/`brand_stats` 等）已建好且核对过与 RDS 一致
-   （见 openspec/changes/dockerize-selfhosted-infra/design.md 决策 4）
+1. 自建 `db` 容器已建好 schema（含分区表、`category_stats`/`brand_stats` 等），且核对过
+   与 RDS 一致（见 openspec/changes/dockerize-selfhosted-infra/design.md 决策 4）。
+
+   **不能用 `docker compose exec app alembic upgrade head`。** 此刻切换还没发生，`.env`
+   的 `DATABASE_URL`/`DATABASE_URL_ASYNC` 通常仍指向 RDS，而 `app` 容器的环境变量是同一份
+   `.env` 经 `env_file:` 注入的——`exec` 进一个尚未按新形态起过的 `app` 容器会找不到容器,
+   即便临时起一个也是升级 RDS 的 schema（RDS 本来就已是 head，实际什么也没发生），而不是
+   在目标自建库上建表（Codex 审核 PR #84 第五轮）。改用 `docker compose run --rm` 起一个
+   一次性容器，显式覆盖两个 DSN 指向 `db` 服务（内部网络地址，`POSTGRES_PASSWORD` 与
+   `db` 服务共用同一份 `.env` 注入，见 `.env.example` 的密码字符集约束）：
+
+       docker compose run --rm \
+         -e DATABASE_URL="postgresql://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" \
+         -e DATABASE_URL_ASYNC="postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" \
+         app alembic upgrade head
 2. 选在低峰时段执行——本脚本会在确认无活跃导入后把源库切为只读（`_quiesce_source`），
    堵住检查通过到 dump 开始之间的写入窗口，但改不了已经发生的事：切只读之前若源库上
    还有别的写入在跑，那部分数据依然进不了 dump（见 design.md 风险「迁移窗口数据
@@ -34,6 +46,11 @@ import argparse
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts._selfhosted_pg_env import default_db_name
 
 _DUMP_PATH_IN_CONTAINER = "/tmp/keywordiq_migration_dump.custom"
 
@@ -125,7 +142,10 @@ def _run(cmd: list[str], *, dry_run: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-url", required=True, help="RDS 的 DATABASE_URL（psycopg2 格式）")
-    parser.add_argument("--db-name", default="amazon_search", help="自建库里的数据库名")
+    parser.add_argument(
+        "--db-name", default=default_db_name(),
+        help="自建库里的数据库名，默认跟 .env 的 POSTGRES_DB 走",
+    )
     parser.add_argument("--compose-service", default="db", help="自建库的 compose 服务名")
     parser.add_argument("--jobs", type=int, default=4, help="pg_restore 并行度")
     parser.add_argument(
@@ -193,7 +213,9 @@ def main() -> int:
 
     print(
         "\n迁移命令已执行完毕。接下来必须跑："
-        "\n  uv run python scripts/verify_selfhosted_migration.py --source-url <同上>"
+        f"\n  uv run python scripts/verify_selfhosted_migration.py --source-url <同上> "
+        f"--db-name {args.db_name}"
+        "\n（--db-name 与本次迁移用的库名保持一致，不要依赖核对脚本自己的默认值）"
         "\n核对通过后才能切换 .env 的 DATABASE_URL/DATABASE_URL_ASYNC。"
     )
     return 0

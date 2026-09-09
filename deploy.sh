@@ -131,12 +131,18 @@ echo "  nginx 已重载"
 # keywordiq.service 仍绑在 127.0.0.1:8000——与 app 容器要绑的端口相同，不先停掉它，
 # 下面的 docker compose up -d 会因端口已被占用而起不来。从仓库里删掉
 # etc/keywordiq.service 只影响下次全新安装，不会停掉宿主机上已安装、正在跑的 unit。
-# 用 is-active 判断而非"unit 是否存在"：停过一次之后 is-active 恒为假，后续每次
-# deploy.sh 都会跳过这一步，天然幂等，不需要额外记状态。
+# stop 与 disable 分别按 is-active / is-enabled 独立判断，不能只查 is-active：
+# unit 若被手工停过、处于 failed，或本次部署前恰好还在 activating，is-active 为假，
+# 但只要它仍是 enabled，宿主机下次重启时 systemd 照样把它拉起来，回头跟新容器抢
+# 127.0.0.1:8000（Codex 审核 PR #84 第六轮）。两个判断各自天然幂等：停过之后
+# is-active 恒为假，disable 过之后 is-enabled 恒为假，不需要额外记状态。
 if systemctl is-active --quiet keywordiq.service 2>/dev/null; then
-    warn "  检测到遗留 keywordiq.service 仍占用 127.0.0.1:8000，先停用..."
+    warn "  检测到遗留 keywordiq.service 仍在运行并占用 127.0.0.1:8000，先停止..."
     as_root systemctl stop keywordiq.service
-    as_root systemctl disable keywordiq.service 2>/dev/null || true
+fi
+if systemctl is-enabled --quiet keywordiq.service 2>/dev/null; then
+    warn "  检测到遗留 keywordiq.service 仍处于启用状态，禁用避免下次开机抢占端口..."
+    as_root systemctl disable keywordiq.service
 fi
 
 # up -d 对已用新镜像 build 过的服务会重建容器；db/netdata 若已在跑且配置未变则不受影响。
@@ -153,6 +159,10 @@ for i in $(seq 1 15); do
     sleep 2
 done
 
+# 非零退出：新容器一直没就绪，nginx 前面几步已经重载完毕，此时 nginx 正在把流量转给
+# 一个还没通过健康检查的后端。静默 exit 0 会让无人值守调用（--yes，CI/自动发布）把这次
+# 部署记成成功，而实际服务可能不可用——只打印警告不够，退出码必须让上游据此判定失败
+# 并触发告警（Codex 审核 PR #84 第六轮）。
 warn "⚠️  部署动作已完成，但 15 次重试内 /health 未通过。"
 warn "   排查：docker compose logs app --tail 100"
-exit 0
+exit 1

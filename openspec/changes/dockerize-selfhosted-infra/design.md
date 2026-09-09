@@ -209,7 +209,10 @@ issue #81 已经对"是否为独立站抓取并发引入 Celery/Redis"做过完�
 ## Migration Plan
 
 1. 在 `db` 容器（全新、空库）上跑 `alembic upgrade head`，核对生成的 schema（含分区、
-   物化视图）与 RDS 实际 schema 一致（`\d+` 或 `pg_dump --schema-only` 逐项比对）
+   物化视图）与 RDS 实际 schema 一致（`\d+` 或 `pg_dump --schema-only` 逐项比对）。
+   **不能用 `docker compose exec app`**——此刻 `.env` 通常仍指向 RDS，`app` 容器读的是
+   同一份 `.env`；具体命令（`docker compose run --rm` 显式覆盖两个 DSN 指向 `db` 服务）
+   见 `migrate_to_selfhosted_pg.py` 模块 docstring 前提第 1 条（Codex 审核 PR #84 第五轮）
 2. 确认迁移窗口内没有导入任务在跑（`import_batch` 表无 `PROCESSING`/`QUEUED`/
    `UPLOADING`），随后把 RDS 切为拒绝新写事务并断开其余会话——`migrate_to_selfhosted_pg.py`
    自动做这两步（`_check_no_active_import` + `_quiesce_source`），不需要手工执行
