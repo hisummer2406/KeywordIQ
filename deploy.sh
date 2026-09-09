@@ -20,6 +20,10 @@
 #
 # 可用环境变量覆盖：
 #   WEB_ROOT      SPA 产物发布目录（默认 /var/www/keywordiq，须与 nginx root 一致）
+#   SERVICE_NAME  旧路线（host nginx + systemd 裸 uvicorn）遗留的服务名（默认 keywordiq），
+#                 仅用于本次切容器化时清理该 unit——旧路线本身支持这个覆盖，若操作者
+#                 当初把它改成了非默认名字，硬编码 keywordiq.service 找不到那个 unit，
+#                 它会继续占着 127.0.0.1:8000（Codex 审核 PR #84 第十三轮）
 
 set -euo pipefail
 
@@ -29,6 +33,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 WEB_ROOT="${WEB_ROOT:-/var/www/keywordiq}"
+SERVICE_NAME="${SERVICE_NAME:-keywordiq}"
 
 SKIP_FRONTEND=0
 SKIP_MIGRATE=0
@@ -128,21 +133,23 @@ as_root systemctl reload nginx
 echo "  nginx 已重载"
 
 # 首次由旧路线（host nginx + systemd 裸 uvicorn）切到本容器化路线时，遗留的
-# keywordiq.service 仍绑在 127.0.0.1:8000——与 app 容器要绑的端口相同，不先停掉它，
+# ${SERVICE_NAME}.service 仍绑在 127.0.0.1:8000——与 app 容器要绑的端口相同，不先停掉它，
 # 下面的 docker compose up -d 会因端口已被占用而起不来。从仓库里删掉
 # etc/keywordiq.service 只影响下次全新安装，不会停掉宿主机上已安装、正在跑的 unit。
+# 探测与操作都读 SERVICE_NAME 而非硬编码 keywordiq：旧路线本身支持这个环境变量覆盖，
+# 操作者若当初把服务名改成了别的，硬编码会找不到那个 unit（Codex 审核 PR #84 第十三轮）。
 # stop 与 disable 分别按 is-active / is-enabled 独立判断，不能只查 is-active：
 # unit 若被手工停过、处于 failed，或本次部署前恰好还在 activating，is-active 为假，
 # 但只要它仍是 enabled，宿主机下次重启时 systemd 照样把它拉起来，回头跟新容器抢
 # 127.0.0.1:8000（Codex 审核 PR #84 第六轮）。两个判断各自天然幂等：停过之后
 # is-active 恒为假，disable 过之后 is-enabled 恒为假，不需要额外记状态。
-if systemctl is-active --quiet keywordiq.service 2>/dev/null; then
-    warn "  检测到遗留 keywordiq.service 仍在运行并占用 127.0.0.1:8000，先停止..."
-    as_root systemctl stop keywordiq.service
+if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+    warn "  检测到遗留 ${SERVICE_NAME}.service 仍在运行并占用 127.0.0.1:8000，先停止..."
+    as_root systemctl stop "${SERVICE_NAME}.service"
 fi
-if systemctl is-enabled --quiet keywordiq.service 2>/dev/null; then
-    warn "  检测到遗留 keywordiq.service 仍处于启用状态，禁用避免下次开机抢占端口..."
-    as_root systemctl disable keywordiq.service
+if systemctl is-enabled --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+    warn "  检测到遗留 ${SERVICE_NAME}.service 仍处于启用状态，禁用避免下次开机抢占端口..."
+    as_root systemctl disable "${SERVICE_NAME}.service"
 fi
 
 # up -d 对已用新镜像 build 过的服务会重建容器；db/netdata 若已在跑且配置未变则不受影响。
