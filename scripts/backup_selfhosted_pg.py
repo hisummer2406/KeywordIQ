@@ -132,11 +132,27 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmpdir:
         local_path = Path(tmpdir) / f"{timestamp}.custom"
 
-        print(f"\n在 {args.compose_service} 容器内执行 pg_dump（全量）...")
-        _dump_full(args.compose_service, args.db_name, dump_path_in_container)
+        # dump/复制这两步失败也必须清理容器内的产物——`pg_dump` 半途失败（磁盘满、连接
+        # 断开）会留下一个不完整的归档文件，`docker compose cp` 失败则是完整归档文件
+        # 复制失败；两种情况这个 PID 专属路径都不会再被本进程后续步骤引用，留在容器
+        # 可写层里。这个脚本本就设计成按 cron 定时反复失败重跑（比如 OSS 凭证配错），
+        # 不清理会让每次失败都新增一份数据库量级的归档文件，积累到把宿主机磁盘写满
+        # （Codex 审核 PR #84 第十四轮）。用 try/except 而非 try/finally 是为了让清理
+        # 本身的失败（容器已经不在了之类）不掩盖真正的备份失败原因——`raise` 原样传播
+        # 最初那个异常，清理失败只打印不上抛。
+        try:
+            print(f"\n在 {args.compose_service} 容器内执行 pg_dump（全量）...")
+            _dump_full(args.compose_service, args.db_name, dump_path_in_container)
 
-        print(f"\n把 dump 从容器复制到本地临时文件 {local_path} ...")
-        _copy_out(args.compose_service, local_path, dump_path_in_container)
+            print(f"\n把 dump 从容器复制到本地临时文件 {local_path} ...")
+            _copy_out(args.compose_service, local_path, dump_path_in_container)
+        except Exception:
+            print("\n备份失败，仍尝试清理容器内可能留下的临时文件...")
+            try:
+                _cleanup_container(args.compose_service, dump_path_in_container)
+            except subprocess.CalledProcessError:
+                print("清理容器内临时文件也失败了（可能是文件本就没生成），以原始备份错误为准。")
+            raise
 
         print("\n清理容器内的临时文件...")
         _cleanup_container(args.compose_service, dump_path_in_container)
