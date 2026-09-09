@@ -234,7 +234,11 @@ async def login_with_auth_code(
         # 合成一个错误码会让管理员无从判断该去哪边查。
         raise SsoAccountDisabledError(log_detail=f"账号已停用: id={user.id}")
 
+    # 与本地密码登录（simple_auth.login）共用同一个会话签发方法（issue #89），
+    # 不在这里另写一遍"生成 session_id → 落库 → 签发"。
+    crud = UserCenterCRUD(db)
+    session_id = await crud.rotate_active_session(user)
     token = auth_service.create_access_token(
-        user.id, user.user_name, user.is_super, user.role_code
+        user.id, user.user_name, user.is_super, user.role_code, session_id
     )
     return {"token": token, "user": user}

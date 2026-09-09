@@ -719,6 +719,19 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   没有自救入口，只能靠 `scripts/seed_admin.py` 或直接改库恢复。
 - **端点**：`POST /api/auth/token`（登录发令牌，免鉴权）、`GET /api/auth/me`、
   `POST /api/auth/logout`（干净 REST）。
+- **账号级会话唯一（issue #89）：JWT 不再是纯粹无状态的。** 每次登录成功（本地密码/钉钉
+  扫码共用同一段逻辑，`UserCenterCRUD.rotate_active_session`）生成新的 `session_id`，覆盖
+  `user_center.active_session_id` 并编码进新签发的 JWT；`get_current_user` 在查用户之外
+  额外比对这一项，缺失、为空串或与库中不一致均判定为会话失效，抛
+  `SessionInvalidError`（`auth.session_invalid`，与其余 401 场景的 `auth.unauthorized`
+  区分，供前端呈现"账号已在其他浏览器登录"）。主动退出（`clear_session_if_current`）是
+  条件更新——只清与本次令牌一致的记录，旧会话的退出请求不会误删更新的登录。并发登录的
+  "最后一次"由数据库对同一行的写入天然串行化决定，不额外加锁。**上线时不兼容缺少
+  `session_id` 的旧令牌**，全体在线用户需重新登录一次；这是刻意的 BREAKING 行为，不做
+  兼容分支。前端 `errorHandler`（`frontend/src/app.tsx`）按错误码区分提示文案，并在清理前
+  比对这次失败请求发起时用的令牌是否仍是当前令牌——不一致（本浏览器已经历过重新登录）时
+  忽略这个迟到的响应，不清理刚取得的新会话。详见
+  `openspec/changes/add-single-session-login/design.md`。
 - **鉴权显式落在每个端点的依赖上**（`Depends(require_permission(code))` 或 `get_current_user`），
   没有全局鉴权中间件——旧的 `AdminAuthMiddleware` 因 `exclude_paths` 含 `"/"` 形同虚设，已删除。
   新增受保护端点务必挂鉴权依赖（无全局兜底）。`test/test_protable_contract.py` 有"无 token 必拒"回归。

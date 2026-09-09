@@ -63,6 +63,21 @@ class ForbiddenError(APIError):
     message = "没有执行该操作的权限"
 
 
+class SessionInvalidError(APIError):
+    """令牌的会话编号缺失/为空/与当前有效会话不一致（issue #89）。
+
+    三种成因（旧令牌不携带该声明、声明为空串、账号已在别处重新登录致使编号被覆盖）对
+    用户而言是同一个可操作结论——"这张令牌不再代表当前有效会话，请重新登录"，故合并成
+    一个错误码，不逐个细分。**必须**用这个 `APIError` 子类而非裸 `HTTPException`：
+    后者会被 `http_exception_handler` 统一映射成 `auth.unauthorized`，前端就分不出
+    "被顶号"与"令牌单纯过期/畸形"，做不出"账号已在其他浏览器登录"这句区别文案。
+    """
+
+    http_status = 401
+    code = "auth.session_invalid"
+    message = "登录状态已失效，可能是账号在其他浏览器登录，请重新登录"
+
+
 class NotFoundError(APIError):
     """目标不存在。"""
 
@@ -117,6 +132,7 @@ CODE_REQUEST_TOO_LARGE: Final = "request.too_large"
 CODE_REQUEST_UNPROCESSABLE: Final = "request.unprocessable"
 CODE_AUTH_UNAUTHORIZED: Final = "auth.unauthorized"
 CODE_AUTH_FORBIDDEN: Final = "auth.forbidden"
+CODE_AUTH_SESSION_INVALID: Final = "auth.session_invalid"  # 会话被顶替/缺失/不匹配
 
 # 通用资源
 CODE_RESOURCE_NOT_FOUND: Final = "resource.not_found"

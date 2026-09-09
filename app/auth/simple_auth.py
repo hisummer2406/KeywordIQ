@@ -10,11 +10,12 @@ AsyncSession 下访问 role_code / permission_codes 不会触发禁止的隐式�
 """
 import logging
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.login_auth import auth_service
+from app.common.errors import SessionInvalidError
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_model import UserCenter
 from database import AsyncSessionFactory, get_async_db
@@ -39,8 +40,10 @@ class SimpleAuth:
                     detail="用户名或密码错误"
                 )
 
+            # 落库先于签发：数据库提交成功后才有可用的登录结果（issue #89）。
+            session_id = await crud.rotate_active_session(user)
             token = auth_service.create_access_token(
-                user.id, user.user_name, user.is_super, user.role_code
+                user.id, user.user_name, user.is_super, user.role_code, session_id
             )
 
             return {
@@ -52,10 +55,18 @@ class SimpleAuth:
 
     @staticmethod
     async def get_current_user(
+            request: Request,
             credentials: HTTPAuthorizationCredentials = Depends(security),
             db: AsyncSession = Depends(get_async_db)
     ) -> UserCenter:
-        """获取当前用户（含角色/权限，relationship selectin 一并载入）"""
+        """获取当前用户（含角色/权限，relationship selectin 一并载入）。
+
+        会话校验（issue #89）：JWT 的 `session_id` 缺失、为空串，或与库中
+        `active_session_id` 不一致，均判定为该令牌所属会话已失效，抛
+        `SessionInvalidError`（区别于其余令牌无效场景的专属错误码，供前端呈现
+        "账号已在其他浏览器登录"）。校验通过后把 `session_id` 挂到
+        `request.state`，供 `logout` 端点做条件清除，不必再解码一次令牌。
+        """
         payload = auth_service.decode_access_token(credentials.credentials)
         if not payload:
             raise HTTPException(
@@ -71,6 +82,11 @@ class SimpleAuth:
                 detail="用户不存在或已禁用"
             )
 
+        session_id = payload.get("session_id") or None
+        if not session_id or session_id != user.active_session_id:
+            raise SessionInvalidError()
+
+        request.state.session_id = session_id
         return user
 
     @staticmethod

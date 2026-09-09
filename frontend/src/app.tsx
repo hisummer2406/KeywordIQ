@@ -196,8 +196,24 @@ export const request: RequestConfig = {
 
       // 非登录页的 401 才是"会话过期"→ 清 token 跳登录；登录页的 401 是凭证错误
       if (status === 401 && history.location.pathname !== LOGIN_PATH) {
+        // 这次失败请求发起时用的令牌，若已经不是当前本地持有的令牌，说明本浏览器在它
+        // 发出之后又完成过一次新登录（issue #89）——这是一个迟到的、属于旧令牌的响应，
+        // MUST NOT 反过来把刚取得的新登录状态清掉。`requestToken` 取不到时（如某些
+        // 未附带请求配置的调用方式）不认为是陈旧响应，沿用此前"直接清理"的安全默认。
+        const requestToken = error?.config?.headers?.Authorization;
+        const isStaleResponse = requestToken && requestToken !== `Bearer ${getToken()}`;
+        if (isStaleResponse) {
+          return;
+        }
+
         clearToken();
-        message.warning('登录已过期，请重新登录');
+        // 分析屏的会话缓存与令牌同生共死（doLogout 同一条纪律）：不清的话，甲被顶号后
+        // 乙在同一浏览器登录，会先看到甲遗留的查询条件与结果行。
+        clearSnapshot();
+        // 会话被顶替（auth.session_invalid）呈现区别于普通过期的明确原因
+        const reason =
+          body?.code === 'auth.session_invalid' ? '账号已在其他浏览器登录' : '登录已过期，请重新登录';
+        message.warning(reason);
         history.push(LOGIN_PATH);
         return;
       }
