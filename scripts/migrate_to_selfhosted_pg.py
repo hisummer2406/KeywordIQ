@@ -49,7 +49,9 @@
 分成两个独立步骤，是为了核对也能在切换 `.env` 之后的观察窗口内单独重跑（见
 design.md「Migration Plan」）。
 
-退出码非 0 表示迁移失败，不应继续后续步骤。
+退出码非 0 表示迁移失败，不应继续后续步骤。**可以直接重跑本脚本**——恢复步骤前会先
+清空目标库里即将被写入的表（`_reset_target_tables`），中途失败不会在重试时撞主键冲突
+（Codex 审核 PR #84 第十四轮）。
 """
 
 from __future__ import annotations
@@ -179,6 +181,51 @@ def _run(cmd: list[str], *, dry_run: bool) -> None:
     subprocess.run(cmd, check=True)
 
 
+def _reset_target_tables(compose_service: str, db_name: str, *, dry_run: bool) -> None:
+    """清空目标库里即将被 `pg_restore --data-only` 写入的表，让这一步对重跑安全。
+
+    `pg_restore --data-only` 不是幂等操作——它对已有行执行 INSERT。若上一次因某个表
+    或分区中途失败（网络抖动、磁盘满、并行恢复的某个 worker 报错）而退出，目标库处于
+    "部分表已经有数据"的状态；此时按文档字面重跑本脚本，`pg_restore` 会在这些已恢复
+    过的表上撞主键冲突，而不是把迁移续上——源库已经被 `_quiesce_source` 切成持久
+    只读，操作者卡在一个"重试即报错、不重试又没有别的路"的状态（Codex 审核 PR #84
+    第十四轮）。
+
+    在 `pg_restore` 之前无条件 TRUNCATE 全部即将被恢复的表，把这一步变成可安全重复
+    执行的操作：不管是首次运行还是失败后重试，起点都统一是"这些表在目标库里是空的"。
+    TRUNCATE 一个分区父表会级联清空全部叶子分区，不需要单独枚举分区。种子表
+    （`_MIGRATION_SEEDED_TABLES`）不在清空范围内——它们本就不参与 `pg_restore
+    --data-only`（dump 阶段已用 `--exclude-table` 排除），TRUNCATE 掉会把
+    RBAC 权限矩阵清空。
+    """
+    if dry_run:
+        print("[--dry-run] 跳过清空目标表（不会真的连接自建库）")
+        return
+    exclude = ", ".join(f"'{t}'" for t in _MIGRATION_SEEDED_TABLES)
+    list_tables_sql = (
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'analysis' "
+        f"AND tablename NOT IN ({exclude})"
+    )
+    proc = subprocess.run(
+        [
+            "docker", "compose", "exec", "-T", compose_service,
+            "psql", "-U", "postgres", "-d", db_name, "-tAc", list_tables_sql,
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    tables = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if not tables:
+        return
+    truncate_sql = "TRUNCATE " + ", ".join(f"analysis.{t}" for t in tables) + " CASCADE"
+    subprocess.run(
+        [
+            "docker", "compose", "exec", "-T", compose_service,
+            "psql", "-U", "postgres", "-d", db_name, "-c", truncate_sql,
+        ],
+        check=True,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-url", required=True, help="RDS 的 DATABASE_URL（psycopg2 格式）")
@@ -228,6 +275,9 @@ def main() -> int:
         ],
         dry_run=args.dry_run,
     )
+
+    print(f"\n清空目标库 {args.db_name} 里即将被恢复的表（让这一步对重跑安全）...")
+    _reset_target_tables(args.compose_service, args.db_name, dry_run=args.dry_run)
 
     print(f"\n恢复到自建库 {args.db_name}（并行度 {args.jobs}）...")
     _run(
