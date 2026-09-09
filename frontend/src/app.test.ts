@@ -106,6 +106,25 @@ describe('全局 errorHandler', () => {
     expect(pushMock).not.toHaveBeenCalled();
   });
 
+  it('重新登录成功、尚未跳离登录页时，迟到的旧请求 401 同样被忽略（PR #91 审核 P2）', () => {
+    // 重新登录已经拿到新 token，但 useLoginRedirect 还没来得及把路由从 /login 推走
+    // ——这段窗口期里，一个用旧 token 发出的请求才姗姗来迟地返回 401。
+    locationRef.pathname = '/login';
+    setToken('fresh-after-relogin');
+    handler(
+      httpError(
+        401,
+        { success: false, code: 'auth.session_invalid', message: '登录状态已失效', request_id: 'r5' },
+        { headers: { Authorization: 'Bearer stale-before-relogin' } },
+      ),
+    );
+
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(messageWarning).not.toHaveBeenCalled();
+    expect(messageError).not.toHaveBeenCalled();
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
   it('skipErrorHandler 不弹提示，但仍把错误抛给调用方', () => {
     const err = httpError(401, { message: '用户名或密码错误' }, { skipErrorHandler: true });
     locationRef.pathname = '/login';
