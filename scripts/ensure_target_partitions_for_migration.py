@@ -7,33 +7,56 @@
 演练（tasks 4.3）实际跑出来的错误，不是猜测——设计阶段漏考虑了这一步。
 
 **必须在 app 容器内运行**：既要用 psycopg2 连源库（与宿主机同样可达），又要用项目
-自己的 `SessionFactory`/`ensure_fact_partitions` 连目标库——后者只在 Docker 内部
-网络可达，宿主机连不到 `db`。
+自己的 `ensure_fact_partitions` 连目标库——后者只在 Docker 内部网络可达，宿主机连不到
+`db`。
+
+**目标库连接串固定拼 compose 内部网络的 `db` 服务，不读 `config.settings.DATABASE_URL`
+/ `database.SessionFactory`。** 迁移这一步发生在 design.md「Migration Plan」步骤 5
+（切换 `.env` 的 `DATABASE_URL`）之前——此刻 `.env` 里的 `DATABASE_URL` 仍指向 RDS 源库，
+而 `docker compose run --rm app` 经 `env_file: .env` 继承同一份配置。若这里复用全局
+`SessionFactory`，`ensure_fact_partitions` 会在源库（RDS）上重复建一遍分区（RDS 早就有，
+等于白跑），自建目标库依旧一个叶子分区都没有，紧接着的 `pg_restore --data-only` 会对
+每一行事实数据报 `relation "analysis.fact_daily_2026_09_us" does not exist`
+（Codex 审核 PR #84 第三轮）。
 
 用法（由 migrate_to_selfhosted_pg.py 自动调用，一般不需要手动跑）::
 
     docker compose run --rm app python scripts/ensure_target_partitions_for_migration.py \\
-        --source-url "postgresql://user:pass@rds-host/amazon_search"
+        --source-url "postgresql://user:pass@rds-host/amazon_search" \\
+        --db-name amazon_search
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import psycopg2
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.table.analysis.partitioning import PARTITIONED_TABLES, ensure_fact_partitions
 from config import settings
-from database import SessionFactory
 
 # 一级分区表（fact_dropped/fact_growth）不按站点物理隔离，但 `ensure_fact_partitions`
 # 的签名仍要求一个站点码做校验——随便取 ENABLED_SITES 的第一个即可，不影响建出来的分区
 # （site_subpartition=False 时函数内部本就不会用它建站点子分区）。
 _FALLBACK_SITE = settings.ENABLED_SITES.split(",")[0]
+
+
+def _default_target_url(db_name: str) -> str:
+    """按 compose 内部网络拼目标库 DSN，与 `.env` 当前 `DATABASE_URL` 指向谁无关。
+
+    `db` 是 compose 里的服务名，只在容器内部网络可达；`POSTGRES_PASSWORD` 经
+    `env_file: .env` 同样注入到本容器（.env.example 顶层就有这一项，供 `db` 服务的
+    `environment:` 与本脚本共用）。
+    """
+    password = os.environ["POSTGRES_PASSWORD"]
+    return f"postgresql://postgres:{password}@db/{db_name}"
 
 
 def _months_needed(source_url: str, table: str, date_column: str, has_site: bool) -> set[tuple[str, str]]:
@@ -52,12 +75,24 @@ def _months_needed(source_url: str, table: str, date_column: str, has_site: bool
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-url", required=True)
+    parser.add_argument(
+        "--db-name", default="amazon_search",
+        help="自建库里的数据库名（compose db 服务的 POSTGRES_DB，默认 amazon_search）",
+    )
+    parser.add_argument(
+        "--target-url", default=None,
+        help="自建库 DSN，默认按 --db-name 与 POSTGRES_PASSWORD 拼 compose 内部网络地址",
+    )
     args = parser.parse_args()
+
+    target_url = args.target_url or _default_target_url(args.db_name)
+    target_engine = create_engine(target_url)
+    TargetSession = sessionmaker(bind=target_engine)
 
     from datetime import date as _date
 
     total = 0
-    with SessionFactory() as session:
+    with TargetSession() as session:
         for table, scheme in PARTITIONED_TABLES.items():
             needed = _months_needed(
                 args.source_url, table, scheme.date_column, scheme.site_subpartition

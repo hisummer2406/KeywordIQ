@@ -53,7 +53,15 @@
   执行用户（root）连接，报 `role "root" does not exist"`；
   (b) `permission`/`role`/`role_permission`/`alembic_version` 四张表由 Alembic 迁移
   在建库时直接写入固定种子数据，`--data-only` 原样搬一遍会主键冲突——已在 `pg_dump`
-  阶段用 `--exclude-table` 排除。
+  阶段用 `--exclude-table` 排除。**PR #84 Codex 第三轮复审发现第三个 bug**：补分区那步
+  `docker compose run --rm app python scripts/ensure_target_partitions_for_migration.py`
+  发生在 design.md 步骤 5（切 `.env`）之前，此刻 `.env` 的 `DATABASE_URL` 仍指向 RDS 源库，
+  而该脚本原先用全局 `database.SessionFactory`（读的正是这个 `.env`）建分区——结果分区
+  被重复建在源库上（RDS 早就有，白跑），自建目标库依旧没有叶子分区，紧接着的
+  `pg_restore --data-only` 对每一行事实数据都报 `relation ... does not exist`。改为
+  `ensure_target_partitions_for_migration.py` 自建一个独立的 `sqlalchemy.create_engine`，
+  按新增的 `--db-name`/`--target-url` 参数显式拼 compose 内部网络的 `db` 服务地址，与
+  `.env` 当前指向谁无关；`migrate_to_selfhosted_pg.py` 调用处同步传入 `--db-name`。
 - [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
   `fact_dropped`/`fact_growth`/`dim_keyword`/`dim_product`/`site_data_stats` 的行数与
   最新期次。**演练中发现并修复一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python
@@ -106,11 +114,21 @@
 - [x] 5.3 实际跑了一次"备份 → 恢复到全新空库 → 核对"演练：备份产出真实上传到 OSS
   又下载下来、恢复进一个从未跑过迁移的全新 `db` 容器、核对 `permission`（6 行）、
   `role`（3 行）、`alembic_version`（1 行）均与备份时刻一致。
-- [ ] 5.4 **未配置**——往生产机器上装 cron 是生产环境操作，本会话不具备执行环境。
-  待生产部署时按 `backup_selfhosted_pg.py` 的用法说明配置定时任务，保留策略建议直接
-  用 OSS 生命周期规则管理该前缀（脚本文档里已说明理由，不在脚本里重新实现）。
+- [ ] 5.4 **未配置**——往生产机器上装 cron 是生产环境操作，本会话不具备执行环境，
+  安装本身仍留给有生产访问权限的人执行。**PR #84 Codex 第三轮复审指出**：仓库此前只有
+  "挂 cron 执行"这句散文，没有任何具体的 crontab 行、时间点或安装命令——照着文档走
+  到最后一步，仍要操作者自己发明这一步怎么做。已在 README.md「生产部署」一节补上可
+  直接复制的 `crontab -e` 行（每天 03:00，`uv` 用绝对路径规避 cron 默认 `PATH` 找不到
+  它的问题）。保留策略仍按 OSS 生命周期规则管理，不在这条 cron 里重新实现。
 
 ## 6. 切换与回滚准备
+
+**PR #84 Codex 第三轮复审发现**：`specs/containerized-deployment/spec.md` 的「迁移窗口内
+可回滚」一条仍写着"观察窗口内 SHALL 能够仅通过修改配置回滚到 RDS"，与 design.md Migration
+Plan 步骤 6 早已更正的结论矛盾——观察窗口内自建库一旦有新写入（导入或用户写入），仅改
+`.env` 回滚会让服务从落后这部分写入的数据重新起步，必须先把这部分写入同步/重放回 RDS
+或明确接受丢失。已重写该 Requirement 与 Scenario，拆成"尚无新写入"与"已有新写入"两种
+场景，前者才允许纯配置回滚，后者要求先处理新写入，措辞与 design.md 对齐。
 
 - [ ] 6.1 **未执行**——切换生产 `.env` 是生产环境操作，本会话不具备执行环境
 - [ ] 6.2 **未执行**——同上，依赖 6.1
