@@ -296,6 +296,30 @@ Scenario 仍然遗漏了一步——`migrate_to_selfhosted_pg.py` 的 `_quiesce_
 
 - [x] 8.1 `docker-compose.yml` 新增 `netdata` 服务，只读挂载 Docker socket 与
   `/proc`/`/sys`/`/etc/os-release`，只绑 `127.0.0.1:19999`
+
+  **PR #84 Codex 第十一轮复审发现第十三个 bug**：只挂 `/proc`/`/sys` 拿到的是宿主机
+  挂载点的*元数据*（挂载表），diskspace 采集器要报出真实磁盘用量还得对这些挂载点本身
+  发起 `statvfs()`——这个调用作用于容器自己的挂载命名空间，看到的是容器 rootfs（很小
+  的 overlay 层），不是宿主机真实磁盘。上文「扩容触发条件：磁盘使用率超过 70%」这条
+  运维阈值因此永远等不到正确的数字触发。用真实容器实测复现：本机 `df -h /` 报
+  460Gi 总量、20Gi 可用；同样配置（只挂 `/proc`/`/sys`）的 netdata 容器
+  `disk_space./` 图表报出的却是约 58 GiB 总量（35.96 可用 + 19.41 已用 + 2.996
+  预留）——是 Docker Desktop 那个 Linux VM 自己的虚拟磁盘大小，与宿主机实际磁盘完全
+  对不上。
+
+  修复：加 `- /:/host/root:ro,rslave` 挂载（宿主机官方推荐的 diskspace 采集器接入
+  方式，`rslave` 保证宿主机后续新增挂载点也能被看见）+ `cap_add: SYS_ADMIN`（进宿主机
+  挂载命名空间需要的权限，`SYS_PTRACE` 不够）。**本地验证有硬性上限**：macOS 上
+  `docker run -v /:/host/root:ro,rslave ...` 直接报
+  `path / is mounted on / but it is not a shared or slave mount`——Docker Desktop
+  的 Linux VM 自身挂载传播模式不支持这个标志，这是 Mac 开发机与生产 Alibaba Cloud
+  Linux ECS（真实原生 Linux 内核）之间的环境差异，不是这条修复本身的问题（与 8.4
+  "这是本地开发机数字，不等于生产 x86 ECS 实际值"同一类局限）。去掉 `rslave` 只挂
+  `:ro` 在本机测出的数字（约 0.77 GiB）同样对不上宿主机真实磁盘——这进一步说明本机
+  macOS 环境结构性地测不出这条修复在生产 Linux 主机上的真实效果，只能确认
+  **缺陷本身确实存在**（未挂载时数字明显错误），修复后的真实数字需要在生产 ECS 上
+  用 `docker compose up -d netdata` 后核对面板磁盘图表与 `df -h` 是否一致。
+  `docker compose --env-file ... config` 确认 YAML 语法通过。
 - [x] 8.2 `docker/postgres-initdb/01_netdata_monitor_role.sh`：容器首次初始化时建
   `netdata` 角色并 `GRANT pg_monitor`；`docker/netdata/go.d/postgres.conf` 提供采集
   配置。**已实测验证**：Netdata 的 PostgreSQL 采集任务实际连上、成功采集（API 返回

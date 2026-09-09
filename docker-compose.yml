@@ -49,6 +49,10 @@ services:
     hostname: keywordiq-ecs
     cap_add:
       - SYS_PTRACE
+      # diskspace 采集器需要进宿主机的 mount namespace 才能正确 stat 各挂载点
+      # （PR #84 Codex 第十一轮复审）——只挂 /proc 和 /sys 给不了这个能力，见下方
+      # /host/root 挂载的注释。
+      - SYS_ADMIN
     security_opt:
       - apparmor:unconfined
     # 只读挂载：Netdata 只需要读容器/系统状态，不需要写权限。PostgreSQL 采集配置是
@@ -59,6 +63,13 @@ services:
       - /etc/os-release:/host/etc/os-release:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./docker/netdata/go.d/postgres.conf:/etc/netdata/go.d/postgres.conf:ro
+      # 只挂 /proc、/sys 拿到的是宿主机的挂载点*元数据*，diskspace 采集器要看到真实
+      # 磁盘用量还得对这些挂载点本身发起 statvfs()——那个调用作用于本容器自己的挂载
+      # 命名空间，看到的是容器 rootfs（很小的 overlay 层），不是宿主机真实磁盘
+      # （PR #84 Codex 第十一轮复审：只有这个挂载，"磁盘使用率超过 70% 触发扩容"
+      # 这条运维阈值永远不会被正确的数字命中）。挂真实宿主机根目录到 /host/root，
+      # `rslave` 保证宿主机后续新增的挂载点（如另接一块盘）也能被看见。
+      - /:/host/root:ro,rslave
     ports:
       # 只绑本地回环，不对公网暴露——面板默认无鉴权（design.md 决策 9）。远程查看走
       # SSH 隧道（`ssh -L 19999:127.0.0.1:19999 <host>`）或加了 Basic Auth 的 nginx
