@@ -200,6 +200,23 @@ describe('getInitialState', () => {
     expect(getToken()).toBeNull();
   });
 
+  it('/me 请求发起后本浏览器已重新登录，姗姗来迟的失败不清理新令牌（PR #91 复审 P1）', async () => {
+    // umi 的 request 包装无论 errorHandler 是否再抛都会让原 Promise 照常 reject，
+    // 因此这里必须独立重复一次"陈旧响应不动新令牌"的判断，不能指望 errorHandler
+    // 那边"忽略"了就万事大吉。
+    setToken('stale-before-relogin');
+    getCurrentUserMock.mockImplementationOnce(async () => {
+      // /me 发出之后、响应落地之前，本浏览器已经完成了一次新登录
+      setToken('fresh-after-relogin');
+      throw new Error('401');
+    });
+
+    const state = await getInitialState();
+
+    expect(state.currentUser).toBeUndefined();
+    expect(getToken()).toBe('fresh-after-relogin');
+  });
+
   it('token 有效时带回当前用户，且保留 token', async () => {
     setToken('good-token');
     getCurrentUserMock.mockResolvedValueOnce({ user_name: 'admin' });
