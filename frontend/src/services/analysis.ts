@@ -1,4 +1,5 @@
 import { history, request } from '@umijs/max';
+import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { clearToken, getToken } from '@/utils/token';
 
 /** 站点作用域分析查询。列表 POST /search 返 ProTable 契约 + 作用域回显。 */
@@ -224,6 +225,10 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
         // 非 JSON 错误体，用默认文案
       }
       clearToken();
+      // 分析屏的会话缓存与令牌同生共死，与 app.tsx 的 errorHandler 同一条纪律——
+      // 不清的话，这次导出发现会话被顶替后，同一浏览器登录新账号会先看到上一个账号
+      // 遗留的查询条件与结果行（PR #91 复审 P1）。
+      clearSnapshot();
       history.push('/login');
       throw new Error(reason);
     }

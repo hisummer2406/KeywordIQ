@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // vi.mock 会被提升到文件顶部，工厂里不能引用普通的顶层变量，故用 vi.hoisted 一起提升
-const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
+const { pushMock, clearSnapshotMock } = vi.hoisted(() => ({
+  pushMock: vi.fn(),
+  clearSnapshotMock: vi.fn(),
+}));
 vi.mock('@umijs/max', () => ({
   history: { push: pushMock },
   request: vi.fn(),
 }));
+vi.mock('@/pages/Analysis/stateCache', () => ({ clearSnapshot: clearSnapshotMock }));
 
 import { exportAnalysis } from '@/services/analysis';
 import { getToken, setToken, TOKEN_KEY } from '@/utils/token';
@@ -96,6 +100,14 @@ describe('exportAnalysis', () => {
     expect(pushMock).toHaveBeenCalledWith('/login');
   });
 
+  it('会话被顶替时一并清空分析屏会话缓存，避免下一个账号看到上一个账号的条件（PR #91 复审 P1）', async () => {
+    setToken('kicked');
+    mockFetch({ status: 401 });
+
+    await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow();
+    expect(clearSnapshotMock).toHaveBeenCalledOnce();
+  });
+
   it('会话被顶替时呈现区别于普通过期的明确原因（issue #89）', async () => {
     setToken('kicked');
     mockFetch({
@@ -131,6 +143,7 @@ describe('exportAnalysis', () => {
 
     expect(getToken()).toBe('fresh-after-relogin');
     expect(pushMock).not.toHaveBeenCalled();
+    expect(clearSnapshotMock).not.toHaveBeenCalled();
   });
 
   it('错误体不是 JSON 时用兜底文案，不把解析异常抛给用户', async () => {

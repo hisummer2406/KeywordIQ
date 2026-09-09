@@ -21,9 +21,19 @@ export async function getInitialState(): Promise<{
   avatar?: string | false;
 }> {
   const fetchUserInfo = async () => {
+    const requestToken = getToken();
     try {
       return await getCurrentUser();
     } catch {
+      // 这次 /me 请求发起时用的令牌，若已经不是当前本地持有的令牌，说明本浏览器在它
+      // 发出之后又完成过一次新登录（issue #89）——不能因为这个迟到的失败就把刚取得的
+      // 新令牌清掉。errorHandler 里"忽略陈旧响应"的处理只管住它自己会不会清理/提示，
+      // 挡不住这里：umi 的 request 包装无论 errorHandler 是否再抛都会让原 Promise 照常
+      // reject（`src/.umi/plugin-request/request.ts` 的 catch 分支），这个 catch 必须
+      // 独立重复一次同样的判断（PR #91 复审 P1）。
+      if (requestToken !== getToken()) {
+        return undefined;
+      }
       // 拉不到用户说明这张 token 已经不作数了，就地清掉。留着它会让下面的路由守卫
       // （判据是 token）继续放行，用户带着废令牌停在受保护页，既进不去也回不到登录页。
       clearToken();
