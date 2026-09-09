@@ -171,6 +171,22 @@
   `ALTER DATABASE` 写进同一条用分号连起来的命令时共享同一个隐式事务、`SET` 不生效）
   ——最终确认的回滚指令（`PGOPTIONS='-c default_transaction_read_only=off' psql ...`）
   逐字符跑通。
+
+  **PR #84 Codex 第九轮复审发现第十一个 bug**：`_quiesce_source` 切只读、
+  `pg_terminate_backend` 断开旧会话，但"首次检查通过"到"断开连接"之间仍有一段非零
+  窗口。若有个导入恰好在这段窗口内开始，它的批次状态在 `_execute_locked` 里先于事实
+  写入单独提交为 `PROCESSING`（`app/table/upload/import_service.py:144`），随后连接
+  被切断，事实写入那段跟着回滚，但 `PROCESSING` 那次提交已经落地；该批次自己的失败
+  处理原本想把状态改成 `FAILED`，但此刻源库已被设成持久只读，这次写入同样失败——
+  批次因此永久卡在 `PROCESSING`，且会连同其余数据一起被 `pg_dump --data-only` 原样
+  搬到目标库，没有任何环节会报错。已给 `_check_no_active_import` 加
+  `after_quiesce: bool` 参数：`_quiesce_source` 之后再调用一次，命中时给出与首次
+  检查不同的提示（首次说"等它跑完"，这次说明连接已断、源库已只读、不会自己恢复，
+  需要人工核实）。新增
+  `test/test_migrate_to_selfhosted_pg_integration.py`（`TEST_DATABASE_URL` 下）：
+  已验证过用改动前的单参数版本跑同一测试文件会报
+  `TypeError: unexpected keyword argument 'after_quiesce'`（2 个用例失败），改完
+  3 个全过。
 - [ ] 4.4 **未执行**——需要生产阿里云 RDS 的访问权限与实际低峰时段窗口，本会话不具备，
   留给有生产访问权限的人执行。跑法见 `migrate_to_selfhosted_pg.py` 与
   `verify_selfhosted_migration.py` 的用法说明。
