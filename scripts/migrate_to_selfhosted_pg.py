@@ -146,10 +146,23 @@ def _quiesce_source(source_url: str) -> None:
     执行同样能绕开，但若把两条语句写进同一次调用（同一个 `psql -c "stmt1; stmt2"`），
     Postgres 的简单查询协议会把它们隐式包进同一个事务，`SET` 生效前 `ALTER DATABASE`
     所在的事务早已在只读状态下开始——本地演练把这两种失败形态都跑出来过，不是猜测。
+
+    **这个函数自己也要用同一招 `PGOPTIONS` 覆盖，否则第二次调用会自锁。** 第十四轮
+    刚把"恢复步骤失败后可以直接重跑整个脚本"写成了承诺（`_reset_target_tables`），
+    但 `main()` 里 `_quiesce_source` 排在恢复步骤*之前*——重跑必然会第二次调用它。
+    第一次调用把源库的会话默认值持久设成只读后，第二次调用建立的新连接同样会先
+    继承这个库级默认值，而 `ALTER DATABASE ... SET` 本身是对系统目录的写操作，会被
+    这个继承来的只读挡下——跟上面这段说明"为什么撤销要带 `PGOPTIONS`"是同一个机制，
+    只是方向反过来：不带 `PGOPTIONS` 的第二次调用连"重新设成 on"这个幂等操作都做
+    不到，重跑会卡死在这一步，永远到不了下面新增的清空目标表那一步（Codex 审核
+    PR #84 第十五轮）。用 `options="-c default_transaction_read_only=off"` 建连接，
+    让本函数无论源库当前是不是已经只读都能正常把 `ALTER DATABASE` 跑下去。
     """
     import psycopg2
 
-    with psycopg2.connect(source_url) as conn:
+    with psycopg2.connect(
+        source_url, options="-c default_transaction_read_only=off"
+    ) as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute("SELECT current_database()")

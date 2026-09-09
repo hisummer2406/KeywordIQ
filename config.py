@@ -206,6 +206,77 @@ class Settings(BaseSettings):
     # 导入这类"占着线程但不烧 CPU"的长任务的。
     THREAD_POOL_LIMIT: int = 32
 
+    # 自建部署（dockerize-selfhosted-infra）下 docker-compose.yml `db` 服务的实际
+    # 主机名与给 Netdata 监控角色/人工 psql/迁移与备份脚本预留的连接余量——
+    # `_validate_pool_within_self_hosted_pg_cap` 用。
+    SELF_HOSTED_DB_HOST: ClassVar[str] = "db"
+    POOL_WORKERS: ClassVar[int] = 4  # start.sh / Dockerfile 固定的 uvicorn worker 数
+    PG_CONNECTION_RESERVE: ClassVar[int] = 10
+
+    @model_validator(mode="after")
+    def _validate_pool_within_self_hosted_pg_cap(self) -> "Settings":
+        """自建部署下，连接池总量不得超过自建 PostgreSQL 的 max_connections。
+
+        独立 RDS（max_connections=400）时期，池子开得再大也顶不到硬顶，最多是把
+        "快速可见的失败（pool_timeout）"换成"整体缓慢劣化"。dockerize-selfhosted-infra
+        把数据库搬到同机 docker-compose 的 `db` 服务后，硬顶从 400 骤降到
+        `PG_MAX_CONNECTIONS`（`docker-compose.yml` 默认 120）——按 design.md
+        「Migration Plan」步骤 5，既有生产环境升级时只被要求切换
+        `DATABASE_URL`/`DATABASE_URL_ASYNC` 指向这个新库，若 `.env` 里旧的
+        `DB_POOL_SIZE=20`/`DB_MAX_OVERFLOW=10`/`DB_ASYNC_POOL_SIZE=20`/
+        `DB_ASYNC_MAX_OVERFLOW=10`（独立 RDS 时期的取值）原样留着、盖掉这里的新类
+        默认值 2/3/8/8，(20+10+20+10)×4=240 远超自建 Postgres 的 120 连接上限——
+        异步查询池单独就能在健康检查、导入、管理连接之前吃光全部配额，表现是
+        `too many clients already`，而不是连接池排队超时那种慢性劣化（Codex 审核
+        PR #84 第十五轮）。在启动期把这笔账算一遍，超出安全余量直接拒绝启动，
+        好过等生产真把连接吃光了才发现。
+
+        **只在 `DATABASE_URL` 的 host 恰好是 `db`（docker-compose.yml 里自建 `db`
+        服务的内部网络主机名，只有这条自建部署路径会用这个值）时才启用这条校验**——
+        本地开发直连 `localhost`、还留在 RDS 路线的部署直连
+        `*.rds.aliyuncs.com`，都不受自建 Postgres 这个连接数硬顶约束，套用这条校验
+        反而会把根本不受影响的部署方式一并挡在启动之外：本仓库自己的本地开发
+        `.env` 就还留着旧的 `DB_POOL_SIZE=20`/`DB_MAX_OVERFLOW=10`（指向
+        `localhost` 直连的本地 Postgres），若不按 host 收窄，这条校验会连本地
+        `uv run pytest`/`uv run uvicorn` 都启动不了。
+
+        `PG_MAX_CONNECTIONS` 是 docker-compose.yml 专用变量，不进 `Settings`
+        （与 `POSTGRES_DB` 同一条既有约定），这里只用 `os.environ` 读一次原始值
+        做校验，不新增字段。取不到时按 `docker-compose.yml` 里
+        `${PG_MAX_CONNECTIONS:-120}` 的同一个默认值算——这正是"既有 `.env` 从没
+        写过这一项"的那个场景，恰恰是本条校验要拦住的：`db` 服务的实际
+        `max_connections` 同样会落到这个默认值，两边算的是同一个数。
+        """
+        import os
+
+        from sqlalchemy.engine import make_url
+
+        try:
+            host = make_url(self.DATABASE_URL).host
+        except Exception:
+            return self
+        if host != self.SELF_HOSTED_DB_HOST:
+            return self
+
+        pg_max_connections = int(os.environ.get("PG_MAX_CONNECTIONS", "120"))
+        total = (
+            self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
+            + self.DB_ASYNC_POOL_SIZE + self.DB_ASYNC_MAX_OVERFLOW
+        ) * self.POOL_WORKERS
+        safe_cap = pg_max_connections - self.PG_CONNECTION_RESERVE
+        if total > safe_cap:
+            raise ValueError(
+                f"连接池配置总量 {total}（(DB_POOL_SIZE+DB_MAX_OVERFLOW+"
+                f"DB_ASYNC_POOL_SIZE+DB_ASYNC_MAX_OVERFLOW)×{self.POOL_WORKERS} workers）"
+                f"超过自建 PostgreSQL 的安全上限 {safe_cap}"
+                f"（PG_MAX_CONNECTIONS={pg_max_connections} 减去为 Netdata 监控角色/"
+                "人工管理连接/迁移与备份脚本预留的余量）。多半是从独立 RDS 配置"
+                "（20/10/20/10）升级到自建部署时忘了同步调小这四项——按 .env.example "
+                "的新起点值（2/3/8/8）改小，或提高 PG_MAX_CONNECTIONS 并确认自建机器"
+                "有余量承受。"
+            )
+        return self
+
     @field_validator("ENABLED_SITES")
     @classmethod
     def _validate_enabled_sites(cls, value: str) -> str:
