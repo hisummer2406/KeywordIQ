@@ -224,6 +224,13 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
       } catch {
         // 非 JSON 错误体，用默认文案
       }
+
+      // 上面 `await res.json()` 是真实的异步间隙——即便进这个分支时令牌还没变，
+      // 解析响应体期间本浏览器完全可能又完成一次新登录。真正执行清理动作前必须
+      // 紧贴着再判一次，不能只信开头那次检查的结果（PR #91 复审第四轮）。
+      if (token !== getToken()) {
+        return;
+      }
       clearToken();
       // 分析屏的会话缓存与令牌同生共死，与 app.tsx 的 errorHandler 同一条纪律——
       // 不清的话，这次导出发现会话被顶替后，同一浏览器登录新账号会先看到上一个账号
