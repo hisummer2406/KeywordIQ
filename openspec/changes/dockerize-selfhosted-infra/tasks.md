@@ -32,7 +32,14 @@
 - [x] 3.1 `.env.example`：`DATABASE_URL`/`DATABASE_URL_ASYNC` 新增指向 `db` 的注释示例
   （保持与其余环境一样"注释、按需取用"的约定，不强改成唯一活跃值），连接池改为目标值
   （同步 `2+3`，异步 `8+8`），新增自建 PG 容器专用变量段
-  （`POSTGRES_DB`/`POSTGRES_PASSWORD`/`PGDATA_HOST_PATH`/`PG_*`）
+  （`POSTGRES_DB`/`POSTGRES_PASSWORD`/`PGDATA_HOST_PATH`/`PG_*`）。**PR #84 Codex 第五轮
+  复审发现一个 bug**：指向 `db` 的 `DATABASE_URL` 示例把 `${POSTGRES_PASSWORD}` 直接拼进
+  DSN 字符串，这是 docker-compose 的纯变量替换、不是 URL 编码替换——密码若含 `@`/`/`/
+  `:`/`#`/`%`/`?` 等保留字符，替换出来的字符串会被 SQLAlchemy 解析成错误的
+  host/database（`config.py` 的 `DATABASE_URL` 是裸 `str`，不做任何校验），且这个失败
+  只会在应用启动连接时才暴露。没有引入一套额外的编码变量（那需要与 `POSTGRES_PASSWORD`
+  手动保持同步，容易漏改）：改为在 `DATABASE_URL`/`POSTGRES_PASSWORD` 两处都加注释，
+  要求密码只用字母数字生成（如 `openssl rand -hex 24`），从根上避开转义问题。
 - [x] 3.2 `db` 容器的 `max_connections`/`shared_buffers`/`effective_cache_size`/
   `work_mem` 通过 compose 的 `command:` 从 `.env` 变量注入，起点值见 `.env.example`
 - [x] 3.3 `uv run pytest -m conventions` 通过（15 passed）——曾在改连接池默认值时先红
@@ -67,6 +74,19 @@
   含 `@`/`/`/`#`/`%`/`:` 等 DSN 保留字符会被解析成错误的 host/database，而这一步发生在
   源库已被切为只读之后，DSN 解析失败会让迁移卡在"RDS 只读、自建库还没数据"的半途。
   改用 `sqlalchemy.engine.URL.create` 构造，不再手拼字符串。
+  **PR #84 Codex 第五轮复审发现第五、六个 bug**：(a) 模块文档字符串里前提第 1 条写的
+  `docker compose exec app alembic upgrade head`——此刻切换还没发生，`.env` 仍指向 RDS，
+  `app` 容器读的是同一份 `.env`，`exec` 进一个尚未按新形态起过的容器会找不到容器，
+  即便临时起一个也是在 RDS（本来就是 head）上空跑，目标自建库根本没建表，紧接着的
+  `pg_restore` 会因为 schema 不存在而失败。已改为 `docker compose run --rm` 一次性容器 +
+  `-e` 显式覆盖两个 DSN 指向 `db` 服务，design.md Migration Plan 步骤 1 同步更新指向这段
+  说明。(b) `--db-name` 默认值同样硬编码 `"amazon_search"`，操作者改过 `POSTGRES_DB`
+  后，本脚本会在 RDS 已切只读、`ensure_target_partitions_for_migration.py` 与
+  `pg_restore` 都对着不存在的库跑之后才失败；脚本结尾打印的核对命令提示同样没带
+  `--db-name`。已抽出 `scripts/_selfhosted_pg_env.py` 的 `default_db_name()`（读
+  `.env` 的 `POSTGRES_DB`，取不到回退 `"amazon_search"`）给 `backup_selfhosted_pg.py`
+  （5.4 已经这么修过一次）、本脚本与 4.2 的核对脚本三处共用，不再各自复制；本脚本结尾
+  打印的核对命令也带上与本次迁移一致的 `--db-name`。
 - [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
   `fact_dropped`/`fact_growth`/`dim_keyword`/`dim_product`/`site_data_stats` 的行数与
   最新期次。**演练中发现并修复一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python
@@ -77,7 +97,16 @@
   进去——若迁移中途出错、这两张表少落了数据，核对仍会全绿放行切换。已补上，并新增
   `test/test_verify_selfhosted_migration_unit.py` 断言核对清单与
   `partitioning.PARTITIONED_TABLES` 对齐，往后新增分区事实表却忘了同步进核对脚本会
-  直接测试失败，不必等到真实迁移演练才发现。
+  直接测试失败，不必等到真实迁移演练才发现。**PR #84 Codex 第五轮复审发现第三个
+  bug**：核对清单当时只有这七张表，`user_center`、词库两张表、`import_batch`、全部
+  `competitor_*` 共享表与关注表都不在其中——这些表若在 `pg_restore` 时因故少落了数据，
+  核对仍会全绿放行切换 `.env`，实际后果是用户登不进去、收藏的词库/关注清单凭空消失。
+  已扩到 `migration_scope.V2_TABLES` 减去种子表后的全部 24 张持久表（新增的 17 张只做
+  行数核对，没有像事实表那样统一的"期次"列可比）；`--db-name` 默认值同样改用
+  `_selfhosted_pg_env.default_db_name()`。新增
+  `test_核对清单覆盖全部迁移搬迁的持久表`，与 `V2_TABLES` 这份 alembic 也在用的权威清单
+  对齐，而不是另写一份期望表名——新模型登记进 `V2_TABLES` 后若忘了同步进核对脚本，这条
+  测试直接红。
 - [x] 4.3 本地演练（不是"跳过、直接标记完成"）：起一个独立的 `postgres:15.8` 容器
   模拟 RDS，跑 `alembic upgrade head` + 少量手写数据（`scripts/seed_demo_data.py` 与
   `scripts/generate_synthetic_data.py` 两个现成的生成器都因 2.2 提到的 schema 漂移
@@ -175,7 +204,14 @@ Scenario 仍然遗漏了一步——`migrate_to_selfhosted_pg.py` 的 `_quiesce_
   前用 `systemctl is-active --quiet keywordiq.service` 判断，在跑就先
   `stop`/`disable`；用 is-active 而非"unit 是否存在"判断是为了天然幂等——停过一次后
   is-active 恒为假，后续每次 `deploy.sh` 都会跳过，不需要额外记状态。design.md
-  Migration Plan 步骤 5 同步更新，说明这一步现在自动发生。
+  Migration Plan 步骤 5 同步更新，说明这一步现在自动发生。**PR #84 Codex 第六轮复审
+  发现两个 bug**：(a) `disable` 之前套在 `is-active` 判断里——unit 若被手工停过、
+  处于 failed，或部署这一刻恰好还在 activating，`is-active` 为假，但只要它仍是
+  enabled，宿主机下次重启时 systemd 照样把它拉起来，回头跟新容器抢
+  `127.0.0.1:8000`。已把 `stop`（按 `is-active`）与 `disable`（按 `is-enabled`）拆成
+  两个独立判断，各自天然幂等。(b) 健康检查 15 次重试仍不通过时脚本仍 `exit 0`——nginx
+  已经 reload 完毕，此时可能正把流量转给一个还没就绪的后端，`--yes`/CI 等无人值守调用
+  会把这次部署记成成功。已把失败分支改成 `exit 1`。
 - [x] 7.3 CLAUDE.md「Development Commands」更新反映 Docker 化命令；`etc/keywordiq-nginx.conf`
   顶部注释更新 + 追加一段注释掉的 Netdata Basic Auth 反代示例（呼应第 8 组）
 - [x] 7.4 `uv run pytest test/` 全量：584 passed, 260 skipped（跳过的是需要真实

@@ -21,15 +21,27 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from pathlib import Path
 
 import psycopg2
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts._selfhosted_pg_env import default_db_name
 
 # (表名, 用于核对"最新一条"的列)。fact_growth/fact_dropped 用 anchor_date，
 # 两个事实表天报/周报的分区列名不同（CLAUDE.md 已经踩过这个坑），故分开写。
 #
-# 这四张都是 analysis schema 下唯一持久存数据的事实表——漏掉任一张，那张表若在
-# pg_restore 时因分区缺失/中途出错而少落了数据，核对仍会全绿放行切换（Codex 审核
-# PR #84：本注释曾承诺覆盖 fact_growth/fact_dropped，但下面的元组没有真的写进去）。
+# 覆盖 analysis schema 下**全部**持久存数据的表，只排除 `migrate_to_selfhosted_pg.py`
+# 的 `_MIGRATION_SEEDED_TABLES`（`permission`/`role`/`role_permission`/`alembic_version`
+# ——这四张由 Alembic 迁移在建库时写种子数据，不经 `pg_dump --data-only` 搬迁，源库与
+# 目标库的种子行本就该分别由各自的迁移历史生成，核对它们的计数没有意义）。此前只列了
+# 事实表与两张维度表共七张，`user_center`、词库、`import_batch`、全部 `competitor_*`
+# 共享表与关注表都不在核对范围内——这些表若在 `pg_restore` 时因故少落了数据，核对仍会
+# 全绿放行切换，实际后果是用户登不进去、收藏的词库/关注清单凭空消失（Codex 审核
+# PR #84 第五轮）。除四张事实表外一律只核对行数（`latest_col=None`）：这些表没有像
+# `report_date` 那样统一的"期次"列，行数不一致已经足以拦住"部分表没搬完整"这类真实
+# 会发生的问题，不必为每张表各自找一个类比列。
 _TABLES_WITH_LATEST_COL = (
     ("fact_daily", "report_date"),
     ("fact_weekly", "report_date_week"),
@@ -37,7 +49,24 @@ _TABLES_WITH_LATEST_COL = (
     ("fact_growth", "anchor_date"),
     ("dim_keyword", None),
     ("dim_product", None),
+    ("dim_brand", None),
+    ("dim_category", None),
     ("site_data_stats", None),
+    ("user_center", None),
+    ("keyword_group", None),
+    ("keyword_group_item", None),
+    ("import_batch", None),
+    ("competitor_seller", None),
+    ("competitor_seller_asin", None),
+    ("competitor_asin_report", None),
+    ("competitor_store", None),
+    ("competitor_store_product", None),
+    ("competitor_store_price", None),
+    ("competitor_store_rank", None),
+    ("user_seller_group", None),
+    ("user_seller_watch", None),
+    ("user_store_watch", None),
+    ("competitor_watch_preview", None),
 )
 
 
@@ -94,7 +123,8 @@ def main() -> int:
         "--compose-service", default="db", help="自建库的 compose 服务名（默认 db）"
     )
     parser.add_argument(
-        "--db-name", default="amazon_search", help="自建库里的数据库名（默认 amazon_search）"
+        "--db-name", default=default_db_name(),
+        help="自建库里的数据库名，默认跟 .env 的 POSTGRES_DB 走",
     )
     args = parser.parse_args()
 
