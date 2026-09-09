@@ -13,10 +13,22 @@
    一次性容器，显式覆盖两个 DSN 指向 `db` 服务（内部网络地址，`POSTGRES_PASSWORD` 与
    `db` 服务共用同一份 `.env` 注入，见 `.env.example` 的密码字符集约束）：
 
-       docker compose run --rm \
-         -e DATABASE_URL="postgresql://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" \
-         -e DATABASE_URL_ASYNC="postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" \
-         app alembic upgrade head
+   **`${POSTGRES_PASSWORD}`/`${POSTGRES_DB}` 必须在容器内展开，不能在宿主机 shell 展开。**
+   `docker compose run -e VAR=value` 里的 `value` 是宿主机 shell 在调用 `docker compose`
+   之前就展开的普通命令行参数——docker compose 只会把 `.env` 的键值对经 `env_file:`
+   注入*容器*的环境，从不导出到调用它的宿主机 shell。若照字面把下面这条命令粘进
+   宿主机终端，宿主机 shell 会把两个 `${...}` 展开成空字符串（除非操作者事先手动
+   `export` 过），拼出 `postgresql://postgres:@db/`，本该初始化目标库的 alembic 命令
+   因此连不上库，迁移在这一步就卡住（Codex 审核 PR #84 第八轮）。改用
+   `app sh -c '...'`、并把整段命令用单引号包住：单引号让宿主机 shell 原样传递
+   `${POSTGRES_PASSWORD}`/`${POSTGRES_DB}` 这两段文本，展开发生在容器内的 `sh` 里，
+   读到的是 `app` 服务经 `env_file: .env` 已经注入好的那两个变量：
+
+       docker compose run --rm app sh -c '
+         DATABASE_URL="postgresql://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" \
+         DATABASE_URL_ASYNC="postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" \
+         alembic upgrade head
+       '
 2. 选在低峰时段执行——本脚本会在确认无活跃导入后把源库切为只读（`_quiesce_source`），
    堵住检查通过到 dump 开始之间的写入窗口，但改不了已经发生的事：切只读之前若源库上
    还有别的写入在跑，那部分数据依然进不了 dump（见 design.md 风险「迁移窗口数据

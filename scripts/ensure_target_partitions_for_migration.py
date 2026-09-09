@@ -66,17 +66,40 @@ def _default_target_url(db_name: str) -> URL:
     return URL.create("postgresql", username="postgres", password=password, host="db", database=db_name)
 
 
-def _months_needed(source_url: str, table: str, date_column: str, has_site: bool) -> set[tuple[str, str]]:
-    """返回源库里这张表实际用到的 (site, 月份) 组合去重后的集合。
+def _source_leaf_partitions(source_url: str, table: str, has_site: bool) -> set[tuple[str, str]]:
+    """返回源库里这张表**已建出的**叶子分区对应的 (site, 月份) 集合。
 
-    按月而非按天聚合——分区是按月建的，逐天调用 `ensure_fact_partitions` 一样能跑通
-    （幂等），只是白白多发很多次 DDL 语句。
+    直接读分区目录（`pg_partition_tree`），不从行数据反推月份——`fact_dropped`/
+    `fact_growth` 的叶子分区在 `import_report` 里先建、后计算行，即便某一期结果为空
+    也照常提交，源库因此可能存在"分区已建、一行没有"的叶子。旧写法按
+    `SELECT DISTINCT site, date_trunc('month', ...) FROM analysis.{table}` 反推月份，
+    看不到这种空叶子；`pg_dump --data-only` 仍会为它发一条 COPY 归档项，目标库没建
+    这个分区，`pg_restore` 就会在 RDS 已切只读之后才报
+    `relation "analysis.fact_dropped_2026_09" does not exist`
+    （Codex 审核 PR #84 第七轮）。改读目录后，"分区存在但为空" 与 "分区不存在" 不再
+    被行扫描混为一谈；副作用是不必再全表扫描取值，只查目录，比原来更快。
     """
-    site_expr = "site" if has_site else f"'{_FALLBACK_SITE}'"
-    sql = f"SELECT DISTINCT {site_expr}, date_trunc('month', {date_column})::date FROM analysis.{table}"
     with psycopg2.connect(source_url) as conn, conn.cursor() as cur:
-        cur.execute(sql)
-        return {(row[0], row[1].isoformat()) for row in cur.fetchall()}
+        cur.execute(
+            "SELECT c.relname FROM pg_partition_tree(%s::regclass) t "
+            "JOIN pg_class c ON c.oid = t.relid WHERE t.isleaf",
+            (f"analysis.{table}",),
+        )
+        leaf_names = [row[0] for row in cur.fetchall()]
+
+    result: set[tuple[str, str]] = set()
+    for name in leaf_names:
+        # 命名约定见 partitioning.py 的 month_partition_name/site_partition_name：
+        # 月度叶子 `{table}_YYYY_MM`，两级方案下站点叶子在其后再拼 `_{site 小写}`。
+        suffix = name[len(table) + 1 :]
+        if has_site:
+            year_month, _, site_lower = suffix.rpartition("_")
+            site = site_lower.upper()
+        else:
+            year_month, site = suffix, _FALLBACK_SITE
+        year, month = year_month.split("_")
+        result.add((site, f"{year}-{month}-01"))
+    return result
 
 
 def main() -> int:
@@ -107,9 +130,7 @@ def main() -> int:
     total = 0
     with TargetSession() as session:
         for table, scheme in PARTITIONED_TABLES.items():
-            needed = _months_needed(
-                args.source_url, table, scheme.date_column, scheme.site_subpartition
-            )
+            needed = _source_leaf_partitions(args.source_url, table, scheme.site_subpartition)
             print(f"{table}: 需要 {len(needed)} 个 (site, 月份) 分区")
             for site, month_str in needed:
                 ensure_fact_partitions(session, table, site, _date.fromisoformat(month_str))

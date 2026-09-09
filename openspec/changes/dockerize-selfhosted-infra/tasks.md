@@ -96,6 +96,32 @@
   环境变量——用 `os.environ.get("POSTGRES_DB", ...)`，不能照抄 `_selfhosted_pg_env.
   default_db_name()`（那是读宿主机 `.env` 文件，容器里找不到文件会静默回退到错误默认值，
   是同一类 bug 的另一种写法）。
+
+  **PR #84 Codex 第七轮复审在 `ensure_target_partitions_for_migration.py` 发现第七个
+  bug**：`_months_needed`（现改名 `_source_leaf_partitions`）按
+  `SELECT DISTINCT site, date_trunc('month', ...) FROM analysis.{table}` 反推月份，
+  只看**有行**的月份。`fact_dropped`/`fact_growth` 的叶子分区在 `import_report` 里
+  先建、后计算掉榜/增长行，即便某一期结果为空也照常提交——源库因此可能存在"分区已建、
+  一行没有"的空叶子；`pg_dump --data-only` 仍会为这个空叶子发一条 COPY 归档项，行驱动
+  的写法看不到它，目标库没建这个分区，`pg_restore` 就会在 RDS 已切只读之后才报
+  `relation "analysis.fact_dropped_2026_09" does not exist`。改为直接读源库的分区
+  目录（`pg_partition_tree`）枚举叶子分区、从命名约定解析出 (site, 月份)，不再从行
+  数据反推；副作用是不必再全表扫描取值，只查目录，比原来更快。新增
+  `test/test_ensure_target_partitions_for_migration_integration.py`（`TEST_DATABASE_URL`
+  下）：先建一个零行的叶子分区，验证新函数能识别到它——已验证过用旧的行驱动逻辑跑
+  同一断言会得到空集合（真实复现过这个 bug，不是猜测）。
+
+  **PR #84 Codex 第八轮复审在本脚本（`migrate_to_selfhosted_pg.py`）文档字符串发现
+  第八个 bug**：前提第 1 条给出的示例命令
+  `docker compose run --rm -e DATABASE_URL="postgresql://postgres:${POSTGRES_PASSWORD}@db/${POSTGRES_DB}" ...`
+  里的 `${POSTGRES_PASSWORD}`/`${POSTGRES_DB}` 是**宿主机 shell**在调用
+  `docker compose` 之前就展开的普通命令行参数——docker compose 只把 `.env` 经
+  `env_file:` 注入*容器*，从不导出到调用它的宿主机 shell。操作者若照字面把这条命令
+  粘进宿主机终端，两个 `${...}` 会被展开成空字符串，拼出
+  `postgresql://postgres:@db/`，本该初始化目标库的 alembic 命令因此连不上库，迁移在
+  这一步就卡住。改为 `docker compose run --rm app sh -c '...'`，整段命令用单引号包住
+  让宿主机 shell 原样传递这两段文本，展开改在容器内的 `sh` 里发生，读到的是 `app`
+  服务经 `env_file: .env` 已经注入好的变量。
 - [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
   `fact_dropped`/`fact_growth`/`dim_keyword`/`dim_product`/`site_data_stats` 的行数与
   最新期次。**演练中发现并修复一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python
@@ -116,6 +142,18 @@
   `test_核对清单覆盖全部迁移搬迁的持久表`，与 `V2_TABLES` 这份 alembic 也在用的权威清单
   对齐，而不是另写一份期望表名——新模型登记进 `V2_TABLES` 后若忘了同步进核对脚本，这条
   测试直接红。
+
+  **PR #84 Codex 第七轮复审发现第九个 bug**：`category_stats`/`brand_stats`（迁移
+  `f5a6b7c8d9e0` 已从物化视图改成按 (站点,周期,日期) 分片的普通表）仍不在核对清单
+  里——它们没有 ORM 模型，全靠原生 SQL 写入（`app/table/analysis/filter_stats.py`），
+  因此不登记进 `migration_scope.V2_TABLES`（那份清单只管 alembic autogenerate 能看见
+  的对象），从 `V2_TABLES` 派生清单自然漏掉它们。但它们仍是 `analysis` schema 下的
+  普通表，`pg_dump --data-only --schema=analysis` 按整个 schema 搬迁、不看
+  `V2_TABLES`，同样会把它们搬过去；`analysis_crud.py` 靠它们提供类目/品牌下拉，数据
+  没搬完整时下拉会显示不全或缺项，核对却仍会全绿放行切换。表名直接从
+  `filter_stats._FILTER_STATS`（该模块实际写入的表）取，不再手写一份新清单；
+  `test_核对清单覆盖全部迁移搬迁的持久表` 的预期集合同步改为
+  `(V2_TABLES - 种子表) ∪ _FILTER_STATS 的表名`。
 - [x] 4.3 本地演练（不是"跳过、直接标记完成"）：起一个独立的 `postgres:15.8` 容器
   模拟 RDS，跑 `alembic upgrade head` + 少量手写数据（`scripts/seed_demo_data.py` 与
   `scripts/generate_synthetic_data.py` 两个现成的生成器都因 2.2 提到的 schema 漂移
@@ -234,6 +272,16 @@ Scenario 仍然遗漏了一步——`migrate_to_selfhosted_pg.py` 的 `_quiesce_
   `netdata` 角色并 `GRANT pg_monitor`；`docker/netdata/go.d/postgres.conf` 提供采集
   配置。**已实测验证**：Netdata 的 PostgreSQL 采集任务实际连上、成功采集（API 返回
   67 个 `postgres_*` 图表），不是只装了角色没验证能不能用
+
+  **PR #84 Codex 第八轮复审发现第十个 bug**：`GRANT CONNECT ON DATABASE ${POSTGRES_DB}`
+  把 `POSTGRES_DB` 直接以 bash 变量插进 heredoc，未加标识符引号——若库名含 `-` 之类
+  需要引号的字符（如 `keyword-iq`），拼出的是 `GRANT CONNECT ON DATABASE keyword-iq`，
+  PostgreSQL 会把它解析成 `keyword - iq` 减法表达式而语法错误；脚本又跑在
+  `ON_ERROR_STOP=1` 下，会让容器首次初始化直接中止。改用 psql 变量
+  （`-v dbname="$POSTGRES_DB"`）+ `:"dbname"` 标识符引号语法，由 psql 负责按标识符
+  规则转义。**已用真实 `postgres:15.8` 容器验证**：起一个名为 `keyword-iq-test` 的库，
+  旧写法 `GRANT CONNECT ON DATABASE keyword-iq-test ...` 实测报
+  `ERROR: syntax error at or near "-"`；改用 `:"dbname"` 后同一条 GRANT 成功执行。
 - [x] 8.3 `docker-compose.yml` 里 `db`/`netdata` 均只绑 `127.0.0.1`；
   `etc/keywordiq-nginx.conf` 追加注释掉的 Basic Auth 反代示例作为 SSH 隧道之外的另一
   个可选路径

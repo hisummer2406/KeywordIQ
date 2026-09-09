@@ -11,8 +11,15 @@
 # 漏改的表现是 Netdata 连一个不存在的库，PostgreSQL 那组监控图表静默消失。
 set -euo pipefail
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+# POSTGRES_DB 直接以 bash 变量插进 heredoc（未加标识符引号）时，若库名含 `-` 之类
+# 需要引号的字符（如 `keyword-iq`），拼出的是 `GRANT CONNECT ON DATABASE keyword-iq`
+# ——PostgreSQL 会把它解析成 `keyword - iq` 减法表达式而语法错误；本脚本又跑在
+# `ON_ERROR_STOP=1` 下，会让容器首次初始化直接中止（Codex 审核 PR #84 第八轮）。
+# 改用 psql 变量 + `:"var"` 标识符引号语法，由 psql 负责按标识符规则转义，不再靠
+# bash 插值裸拼 SQL。
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+    -v dbname="$POSTGRES_DB" <<-EOSQL
     CREATE ROLE netdata WITH LOGIN PASSWORD 'netdata_monitor_only';
     GRANT pg_monitor TO netdata;
-    GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO netdata;
+    GRANT CONNECT ON DATABASE :"dbname" TO netdata;
 EOSQL

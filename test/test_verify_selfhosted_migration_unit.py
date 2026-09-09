@@ -14,8 +14,18 @@
 同一份权威清单，减去只由迁移种子写入、不经 `pg_dump --data-only` 搬迁的种子表
 （`migrate_to_selfhosted_pg._MIGRATION_SEEDED_TABLES`）——而不是另写一份期望表名，
 新模型登记进 `V2_TABLES` 后若忘了同步进核对脚本，这条测试直接红。
+
+回归目标三：`category_stats`/`brand_stats` 不在 `V2_TABLES` 里——它们没有 ORM 模型，
+全靠原生 SQL 写入（`app/table/analysis/filter_stats.py`），因此不受 alembic
+autogenerate 管理，也就不登记进 `V2_TABLES`。但它们仍是 `analysis` schema 下的普通表
+（迁移 `f5a6b7c8d9e0` 已从物化视图改成普通表），`pg_dump --data-only --schema=analysis`
+按整个 schema 搬迁、不看 `V2_TABLES`，同样会把它们搬过去；核对清单若只从 `V2_TABLES`
+派生就会漏掉这两张，而 `analysis_crud.py` 靠它们提供类目/品牌下拉（Codex 审核
+PR #84 第七轮）。断言因此把 `_FILTER_STATS`（该模块实际写入的表）并入预期集合，
+而不是把这两个表名重新手写一遍。
 """
 
+from app.table.analysis.filter_stats import _FILTER_STATS
 from app.table.analysis.partitioning import PARTITIONED_TABLES
 from migration_scope import V2_TABLES
 from scripts.migrate_to_selfhosted_pg import _MIGRATION_SEEDED_TABLES
@@ -35,7 +45,8 @@ def test_核对清单覆盖全部分区事实表且日期列一致():
 
 def test_核对清单覆盖全部迁移搬迁的持久表():
     checked = set(dict(_TABLES_WITH_LATEST_COL).keys())
-    migrated = V2_TABLES - set(_MIGRATION_SEEDED_TABLES)
+    non_orm_migrated_tables = {table for table, _, _ in _FILTER_STATS}
+    migrated = (V2_TABLES - set(_MIGRATION_SEEDED_TABLES)) | non_orm_migrated_tables
 
     missing = migrated - checked
     assert not missing, f"以下表被 pg_dump --data-only 搬迁，但迁移核对脚本没有核对: {sorted(missing)}"
