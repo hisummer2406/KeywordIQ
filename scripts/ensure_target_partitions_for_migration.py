@@ -82,9 +82,15 @@ def _months_needed(source_url: str, table: str, date_column: str, has_site: bool
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-url", required=True)
+    # 默认值直接读 os.environ，不走 scripts/_selfhosted_pg_env.default_db_name()（后者
+    # 读宿主机的 .env 文件）——本脚本必须在 app 容器内跑（见模块 docstring），容器里没有
+    # .env 文件，POSTGRES_DB 是 compose `env_file: .env` 直接注入的环境变量，跟
+    # POSTGRES_PASSWORD（第 65 行同样读 os.environ）是同一个道理。用错哪一种都会在
+    # 操作者改过 POSTGRES_DB 后悄悄回退到 "amazon_search"（Codex 审核 PR #84 第五轮
+    # 修完 backup/migrate/verify 三个脚本后，排查同类写法时顺带发现的第四处）。
     parser.add_argument(
-        "--db-name", default="amazon_search",
-        help="自建库里的数据库名（compose db 服务的 POSTGRES_DB，默认 amazon_search）",
+        "--db-name", default=os.environ.get("POSTGRES_DB", "amazon_search"),
+        help="自建库里的数据库名，默认跟随注入到本容器的 POSTGRES_DB",
     )
     parser.add_argument(
         "--target-url", default=None,
