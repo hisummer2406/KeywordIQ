@@ -10,8 +10,9 @@ import {
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import { useAccess, useModel } from '@umijs/max';
 import { Alert, Button, Card, Col, Row, Select, Space, Tooltip, Typography, message } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type AnalysisRow, type View } from '@/services/analysis';
+import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
 import AddToLibraryModal from './AddToLibraryModal';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
@@ -107,7 +108,42 @@ export default function AnalysisPage() {
   });
   clearCategoryFiltersRef.current = query.clearCategoryFilters;
 
-  const { appliedRef, actionRef, appliedView } = query;
+  const { appliedRef, actionRef, appliedView, loadedSite, loadedView, loadedDate } = query;
+
+  /**
+   * 排名趋势详情：一次只开一行的详情，不进会话快照——与选中行同理，切走再切回清空是
+   * 预期行为。
+   *
+   * **点击那一刻把行与它所属的作用域一起冻结进 `trendTarget`，不是分开存。**
+   * `loadedSite`/`loadedView`/`loadedDate` 是随最近一次响应更新的活状态：若打开详情后、
+   * 抽屉关闭前又有一轮查询完成（哪怕是这次点击之前就在飞的旧请求），三者会先于用户手动
+   * 关闭抽屉而变化，届时抽屉会把仍在展示的旧行 `keyword_id` 配上新站点/视图/日期重新
+   * 发请求——跨站点必 422，同站点也会把数据按错误的日期语境解析（PR #87 复审 P2，
+   * 修复第一版把冻结做在了渲染处读取 `loadedSite` 等活状态，仍然会被后续响应覆盖）。
+   *
+   * `openTrend` 必须用 `useCallback` 而不是每次渲染都新建一个闭包：它被烤进下面
+   * `columns` 的 `useMemo`，而那个 memo 的依赖列表里没有（也不该有）`loadedSite`
+   * 这三个高频变化的活状态——`columns` 要的是"作用域变了才重建列"，不是"结果一到就
+   * 重建列"。会话复原时首次渲染 `loadedSite` 等仍是初始的 `undefined`，`runRequest`
+   * 随后才异步把它们填上；若 `openTrend` 不是 `useCallback` 记忆的稳定引用，`columns`
+   * 的 memo 不会因为这几个状态变化而重算，烤进去的还是复原首次渲染那个永远读到
+   * `undefined` 的旧闭包——点击行时守卫静默 return，抽屉打不开，直到某个真正触发
+   * `columns` 重算的依赖（如切视图）恰好也发生（PR #87 复审第三轮 P2）。
+   */
+  interface TrendTarget {
+    row: AnalysisRow;
+    site: string;
+    view: View;
+    date?: string;
+  }
+  const [trendTarget, setTrendTarget] = useState<TrendTarget | null>(null);
+  const openTrend = useCallback(
+    (row: AnalysisRow) => {
+      if (!loadedSite || !loadedView) return; // 一期数据都没有时表格本就是空的，点不到行
+      setTrendTarget({ row, site: loadedSite, view: loadedView, date: loadedDate ?? undefined });
+    },
+    [loadedSite, loadedView, loadedDate],
+  );
 
   /**
    * 解析首屏用哪个作用域与哪份筛选。
@@ -201,8 +237,8 @@ export default function AnalysisPage() {
     [sites, appliedRef, query.appliedSig],
   );
   const columns = useMemo(
-    () => buildColumns(appliedView, appliedDomain, appliedRef.current?.site),
-    [appliedView, appliedDomain, appliedRef, query.appliedSig],
+    () => buildColumns(appliedView, appliedDomain, openTrend, appliedRef.current?.site),
+    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend],
   );
 
   return (
@@ -488,6 +524,21 @@ export default function AnalysisPage() {
         onClose={() => setLibraryModalOpen(false)}
         onAdded={() => setSelectedKeywordIds([])}
       />
+
+      {trendTarget && (
+        <KeywordTrendDrawer
+          open={!!trendTarget}
+          onClose={() => setTrendTarget(null)}
+          keywordId={trendTarget.row.keyword_id}
+          keyword={trendTarget.row.keyword}
+          // 站点/视图/日期取点击那一刻冻结进 trendTarget 的值，不是活状态——见上方
+          // trendTarget 的注释（PR #87 复审 P2）。
+          site={trendTarget.site}
+          view={trendTarget.view}
+          on={trendTarget.date}
+          canAddToLibrary={access.canViewKeyword}
+        />
+      )}
     </PageContainer>
   );
 }

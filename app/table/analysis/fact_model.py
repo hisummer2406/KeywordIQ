@@ -268,6 +268,12 @@ class FactDropped(Base):
         # 掉榜段的分页：作用域三元组做前缀、最后在榜排名承担排序。索引顺序即分页顺序，
         # 因此计划里不该出现排序节点——出现了说明列序被改动过。
         Index("idx_fact_dropped_segment", "site", "period_type", "anchor_date", "last_ranking"),
+        # 单关键词历史查询（趋势详情）：主键 (site, period_type, anchor_date, keyword_id)
+        # 一旦 anchor_date 变成范围（而非等值），keyword_id 就退化成扫描内 filter——
+        # range=ALL 或 30 天窗口下，代价随该站点/视图窗口内的掉榜行数增长，而不是随目标
+        # 关键词的历史行数增长，违背「只按单个 keyword_id 的历史索引取数，不扫全站榜单」
+        # 的设计前提。keyword_id 提到 anchor_date 之前，把范围收窄到单个关键词后再扫描。
+        Index("idx_fact_dropped_keyword_history", "site", "period_type", "keyword_id", "anchor_date"),
         {"postgresql_partition_by": "RANGE (anchor_date)",
          "comment": "掉榜词：行窗口内出现过但锚定期无数据的关键词。导入时算定、查询时只读；"
                     "按锚定期月度 RANGE 分区，随保留窗口一同移出；不做站点二级分区。"},

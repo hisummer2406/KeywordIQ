@@ -1,7 +1,7 @@
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import { buildColumns as buildAnalysisColumns, totalColumnWidth } from '@/pages/Analysis/columns';
-import type { View } from '@/services/analysis';
+import type { AnalysisRow, View } from '@/services/analysis';
 import type { LibraryRowStatus, LibraryWatchRow } from '@/services/library';
 
 /**
@@ -54,6 +54,7 @@ export function watchTableWidth(view: View): number {
 export function buildWatchColumns(
   view: View,
   siteDomain?: string,
+  onOpenTrend?: (row: AnalysisRow) => void,
   siteCode?: string,
 ): ProColumns<LibraryWatchRow>[] {
   const statusColumn: ProColumns<LibraryWatchRow> = {
@@ -65,6 +66,6 @@ export function buildWatchColumns(
   };
   return [
     statusColumn,
-    ...(buildAnalysisColumns(view, siteDomain, siteCode) as ProColumns<LibraryWatchRow>[]),
+    ...(buildAnalysisColumns(view, siteDomain, onOpenTrend, siteCode) as ProColumns<LibraryWatchRow>[]),
   ];
 }
