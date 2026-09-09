@@ -219,7 +219,16 @@
   `custom_dbname` 时，旧的硬编码命令报
   `FATAL: database "amazon_search" does not exist`（退出码 1），改用 `sh -c` 包装后
   恢复与核对查询均成功（核对查询返回预期行数）。纯文档字符串改动，没有可挂的 pytest
-  路径，验证只能靠这次真实容器操作。
+  路径，验证只能靠这次真实容器操作。**PR #84 Codex 第十二轮复审发现第十五个 bug**：
+  `_dump_full`/`_copy_out`/`_cleanup_container` 三步共用容器内固定路径
+  `/tmp/keywordiq_backup.custom`。cron 定时任务与人工临时跑一次这个脚本重叠（脚本用法
+  本就同时支持两者，恢复演练文档里也照抄了手动调用），或前一次没跑完下一次已经开始，
+  两个并发进程会互相覆盖 `pg_dump` 产物，或一个的清理步骤在另一个还没
+  `docker compose cp` 出来之前就把文件删了——产出损坏或丢失的备份文件，且不一定报错。
+  改用按本进程 PID 生成的路径（`/tmp/keywordiq_backup_<pid>.custom`），三个函数改为接收
+  这个路径而非读模块级常量。PID 在同一台宿主机的并发进程间天然唯一，不需要再引入跨进程
+  锁；用 `ruff check` + `ast.parse` + `--help` 冒烟验证（与 5.2 同理，纯路径参数化改动，
+  没有可挂的 pytest 路径）。
 - [x] 5.3 实际跑了一次"备份 → 恢复到全新空库 → 核对"演练：备份产出真实上传到 OSS
   又下载下来、恢复进一个从未跑过迁移的全新 `db` 容器、核对 `permission`（6 行）、
   `role`（3 行）、`alembic_version`（1 行）均与备份时刻一致。
@@ -286,7 +295,19 @@ Scenario 仍然遗漏了一步——`migrate_to_selfhosted_pg.py` 的 `_quiesce_
   `127.0.0.1:8000`。已把 `stop`（按 `is-active`）与 `disable`（按 `is-enabled`）拆成
   两个独立判断，各自天然幂等。(b) 健康检查 15 次重试仍不通过时脚本仍 `exit 0`——nginx
   已经 reload 完毕，此时可能正把流量转给一个还没就绪的后端，`--yes`/CI 等无人值守调用
-  会把这次部署记成成功。已把失败分支改成 `exit 1`。
+  会把这次部署记成成功。已把失败分支改成 `exit 1`。**PR #84 Codex 第十二轮复审发现
+  第十四个 bug**：`exit 1` 这条分支本身永远到不了——`main.py` 的 `/health` 在数据库
+  探活失败时走 `except Exception` 分支，此前无条件返回 `{"status": "unhealthy"}`
+  这个字典，FastAPI 对不带显式状态码的返回值默认序列化成 HTTP 200；而
+  `deploy.sh` 第 155 行判定就绪用的是 `curl -fsS`，`-f` 只认 HTTP 状态码、根本不解析
+  响应体，200 一律视为成功，于是循环第一次探测就 `exit 0` 打印"健康检查通过"，
+  15 次重试与后面的 `exit 1` 分支永远不会被执行到——数据库连不上时部署脚本仍然报告
+  部署成功。修法是把 `/health` 失败分支改成显式 `JSONResponse(status_code=503, ...)`，
+  与本仓库错误契约里"503 = 基础设施不可用"是同一条纪律（此前只是没套用到这个手写的
+  端点上），不需要改 `deploy.sh` 本身。已加回归测试
+  `test/test_error_contract_unit.py::test_health_check_returns_503_when_database_unreachable`
+  （monkeypatch `_probe_sync_engine` 抛异常），验证过修复前该测试失败（`200 == 503`
+  断言不成立，与 Codex 描述的失败现象完全一致）、修复后通过。
 - [x] 7.3 CLAUDE.md「Development Commands」更新反映 Docker 化命令；`etc/keywordiq-nginx.conf`
   顶部注释更新 + 追加一段注释掉的 Netdata Basic Auth 反代示例（呼应第 8 组）
 - [x] 7.4 `uv run pytest test/` 全量：584 passed, 260 skipped（跳过的是需要真实

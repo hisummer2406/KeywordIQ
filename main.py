@@ -7,6 +7,7 @@ import anyio.to_thread
 from fastapi import Depends, FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -238,7 +239,12 @@ async def health_check():
         # 细节只进日志。此前把 str(e) 写进响应体，而数据库异常的字符串可能带出
         # 连接串与内部路径——健康检查通常是不鉴权的，等于对外泄露。
         logger.exception("❌ 健康检查失败")
-        return {"status": "unhealthy"}
+        # 状态码必须是 503 不能是默认的 200：deploy.sh 用 `curl -fsS` 判定就绪，
+        # curl -f 只认 HTTP 状态码不解析响应体，此前失败分支返回 200 时 curl 会
+        # 把"探测到数据库连不上"误判成"健康检查通过"（PR #84 Codex 第十二轮）——
+        # 与本文件错误契约里"503 = 基础设施不可用"是同一条纪律，此前只是没套用到
+        # 这个手写端点上。
+        return JSONResponse(status_code=503, content={"status": "unhealthy"})
 
 
 # 进程内长驻，摘要要跨请求才有意义（每请求新建的话"最近 10 次均值"只有一个样本）。

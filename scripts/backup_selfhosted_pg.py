@@ -46,6 +46,7 @@ schema，不能依赖恢复时还记得先跑一遍迁移。
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -57,7 +58,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import settings
 from scripts._selfhosted_pg_env import default_db_name
 
-_DUMP_PATH_IN_CONTAINER = "/tmp/keywordiq_backup.custom"
 # 与导入用的 imports/ 前缀区分，避免两类对象在同一前缀下混淆（design.md 决策 6）。
 _OSS_BACKUP_PREFIX = "backups/postgres"
 
@@ -67,28 +67,28 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
-def _dump_full(compose_service: str, db_name: str) -> None:
+def _dump_full(compose_service: str, db_name: str, dump_path_in_container: str) -> None:
     """全量 dump（schema + data），落在容器内。"""
     _run(
         [
             "docker", "compose", "exec", "-T", compose_service,
-            "pg_dump", "-Fc", f"--file={_DUMP_PATH_IN_CONTAINER}",
+            "pg_dump", "-Fc", f"--file={dump_path_in_container}",
             "--username", "postgres", "--dbname", db_name,
         ]
     )
 
 
-def _copy_out(compose_service: str, local_path: Path) -> None:
+def _copy_out(compose_service: str, local_path: Path, dump_path_in_container: str) -> None:
     _run(
         [
             "docker", "compose", "cp",
-            f"{compose_service}:{_DUMP_PATH_IN_CONTAINER}", str(local_path),
+            f"{compose_service}:{dump_path_in_container}", str(local_path),
         ]
     )
 
 
-def _cleanup_container(compose_service: str) -> None:
-    _run(["docker", "compose", "exec", "-T", compose_service, "rm", "-f", _DUMP_PATH_IN_CONTAINER])
+def _cleanup_container(compose_service: str, dump_path_in_container: str) -> None:
+    _run(["docker", "compose", "exec", "-T", compose_service, "rm", "-f", dump_path_in_container])
 
 
 def _upload(local_path: Path, object_key: str) -> None:
@@ -122,18 +122,24 @@ def main() -> int:
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     object_key = f"{_OSS_BACKUP_PREFIX}/{timestamp}.custom"
+    # 容器内路径按本进程 PID 加区分：定时任务与人工临时跑重叠是这个脚本明确要支持的
+    # 用法（design.md 决策 6 只规定"用 host cron"，恢复演练文档里也照抄了手动调用）。
+    # 固定路径下两个并发调用会互相覆盖 pg_dump 产物，或一个的清理步骤在另一个还没
+    # `docker compose cp` 出来之前就把文件删了——PID 在同一台宿主机上并发进程间
+    # 唯一，不需要再引入跨进程锁（PR #84 Codex 第十二轮）。
+    dump_path_in_container = f"/tmp/keywordiq_backup_{os.getpid()}.custom"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         local_path = Path(tmpdir) / f"{timestamp}.custom"
 
         print(f"\n在 {args.compose_service} 容器内执行 pg_dump（全量）...")
-        _dump_full(args.compose_service, args.db_name)
+        _dump_full(args.compose_service, args.db_name, dump_path_in_container)
 
         print(f"\n把 dump 从容器复制到本地临时文件 {local_path} ...")
-        _copy_out(args.compose_service, local_path)
+        _copy_out(args.compose_service, local_path, dump_path_in_container)
 
         print("\n清理容器内的临时文件...")
-        _cleanup_container(args.compose_service)
+        _cleanup_container(args.compose_service, dump_path_in_container)
 
         size_mb = local_path.stat().st_size / 1024 / 1024
         print(f"\n上传到 OSS: {settings.OSS_BUCKET}/{object_key}（{size_mb:.1f} MB）...")
