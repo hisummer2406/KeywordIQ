@@ -275,6 +275,22 @@ def test_request_id_on_success_response(client):
     assert "X-Request-Id" in r.headers
 
 
+def test_health_check_returns_503_when_database_unreachable(client, monkeypatch):
+    """deploy.sh 用 `curl -fsS` 判定就绪，只认 HTTP 状态码不解析响应体——探活失败若
+    仍返回默认的 200，部署脚本会把"数据库连不上"误判成"健康检查通过"
+    （PR #84 Codex 第十二轮）。"""
+
+    def _raise():
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr(main, "_probe_sync_engine", _raise)
+
+    r = client.get("/health")
+
+    assert r.status_code == 503
+    assert r.json()["status"] == "unhealthy"
+
+
 # ---------------- 逐端点契约一致性（任务 3.7） ----------------
 
 def _as_super():
