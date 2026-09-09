@@ -27,6 +27,7 @@ import psycopg2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.table.analysis.filter_stats import _FILTER_STATS
 from scripts._selfhosted_pg_env import default_db_name
 
 # (表名, 用于核对"最新一条"的列)。fact_growth/fact_dropped 用 anchor_date，
@@ -67,7 +68,17 @@ _TABLES_WITH_LATEST_COL = (
     ("user_seller_watch", None),
     ("user_store_watch", None),
     ("competitor_watch_preview", None),
+    *((table, None) for table, _, _ in _FILTER_STATS),
 )
+# 上面这一截（`category_stats`/`brand_stats`）不在 `migration_scope.V2_TABLES` 里
+# ——它们没有 ORM 模型，全靠原生 SQL 写入（见 `app/table/analysis/filter_stats.py`
+# 的 `rebuild_filter_stats`），因此不受 alembic autogenerate 管理。但它们仍是
+# `analysis` schema 下的普通表（迁移 `f5a6b7c8d9e0` 已把它们从物化视图改成普通表），
+# `pg_dump --data-only --schema=analysis` 按整个 schema 搬迁、不看 V2_TABLES，同样会
+# 把它们搬过去；`analysis_crud.py` 靠它们提供类目/品牌下拉选项。核对清单若只从
+# V2_TABLES 派生就会漏掉这两张——数据没搬完整时下拉会显示不全或缺项，核对却仍会全绿
+# 放行切换（Codex 审核 PR #84 第七轮）。表名直接取自 `_FILTER_STATS`（该模块实际
+# 写入的表），不再手写一份新清单，避免两处各自维护而漂移。
 
 
 def _source_counts(source_url: str) -> dict[str, tuple[int, str | None]]:
