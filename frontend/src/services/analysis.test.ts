@@ -96,6 +96,43 @@ describe('exportAnalysis', () => {
     expect(pushMock).toHaveBeenCalledWith('/login');
   });
 
+  it('会话被顶替时呈现区别于普通过期的明确原因（issue #89）', async () => {
+    setToken('kicked');
+    mockFetch({
+      status: 401,
+      body: { success: false, code: 'auth.session_invalid', message: '登录状态已失效' },
+    });
+
+    await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow(/账号已在其他浏览器登录/);
+    expect(getToken()).toBeNull();
+    expect(pushMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('导出请求发出后本浏览器已重新登录，姗姗来迟的旧 401 不清理新会话（PR #91 复审 P2）', async () => {
+    // 导出发起时用的是旧 token；响应还没回来，本浏览器已经用新 token 完成一次登录
+    setToken('stale-before-relogin');
+    const res = {
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      blob: async () => new Blob(['csv']),
+      json: async () => ({ success: false, code: 'auth.session_invalid', message: 'x' }),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        // fetch 发出之后、响应落地之前，本浏览器已经完成了一次新登录
+        setToken('fresh-after-relogin');
+        return res;
+      }),
+    );
+
+    await exportAnalysis({ site: 'US', view: 'DAY' }); // 不应该 reject
+
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
   it('错误体不是 JSON 时用兜底文案，不把解析异常抛给用户', async () => {
     const res = {
       ok: false,

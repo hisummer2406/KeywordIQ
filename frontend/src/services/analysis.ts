@@ -186,7 +186,8 @@ function triggerDownload(blob: Blob, filename: string) {
  *
  * 用裸 fetch 而非 umi request：需要拿到 Blob 与响应头里的文件名，且要按 FastAPI 的
  * {detail} 形状把 413（超出行数上限）原文透给用户。代价是绕过了 app.tsx 的 errorConfig，
- * 故 401 的清 token / 跳登录在这里自行处理，保持与全局一致。
+ * 故 401 的清 token / 跳登录、按错误码区分提示、以及陈旧响应的会话保护（issue #89，
+ * PR #91 复审 P2）都在这里自行重做一遍，保持与全局 errorHandler 一致。
  */
 export async function exportAnalysis(body: SearchBody): Promise<void> {
   const base = process.env.UMI_APP_API_BASE || '';
@@ -202,9 +203,29 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
 
   if (!res.ok) {
     if (res.status === 401) {
+      // 这次导出请求发起时用的令牌，若已经不是当前本地持有的令牌，说明本浏览器在它
+      // 发出之后又完成过一次新登录（issue #89）——这是一个迟到的、属于旧令牌的响应，
+      // MUST NOT 反过来把刚取得的新登录状态清掉，也不该弹出一条虚假的过期提示。与
+      // app.tsx 的 errorHandler 同一条纪律：这里独立实现是因为裸 fetch 绕过了它
+      // （PR #91 复审 P2）。
+      if (token !== getToken()) {
+        return;
+      }
+
+      // 会话被顶替（auth.session_invalid）呈现区别于普通过期的明确原因，与
+      // app.tsx 的 errorHandler 保持一致的文案判据。
+      let reason = '登录已过期，请重新登录';
+      try {
+        const errBody = await res.json();
+        if (errBody?.code === 'auth.session_invalid') {
+          reason = '账号已在其他浏览器登录';
+        }
+      } catch {
+        // 非 JSON 错误体，用默认文案
+      }
       clearToken();
       history.push('/login');
-      throw new Error('登录已过期，请重新登录');
+      throw new Error(reason);
     }
     let detail = `导出失败（${res.status}）`;
     try {
