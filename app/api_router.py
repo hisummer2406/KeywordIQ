@@ -7,6 +7,7 @@ from app.table.competitor.store_api import store_router
 from app.table.competitor.watch_api import competitor_router
 from app.table.keyword.growth_api import growth_router
 from app.table.keyword.library_api import library_router
+from app.table.keyword.trend_api import trend_router
 from app.table.upload.upload_api import upload_router
 from app.user.user_api import user_router
 
@@ -35,6 +36,14 @@ api_router.include_router(
 # 与文件对应。
 api_router.include_router(
     library_router,
+    prefix="/keyword",
+    tags=["关键词工具"]
+)
+
+# 关键词排名趋势详情：市场分析与我的词库共用同一个只读端点，权限接受两屏各自的权限点
+# 任一即可（见 trend_api.py），不因挂在 /keyword 前缀下就要求 keyword:view。
+api_router.include_router(
+    trend_router,
     prefix="/keyword",
     tags=["关键词工具"]
 )

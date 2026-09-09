@@ -2,7 +2,8 @@ import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { Button, Card, Popconfirm, Radio, Select, Space, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
-import type { View } from '@/services/analysis';
+import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
+import type { AnalysisRow, View } from '@/services/analysis';
 import {
   createGroup,
   deleteGroup,
@@ -40,6 +41,13 @@ import { toSortParams } from './sort';
  */
 export default function KeywordLibraryPage() {
   const actionRef = useRef<ActionType>();
+  /**
+   * 表格 `request` 的调用序号，与分析查询屏 `useAnalysisQuery.runRequest` 同一模式
+   * 同一理由：ProTable 允许同一时刻有多个 `request` 调用同时在飞，旧调用不会被真的
+   * 取消，可能在更新的调用之后才落地。不核对序号就覆盖 `loadedSite`/`loadedView`/
+   * `loadedDate`，会让它们回退到比表格当下所展示的行更旧的作用域（PR #87 第五轮 P2）。
+   */
+  const requestSeqRef = useRef(0);
 
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [groups, setGroups] = useState<KeywordGroup[]>([]);
@@ -52,12 +60,36 @@ export default function KeywordLibraryPage() {
   const [scopeHasNoDates, setScopeHasNoDates] = useState(false);
 
   const [selected, setSelected] = useState<number[]>([]);
-  /** 表格里那批行实际所属的站点，取自请求成功时后端回传的 `WatchResponse.site`——
-   * 不能用 `active?.site`：切分组时 `activeId` 先于表格重新加载完成变化（`switchGroup`
-   * 里 `setActiveId` 是同步的，`reloadScope` 与随后的 `reload(true)` 都要等一轮网络
-   * 往返），这段窗口内表格显示的仍是上一个分组的行，若操作列的链接跟着新 `activeId`
-   * 走，会把旧分组的词按新站点拼链接，跳到错误地区。 */
+  /** 表格里这批行实际所属的站点/视图/期次，取自请求成功时后端回传的 `WatchResponse`——
+   * 不能用 `active?.site` / 当前 `view` / `date` 状态：切分组或切视图时 `activeId`/`view`
+   * 先于表格重新加载完成变化（`switchGroup`/`switchView` 里 `setActiveId`/`setView` 是
+   * 同步的，`reloadScope` 与随后的 `reload(true)` 都要等一轮网络往返），这段窗口内表格
+   * 显示的仍是上一批行，若详情抽屉跟着新状态走，会把旧行的 keyword_id 配上新站点/新
+   * 视图/新日期，要么触发后端跨站点校验（422），要么在 DAY 行上打开一份被当成 WEEK
+   * 解析的历史（PR #87 复审 P2）。三者一起取自同一次响应，不能只补 site。 */
   const [loadedSite, setLoadedSite] = useState<string | undefined>();
+  const [loadedView, setLoadedView] = useState<View | undefined>();
+  const [loadedDate, setLoadedDate] = useState<string | undefined>();
+
+  /**
+   * 排名趋势详情：一次只开一行。**点击那一刻把行与它当时所属的站点/视图/期次一起冻结**，
+   * 不是分开存——抽屉打开后若又有一轮表格刷新完成（切分组/切视图，甚至点击前就在飞的
+   * 旧请求），`loadedSite`/`loadedView`/`loadedDate` 会先于用户关闭抽屉而变化；若抽屉的
+   * 站点/视图/期次改读这些活状态，会把仍在展示的旧行 `keyword_id` 配上新值重新发请求
+   * （PR #87 复审 P2：第一版修复把冻结做在了渲染处读 `loadedSite` 等活状态，同样会被
+   * 后续响应覆盖，问题不变）。
+   */
+  interface TrendTarget {
+    row: AnalysisRow;
+    site: string;
+    view: View;
+    date?: string;
+  }
+  const [trendTarget, setTrendTarget] = useState<TrendTarget | null>(null);
+  const openTrend = (row: AnalysisRow) => {
+    if (!loadedSite || !loadedView || !loadedDate) return; // 表格本就空，点不到行
+    setTrendTarget({ row, site: loadedSite, view: loadedView, date: loadedDate });
+  };
 
   const active = groups.find((g) => g.group_id === activeId);
   const siteDomain = sites.find((s) => s.code === loadedSite)?.domain;
@@ -195,7 +227,7 @@ export default function KeywordLibraryPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="keyword_id"
-        columns={buildWatchColumns(view, siteDomain, loadedSite)}
+        columns={buildWatchColumns(view, siteDomain, openTrend, loadedSite)}
         search={false}
         options={false}
         dateFormatter="string"
@@ -212,6 +244,7 @@ export default function KeywordLibraryPage() {
         locale={{ emptyText }}
         request={async (params, sort) => {
           if (!activeId) return { data: [], total: 0, success: true };
+          const seq = (requestSeqRef.current += 1);
           const res = await watchGroup({
             group_id: activeId,
             view,
@@ -220,8 +253,16 @@ export default function KeywordLibraryPage() {
             perPage: params.pageSize,
             ...toSortParams(sort),
           });
-          // 操作列的链接必须跟着这批行实际所属的站点走，见上方 loadedSite 的注释。
-          setLoadedSite(res.site);
+          // 这次 await 期间已经有更晚的调用发出（seq 被推进），说明这次响应对应的
+          // 站点/视图/期次已经过期，见上方 requestSeqRef 的注释：不采纳它去覆盖
+          // loadedSite/View/Date，但仍把查到的行还给 ProTable 自己的这次调用。
+          if (seq === requestSeqRef.current) {
+            // 操作列的链接与详情抽屉必须跟着这批行实际所属的站点/视图/期次走，见上方
+            // loadedSite 的注释；三者取自响应本身，不是发请求时的闭包值。
+            setLoadedSite(res.site);
+            setLoadedView(res.view);
+            setLoadedDate(res.date ?? undefined);
+          }
           return {
             data: res.data ?? [],
             total: res.total ?? 0,
@@ -229,6 +270,22 @@ export default function KeywordLibraryPage() {
           };
         }}
       />
+
+      {trendTarget && (
+        <KeywordTrendDrawer
+          open={!!trendTarget}
+          onClose={() => setTrendTarget(null)}
+          keywordId={trendTarget.row.keyword_id}
+          keyword={trendTarget.row.keyword}
+          // 站点/视图/期次取点击那一刻冻结进 trendTarget 的值，不是活状态——见上方
+          // trendTarget 的注释（PR #87 复审 P2）。
+          site={trendTarget.site}
+          view={trendTarget.view}
+          on={trendTarget.date}
+          // 这个词已经在当前分组里，不重复提供「加入词库」入口。
+          hideAddToLibrary
+        />
+      )}
     </PageContainer>
   );
 }

@@ -73,6 +73,29 @@ def test_super_user_bypasses_permission_check():
     assert dep(current_user=su) is su
 
 
+def test_require_any_permission_allows_with_either_one():
+    """关键词趋势详情：只有 analysis:view 或只有 keyword:view 都该放行（issue #86）。"""
+    dep = simple_auth.require_any_permission(P.ANALYSIS_VIEW, P.KEYWORD_VIEW)
+    only_analysis = _make_user("custom", [P.ANALYSIS_VIEW])
+    only_keyword = _make_user("custom", [P.KEYWORD_VIEW])
+    assert dep(current_user=only_analysis) is only_analysis
+    assert dep(current_user=only_keyword) is only_keyword
+
+
+def test_require_any_permission_denies_when_neither_present():
+    dep = simple_auth.require_any_permission(P.ANALYSIS_VIEW, P.KEYWORD_VIEW)
+    neither = _make_user("custom", [P.UPLOAD_IMPORT])
+    with pytest.raises(HTTPException) as exc:
+        dep(current_user=neither)
+    assert exc.value.status_code == 403
+
+
+def test_require_any_permission_super_user_bypasses():
+    dep = simple_auth.require_any_permission(P.ANALYSIS_VIEW, P.KEYWORD_VIEW)
+    su = _super()
+    assert dep(current_user=su) is su
+
+
 # ---------------- require_super：不可授予的能力（用户管理） ----------------
 
 

@@ -201,6 +201,42 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 事实行的列投影由 `analysis_crud.fact_metric_columns` 提供，**两屏共用一份**；复制第二份
 不会报错，表现是同一个词在两屏显示不同的值。
 
+**关键词工具 · 排名趋势详情（`GET /api/keyword/trend`，issue #86）**：单关键词的日/周排名
+历史，市场分析与我的词库共用同一个只读端点，抽屉形式，不设导航菜单。查询固定
+`keyword_id + site + view`，按 `idx_fact_{daily,weekly}_keyword_history` 与
+`idx_fact_dropped_keyword_history`（`site, period_type, keyword_id, anchor_date`）
+取数，不扫全站榜单。**掉榜段不走 `fact_dropped` 的主键**——主键是
+`(site, period_type, anchor_date, keyword_id)`，`anchor_date` 排在 `keyword_id`
+之前，单关键词历史查询里 `anchor_date` 是范围（`range=ALL` 或 30 天窗口）而非等值，
+`keyword_id` 因此退化成扫描内 filter，代价随该站点/视图窗口内的掉榜行数增长，而不是
+随目标关键词的历史行数增长（PR #87 复审 P1）。新建的
+`idx_fact_dropped_keyword_history` 把 `keyword_id` 提到 `anchor_date` 之前，
+把范围先收窄到单个关键词再扫描。五条要点：
+
+- **五态分类，且不信任 `site_data_stats` 在保留下界之前的行。** `retention_service`
+  只 `DROP` 事实表/`fact_dropped`/`fact_growth` 的月度分区，**从不清理 `site_data_stats`
+  的对应行**——这是既有代码一个尚未触发问题的缺口，本变更不修。判定顺序因此把
+  `report_date < retention_cutoff` 放在最前面、且**不查** `site_data_stats`：否则一个
+  分区早被 `DROP`、统计行却仍残留的月份会被误判成「已导入但未收录」，让用户以为那份
+  数据还在，只是没收这个词。其余四态：在榜（`RANKED`）/ 掉榜（沿用既有 `fact_dropped`
+  口径，`DROPPED`）/ 报表已导入但未收录（`NO_DATA`）/ 报表未导入（`NOT_IMPORTED`）。
+- **周视图的期次步长是 7 天，不是自然周边界。** 复用 `app/table/upload/importer.py`
+  的 `_PERIOD_CONFIG["WEEK"]`「上一期偏移」——`previous_ranking`/`ranking_change` 已经
+  在用这个数，这里不新造一套周定义。
+- **锚定期解析统一是「取 `<= on` 的最新一期，取不到就退化为全局最新一期」**
+  （`trend_service._resolve_anchor`）。这一条规则同时覆盖两种情形：同视图的正常查询
+  （`on` 本就在集合内，取到就是它自己）与日/周切换（`on` 来自另一个视图，找不到精确
+  匹配）。**`on` 必须是打开详情那一刻来源页面正在看的期次**，不是「今天」——从历史查询
+  结果打开详情却看见比来源页面更新的数据，是「静默跳到最新期」的一种形态。
+- **`latest_available` 与锚定期当期可能不是同一天，前端必须分别标注日期。** 锚定期本身
+  若是掉榜/未收录/未导入，`latest_available` 会取更早的一个在榜点；把它显示成「当前
+  排名」是这条口径唯一容易踩的坑。
+- **权限接受 `analysis:view` 或 `keyword:view` 任一**（`simple_auth.require_any_permission`），
+  不新增权限点。这是刻意的例外：端点只读一个公共 `keyword_id` 的历史排名，不携带任何
+  域私有数据，两个入口各自的合法用户都不该被另一个域的权限矩阵挡住。**这个原语只在
+  「端点跨域共用且不携带私有数据」时才该用**——像 `competitor_new` 那种读取用户私有
+  关注关系的筛选，仍然是`check_permission` 按需叠加校验，不能用「任一满足」放宽。
+
 ## 顶栏菜单：按数据域命名，不设按排除法命名的容器
 
 顶栏八项，名称统一四字，顺序固定：**机会中心 → 市场分析 → 词库工具 → 竞对监控 →

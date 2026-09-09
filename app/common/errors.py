@@ -129,6 +129,10 @@ CODE_ANALYSIS_EXPORT_TOO_LARGE: Final = "analysis.export_too_large"
 # 关键词工具（增长榜与词库共用——两屏的作用域解析是同一套站点/期次判定）
 CODE_KEYWORD_SCOPE_INVALID: Final = "keyword.scope_invalid"
 
+# 关键词排名趋势详情（市场分析与我的词库共用同一个只读端点）
+CODE_KEYWORD_TREND_NOT_FOUND: Final = "keyword.trend_not_found"
+CODE_KEYWORD_TREND_SITE_MISMATCH: Final = "keyword.trend_site_mismatch"
+
 # 词库（关键词工具 · 我的词库）
 CODE_LIBRARY_GROUP_NOT_FOUND: Final = "library.group_not_found"
 CODE_LIBRARY_GROUP_DUPLICATE: Final = "library.group_duplicate"      # 同站点下重名
