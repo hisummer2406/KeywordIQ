@@ -35,6 +35,7 @@ from pathlib import Path
 
 import psycopg2
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -48,15 +49,21 @@ from config import settings
 _FALLBACK_SITE = settings.ENABLED_SITES.split(",")[0]
 
 
-def _default_target_url(db_name: str) -> str:
+def _default_target_url(db_name: str) -> URL:
     """按 compose 内部网络拼目标库 DSN，与 `.env` 当前 `DATABASE_URL` 指向谁无关。
 
     `db` 是 compose 里的服务名，只在容器内部网络可达；`POSTGRES_PASSWORD` 经
     `env_file: .env` 同样注入到本容器（.env.example 顶层就有这一项，供 `db` 服务的
     `environment:` 与本脚本共用）。
+
+    **用 `URL.create` 而不是拼 f-string。** 生产 `POSTGRES_PASSWORD` 若含 `@`/`/`/`#`/
+    `%`/`:` 等 DSN 保留字符，直接塞进字符串会被解析成错误的 host/database，甚至让
+    整个 URL 不可解析；这一步发生在源库已被 `_quiesce_source` 切成只读之后，DSN 解析
+    失败会让迁移卡在"RDS 只读、自建库还没有数据"的半途（Codex 审核 PR #84 第四轮）。
+    `create_engine` 接受 `URL` 对象，不需要再转回字符串。
     """
     password = os.environ["POSTGRES_PASSWORD"]
-    return f"postgresql://postgres:{password}@db/{db_name}"
+    return URL.create("postgresql", username="postgres", password=password, host="db", database=db_name)
 
 
 def _months_needed(source_url: str, table: str, date_column: str, has_site: bool) -> set[tuple[str, str]]:

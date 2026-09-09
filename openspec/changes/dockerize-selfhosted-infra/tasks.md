@@ -62,6 +62,11 @@
   `ensure_target_partitions_for_migration.py` 自建一个独立的 `sqlalchemy.create_engine`，
   按新增的 `--db-name`/`--target-url` 参数显式拼 compose 内部网络的 `db` 服务地址，与
   `.env` 当前指向谁无关；`migrate_to_selfhosted_pg.py` 调用处同步传入 `--db-name`。
+  **PR #84 Codex 第四轮复审发现第四个 bug**：拼这个 DSN 时用的是 f-string 直接把
+  `POSTGRES_PASSWORD` 塞进 `postgresql://postgres:{password}@db/{db_name}`，若生产密码
+  含 `@`/`/`/`#`/`%`/`:` 等 DSN 保留字符会被解析成错误的 host/database，而这一步发生在
+  源库已被切为只读之后，DSN 解析失败会让迁移卡在"RDS 只读、自建库还没数据"的半途。
+  改用 `sqlalchemy.engine.URL.create` 构造，不再手拼字符串。
 - [x] 4.2 `scripts/verify_selfhosted_migration.py`：比对 `fact_daily`/`fact_weekly`/
   `fact_dropped`/`fact_growth`/`dim_keyword`/`dim_product`/`site_data_stats` 的行数与
   最新期次。**演练中发现并修复一个 bug**：源库（psycopg2）里空表的 `MAX()` 是 Python
@@ -120,6 +125,12 @@
   到最后一步，仍要操作者自己发明这一步怎么做。已在 README.md「生产部署」一节补上可
   直接复制的 `crontab -e` 行（每天 03:00，`uv` 用绝对路径规避 cron 默认 `PATH` 找不到
   它的问题）。保留策略仍按 OSS 生命周期规则管理，不在这条 cron 里重新实现。
+  **PR #84 Codex 第四轮复审指出**：`--db-name` 默认值原先硬编码 `"amazon_search"`，
+  README 文档化的 cron 行没有显式传这个参数——一旦操作者按 `.env.example` 的说明把
+  `POSTGRES_DB` 改成别的库名，每次定时备份都会对着一个不存在的库跑并失败。`POSTGRES_DB`
+  按 `.env.example` 的约定"不经 config.py"（不进 `Settings`），因此没有直接读
+  `settings.POSTGRES_DB` 的选项，改为用 `python-dotenv` 的 `dotenv_values(".env")`
+  单独读这一项，取不到时回退 `"amazon_search"`。
 
 ## 6. 切换与回滚准备
 
@@ -129,6 +140,15 @@ Plan 步骤 6 早已更正的结论矛盾——观察窗口内自建库一旦有
 `.env` 回滚会让服务从落后这部分写入的数据重新起步，必须先把这部分写入同步/重放回 RDS
 或明确接受丢失。已重写该 Requirement 与 Scenario，拆成"尚无新写入"与"已有新写入"两种
 场景，前者才允许纯配置回滚，后者要求先处理新写入，措辞与 design.md 对齐。
+
+**PR #84 Codex 第四轮复审发现**：即便是"尚无新写入"这个最简单的场景，上一轮改完的
+Scenario 仍然遗漏了一步——`migrate_to_selfhosted_pg.py` 的 `_quiesce_source` 在迁移
+开始时已把 RDS 持久切为拒绝新写事务（`ALTER DATABASE ... SET`），这个状态不会因为
+`.env` 改回指向 RDS 而自动解除。按上一轮的文字操作，回滚后应用配置层面确实指回了 RDS，
+实际连上去却只能读不能写，且这个失败模式在应用日志里长得像数据库故障，不像"回滚没做
+完"。已在两个 Scenario 里都补上"解除 RDS 的 `default_transaction_read_only`"这一步，
+并在 `_quiesce_source` 的 docstring 与运行时打印里把还原命令的适用场景从"迁移中途放弃"
+扩展到同样覆盖"迁移完成后在观察窗口内回滚"，design.md Migration Plan 步骤 6 同步说明。
 
 - [ ] 6.1 **未执行**——切换生产 `.env` 是生产环境操作，本会话不具备执行环境
 - [ ] 6.2 **未执行**——同上，依赖 6.1

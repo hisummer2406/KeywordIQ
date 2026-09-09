@@ -56,6 +56,23 @@ from config import settings
 _DUMP_PATH_IN_CONTAINER = "/tmp/keywordiq_backup.custom"
 # 与导入用的 imports/ 前缀区分，避免两类对象在同一前缀下混淆（design.md 决策 6）。
 _OSS_BACKUP_PREFIX = "backups/postgres"
+_FALLBACK_DB_NAME = "amazon_search"
+
+
+def _default_db_name() -> str:
+    """`--db-name` 默认值跟着 `.env` 的 `POSTGRES_DB` 走，不硬编码。
+
+    `POSTGRES_DB` 是 docker-compose.yml 专用的初始化变量，按 `.env.example` 的约定
+    "不经 config.py"（不进 `Settings`），所以不能读 `settings.POSTGRES_DB`——改用
+    `python-dotenv` 直接读同一份 `.env`（与本脚本已经在用的 `config.settings` 解析的
+    是同一份文件，README 文档的 cron 调用已 `cd` 到项目目录，此处同样相对 cwd 解析）。
+    没有这一步，操作者一旦把 `POSTGRES_DB` 从默认值改掉，README 里文档化的 cron 行
+    因为没有显式传 `--db-name`，每次定时备份都会对着一个不存在的库跑并失败
+    （Codex 审核 PR #84 第四轮）。
+    """
+    from dotenv import dotenv_values
+
+    return dotenv_values(".env").get("POSTGRES_DB") or _FALLBACK_DB_NAME
 
 
 def _run(cmd: list[str]) -> None:
@@ -106,7 +123,7 @@ def _upload(local_path: Path, object_key: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compose-service", default="db")
-    parser.add_argument("--db-name", default="amazon_search")
+    parser.add_argument("--db-name", default=_default_db_name())
     parser.add_argument(
         "--keep-local", action="store_true", help="保留本地临时文件（默认用完即删）"
     )

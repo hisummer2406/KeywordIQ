@@ -47,21 +47,27 @@
 - **THEN** 生成的 schema（含分区表与物化视图）与 RDS 当前实际 schema 一致，无需任何
   手工 DDL 补丁
 
-### Requirement: 迁移窗口内可回滚，观察窗口内的回滚须先处理自建库产生的新写入
+### Requirement: 迁移窗口内可回滚，观察窗口内的回滚须先处理自建库产生的新写入与 RDS 只读状态
 切换 `.env` 到自建 PostgreSQL 之后、自建库尚未产生任何新写入前，SHALL 能够仅通过修改
-配置回滚到 RDS，不需要重新执行数据迁移。一旦观察窗口内自建库已产生新的导入或用户写入，
-回滚 SHALL 先将这部分写入同步或重放回 RDS，或由执行回滚的人明确记录接受这部分数据的
-丢失——仅修改配置不能替代这一步，否则服务会从落后至少这部分写入的数据重新起步。
+配置回滚到 RDS，不需要重新执行数据迁移；但迁移脚本（`_quiesce_source`）在迁移开始时
+已把 RDS 持久切为拒绝新写事务，这个状态不会因为把 `.env` 改回指向 RDS 而自动解除，
+回滚 SHALL 同时解除它，否则应用配置层面已经"改回 RDS"，实际却因数据库本身仍是只读
+导致写入全部失败。一旦观察窗口内自建库已产生新的导入或用户写入，回滚 SHALL 先将这部分
+写入同步或重放回 RDS，或由执行回滚的人明确记录接受这部分数据的丢失——仅修改配置不能
+替代这一步，否则服务会从落后至少这部分写入的数据重新起步。
 
 #### Scenario: 切换后尚无新写入时回滚
 - **WHEN** 切换 `.env` 到自建库之后、自建库尚未产生任何新的导入或用户写入
-- **THEN** 将 `DATABASE_URL`/`DATABASE_URL_ASYNC` 改回指向 RDS 并重启应用容器即可恢复
-  服务，不丢失任何数据，且此时 RDS 仍保持只读可用、未被释放
+- **THEN** 将 `DATABASE_URL`/`DATABASE_URL_ASYNC` 改回指向 RDS、解除 RDS 的
+  `default_transaction_read_only`（`migrate_to_selfhosted_pg.py` 的 `_quiesce_source`
+  docstring 给出了本地演练验证过的还原命令），并重启应用容器，即可恢复服务且不丢失
+  任何数据
 
 #### Scenario: 观察窗口内已有新写入时回滚
 - **WHEN** 观察窗口内自建库已产生新的导入或用户写入，此时发现资源争抢或数据不一致问题
 - **THEN** 回滚前必须先把这部分写入同步或重放回 RDS，或由执行回滚的人明确记录接受这部分
-  数据丢失；仅修改 `DATABASE_URL`/`DATABASE_URL_ASYNC` 配置不满足本条回滚要求
+  数据丢失，并同样要解除 RDS 的 `default_transaction_read_only`；仅修改
+  `DATABASE_URL`/`DATABASE_URL_ASYNC` 配置不满足本条回滚要求
 
 ### Requirement: 自建部署有可视化监控
 自建 Docker 部署 SHALL 提供可视化监控面板，覆盖宿主机系统指标、各容器（`app`/`db`）
