@@ -200,21 +200,46 @@ describe('getInitialState', () => {
     expect(getToken()).toBeNull();
   });
 
-  it('/me 请求发起后本浏览器已重新登录，姗姗来迟的失败不清理新令牌（PR #91 复审 P1）', async () => {
+  it('/me 请求发起后本浏览器已重新登录，姗姗来迟的失败不清理新令牌，且用新令牌重新拉一次用户（PR #91 复审第五轮 P2）', async () => {
     // umi 的 request 包装无论 errorHandler 是否再抛都会让原 Promise 照常 reject，
     // 因此这里必须独立重复一次"陈旧响应不动新令牌"的判断，不能指望 errorHandler
     // 那边"忽略"了就万事大吉。
+    //
+    // 只是不清令牌还不够：若就此返回 undefined，这个标签页的 currentUser 会一直空着，
+    // onPageChange 据此把它弹回登录页，而它其实已经拿到一张有效令牌——必须用这张新
+    // 令牌重新拉一次，状态才能追上本地实际持有的会话。
     setToken('stale-before-relogin');
-    getCurrentUserMock.mockImplementationOnce(async () => {
-      // /me 发出之后、响应落地之前，本浏览器已经完成了一次新登录
-      setToken('fresh-after-relogin');
-      throw new Error('401');
-    });
+    getCurrentUserMock
+      .mockImplementationOnce(async () => {
+        // /me 发出之后、响应落地之前，本浏览器已经完成了一次新登录
+        setToken('fresh-after-relogin');
+        throw new Error('401');
+      })
+      .mockResolvedValueOnce({ username: 'admin' } as API.CurrentUser);
+
+    const state = await getInitialState();
+
+    expect(state.currentUser).toEqual({ username: 'admin' });
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(getCurrentUserMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('重新拉取仍用的是失效令牌时，照常清理，不会死循环（PR #91 复审第五轮 P2）', async () => {
+    // 第一次失败触发"令牌已变化，重新拉一次"；重试时令牌未再变化且依旧失败，
+    // 必须落回"这张令牌本身就不作数"的既有分支，而不是无限重试。
+    setToken('stale-before-relogin');
+    getCurrentUserMock
+      .mockImplementationOnce(async () => {
+        setToken('also-invalid');
+        throw new Error('401');
+      })
+      .mockRejectedValueOnce(new Error('401'));
 
     const state = await getInitialState();
 
     expect(state.currentUser).toBeUndefined();
-    expect(getToken()).toBe('fresh-after-relogin');
+    expect(getToken()).toBeNull();
+    expect(getCurrentUserMock).toHaveBeenCalledTimes(2);
   });
 
   it('token 有效时带回当前用户，且保留 token', async () => {

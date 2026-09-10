@@ -20,7 +20,7 @@ export async function getInitialState(): Promise<{
   name?: string;
   avatar?: string | false;
 }> {
-  const fetchUserInfo = async () => {
+  const fetchUserInfo = async (): Promise<API.CurrentUser | undefined> => {
     const requestToken = getToken();
     try {
       return await getCurrentUser();
@@ -31,8 +31,14 @@ export async function getInitialState(): Promise<{
       // 挡不住这里：umi 的 request 包装无论 errorHandler 是否再抛都会让原 Promise 照常
       // reject（`src/.umi/plugin-request/request.ts` 的 catch 分支），这个 catch 必须
       // 独立重复一次同样的判断（PR #91 复审 P1）。
+      //
+      // 光是"不清掉新令牌"还不够：直接 return undefined 会让 getInitialState 把
+      // currentUser 发布成空，onPageChange 的路由守卫据此把这个标签页弹回登录页，
+      // 而它其实已经拿着一张有效令牌——且 useLoginRedirect 只在 currentUser 落位后
+      // 才会离开登录页，这个标签页会卡死在那里出不来。真正要做的是用现在这张新令牌
+      // 重新拉一次，让状态追上本地实际持有的会话（PR #91 复审第五轮 P2）。
       if (requestToken !== getToken()) {
-        return undefined;
+        return getToken() ? fetchUserInfo() : undefined;
       }
       // 拉不到用户说明这张 token 已经不作数了，就地清掉。留着它会让下面的路由守卫
       // （判据是 token）继续放行，用户带着废令牌停在受保护页，既进不去也回不到登录页。
