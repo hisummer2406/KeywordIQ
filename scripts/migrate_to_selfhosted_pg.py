@@ -342,8 +342,9 @@ def main() -> int:
     print(
         "\n迁移命令已执行完毕。接下来必须跑："
         f"\n  uv run python scripts/verify_selfhosted_migration.py --source-url <同上> "
-        f"--db-name {args.db_name}"
-        "\n（--db-name 与本次迁移用的库名保持一致，不要依赖核对脚本自己的默认值）"
+        f"--db-name {args.db_name} --compose-service {args.compose_service}"
+        "\n（--db-name/--compose-service 均与本次迁移用的取值保持一致，不要依赖核对"
+        "脚本自己的默认值——自建库服务改过名时，核对脚本的默认值 db 连不到目标服务）"
         "\n核对通过后才能切换 .env 的 DATABASE_URL/DATABASE_URL_ASYNC。"
     )
     return 0
