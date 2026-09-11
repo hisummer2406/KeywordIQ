@@ -94,3 +94,29 @@ def test_自建库服务改名时会传给分区建表助手(monkeypatch, capsys
         if "ensure_target_partitions_for_migration.py" in line
     )
     assert "--compose-service postgres_renamed" in ensure_partitions_line
+
+
+def test_自建库服务改名时会传给核对脚本的后续命令(monkeypatch, capsys):
+    """收尾打印的 `verify_selfhosted_migration.py` 调用同样要带改过名的服务名。
+
+    `verify_selfhosted_migration.py` 的 `--compose-service` 默认值是 `db`；操作者
+    若直接复制粘贴收尾打印的这条命令，改过名却没在打印里带上就会让核对脚本连到
+    默认的 `db`，而不是这次迁移实际用的目标服务（Codex 审核 PR #84 第二十轮）。
+    """
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "migrate_to_selfhosted_pg.py",
+            "--source-url", "postgresql://user:pass@rds-host/amazon_search",
+            "--db-name", "amazon_search",
+            "--compose-service", "postgres_renamed",
+            "--dry-run",
+        ],
+    )
+    main()
+    printed = capsys.readouterr().out
+    verify_line = next(
+        line for line in printed.splitlines()
+        if "verify_selfhosted_migration.py" in line
+    )
+    assert "--compose-service postgres_renamed" in verify_line
