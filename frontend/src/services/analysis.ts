@@ -1,6 +1,6 @@
 import { history, request } from '@umijs/max';
 import { clearSnapshot } from '@/pages/Analysis/stateCache';
-import { clearToken, getToken } from '@/utils/token';
+import { clearToken, getToken, isStaleAuthResponse } from '@/utils/token';
 
 /** 站点作用域分析查询。列表 POST /search 返 ProTable 契约 + 作用域回显。 */
 
@@ -204,12 +204,16 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
 
   if (!res.ok) {
     if (res.status === 401) {
-      // 这次导出请求发起时用的令牌，若已经不是当前本地持有的令牌，说明本浏览器在它
-      // 发出之后又完成过一次新登录（issue #89）——这是一个迟到的、属于旧令牌的响应，
-      // MUST NOT 反过来把刚取得的新登录状态清掉，也不该弹出一条虚假的过期提示。与
-      // app.tsx 的 errorHandler 同一条纪律：这里独立实现是因为裸 fetch 绕过了它
-      // （PR #91 复审 P2）。
-      if (token !== getToken()) {
+      // 这次导出请求发起时用的令牌，若"当前仍存在另一张有效令牌"且与它不同，说明
+      // 本浏览器在它发出之后又完成过一次新登录（issue #89）——这是一个迟到的、属于
+      // 旧令牌的响应，MUST NOT 反过来把刚取得的新登录状态清掉。与 app.tsx 的
+      // errorHandler 同一条纪律：这里独立实现是因为裸 fetch 绕过了它（PR #91 复审 P2）。
+      //
+      // **当前令牌若是 null（另一个标签页主动退出、本地已无令牌），这不是"陈旧响应"，
+      // 是真实的会话结束**，必须走下面的清理分支——没有任何 storage 事件监听会替这
+      // 个标签页做这件事，误判成陈旧响应会让它带着一份服务端已经不存在的登录状态卡住
+      // （PR #91 复审第七轮）。
+      if (isStaleAuthResponse(token)) {
         return;
       }
 
@@ -226,9 +230,9 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
       }
 
       // 上面 `await res.json()` 是真实的异步间隙——即便进这个分支时令牌还没变，
-      // 解析响应体期间本浏览器完全可能又完成一次新登录。真正执行清理动作前必须
-      // 紧贴着再判一次，不能只信开头那次检查的结果（PR #91 复审第四轮）。
-      if (token !== getToken()) {
+      // 解析响应体期间本浏览器完全可能又完成一次新登录（或退出）。真正执行清理动作前
+      // 必须紧贴着再判一次，不能只信开头那次检查的结果（PR #91 复审第四轮）。
+      if (isStaleAuthResponse(token)) {
         return;
       }
       clearToken();
