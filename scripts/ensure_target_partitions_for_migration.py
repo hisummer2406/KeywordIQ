@@ -8,22 +8,26 @@
 
 **必须在 app 容器内运行**：既要用 psycopg2 连源库（与宿主机同样可达），又要用项目
 自己的 `ensure_fact_partitions` 连目标库——后者只在 Docker 内部网络可达，宿主机连不到
-`db`。
+自建库服务。
 
-**目标库连接串固定拼 compose 内部网络的 `db` 服务，不读 `config.settings.DATABASE_URL`
-/ `database.SessionFactory`。** 迁移这一步发生在 design.md「Migration Plan」步骤 5
-（切换 `.env` 的 `DATABASE_URL`）之前——此刻 `.env` 里的 `DATABASE_URL` 仍指向 RDS 源库，
-而 `docker compose run --rm app` 经 `env_file: .env` 继承同一份配置。若这里复用全局
-`SessionFactory`，`ensure_fact_partitions` 会在源库（RDS）上重复建一遍分区（RDS 早就有，
-等于白跑），自建目标库依旧一个叶子分区都没有，紧接着的 `pg_restore --data-only` 会对
-每一行事实数据报 `relation "analysis.fact_daily_2026_09_us" does not exist`
-（Codex 审核 PR #84 第三轮）。
+**目标库连接串按 `--compose-service`（默认 `db`）拼 compose 内部网络地址，不读
+`config.settings.DATABASE_URL` / `database.SessionFactory`。** 迁移这一步发生在
+design.md「Migration Plan」步骤 5（切换 `.env` 的 `DATABASE_URL`）之前——此刻 `.env`
+里的 `DATABASE_URL` 仍指向 RDS 源库，而 `docker compose run --rm app` 经
+`env_file: .env` 继承同一份配置。若这里复用全局 `SessionFactory`，
+`ensure_fact_partitions` 会在源库（RDS）上重复建一遍分区（RDS 早就有，等于白跑），
+自建目标库依旧一个叶子分区都没有，紧接着的 `pg_restore --data-only` 会对每一行事实
+数据报 `relation "analysis.fact_daily_2026_09_us" does not exist`
+（Codex 审核 PR #84 第三轮）。**`--compose-service` 必须与
+`migrate_to_selfhosted_pg.py` 调用它时传的同名参数一致**——该服务名同时就是 Docker
+内部网络里的主机名，改了自建库服务名却漏传这里会连一个不存在的主机名，而此刻源库
+已被切成只读，这一步失败就直接卡住（Codex 审核 PR #84 第十七轮）。
 
 用法（由 migrate_to_selfhosted_pg.py 自动调用，一般不需要手动跑）::
 
     docker compose run --rm app python scripts/ensure_target_partitions_for_migration.py \\
         --source-url "postgresql://user:pass@rds-host/amazon_search" \\
-        --db-name amazon_search
+        --db-name amazon_search [--compose-service db]
 """
 
 from __future__ import annotations
@@ -49,12 +53,20 @@ from config import settings
 _FALLBACK_SITE = settings.ENABLED_SITES.split(",")[0]
 
 
-def _default_target_url(db_name: str) -> URL:
+def _default_target_url(db_name: str, host: str) -> URL:
     """按 compose 内部网络拼目标库 DSN，与 `.env` 当前 `DATABASE_URL` 指向谁无关。
 
-    `db` 是 compose 里的服务名，只在容器内部网络可达；`POSTGRES_PASSWORD` 经
-    `env_file: .env` 同样注入到本容器（.env.example 顶层就有这一项，供 `db` 服务的
+    `host` 是 compose 里自建库服务的名字（默认 `db`），只在容器内部网络可达，且这个
+    名字就是内部网络里的主机名，不需要另外解析；`POSTGRES_PASSWORD` 经
+    `env_file: .env` 同样注入到本容器（.env.example 顶层就有这一项，供该服务的
     `environment:` 与本脚本共用）。
+
+    **`host` 不能硬编码成字面量 `"db"`，必须由调用方传入实际的 compose 服务名。**
+    `migrate_to_selfhosted_pg.py` 支持 `--compose-service` 把自建库服务改名（如
+    `db` 改成 `postgres`），它自己的 dump/清空/恢复三步都会改用新名字，但若这里仍固定
+    拼 `db`，本脚本会在改名后连一个不存在的内部网络主机名——且这一步发生在源库已被
+    `_quiesce_source` 切成只读之后，分区建不出来会直接卡住紧接着的 `pg_restore`
+    （Codex 审核 PR #84 第十七轮）。
 
     **用 `URL.create` 而不是拼 f-string。** 生产 `POSTGRES_PASSWORD` 若含 `@`/`/`/`#`/
     `%`/`:` 等 DSN 保留字符，直接塞进字符串会被解析成错误的 host/database，甚至让
@@ -63,7 +75,7 @@ def _default_target_url(db_name: str) -> URL:
     `create_engine` 接受 `URL` 对象，不需要再转回字符串。
     """
     password = os.environ["POSTGRES_PASSWORD"]
-    return URL.create("postgresql", username="postgres", password=password, host="db", database=db_name)
+    return URL.create("postgresql", username="postgres", password=password, host=host, database=db_name)
 
 
 def _source_leaf_partitions(source_url: str, table: str, has_site: bool) -> set[tuple[str, str]]:
@@ -116,12 +128,18 @@ def main() -> int:
         help="自建库里的数据库名，默认跟随注入到本容器的 POSTGRES_DB",
     )
     parser.add_argument(
+        "--compose-service", default="db",
+        help="自建库的 compose 服务名，同时是 Docker 内部网络里的主机名；"
+        "与 migrate_to_selfhosted_pg.py 的同名参数须保持一致",
+    )
+    parser.add_argument(
         "--target-url", default=None,
-        help="自建库 DSN，默认按 --db-name 与 POSTGRES_PASSWORD 拼 compose 内部网络地址",
+        help="自建库 DSN，默认按 --db-name 与 --compose-service/POSTGRES_PASSWORD 拼 "
+        "compose 内部网络地址",
     )
     args = parser.parse_args()
 
-    target_url = args.target_url or _default_target_url(args.db_name)
+    target_url = args.target_url or _default_target_url(args.db_name, args.compose_service)
     target_engine = create_engine(target_url)
     TargetSession = sessionmaker(bind=target_engine)
 

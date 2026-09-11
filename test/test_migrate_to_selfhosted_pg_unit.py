@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from scripts.migrate_to_selfhosted_pg import _MIGRATION_SEEDED_TABLES, _reset_target_tables
+from scripts.migrate_to_selfhosted_pg import _MIGRATION_SEEDED_TABLES, _reset_target_tables, main
 
 
 def test_dry_run不发任何命令():
@@ -66,3 +66,31 @@ def test_没有非种子表时不发truncate():
         _reset_target_tables("db", "amazon_search", dry_run=False)
 
     run.assert_called_once()
+
+
+def test_自建库服务改名时会传给分区建表助手(monkeypatch, capsys):
+    """`--compose-service` 改名后必须传给 `ensure_target_partitions_for_migration.py`。
+
+    该脚本按 compose 服务名拼 Docker 内部网络地址（`_default_target_url` 的 `host`
+    参数），若这里漏传，服务改名后它会去连一个不存在的主机名——而这一步发生在源库
+    已被 `_quiesce_source` 切成只读之后，失败就直接卡住恢复（Codex 审核 PR #84
+    第十七轮）。用 `--dry-run` 跑 `main()`，不连任何库，只断言打印出的命令行里，
+    针对这个脚本的那条调用带上了改过名的服务名。
+    """
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "migrate_to_selfhosted_pg.py",
+            "--source-url", "postgresql://user:pass@rds-host/amazon_search",
+            "--db-name", "amazon_search",
+            "--compose-service", "postgres_renamed",
+            "--dry-run",
+        ],
+    )
+    main()
+    printed = capsys.readouterr().out
+    ensure_partitions_line = next(
+        line for line in printed.splitlines()
+        if "ensure_target_partitions_for_migration.py" in line
+    )
+    assert "--compose-service postgres_renamed" in ensure_partitions_line
