@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // vi.mock 会被提升到文件顶部，工厂里不能引用普通的顶层变量，故用 vi.hoisted 一起提升
-const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
+const { pushMock, clearSnapshotMock } = vi.hoisted(() => ({
+  pushMock: vi.fn(),
+  clearSnapshotMock: vi.fn(),
+}));
 vi.mock('@umijs/max', () => ({
   history: { push: pushMock },
   request: vi.fn(),
 }));
+vi.mock('@/pages/Analysis/stateCache', () => ({ clearSnapshot: clearSnapshotMock }));
 
 import { exportAnalysis } from '@/services/analysis';
-import { getToken, setToken, TOKEN_KEY } from '@/utils/token';
+import { clearToken, getToken, setToken, TOKEN_KEY } from '@/utils/token';
 
 /**
  * 导出用裸 fetch（需要 Blob 与响应头里的文件名），因此绕过了 app.tsx 的 errorConfig。
@@ -94,6 +98,101 @@ describe('exportAnalysis', () => {
     expect(getToken()).toBeNull();
     expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
     expect(pushMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('会话被顶替时一并清空分析屏会话缓存，避免下一个账号看到上一个账号的条件（PR #91 复审 P1）', async () => {
+    setToken('kicked');
+    mockFetch({ status: 401 });
+
+    await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow();
+    expect(clearSnapshotMock).toHaveBeenCalledOnce();
+  });
+
+  it('会话被顶替时呈现区别于普通过期的明确原因（issue #89）', async () => {
+    setToken('kicked');
+    mockFetch({
+      status: 401,
+      body: { success: false, code: 'auth.session_invalid', message: '登录状态已失效' },
+    });
+
+    await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow(/账号已在其他浏览器登录/);
+    expect(getToken()).toBeNull();
+    expect(pushMock).toHaveBeenCalledWith('/login');
+  });
+
+  it('导出请求发出后本浏览器已重新登录，姗姗来迟的旧 401 不清理新会话（PR #91 复审 P2）', async () => {
+    // 导出发起时用的是旧 token；响应还没回来，本浏览器已经用新 token 完成一次登录
+    setToken('stale-before-relogin');
+    const res = {
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      blob: async () => new Blob(['csv']),
+      json: async () => ({ success: false, code: 'auth.session_invalid', message: 'x' }),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        // fetch 发出之后、响应落地之前，本浏览器已经完成了一次新登录
+        setToken('fresh-after-relogin');
+        return res;
+      }),
+    );
+
+    await exportAnalysis({ site: 'US', view: 'DAY' }); // 不应该 reject
+
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(clearSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it('res.json() 解析期间才完成重新登录，同样不清理新会话（PR #91 复审第四轮）', async () => {
+    // 令牌比对在拿到 res 时还是一致的；真正的竞态发生在随后 await res.json() 这段
+    // 异步间隙里——必须在真正清理前再判一次，只判一次不够。
+    setToken('stale-before-relogin');
+    const res = {
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      blob: async () => new Blob(['csv']),
+      json: async () => {
+        setToken('fresh-after-relogin');
+        return { success: false, code: 'auth.session_invalid', message: 'x' };
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => res));
+
+    await exportAnalysis({ site: 'US', view: 'DAY' }); // 不应该 reject
+
+    expect(getToken()).toBe('fresh-after-relogin');
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(clearSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it('导出请求发出后本浏览器已经退出（另一标签页触发，不是重新登录），401 正常清理并提示，不当成陈旧响应静默吞掉（PR #91 复审第七轮）', async () => {
+    setToken('used-before-logout');
+    const res = {
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      blob: async () => new Blob(['csv']),
+      json: async () => ({ success: false, code: 'auth.session_invalid', message: 'x' }),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        // fetch 发出之后、响应落地之前，另一个标签页完成了退出——本地令牌变成 null，
+        // 不是被替换成另一张新令牌
+        clearToken();
+        return res;
+      }),
+    );
+
+    await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow(/账号已在其他浏览器登录/);
+
+    expect(getToken()).toBeNull();
+    expect(pushMock).toHaveBeenCalledWith('/login');
+    expect(clearSnapshotMock).toHaveBeenCalledOnce();
   });
 
   it('错误体不是 JSON 时用兜底文案，不把解析异常抛给用户', async () => {

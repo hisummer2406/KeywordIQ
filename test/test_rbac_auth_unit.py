@@ -3,13 +3,18 @@
 覆盖：角色→权限解析、require_permission 放行/拒绝、is_super 兜底、serialize_user 形状、
 JWT 承载 role 的签发/解码 roundtrip、畸形令牌解码返回 None（回归 jwt.PyJWTError 修正）。
 """
+import types
+
 import pytest
 from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 
 from app.auth import permissions as P
 from app.auth.login_auth import auth_service
 from app.auth.simple_auth import serialize_user, simple_auth
+from app.common.errors import SessionInvalidError
 from app.user.rbac_model import Permission, Role
+from app.user.user_crud import UserCenterCRUD
 from app.user.user_model import UserCenter
 
 
@@ -184,17 +189,140 @@ def test_serialize_user_shape():
 
 
 def test_jwt_roundtrip_carries_role():
-    tok = auth_service.create_access_token(7, "alice", False, "analyst")
+    tok = auth_service.create_access_token(7, "alice", False, "analyst", "sess-1")
     payload = auth_service.decode_access_token(tok)
     assert payload is not None
     assert payload["role"] == "analyst"
     assert payload["username"] == "alice"
     assert payload["is_super"] is False
+    assert payload["session_id"] == "sess-1"
 
 
 def test_decode_malformed_token_returns_none():
     # 回归：PyJWT 无 jwt.JWTError，畸形令牌不应抛 AttributeError，而是返回 None
     assert auth_service.decode_access_token("not-a-jwt") is None
+
+
+# ---------------- get_current_user 的会话校验（issue #89） ----------------
+#
+# 不连库：monkeypatch `UserCenterCRUD.get_user_by_username`（类方法，绕开真实 db.execute）
+# 与 `auth_service.decode_access_token`，构造受控的 payload 与用户。
+
+
+def _fake_request():
+    return types.SimpleNamespace(state=types.SimpleNamespace())
+
+
+def _patch_lookup(monkeypatch, *, user, payload):
+    async def _fake_get_user_by_username(self, username):
+        return user
+
+    monkeypatch.setattr(UserCenterCRUD, "get_user_by_username", _fake_get_user_by_username)
+    monkeypatch.setattr(auth_service, "decode_access_token", lambda token: payload)
+
+
+@pytest.mark.parametrize("session_id_in_token", [None, ""])
+async def test_get_current_user_rejects_missing_or_empty_session_id(monkeypatch, session_id_in_token):
+    user = _analyst()
+    user.active_session_id = "current-session"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": session_id_in_token})
+
+    with pytest.raises(SessionInvalidError):
+        await simple_auth.get_current_user(
+            request=_fake_request(),
+            credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+            db=None,
+        )
+
+
+async def test_get_current_user_rejects_mismatched_session_id(monkeypatch):
+    user = _analyst()
+    user.active_session_id = "current-session"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": "stale-session"})
+
+    with pytest.raises(SessionInvalidError):
+        await simple_auth.get_current_user(
+            request=_fake_request(),
+            credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+            db=None,
+        )
+
+
+async def test_get_current_user_accepts_matching_session_id(monkeypatch):
+    user = _analyst()
+    user.active_session_id = "current-session"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": "current-session"})
+    request = _fake_request()
+
+    result = await simple_auth.get_current_user(
+        request=request,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+        db=None,
+    )
+
+    assert result is user
+    # 挂在 request.state 上供 logout 端点做条件清除，不必重新解码令牌
+    assert request.state.session_id == "current-session"
+
+
+# ---------------- get_current_user_for_logout：登出专用，不校验会话是否当前有效
+# （PR #91 复审第六轮 P2） ----------------
+#
+# 与上面几条 get_current_user 的用例刻意对称：同样的令牌/用户组合，这里必须放行，
+# 那边必须拒绝——差异正是这个依赖存在的全部理由。
+
+
+async def test_get_current_user_for_logout_accepts_mismatched_session_id(monkeypatch):
+    """账号已在别处重新登录、这张令牌的会话已经不是当前有效会话——不能当鉴权失败拒绝，
+    否则 `logout` 端点里 `clear_session_if_current` 那段"0 行=已达成"的条件更新永远
+    执行不到。"""
+    user = _analyst()
+    user.active_session_id = "new-session-from-elsewhere"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": "stale-session"})
+    request = _fake_request()
+
+    result = await simple_auth.get_current_user_for_logout(
+        request=request,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+        db=None,
+    )
+
+    assert result is user
+    # 挂的是令牌里声称的那个（旧）session_id，不是库里当前的——由端点的条件更新去
+    # 决定要不要清，这里不预先替它做判断
+    assert request.state.session_id == "stale-session"
+
+
+async def test_get_current_user_for_logout_accepts_missing_session_id(monkeypatch):
+    """本功能上线前签发的旧令牌没有 session_id——同样不能拒，登出这张令牌本来就该
+    直接成功（没有会话可清，等于已经达成目标）。"""
+    user = _analyst()
+    user.active_session_id = "current-session"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": None})
+    request = _fake_request()
+
+    result = await simple_auth.get_current_user_for_logout(
+        request=request,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+        db=None,
+    )
+
+    assert result is user
+    assert request.state.session_id is None
+
+
+async def test_get_current_user_for_logout_still_rejects_invalid_token(monkeypatch):
+    """放宽的只是会话匹配这一条，令牌本身无法解码、用户不存在/已禁用仍要 401——
+    这不是把 /logout 变成免鉴权端点。"""
+    _patch_lookup(monkeypatch, user=None, payload={"username": "ghost", "session_id": "x"})
+
+    with pytest.raises(HTTPException) as exc:
+        await simple_auth.get_current_user_for_logout(
+            request=_fake_request(),
+            credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+            db=None,
+        )
+    assert exc.value.status_code == 401
 
 
 def test_role_permission_matrix_matches_spec():

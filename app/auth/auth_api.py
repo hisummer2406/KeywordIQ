@@ -3,7 +3,7 @@
 
 amis 时期的信封端点（/login、/profile）已随 amis 于阶段七删除。
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.auth import sso_service
 from app.auth.dingtalk_client import DingTalkClient
 from app.auth.simple_auth import serialize_user, simple_auth
 from app.auth.sso_errors import SsoDisabledError
+from app.user.user_crud import UserCenterCRUD
 from app.user.user_model import UserCenter
 from config import settings
 from database import get_async_db
@@ -65,8 +66,26 @@ async def get_me(current_user: UserCenter = Depends(simple_auth.get_current_user
 
 
 @auth_router.post("/logout")
-async def logout(current_user: UserCenter = Depends(simple_auth.get_current_user)):
-    """登出（JWT 无状态，前端清 token 即可；此处仅确认令牌有效）。"""
+async def logout(
+    request: Request,
+    current_user: UserCenter = Depends(simple_auth.get_current_user_for_logout),
+    db: AsyncSession = Depends(get_async_db),
+):
+    """登出：条件清除当前会话编号（issue #89），使这张令牌立即失效。
+
+    鉴权依赖是 `get_current_user_for_logout` 而不是 `get_current_user`——后者会在
+    会话已经不匹配时提前 401，永远走不到下面这条条件更新（PR #91 复审第六轮 P2，
+    详见该依赖的说明）。条件是"仍等于本次令牌携带的会话编号"——若账号已在别处重新
+    登录、`active_session_id` 已被覆盖，这次清除天然是空操作，不会误删新会话，也不
+    当作错误处理（见 `UserCenterCRUD.clear_session_if_current`）。`session_id` 取自
+    该依赖挂在 `request.state` 上的值，不重复解码一次令牌；这张令牌本就没有
+    session_id（本功能上线前签发的旧令牌）时跳过这次数据库调用——没有基线可比对，
+    执行一次必然 0 行命中的 UPDATE 只会白占一次写入。
+    """
+    session_id = request.state.session_id
+    if session_id:
+        crud = UserCenterCRUD(db)
+        await crud.clear_session_if_current(current_user.id, session_id)
     return {"success": True}
 
 
