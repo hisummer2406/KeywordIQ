@@ -265,6 +265,66 @@ async def test_get_current_user_accepts_matching_session_id(monkeypatch):
     assert request.state.session_id == "current-session"
 
 
+# ---------------- get_current_user_for_logout：登出专用，不校验会话是否当前有效
+# （PR #91 复审第六轮 P2） ----------------
+#
+# 与上面几条 get_current_user 的用例刻意对称：同样的令牌/用户组合，这里必须放行，
+# 那边必须拒绝——差异正是这个依赖存在的全部理由。
+
+
+async def test_get_current_user_for_logout_accepts_mismatched_session_id(monkeypatch):
+    """账号已在别处重新登录、这张令牌的会话已经不是当前有效会话——不能当鉴权失败拒绝，
+    否则 `logout` 端点里 `clear_session_if_current` 那段"0 行=已达成"的条件更新永远
+    执行不到。"""
+    user = _analyst()
+    user.active_session_id = "new-session-from-elsewhere"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": "stale-session"})
+    request = _fake_request()
+
+    result = await simple_auth.get_current_user_for_logout(
+        request=request,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+        db=None,
+    )
+
+    assert result is user
+    # 挂的是令牌里声称的那个（旧）session_id，不是库里当前的——由端点的条件更新去
+    # 决定要不要清，这里不预先替它做判断
+    assert request.state.session_id == "stale-session"
+
+
+async def test_get_current_user_for_logout_accepts_missing_session_id(monkeypatch):
+    """本功能上线前签发的旧令牌没有 session_id——同样不能拒，登出这张令牌本来就该
+    直接成功（没有会话可清，等于已经达成目标）。"""
+    user = _analyst()
+    user.active_session_id = "current-session"
+    _patch_lookup(monkeypatch, user=user, payload={"username": "tester", "session_id": None})
+    request = _fake_request()
+
+    result = await simple_auth.get_current_user_for_logout(
+        request=request,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+        db=None,
+    )
+
+    assert result is user
+    assert request.state.session_id is None
+
+
+async def test_get_current_user_for_logout_still_rejects_invalid_token(monkeypatch):
+    """放宽的只是会话匹配这一条，令牌本身无法解码、用户不存在/已禁用仍要 401——
+    这不是把 /logout 变成免鉴权端点。"""
+    _patch_lookup(monkeypatch, user=None, payload={"username": "ghost", "session_id": "x"})
+
+    with pytest.raises(HTTPException) as exc:
+        await simple_auth.get_current_user_for_logout(
+            request=_fake_request(),
+            credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="tok"),
+            db=None,
+        )
+    assert exc.value.status_code == 401
+
+
 def test_role_permission_matrix_matches_spec():
     # 矩阵与 design 决策 4b 一致；admin 是「全部权限减去 super-only 例外」，不是
     # 无条件的全部——见 test_opportunity_view_is_super_only 那条测试的注释

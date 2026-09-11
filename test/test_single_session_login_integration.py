@@ -242,6 +242,46 @@ async def test_旧会话退出请求与新登录并发时不清除新会话(db):
     assert (await _authorize(db, new_token)).id == user.id
 
 
+async def test_旧会话退出请求打真实依赖链不再被提前拒绝(db):
+    """PR #91 复审第六轮 P2 的回归：上面那条"不清除新会话"的用例只直接调
+    `clear_session_if_current`，绕开了 `get_current_user`/`get_current_user_for_logout`
+    这层依赖链——而真实 HTTP 请求必须先过依赖链才能摸到端点里的条件更新。这里改为
+    打通整条链路：先用旧令牌走 `get_current_user_for_logout`（不是 `get_current_user`，
+    后者会在这一步就因为会话不匹配直接抛 `SessionInvalidError`，永远走不到端点），
+    再调用 `logout` 端点函数本身，断言新会话全须全尾、旧会话的这次退出请求本身成功
+    （不是 401）。
+    """
+    from app.auth.auth_api import logout as logout_endpoint
+
+    user = await _create_local_user(db, "realchainlogout")
+    crud = UserCenterCRUD(db)
+    old_session = await crud.rotate_active_session(user)
+    old_token = auth_service.create_access_token(
+        user.id, user.user_name, user.is_super, user.role_code, old_session
+    )
+
+    # 旧会话的退出请求"迟到"：在它摸到鉴权依赖之前，账号已经被新登录顶替
+    new_session = await crud.rotate_active_session(user)
+
+    request = _fake_request()
+    current_user = await simple_auth.get_current_user_for_logout(
+        request=request,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials=old_token),
+        db=db,
+    )  # 不应该抛 SessionInvalidError——这正是本轮要修的那个缺口
+
+    result = await logout_endpoint(request=request, current_user=current_user, db=db)
+    assert result == {"success": True}
+
+    await db.refresh(user)
+    assert user.active_session_id == new_session, "旧会话事后才发起的退出请求不得清除新会话"
+
+    new_token = auth_service.create_access_token(
+        user.id, user.user_name, user.is_super, user.role_code, new_session
+    )
+    assert (await _authorize(db, new_token)).id == user.id  # 新会话不受影响，仍然有效
+
+
 async def test_退出条件不满足时视为已达成不报错(db):
     user = await _create_local_user(db, "idempotentlogout")
     crud = UserCenterCRUD(db)

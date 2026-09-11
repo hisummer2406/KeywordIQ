@@ -725,7 +725,10 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   额外比对这一项，缺失、为空串或与库中不一致均判定为会话失效，抛
   `SessionInvalidError`（`auth.session_invalid`，与其余 401 场景的 `auth.unauthorized`
   区分，供前端呈现"账号已在其他浏览器登录"）。主动退出（`clear_session_if_current`）是
-  条件更新——只清与本次令牌一致的记录，旧会话的退出请求不会误删更新的登录。并发登录的
+  条件更新——只清与本次令牌一致的记录，旧会话的退出请求不会误删更新的登录。**`/logout`
+  的鉴权依赖是专门的 `get_current_user_for_logout`，不是 `get_current_user`**——后者会
+  在会话已不匹配时提前抛 `SessionInvalidError`，条件更新永远执行不到，只在同一请求内部
+  两次数据库往返之间的极窄窗口才真正生效（PR #91 复审第六轮）。并发登录的
   "最后一次"由数据库对同一行的写入天然串行化决定，不额外加锁。**上线时不兼容缺少
   `session_id` 的旧令牌**，全体在线用户需重新登录一次；这是刻意的 BREAKING 行为，不做
   兼容分支。前端 `errorHandler`（`frontend/src/app.tsx`）按错误码区分提示文案，并在清理前
