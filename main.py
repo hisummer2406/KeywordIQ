@@ -7,13 +7,13 @@ import anyio.to_thread
 from fastapi import Depends, FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.api_router import api_router
 from app.auth.simple_auth import simple_auth
-from app.common.error_handlers import register_error_handlers
+from app.common import errors
+from app.common.error_handlers import json_error, register_error_handlers
 from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
 from app.jobs.poller import run_poller
 from app.table.competitor.store_service import refresh_due_store_round
@@ -244,7 +244,14 @@ async def health_check():
         # 把"探测到数据库连不上"误判成"健康检查通过"（PR #84 Codex 第十二轮）——
         # 与本文件错误契约里"503 = 基础设施不可用"是同一条纪律，此前只是没套用到
         # 这个手写端点上。
-        return JSONResponse(status_code=503, content={"status": "unhealthy"})
+        #
+        # 响应体必须走 error_handlers.json_error，不能手写裸 dict：本仓库的错误契约
+        # 是"所有失败响应只有一种形状"（success/code/message/request_id），手写的
+        # {"status": "unhealthy"} 不含这四个字段，客户端与排查工具无法把这次失败当成
+        # 普通的 503 处理，与 sqlalchemy_exception_handler 处理 OperationalError 时
+        # 产出的形状也对不上——两条路径本该是同一类失败（Codex 审核 PR #84 第十九轮）。
+        # 复用 errors.CODE_DB_UNAVAILABLE，与那条路径用的是同一个错误码。
+        return json_error(503, errors.CODE_DB_UNAVAILABLE, "服务暂时不可用，请稍后重试")
 
 
 # 进程内长驻，摘要要跨请求才有意义（每请求新建的话"最近 10 次均值"只有一个样本）。

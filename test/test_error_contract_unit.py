@@ -278,7 +278,11 @@ def test_request_id_on_success_response(client):
 def test_health_check_returns_503_when_database_unreachable(client, monkeypatch):
     """deploy.sh 用 `curl -fsS` 判定就绪，只认 HTTP 状态码不解析响应体——探活失败若
     仍返回默认的 200，部署脚本会把"数据库连不上"误判成"健康检查通过"
-    （PR #84 Codex 第十二轮）。"""
+    （PR #84 Codex 第十二轮）。
+
+    响应体还必须是本仓库统一的失败形状（success/code/message/request_id），不能是
+    手写的 {"status": "unhealthy"}——那种形状不含这四个字段，客户端与排查工具无法把
+    这次失败当成普通的 503 处理（PR #84 Codex 第十九轮）。"""
 
     def _raise():
         raise RuntimeError("db unreachable")
@@ -288,7 +292,10 @@ def test_health_check_returns_503_when_database_unreachable(client, monkeypatch)
     r = client.get("/health")
 
     assert r.status_code == 503
-    assert r.json()["status"] == "unhealthy"
+    body = r.json()
+    assert {"success", "code", "message", "request_id"} <= set(body.keys())
+    assert body["success"] is False
+    assert body["code"] == "db.unavailable"
 
 
 # ---------------- 逐端点契约一致性（任务 3.7） ----------------
