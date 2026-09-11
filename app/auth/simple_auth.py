@@ -10,11 +10,12 @@ AsyncSession 下访问 role_code / permission_codes 不会触发禁止的隐式�
 """
 import logging
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.login_auth import auth_service
+from app.common.errors import SessionInvalidError
 from app.user.user_crud import UserCenterCRUD
 from app.user.user_model import UserCenter
 from database import AsyncSessionFactory, get_async_db
@@ -39,8 +40,10 @@ class SimpleAuth:
                     detail="用户名或密码错误"
                 )
 
+            # 落库先于签发：数据库提交成功后才有可用的登录结果（issue #89）。
+            session_id = await crud.rotate_active_session(user)
             token = auth_service.create_access_token(
-                user.id, user.user_name, user.is_super, user.role_code
+                user.id, user.user_name, user.is_super, user.role_code, session_id
             )
 
             return {
@@ -51,11 +54,13 @@ class SimpleAuth:
             }
 
     @staticmethod
-    async def get_current_user(
-            credentials: HTTPAuthorizationCredentials = Depends(security),
-            db: AsyncSession = Depends(get_async_db)
-    ) -> UserCenter:
-        """获取当前用户（含角色/权限，relationship selectin 一并载入）"""
+    async def _decode_and_load_user(
+        credentials: HTTPAuthorizationCredentials, db: AsyncSession
+    ) -> tuple[dict, UserCenter]:
+        """解码令牌、按用户名查用户；令牌无效或用户不存在/已禁用统一 401。
+        `get_current_user` 与 `get_current_user_for_logout` 共用这段，差异只在
+        要不要额外校验会话仍是当前有效会话（PR #91 复审第六轮）。
+        """
         payload = auth_service.decode_access_token(credentials.credentials)
         if not payload:
             raise HTTPException(
@@ -70,7 +75,60 @@ class SimpleAuth:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="用户不存在或已禁用"
             )
+        return payload, user
 
+    @staticmethod
+    async def get_current_user(
+            request: Request,
+            credentials: HTTPAuthorizationCredentials = Depends(security),
+            db: AsyncSession = Depends(get_async_db)
+    ) -> UserCenter:
+        """获取当前用户（含角色/权限，relationship selectin 一并载入）。
+
+        会话校验（issue #89）：JWT 的 `session_id` 缺失、为空串，或与库中
+        `active_session_id` 不一致，均判定为该令牌所属会话已失效，抛
+        `SessionInvalidError`（区别于其余令牌无效场景的专属错误码，供前端呈现
+        "账号已在其他浏览器登录"）。校验通过后把 `session_id` 挂到
+        `request.state`，供需要它的端点使用，不必再解码一次令牌。
+
+        **主动退出不要用这个依赖**，见 `get_current_user_for_logout` 的说明。
+        """
+        payload, user = await SimpleAuth._decode_and_load_user(credentials, db)
+
+        session_id = payload.get("session_id") or None
+        if not session_id or session_id != user.active_session_id:
+            raise SessionInvalidError()
+
+        request.state.session_id = session_id
+        return user
+
+    @staticmethod
+    async def get_current_user_for_logout(
+            request: Request,
+            credentials: HTTPAuthorizationCredentials = Depends(security),
+            db: AsyncSession = Depends(get_async_db)
+    ) -> UserCenter:
+        """登出专用的身份校验：只验证令牌签名与用户身份，不要求会话仍是当前有效会话
+        （PR #91 复审第六轮 P2）。
+
+        主动退出的意图是"确保这张令牌不能再用"——若账号已经在别处重新登录、这张令牌的
+        会话早已失效，这本就是退出想要的结果，是 design.md 决策 3 定义的"目标已达成、
+        成功的空操作"，不该被当成一次鉴权失败拒绝掉。若这里复用 `get_current_user`，
+        它自己的会话校验会先一步抛 `SessionInvalidError`，`logout` 端点里
+        `clear_session_if_current` 那段"0 行=已达成"的条件更新因此只在同一个请求内部
+        两次数据库往返之间那个极窄窗口才真正生效——"旧会话事后才发起退出请求"这个更
+        常见、本该由那段条件更新兜底的场景反而先在这里被拦下，返回一个容易让主动点击
+        退出的用户误解的 401（此前的集成测试只直接调 CRUD 方法，没打这条依赖链，没
+        测出这个缺口）。
+
+        因此这里只做身份识别，把 JWT 里声称的 `session_id`（可能已经不是当前有效的
+        那个，也可能因为是本功能上线前签发的旧令牌而缺失）原样挂到 `request.state`，
+        交给 `logout` 端点里的条件更新决定要不要清——不在这一层预先拒绝。**只有
+        `logout` 该用它**，其余端点仍必须用 `get_current_user`，否则等于让已经失效
+        的会话还能继续访问受保护接口。
+        """
+        payload, user = await SimpleAuth._decode_and_load_user(credentials, db)
+        request.state.session_id = payload.get("session_id") or None
         return user
 
     @staticmethod

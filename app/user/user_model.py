@@ -42,6 +42,14 @@ class UserCenter(Base):
     external_id: Mapped[str | None] = mapped_column(
         String(128), nullable=True, comment="该身份源内的稳定用户标识"
     )
+    # 当前有效会话编号（issue #89）。每次登录成功（本地密码/钉钉扫码共用同一段逻辑）生成
+    # 新值覆盖旧值，使旧会话对应的 JWT 立即失效；主动退出清空。**唯一写入点**是
+    # `UserCenterCRUD.rotate_active_session` 与 `clear_session_if_current`——其余代码
+    # MUST NOT 直接赋值，否则会在不知情的情况下把在线用户顶下线。NULL 表示当前没有有效会话
+    # （含本功能上线前的存量用户，直到下次登录）。
+    active_session_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="当前有效会话编号；登录时生成覆盖，退出时清空"
+    )
     # 每用户一个角色（RBAC，见 rbac_model.py）。迁移回填后有值；DB 层留 nullable 以防插入遗漏。
     role_id: Mapped[int | None] = mapped_column(
         ForeignKey(f"{settings.DATABASE_SCHEMA}.role.id", ondelete="RESTRICT"), nullable=True

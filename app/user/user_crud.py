@@ -1,10 +1,11 @@
 import logging
+import secrets
 from datetime import datetime
 from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
 from passlib.context import CryptContext
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -343,6 +344,43 @@ class UserCenterCRUD:
         if not user or not user.is_active or not password_ok:
             return None
         return user
+
+    async def rotate_active_session(self, user: UserCenter) -> str:
+        """登录成功后生成新会话编号并覆盖旧的，使旧会话对应的令牌立即失效（issue #89）。
+
+        **本地密码登录与钉钉扫码登录共用这一个方法**，不各自实现一遍——两处若各写一份，
+        任何一处日后调整（比如换一种编号生成方式）都不会带着另一处一起变，产生的行为
+        分歧没有任何地方会报错。
+
+        只应在认证/建档成功之后调用：失败的登录尝试不得替换有效会话，本方法不做这层
+        判断，由调用方保证只在成功路径上调它。
+
+        **返回值取本地变量，不取 `refresh` 之后的 `user.active_session_id`。** 并发场景
+        下，`commit()` 与 `refresh()` 之间存在一次真实的事件循环让出——若另一个并发登录
+        恰好在这个间隙提交，`refresh()` 读回的会是**那一次**的值而不是本次自己刚写入的，
+        调用方就会拿着一个签发时看似成功、实际早已不是当前有效会话的编号去签发令牌。
+        `refresh()` 仍然保留（让 `user` 对象其余字段与库同步，供调用方继续使用），只是
+        不作为这个方法返回值的来源。
+        """
+        session_id = secrets.token_urlsafe(32)
+        user.active_session_id = session_id
+        await self.db.commit()
+        await self.db.refresh(user)
+        return session_id
+
+    async def clear_session_if_current(self, user_id: int, session_id: str) -> None:
+        """主动退出：仅当库里的有效会话仍等于本次令牌的会话编号时才清空。
+
+        不判断受影响行数——0 行（已被更晚的登录替换）与 1 行（确实清掉了）都是
+        "目标状态已达成"，不是错误。这正是"旧会话的退出请求与新登录并发时,不能注销
+        新会话"的落点：旧请求的 WHERE 条件在新登录写入之后必然匹配不到行，天然是空操作。
+        """
+        await self.db.execute(
+            update(UserCenter)
+            .where(UserCenter.id == user_id, UserCenter.active_session_id == session_id)
+            .values(active_session_id=None)
+        )
+        await self.db.commit()
 
     async def toggle_user_status(self, user_id: int) -> UserCenter:
         """切换用户状态（激活/禁用）。不存在抛 404，禁用超管抛 409。"""

@@ -1,5 +1,6 @@
 import { history, request } from '@umijs/max';
-import { clearToken, getToken } from '@/utils/token';
+import { clearSnapshot } from '@/pages/Analysis/stateCache';
+import { clearToken, getToken, isStaleAuthResponse } from '@/utils/token';
 
 /** 站点作用域分析查询。列表 POST /search 返 ProTable 契约 + 作用域回显。 */
 
@@ -186,7 +187,8 @@ function triggerDownload(blob: Blob, filename: string) {
  *
  * 用裸 fetch 而非 umi request：需要拿到 Blob 与响应头里的文件名，且要按 FastAPI 的
  * {detail} 形状把 413（超出行数上限）原文透给用户。代价是绕过了 app.tsx 的 errorConfig，
- * 故 401 的清 token / 跳登录在这里自行处理，保持与全局一致。
+ * 故 401 的清 token / 跳登录、按错误码区分提示、以及陈旧响应的会话保护（issue #89，
+ * PR #91 复审 P2）都在这里自行重做一遍，保持与全局 errorHandler 一致。
  */
 export async function exportAnalysis(body: SearchBody): Promise<void> {
   const base = process.env.UMI_APP_API_BASE || '';
@@ -202,9 +204,44 @@ export async function exportAnalysis(body: SearchBody): Promise<void> {
 
   if (!res.ok) {
     if (res.status === 401) {
+      // 这次导出请求发起时用的令牌，若"当前仍存在另一张有效令牌"且与它不同，说明
+      // 本浏览器在它发出之后又完成过一次新登录（issue #89）——这是一个迟到的、属于
+      // 旧令牌的响应，MUST NOT 反过来把刚取得的新登录状态清掉。与 app.tsx 的
+      // errorHandler 同一条纪律：这里独立实现是因为裸 fetch 绕过了它（PR #91 复审 P2）。
+      //
+      // **当前令牌若是 null（另一个标签页主动退出、本地已无令牌），这不是"陈旧响应"，
+      // 是真实的会话结束**，必须走下面的清理分支——没有任何 storage 事件监听会替这
+      // 个标签页做这件事，误判成陈旧响应会让它带着一份服务端已经不存在的登录状态卡住
+      // （PR #91 复审第七轮）。
+      if (isStaleAuthResponse(token)) {
+        return;
+      }
+
+      // 会话被顶替（auth.session_invalid）呈现区别于普通过期的明确原因，与
+      // app.tsx 的 errorHandler 保持一致的文案判据。
+      let reason = '登录已过期，请重新登录';
+      try {
+        const errBody = await res.json();
+        if (errBody?.code === 'auth.session_invalid') {
+          reason = '账号已在其他浏览器登录';
+        }
+      } catch {
+        // 非 JSON 错误体，用默认文案
+      }
+
+      // 上面 `await res.json()` 是真实的异步间隙——即便进这个分支时令牌还没变，
+      // 解析响应体期间本浏览器完全可能又完成一次新登录（或退出）。真正执行清理动作前
+      // 必须紧贴着再判一次，不能只信开头那次检查的结果（PR #91 复审第四轮）。
+      if (isStaleAuthResponse(token)) {
+        return;
+      }
       clearToken();
+      // 分析屏的会话缓存与令牌同生共死，与 app.tsx 的 errorHandler 同一条纪律——
+      // 不清的话，这次导出发现会话被顶替后，同一浏览器登录新账号会先看到上一个账号
+      // 遗留的查询条件与结果行（PR #91 复审 P1）。
+      clearSnapshot();
       history.push('/login');
-      throw new Error('登录已过期，请重新登录');
+      throw new Error(reason);
     }
     let detail = `导出失败（${res.status}）`;
     try {

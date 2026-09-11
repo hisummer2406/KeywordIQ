@@ -3,7 +3,7 @@ import { history } from '@umijs/max';
 import { message } from 'antd';
 import { getCurrentUser, logout } from '@/services/auth';
 import { clearSnapshot } from '@/pages/Analysis/stateCache';
-import { clearToken, getToken } from '@/utils/token';
+import { clearToken, getToken, isStaleAuthResponse } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
 import RightContent from '@/components/RightContent';
 
@@ -20,10 +20,26 @@ export async function getInitialState(): Promise<{
   name?: string;
   avatar?: string | false;
 }> {
-  const fetchUserInfo = async () => {
+  const fetchUserInfo = async (): Promise<API.CurrentUser | undefined> => {
+    const requestToken = getToken();
     try {
       return await getCurrentUser();
     } catch {
+      // 这次 /me 请求发起时用的令牌，若已经不是当前本地持有的令牌，说明本浏览器在它
+      // 发出之后又完成过一次新登录（issue #89）——不能因为这个迟到的失败就把刚取得的
+      // 新令牌清掉。errorHandler 里"忽略陈旧响应"的处理只管住它自己会不会清理/提示，
+      // 挡不住这里：umi 的 request 包装无论 errorHandler 是否再抛都会让原 Promise 照常
+      // reject（`src/.umi/plugin-request/request.ts` 的 catch 分支），这个 catch 必须
+      // 独立重复一次同样的判断（PR #91 复审 P1）。
+      //
+      // 光是"不清掉新令牌"还不够：直接 return undefined 会让 getInitialState 把
+      // currentUser 发布成空，onPageChange 的路由守卫据此把这个标签页弹回登录页，
+      // 而它其实已经拿着一张有效令牌——且 useLoginRedirect 只在 currentUser 落位后
+      // 才会离开登录页，这个标签页会卡死在那里出不来。真正要做的是用现在这张新令牌
+      // 重新拉一次，让状态追上本地实际持有的会话（PR #91 复审第五轮 P2）。
+      if (requestToken !== getToken()) {
+        return getToken() ? fetchUserInfo() : undefined;
+      }
       // 拉不到用户说明这张 token 已经不作数了，就地清掉。留着它会让下面的路由守卫
       // （判据是 token）继续放行，用户带着废令牌停在受保护页，既进不去也回不到登录页。
       clearToken();
@@ -194,10 +210,37 @@ export const request: RequestConfig = {
       const status = error?.response?.status;
       const body: ApiErrorBody | undefined = error?.response?.data;
 
+      // 这次失败请求发起时用的令牌，若"当前仍存在另一张有效令牌"且与它不同，说明
+      // 本浏览器在它发出之后又完成过一次新登录（issue #89）——这是一个迟到的、属于
+      // 旧令牌的响应，MUST NOT 反过来把刚取得的新登录状态清掉。**必须在按路由分支
+      // 处理之前判断**：重新登录成功到跳离 /login 之间有一段窗口期（`useLoginRedirect`
+      // 等 currentUser 落位才 push），此时仍在 /login，若把这个判断放进下面按路由分支
+      // 的 if 块里，会连同整块一起被路由条件跳过，这类响应就会落进后面的通用错误分支
+      // 弹出一条虚假提示（PR #91 审核 P2）。`requestToken` 取不到时（如某些未附带请求
+      // 配置的调用方式）不认为是陈旧响应，沿用"按正常 401 处理"的安全默认。
+      //
+      // `isStaleAuthResponse` 同时排除了"当前令牌是 null"的情形——那是另一个标签页
+      // 主动退出、本地已无令牌，不是"陈旧响应"而是真实的会话结束，必须继续往下走
+      // 清理分支；否则这个标签页会带着一份服务端已经不存在的登录状态卡住，没有任何
+      // storage 事件监听会替它清理（PR #91 复审第七轮）。
+      if (status === 401) {
+        const authHeader: string | undefined = error?.config?.headers?.Authorization;
+        const requestToken = authHeader ? authHeader.replace(/^Bearer /, '') : null;
+        if (requestToken && isStaleAuthResponse(requestToken)) {
+          return;
+        }
+      }
+
       // 非登录页的 401 才是"会话过期"→ 清 token 跳登录；登录页的 401 是凭证错误
       if (status === 401 && history.location.pathname !== LOGIN_PATH) {
         clearToken();
-        message.warning('登录已过期，请重新登录');
+        // 分析屏的会话缓存与令牌同生共死（doLogout 同一条纪律）：不清的话，甲被顶号后
+        // 乙在同一浏览器登录，会先看到甲遗留的查询条件与结果行。
+        clearSnapshot();
+        // 会话被顶替（auth.session_invalid）呈现区别于普通过期的明确原因
+        const reason =
+          body?.code === 'auth.session_invalid' ? '账号已在其他浏览器登录' : '登录已过期，请重新登录';
+        message.warning(reason);
         history.push(LOGIN_PATH);
         return;
       }

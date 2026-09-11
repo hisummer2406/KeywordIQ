@@ -111,6 +111,34 @@
 - **零条有效 ASIN 的上报整批拒绝（422），不得落定空基线**——否则下一次正常上报会把该卖家
   全部存量商品误判成新发现，界面表现只是数字突然涌出一批，不报错。
 
+### 认证与会话
+
+- **登录成功后的会话签发（生成 `session_id`、写入 `active_session_id`、提交）只有一个入口
+  `UserCenterCRUD.rotate_active_session`，本地密码登录与钉钉扫码登录共用。** 两处各写一份
+  会在其中一处改动时静默产生行为分歧。
+- **`rotate_active_session` 的返回值必须是本地生成的 `session_id` 变量，不得读
+  `commit()`/`refresh()` 之后的 `user.active_session_id`。** 并发登录下，`commit` 与
+  `refresh` 之间的事件循环让出会让后者读到另一个并发事务写入的值，把错误的会话编号
+  签进令牌。
+- **`get_current_user` 的会话校验（`session_id` 缺失/为空/不匹配）必须抛 `APIError` 子类
+  （`SessionInvalidError`），不得用裸 `HTTPException`。** 后者会被统一映射成
+  `auth.unauthorized`，与"令牌过期"用同一个错误码，前端做不出"账号已在其他浏览器登录"
+  这句区分文案。
+- **主动退出必须是条件更新（`active_session_id` 仍等于本次令牌的会话编号才清空），不得
+  无条件清空。** 否则旧会话的退出请求会把并发中已经登录成功的新会话一起清掉。
+- **`/logout` 的鉴权依赖不得复用 `get_current_user`，必须用不校验会话匹配的
+  `get_current_user_for_logout`。** `get_current_user` 会在会话已不匹配时就直接抛
+  `SessionInvalidError`（401），端点函数体永远执行不到，上面那条条件更新因此只在
+  同一个请求内部两次数据库往返之间的极窄窗口才真正生效——"旧会话事后才发起退出
+  请求"这个更常见、本该由条件更新兜底的场景反而先在鉴权层被拒。判定该不该清、清不清
+  得掉，必须整段留给端点里的条件更新，鉴权层只做身份识别。
+- **前端任何"收到失败响应就清本地令牌"的路径，清理前都必须比对这次失败请求发起时用的
+  令牌是否仍是当前令牌，且这次比对必须紧贴在真正执行清理动作之前（异步操作之后）。**
+  不止 `app.tsx` 的全局 `errorHandler`——`getInitialState.fetchUserInfo`、
+  `exportAnalysis`（裸 fetch，绕过全局 errorHandler）都各自独立发生这段逻辑，缺一处
+  都会在网络延迟下把刚取得的新会话删掉；`await res.json()` 这类比对之后的异步间隙
+  必须再判一次，只判一次不够。
+
 ---
 
 ## 维护
