@@ -143,13 +143,23 @@ echo "  nginx 已重载"
 # 但只要它仍是 enabled，宿主机下次重启时 systemd 照样把它拉起来，回头跟新容器抢
 # 127.0.0.1:8000（Codex 审核 PR #84 第六轮）。两个判断各自天然幂等：停过之后
 # is-active 恒为假，disable 过之后 is-enabled 恒为假，不需要额外记状态。
+#
+# disable 必须带 --now，不能是纯 disable：`systemctl is-active` 对 "activating"
+# 状态返回非零（只有 "active"/"reloading" 算），若 unit 恰好在这次部署时正处于
+# activating（比如宿主机刚重启、旧 unit 还在启动过程中），上面的 is-active 分支判定
+# 为"未在运行"而跳过 stop；这种 unit 通常是 enabled 的，会落进下面这个分支，但纯
+# `disable`（不带 --now）只挪走开机自启的符号链接，不会停掉当前正在 activating 的
+# 进程——它仍可能在本脚本继续往下跑到 `docker compose up -d` 之前完成绑定
+# 127.0.0.1:8000，和新容器抢端口（Codex 审核 PR #84 第十九轮）。`--now` 是
+# "enable/disable 之后顺带 start/stop 一次"的标准选项，一步到位覆盖这条 stop 分支
+# 覆盖不到的 activating 窗口。
 if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
     warn "  检测到遗留 ${SERVICE_NAME}.service 仍在运行并占用 127.0.0.1:8000，先停止..."
     as_root systemctl stop "${SERVICE_NAME}.service"
 fi
 if systemctl is-enabled --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
-    warn "  检测到遗留 ${SERVICE_NAME}.service 仍处于启用状态，禁用避免下次开机抢占端口..."
-    as_root systemctl disable "${SERVICE_NAME}.service"
+    warn "  检测到遗留 ${SERVICE_NAME}.service 仍处于启用状态，禁用并停止避免抢占端口..."
+    as_root systemctl disable --now "${SERVICE_NAME}.service"
 fi
 
 # up -d 对已用新镜像 build 过的服务会重建容器；db/netdata 若已在跑且配置未变则不受影响。
