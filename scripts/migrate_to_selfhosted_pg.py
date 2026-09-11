@@ -297,13 +297,17 @@ def main() -> int:
           "子分区按需建，全新库还没有任何历史导入）...")
     # 显式传 --db-name：此刻 .env 的 DATABASE_URL 仍指向 RDS 源库（第 5 步才切换），
     # 该脚本因此不复用 .env / SessionFactory，而是按这个库名拼 compose 内部网络的
-    # db 服务地址，确保分区建在自建目标库上而不是重复建在源库上（Codex 审核 PR #84）。
+    # 目标库服务地址，确保分区建在自建目标库上而不是重复建在源库上（Codex 审核 PR #84）。
+    # 同时把本脚本的 --compose-service 传下去：那是 Docker 内部网络里目标库的主机名，
+    # 若自建库服务改过名（不再是默认的 db）却漏传，该脚本会去连一个不存在的主机名，
+    # 而此刻源库已被切成只读，这一步失败就直接卡住恢复（Codex 审核 PR #84 第十七轮）。
     _run(
         [
             "docker", "compose", "run", "--rm", "app",
             "python", "scripts/ensure_target_partitions_for_migration.py",
             "--source-url", args.source_url,
             "--db-name", args.db_name,
+            "--compose-service", args.compose_service,
         ],
         dry_run=args.dry_run,
     )
