@@ -210,14 +210,33 @@ def _reset_target_tables(compose_service: str, db_name: str, *, dry_run: bool) -
     （`_MIGRATION_SEEDED_TABLES`）不在清空范围内——它们本就不参与 `pg_restore
     --data-only`（dump 阶段已用 `--exclude-table` 排除），TRUNCATE 掉会把
     RBAC 权限矩阵清空。
+
+    **列表只留顶层关系，不列分区叶子——不是因为会报错，是因为列了也没用。**
+    `pg_tables` 不区分"顶层表"与"分区叶子"：源库若已有事实数据，前一步的分区建表助手
+    会把目标库的叶子分区（如 `fact_daily_2026_01`、`fact_daily_2026_01_US`）也建出来，
+    旧版查询会把它们和父表一起列出，生成形如 `TRUNCATE fact_daily, fact_daily_2026_01,
+    fact_daily_2026_01_US, ... CASCADE` 的语句（Codex 审核 PR #84 第十六轮怀疑这会报
+    "table ... specified more than once"）。**用一次性 `postgres:15.8` 容器
+    复刻了完全相同的两级分区结构逐项实测**：父表与各级叶子在同一条 TRUNCATE 里混排
+    （父先/叶先、带/不带 CASCADE、甚至字面重复同一张表名两次）均未报错、均正确清空，
+    PostgreSQL 15.8 会对同一语句里的关系列表去重，这条具体的报错场景没有复现——所以这
+    不是一个"不改就会崩"的修复。改用 `pg_class.relispartition` 过滤（为 false 的是
+    顶层关系，为 true 的是任意层级的分区叶子——`fact_daily`/`fact_weekly` 日期+站点两级
+    分区下，中间那层日期分区同样带 `relispartition = true`）纯粹是让列表回到函数自己
+    文档一直声称的样子："不需要单独枚举分区"，之前的实现名不副实；列出叶子对结果无害
+    但是冗余，且若未来 `pg_restore` 版本或分区结构变化，冗余列表比精确列表更容易踩到
+    未知的边界情况。
     """
     if dry_run:
         print("[--dry-run] 跳过清空目标表（不会真的连接自建库）")
         return
     exclude = ", ".join(f"'{t}'" for t in _MIGRATION_SEEDED_TABLES)
     list_tables_sql = (
-        "SELECT tablename FROM pg_tables WHERE schemaname = 'analysis' "
-        f"AND tablename NOT IN ({exclude})"
+        "SELECT c.relname FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'analysis' AND c.relkind IN ('r', 'p') "
+        "AND NOT c.relispartition "
+        f"AND c.relname NOT IN ({exclude})"
     )
     proc = subprocess.run(
         [
