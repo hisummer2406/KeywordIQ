@@ -106,6 +106,24 @@ describe('全局 errorHandler', () => {
     expect(pushMock).not.toHaveBeenCalled();
   });
 
+  it('迟到的旧请求 401 到达时本地令牌已被清空（另一标签页主动退出），不是陈旧响应，仍按正常会话结束处理（PR #91 复审第七轮）', () => {
+    // 请求发起时用的是 old-token；响应落地前，另一个标签页已经主动退出，本地已无令牌
+    // ——这不是"本浏览器又登录了一次"，误判成陈旧响应会让这个标签页卡在一份服务端
+    // 已经不存在的登录状态里，没有任何 storage 事件监听会替它清理。
+    clearToken();
+    handler(
+      httpError(
+        401,
+        { success: false, code: 'auth.unauthorized', message: '无效令牌', request_id: 'r6' },
+        { headers: { Authorization: 'Bearer old-token' } },
+      ),
+    );
+
+    expect(getToken()).toBeNull();
+    expect(messageWarning).toHaveBeenCalledWith('登录已过期，请重新登录');
+    expect(pushMock).toHaveBeenCalledWith('/login');
+  });
+
   it('重新登录成功、尚未跳离登录页时，迟到的旧请求 401 同样被忽略（PR #91 审核 P2）', () => {
     // 重新登录已经拿到新 token，但 useLoginRedirect 还没来得及把路由从 /login 推走
     // ——这段窗口期里，一个用旧 token 发出的请求才姗姗来迟地返回 401。

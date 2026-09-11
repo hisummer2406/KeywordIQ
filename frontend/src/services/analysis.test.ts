@@ -12,7 +12,7 @@ vi.mock('@umijs/max', () => ({
 vi.mock('@/pages/Analysis/stateCache', () => ({ clearSnapshot: clearSnapshotMock }));
 
 import { exportAnalysis } from '@/services/analysis';
-import { getToken, setToken, TOKEN_KEY } from '@/utils/token';
+import { clearToken, getToken, setToken, TOKEN_KEY } from '@/utils/token';
 
 /**
  * 导出用裸 fetch（需要 Blob 与响应头里的文件名），因此绕过了 app.tsx 的 errorConfig。
@@ -167,6 +167,32 @@ describe('exportAnalysis', () => {
     expect(getToken()).toBe('fresh-after-relogin');
     expect(pushMock).not.toHaveBeenCalled();
     expect(clearSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it('导出请求发出后本浏览器已经退出（另一标签页触发，不是重新登录），401 正常清理并提示，不当成陈旧响应静默吞掉（PR #91 复审第七轮）', async () => {
+    setToken('used-before-logout');
+    const res = {
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      blob: async () => new Blob(['csv']),
+      json: async () => ({ success: false, code: 'auth.session_invalid', message: 'x' }),
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        // fetch 发出之后、响应落地之前，另一个标签页完成了退出——本地令牌变成 null，
+        // 不是被替换成另一张新令牌
+        clearToken();
+        return res;
+      }),
+    );
+
+    await expect(exportAnalysis({ site: 'US', view: 'DAY' })).rejects.toThrow(/账号已在其他浏览器登录/);
+
+    expect(getToken()).toBeNull();
+    expect(pushMock).toHaveBeenCalledWith('/login');
+    expect(clearSnapshotMock).toHaveBeenCalledOnce();
   });
 
   it('错误体不是 JSON 时用兜底文案，不把解析异常抛给用户', async () => {
