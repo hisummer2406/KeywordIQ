@@ -241,11 +241,30 @@ class Settings(BaseSettings):
         `uv run pytest`/`uv run uvicorn` 都启动不了。
 
         `PG_MAX_CONNECTIONS` 是 docker-compose.yml 专用变量，不进 `Settings`
-        （与 `POSTGRES_DB` 同一条既有约定），这里只用 `os.environ` 读一次原始值
-        做校验，不新增字段。取不到时按 `docker-compose.yml` 里
-        `${PG_MAX_CONNECTIONS:-120}` 的同一个默认值算——这正是"既有 `.env` 从没
-        写过这一项"的那个场景，恰恰是本条校验要拦住的：`db` 服务的实际
-        `max_connections` 同样会落到这个默认值，两边算的是同一个数。
+        （与 `POSTGRES_DB` 同一条既有约定），这里只读一次原始值做校验，不新增字段。
+        取不到时按 `docker-compose.yml` 里 `${PG_MAX_CONNECTIONS:-120}` 的同一个
+        默认值算——这正是"既有 `.env` 从没写过这一项"的那个场景，恰恰是本条校验
+        要拦住的：`db` 服务的实际 `max_connections` 同样会落到这个默认值，两边算的
+        是同一个数。
+
+        **必须先查 `os.environ`，查不到再回退读 `.env` 文件，两步都不能省。**
+        这条校验会在两种截然不同的进程里跑：`app` 容器内（生产常态，`.env` 文件
+        本身不在容器文件系统里——`ensure_target_partitions_for_migration.py` 的
+        `--db-name` 默认值同样因为这个原因改读 `os.environ` 而不是
+        `_selfhosted_pg_env.default_db_name()`），此时 `PG_MAX_CONNECTIONS` 由
+        compose 的 `env_file: .env` 注入成了真正的环境变量，只能从 `os.environ`
+        读到；以及宿主机 cron（`backup_selfhosted_pg.py` 明确要求"用 host cron
+        调用本脚本"，不在容器里跑），此时宿主机进程的 `os.environ` 通常没有
+        `PG_MAX_CONNECTIONS`（除非 cron 环境单独 export 过），但 `.env` 文件就在
+        当前工作目录。pydantic-settings 读 `.env` 只会填充 `Settings` 已声明的
+        字段，不会把未声明的 key 导出到 `os.environ`——若 `.env` 把
+        `PG_MAX_CONNECTIONS` 调高、池子四项也跟着调大到超过默认 120 的安全余量但
+        仍在新上限之内，只用 `os.environ` 读会在宿主机上读到"没设置"而回退到
+        120，按错误的旧上限误判超限，`import config` 直接抛错——`backup_selfhosted_pg.py`
+        因此永远跑不到 `main()`，每次 cron 触发的备份都会静默失败，而这份 `.env`
+        配置在容器里其实完全合法（Codex 审核 PR #84 第十八轮）。回退读的是
+        `_selfhosted_pg_env.default_db_name()` 同款 `python-dotenv`，不是重新发明
+        一套解析。
         """
         import os
 
@@ -258,7 +277,12 @@ class Settings(BaseSettings):
         if host != self.SELF_HOSTED_DB_HOST:
             return self
 
-        pg_max_connections = int(os.environ.get("PG_MAX_CONNECTIONS", "120"))
+        raw = os.environ.get("PG_MAX_CONNECTIONS")
+        if raw is None:
+            from dotenv import dotenv_values
+
+            raw = dotenv_values(".env").get("PG_MAX_CONNECTIONS")
+        pg_max_connections = int(raw or "120")
         total = (
             self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
             + self.DB_ASYNC_POOL_SIZE + self.DB_ASYNC_MAX_OVERFLOW
