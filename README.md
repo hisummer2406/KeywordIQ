@@ -79,6 +79,13 @@ nginx 托管前端 SPA 产物并反代 `/api` 到应用容器（`127.0.0.1:8000`
 # 首次部署
 git clone <project-repo> && cd KeywordIQ
 cp .env.example .env        # 填写生产配置：POSTGRES_*/PG_*、ADMIN_SECRET_KEY、OSS_*、ENABLED_SITES 等
+mkdir -p logs uploads       # 必须在第一次 docker compose run/up 之前建好：docker-compose.yml
+                             # 的 `./logs:/app/logs` 是 bind mount，源目录不存在时由 Docker
+                             # 自动创建，属主是运行 dockerd 的 root——之后 crontab 里非特权用户
+                             # 追加写 logs/backup.log 会因权限不足直接失败（Codex 审核 PR #84
+                             # 第二十二轮）。这里用当前用户先建好目录，之后 docker compose
+                             # 只会挂载已存在的目录、不会改属主；容器内进程是 root（Dockerfile
+                             # 未声明 USER），写入不受宿主机目录属主影响，不受此步骤影响。
 docker compose build app
 docker compose up -d db
 docker compose run --rm app alembic upgrade head   # db 不对宿主机暴露端口，迁移必须在容器内跑
