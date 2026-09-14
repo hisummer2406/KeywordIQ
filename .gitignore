@@ -22,6 +22,9 @@ logs/*
 # 忽略所有__pycache__目录
 __pycache__/
 uploads/
+# 自建 PostgreSQL 的 bind mount 数据目录（PGDATA_HOST_PATH 默认值），体量大且是二进制，
+# 不应入库——数据的持久性由备份方案负责，不是靠 git。
+pgdata/
 
 # docs/ 整个不入库：里面是 PRD、报价单一类的业务文档，以及 docs/table/ 下的真实搜索词
 # 报告样本。前者是二进制、改一次就在历史里留一份全量副本，且从不参与构建或测试；

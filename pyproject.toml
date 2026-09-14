@@ -21,11 +21,16 @@ dependencies = [
     "psutil>=5.9.0",  # monitoring.py 的系统指标采集
     "oss2>=2.19.1",
     "aliyun-python-sdk-sts>=3.1.3",
+    # 曾错放在 dev 分组：钉钉 SSO 客户端（app/auth/dingtalk_client.py）与独立站/竞对
+    # 抓取（app/table/competitor/store_service.py、store_fetcher.py）在运行时导入它，
+    # 不是仅测试用。`uv sync --no-dev`（Dockerfile 生产镜像的标准做法）此前会装出一个
+    # 启动即 ModuleNotFoundError 的镜像——本地开发一直用不带 --no-dev 的 uv sync，
+    # 这个分类错误因此从未在本地暴露过。
+    "httpx<0.28",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx<0.28",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.1",
