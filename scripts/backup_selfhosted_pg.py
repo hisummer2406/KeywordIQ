@@ -1,0 +1,192 @@
+"""自建 PostgreSQL 的定时备份：`pg_dump` 全量 → 上传到阿里云 OSS。
+
+替代阿里云 RDS 消失的自动备份能力（design.md 决策 6）。用 host cron 调用本脚本，
+不新增常驻的备份容器——一条定时任务，复用项目已有的 OSS 凭证与 `docker compose`。
+
+**备份是全量（schema + data），不是 `--data-only`。** 与迁移脚本
+（`migrate_to_selfhosted_pg.py`）刻意不同：迁移的目标库已经由 `alembic upgrade head`
+建过 schema，只需要搬数据；备份要能在“自建库整个没了”的最坏情况下独立重建，必须自带
+schema，不能依赖恢复时还记得先跑一遍迁移。
+
+**产物落在 db 容器内再复制出来，不直接挂宿主机目录写。** `docker compose exec` 里
+`pg_dump` 的 stdout 重定向到宿主机文件在 `-T`（禁用 TTY）下是可行的，但用
+`--file=` 让 pg_dump 自己在容器内写、再 `docker compose cp` 取出，能在复制失败时
+明确区分"备份没做出来"与"做出来了但没搬出容器"两种状态，用 stdout 重定向两者会
+糊在一起。
+
+用法（供 cron 调用）::
+
+    uv run python scripts/backup_selfhosted_pg.py [--compose-service db] [--keep-local]
+
+退出码非 0 表示备份失败，cron 里应接告警（哪怕只是发到已有的钉钉/邮件渠道）。
+
+恢复演练（tasks 5.3 已用真实 OSS 桶实测跑通，下面是验证过、可直接照抄的命令）::
+
+    # 0. 先停 app，再动数据库。`docker-compose.yml` 给 app 配的是
+    #    `restart: unless-stopped`——它此刻很可能还在跑，持续接受 API 请求、跑后台
+    #    轮询（导入队列、独立站/竞对拉取）。`pg_restore --clean` 是"先 DROP 已有对象、
+    #    再按备份重建"的多条语句序列，不是单一事务；app 若还在写，可能在 DROP 与
+    #    重建之间的窗口里持锁导致恢复失败，或恢复顺利完成但立刻被 app 的写入盖掉，
+    #    让恢复出来的库已经不代表备份那一刻的快照。
+    docker compose stop app
+
+    # 1. 从 OSS 下载备份文件（或用 docker compose cp 从别处复制进容器）
+    docker compose cp <本地备份文件> db:/tmp/restore.custom
+
+    # 2. 恢复。目标数据库须已存在（`db` 服务启动时由 POSTGRES_DB 自动建出），
+    #    因此**不要加 --create**——那会让 pg_restore 尝试 DROP/CREATE 自己当前
+    #    连接的数据库，报 "cannot drop the currently open database"（这条错误会被
+    #    pg_restore 当作可忽略继续跑完，实测确认最终数据仍然正确，但命令本身是错的，
+    #    生产恢复时不该让人对着一堆报错怀疑恢复有没有成功）。--clean --if-exists
+    #    会先清空已有对象再按备份重建，同一条命令对"空库"与"库里已有旧数据"都适用。
+    #    `--dbname amazon_search` 硬编码过默认库名，`POSTGRES_DB` 一旦改过就会连到一个
+    #    不存在的库而失败（Codex 审核 PR #84 第十轮）；改用 `sh -c` 在容器内展开
+    #    `$POSTGRES_DB`，读到的是 `db` 服务自己 `environment:` 里已经注入好的值。
+    docker compose exec -T db sh -c 'pg_restore --clean --if-exists \\
+        --username postgres --dbname "$POSTGRES_DB" /tmp/restore.custom'
+
+    # 3. 核对：关键表行数是否符合预期（至少确认 permission/role 等种子表非空，
+    #    证明 schema 与种子数据都恢复了，不只是恢复了个空壳）
+    docker compose exec -T db sh -c 'psql -U postgres -d "$POSTGRES_DB" \\
+        -tAc "SELECT count(*) FROM analysis.permission"'
+
+    # 4. 核对通过后才重新拉起 app——顺序反过来（先起 app 再核对）等于让应用在核对
+    #    结果出来之前就已经在读写这份还未确认完整的数据。
+    docker compose start app
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+from datetime import UTC, datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config import settings
+from scripts._selfhosted_pg_env import default_db_name
+
+# 与导入用的 imports/ 前缀区分，避免两类对象在同一前缀下混淆（design.md 决策 6）。
+_OSS_BACKUP_PREFIX = "backups/postgres"
+
+
+def _run(cmd: list[str]) -> None:
+    print(f"$ {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+
+
+def _dump_full(compose_service: str, db_name: str, dump_path_in_container: str) -> None:
+    """全量 dump（schema + data），落在容器内。"""
+    _run(
+        [
+            "docker", "compose", "exec", "-T", compose_service,
+            "pg_dump", "-Fc", f"--file={dump_path_in_container}",
+            "--username", "postgres", "--dbname", db_name,
+        ]
+    )
+
+
+def _copy_out(compose_service: str, local_path: Path, dump_path_in_container: str) -> None:
+    _run(
+        [
+            "docker", "compose", "cp",
+            f"{compose_service}:{dump_path_in_container}", str(local_path),
+        ]
+    )
+
+
+def _cleanup_container(compose_service: str, dump_path_in_container: str) -> None:
+    _run(["docker", "compose", "exec", "-T", compose_service, "rm", "-f", dump_path_in_container])
+
+
+def _upload(local_path: Path, object_key: str) -> None:
+    """复用项目已有的 OSS 凭证配置，不新增一套。
+
+    用 `oss2.resumable_upload` 而不是 `bucket.put_object_from_file`：后者是单次 PutObject，
+    OSS 单个 PutObject 请求的对象大小上限是 5 GiB——决策 5 里满窗数据约 50 GB，全量 dump
+    早晚会超过这个上限，届时 `put_object_from_file` 直接报错、当天备份整个失败。
+    `resumable_upload` 按文件大小自动在简单上传与分片上传之间切换，超过阈值即走分片
+    （`MultipartUpload`），单个分片仍在 5 GiB 以内，不受这个上限约束（Codex 审核 PR #84）。
+    """
+    import oss2
+
+    auth = oss2.Auth(settings.OSS_ACCESS_KEY_ID, settings.OSS_ACCESS_KEY_SECRET)
+    bucket = oss2.Bucket(auth, settings.OSS_ENDPOINT, settings.OSS_BUCKET)
+    oss2.resumable_upload(bucket, object_key, str(local_path))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--compose-service", default="db")
+    parser.add_argument("--db-name", default=default_db_name())
+    parser.add_argument(
+        "--keep-local", action="store_true", help="保留本地临时文件（默认用完即删）"
+    )
+    args = parser.parse_args()
+
+    if not settings.OSS_ENABLED:
+        print("错误：OSS_ENABLED=false，本脚本依赖 OSS 存放备份，先配好 OSS_* 再启用。")
+        return 1
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    object_key = f"{_OSS_BACKUP_PREFIX}/{timestamp}.custom"
+    # 容器内路径按本进程 PID 加区分：定时任务与人工临时跑重叠是这个脚本明确要支持的
+    # 用法（design.md 决策 6 只规定"用 host cron"，恢复演练文档里也照抄了手动调用）。
+    # 固定路径下两个并发调用会互相覆盖 pg_dump 产物，或一个的清理步骤在另一个还没
+    # `docker compose cp` 出来之前就把文件删了——PID 在同一台宿主机上并发进程间
+    # 唯一，不需要再引入跨进程锁（PR #84 Codex 第十二轮）。
+    dump_path_in_container = f"/tmp/keywordiq_backup_{os.getpid()}.custom"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_path = Path(tmpdir) / f"{timestamp}.custom"
+
+        # dump/复制这两步失败也必须清理容器内的产物——`pg_dump` 半途失败（磁盘满、连接
+        # 断开）会留下一个不完整的归档文件，`docker compose cp` 失败则是完整归档文件
+        # 复制失败；两种情况这个 PID 专属路径都不会再被本进程后续步骤引用，留在容器
+        # 可写层里。这个脚本本就设计成按 cron 定时反复失败重跑（比如 OSS 凭证配错），
+        # 不清理会让每次失败都新增一份数据库量级的归档文件，积累到把宿主机磁盘写满
+        # （Codex 审核 PR #84 第十四轮）。用 try/except 而非 try/finally 是为了让清理
+        # 本身的失败（容器已经不在了之类）不掩盖真正的备份失败原因——`raise` 原样传播
+        # 最初那个异常，清理失败只打印不上抛。
+        try:
+            print(f"\n在 {args.compose_service} 容器内执行 pg_dump（全量）...")
+            _dump_full(args.compose_service, args.db_name, dump_path_in_container)
+
+            print(f"\n把 dump 从容器复制到本地临时文件 {local_path} ...")
+            _copy_out(args.compose_service, local_path, dump_path_in_container)
+        except Exception:
+            print("\n备份失败，仍尝试清理容器内可能留下的临时文件...")
+            try:
+                _cleanup_container(args.compose_service, dump_path_in_container)
+            except subprocess.CalledProcessError:
+                print("清理容器内临时文件也失败了（可能是文件本就没生成），以原始备份错误为准。")
+            raise
+
+        print("\n清理容器内的临时文件...")
+        _cleanup_container(args.compose_service, dump_path_in_container)
+
+        size_mb = local_path.stat().st_size / 1024 / 1024
+        print(f"\n上传到 OSS: {settings.OSS_BUCKET}/{object_key}（{size_mb:.1f} MB）...")
+        _upload(local_path, object_key)
+
+        if args.keep_local:
+            kept = Path.cwd() / local_path.name
+            local_path.replace(kept)
+            print(f"\n本地副本保留在 {kept}")
+
+    print(f"\n备份完成：{object_key}")
+    print(
+        "保留策略建议直接用 OSS 生命周期规则管理该前缀的过期删除（阿里云控制台或 "
+        "oss2 的 put_bucket_lifecycle），不在本脚本里重新实现——这与备份本身是否成功"
+        "是两件独立的事，失败模式也不同（过期规则配错了了不起是备份留太久/太短，"
+        "备份本身失败则是真的没有可恢复的数据）。"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -167,16 +167,22 @@ class Settings(BaseSettings):
     #
     #     (同步池 + 同步溢出) × workers + (异步池 + 异步溢出) × workers
     #
-    # start.sh 固定 4 个 worker。两个引擎服务的负载性质完全不同，因此**分开配置**——
-    # 早先共用一组取值，使算式被系统性低估一半（文档长期写着 (池+溢出)×workers）。
+    # start.sh / Dockerfile 固定 4 个 worker。两个引擎服务的负载性质完全不同，因此
+    # **分开配置**——早先共用一组取值，使算式被系统性低估一半（文档长期写着
+    # (池+溢出)×workers）。
+    #
+    # 自 dockerize-selfhosted-infra 变更起，PostgreSQL 与应用同机部署（同一组
+    # 4 vCPU/8 GiB），取值直接采用此前记录的目标值而非"数据库在独立 RDS"时期的
+    # 20/10——PostgreSQL 进程本身现在也要在这组核心上跑，池子越大只会把
+    # "快速可见的失败（pool_timeout）"换成"整体缓慢劣化"。
     #
     # 同步引擎：导入的 COPY（psycopg2 原始游标，asyncpg 无等价接口）、导出的服务端
     # 游标、Alembic 迁移。都是低并发长事务。
-    DB_POOL_SIZE: int = 20  # 连接池大小
-    DB_MAX_OVERFLOW: int = 10  # 最大溢出连接
+    DB_POOL_SIZE: int = 2  # 连接池大小
+    DB_MAX_OVERFLOW: int = 3  # 最大溢出连接
     # 异步引擎：面向请求的查询与鉴权路径。
-    DB_ASYNC_POOL_SIZE: int = 20
-    DB_ASYNC_MAX_OVERFLOW: int = 10
+    DB_ASYNC_POOL_SIZE: int = 8
+    DB_ASYNC_MAX_OVERFLOW: int = 8
     # 超时与回收两个引擎共用——它们与负载性质无关，只与网络和 RDS 空闲策略有关。
     DB_POOL_TIMEOUT: int = 30  # 连接超时时间（秒）
     DB_POOL_RECYCLE: int = 1800  # 连接回收时间
@@ -199,6 +205,149 @@ class Settings(BaseSettings):
     # 取值 32：4 vCPU 上 bcrypt 是 CPU 密集，线程再多也只是排队；留出的余量是给
     # 导入这类"占着线程但不烧 CPU"的长任务的。
     THREAD_POOL_LIMIT: int = 32
+
+    # 自建部署（dockerize-selfhosted-infra）下 docker-compose.yml `db` 服务的实际
+    # 主机名与给 Netdata 监控角色/人工 psql/迁移与备份脚本预留的连接余量——
+    # `_validate_pool_within_self_hosted_pg_cap` 用。
+    SELF_HOSTED_DB_HOST: ClassVar[str] = "db"
+    POOL_WORKERS: ClassVar[int] = 4  # start.sh / Dockerfile 固定的 uvicorn worker 数
+    PG_CONNECTION_RESERVE: ClassVar[int] = 10
+
+    @model_validator(mode="after")
+    def _validate_pool_within_self_hosted_pg_cap(self) -> "Settings":
+        """自建部署下，连接池总量不得超过自建 PostgreSQL 的 max_connections。
+
+        独立 RDS（max_connections=400）时期，池子开得再大也顶不到硬顶，最多是把
+        "快速可见的失败（pool_timeout）"换成"整体缓慢劣化"。dockerize-selfhosted-infra
+        把数据库搬到同机 docker-compose 的 `db` 服务后，硬顶从 400 骤降到
+        `PG_MAX_CONNECTIONS`（`docker-compose.yml` 默认 120）——按 design.md
+        「Migration Plan」步骤 5，既有生产环境升级时只被要求切换
+        `DATABASE_URL`/`DATABASE_URL_ASYNC` 指向这个新库，若 `.env` 里旧的
+        `DB_POOL_SIZE=20`/`DB_MAX_OVERFLOW=10`/`DB_ASYNC_POOL_SIZE=20`/
+        `DB_ASYNC_MAX_OVERFLOW=10`（独立 RDS 时期的取值）原样留着、盖掉这里的新类
+        默认值 2/3/8/8，(20+10+20+10)×4=240 远超自建 Postgres 的 120 连接上限——
+        异步查询池单独就能在健康检查、导入、管理连接之前吃光全部配额，表现是
+        `too many clients already`，而不是连接池排队超时那种慢性劣化（Codex 审核
+        PR #84 第十五轮）。在启动期把这笔账算一遍，超出安全余量直接拒绝启动，
+        好过等生产真把连接吃光了才发现。
+
+        **池子总量校验只在 `DATABASE_URL` 的 host 恰好是 `db`（docker-compose.yml
+        里自建 `db` 服务的内部网络主机名，只有这条自建部署路径会用这个值）时才
+        启用**——本地开发直连 `localhost`、还留在 RDS 路线的部署直连
+        `*.rds.aliyuncs.com`，都不受自建 Postgres 这个连接数硬顶约束，套用这条校验
+        反而会把根本不受影响的部署方式一并挡在启动之外：本仓库自己的本地开发
+        `.env` 就还留着旧的 `DB_POOL_SIZE=20`/`DB_MAX_OVERFLOW=10`（指向
+        `localhost` 直连的本地 Postgres），若不按 host 收窄，这条校验会连本地
+        `uv run pytest`/`uv run uvicorn` 都启动不了。**但两个 URL 必须指向同一个
+        数据库这一条，不分部署形态、无条件校验**——分开配置 `DATABASE_URL`/
+        `DATABASE_URL_ASYNC` 是为了让同步/异步两个引擎各自有独立的池子大小，不是
+        为了让它们指向不同的库；本仓库任何一份 `.env.example` 场景（本地/自建/RDS）
+        两者都写的是同一个 host 与库名。
+
+        `PG_MAX_CONNECTIONS` 是 docker-compose.yml 专用变量，不进 `Settings`
+        （与 `POSTGRES_DB` 同一条既有约定），这里只读一次原始值做校验，不新增字段。
+        取不到时按 `docker-compose.yml` 里 `${PG_MAX_CONNECTIONS:-120}` 的同一个
+        默认值算——这正是"既有 `.env` 从没写过这一项"的那个场景，恰恰是本条校验
+        要拦住的：`db` 服务的实际 `max_connections` 同样会落到这个默认值，两边算的
+        是同一个数。
+
+        **必须先查 `os.environ`，查不到再回退读 `.env` 文件，两步都不能省。**
+        这条校验会在两种截然不同的进程里跑：`app` 容器内（生产常态，`.env` 文件
+        本身不在容器文件系统里——`ensure_target_partitions_for_migration.py` 的
+        `--db-name` 默认值同样因为这个原因改读 `os.environ` 而不是
+        `_selfhosted_pg_env.default_db_name()`），此时 `PG_MAX_CONNECTIONS` 由
+        compose 的 `env_file: .env` 注入成了真正的环境变量，只能从 `os.environ`
+        读到；以及宿主机 cron（`backup_selfhosted_pg.py` 明确要求"用 host cron
+        调用本脚本"，不在容器里跑），此时宿主机进程的 `os.environ` 通常没有
+        `PG_MAX_CONNECTIONS`（除非 cron 环境单独 export 过），但 `.env` 文件就在
+        当前工作目录。pydantic-settings 读 `.env` 只会填充 `Settings` 已声明的
+        字段，不会把未声明的 key 导出到 `os.environ`——若 `.env` 把
+        `PG_MAX_CONNECTIONS` 调高、池子四项也跟着调大到超过默认 120 的安全余量但
+        仍在新上限之内，只用 `os.environ` 读会在宿主机上读到"没设置"而回退到
+        120，按错误的旧上限误判超限，`import config` 直接抛错——`backup_selfhosted_pg.py`
+        因此永远跑不到 `main()`，每次 cron 触发的备份都会静默失败，而这份 `.env`
+        配置在容器里其实完全合法（Codex 审核 PR #84 第十八轮）。回退读的是
+        `_selfhosted_pg_env.default_db_name()` 同款 `python-dotenv`，不是重新发明
+        一套解析。
+        """
+        import os
+
+        from sqlalchemy.engine import make_url
+
+        try:
+            sync_url = make_url(self.DATABASE_URL)
+            async_url = make_url(self.DATABASE_URL_ASYNC)
+        except Exception:
+            return self
+
+        # 只看 DATABASE_URL 曾经放过一个真实缺口：切库若只改了 DATABASE_URL_ASYNC
+        # （请求/鉴权走的异步引擎），DATABASE_URL（导入/导出/迁移走的同步引擎）仍留
+        # 在旧库，这条校验会因为只查同步 host 直接在下面 return self，之后既不做
+        # 哨兵值/总量校验，应用还会在两个库上静默分裂——异步查询与鉴权读写新库，
+        # 同步的导入/导出/迁移仍读写旧库。`/health` 也发现不了这个问题：它对两个
+        # 引擎各自单独 `SELECT 1`，两个库分别都健康就都探活通过，看不出两边是不是
+        # 同一个库（Codex 审核 PR #84 第二十三轮）。两个 URL 本就该指向同一个数据库
+        # ——分开配置的是池子大小，不是目标库，本仓库任何一份 .env 示例（本地/自建/
+        # RDS）都没有让两者指向不同库的场景，故在任何部署形态下都无条件拒绝不一致，
+        # 不只在自建部署下才查。
+        sync_target = (sync_url.host, sync_url.port, sync_url.database)
+        async_target = (async_url.host, async_url.port, async_url.database)
+        if sync_target != async_target:
+            raise ValueError(
+                "DATABASE_URL 与 DATABASE_URL_ASYNC 指向了不同的数据库："
+                f"{sync_url.host}:{sync_url.port}/{sync_url.database} 对 "
+                f"{async_url.host}:{async_url.port}/{async_url.database}。"
+                "同步引擎（导入/导出/迁移）与异步引擎（请求/鉴权）必须指向同一个库，"
+                "否则应用会在两份数据上静默分裂，且 /health 各自探活各自的库看不出"
+                "这一点。切库时两个 URL 必须一起改。"
+            )
+
+        host = sync_url.host
+        if host != self.SELF_HOSTED_DB_HOST:
+            return self
+
+        # SQLAlchemy `QueuePool` 把 `pool_size<=0` 与 `max_overflow=-1` 当作"无界"
+        # 的哨兵值（分别表示不限制常驻连接数、不限制溢出连接数），不是"0 个"或
+        # "-1 个"。下面的算术按字面数值求和，这类哨兵值会被当成 0 或负数参与加总，
+        # 让实际会撑爆 `PG_MAX_CONNECTIONS` 的配置从这条校验里蒙混过去——必须先
+        # 拒绝这些取值，再进入总量算术（Codex 审核 PR #84 第二十一轮）。
+        if (
+            self.DB_POOL_SIZE <= 0
+            or self.DB_ASYNC_POOL_SIZE <= 0
+            or self.DB_MAX_OVERFLOW < 0
+            or self.DB_ASYNC_MAX_OVERFLOW < 0
+        ):
+            raise ValueError(
+                "自建部署下 DB_POOL_SIZE/DB_ASYNC_POOL_SIZE 必须为正数、"
+                "DB_MAX_OVERFLOW/DB_ASYNC_MAX_OVERFLOW 必须非负——SQLAlchemy 把 "
+                "pool_size<=0 或 max_overflow=-1 当作不限连接数的哨兵值，不是字面的 "
+                "0 或负数，套用这几个值会让连接池实际不受限，绕开本条校验想要保证的 "
+                "PG_MAX_CONNECTIONS 安全上限。"
+            )
+
+        raw = os.environ.get("PG_MAX_CONNECTIONS")
+        if raw is None:
+            from dotenv import dotenv_values
+
+            raw = dotenv_values(".env").get("PG_MAX_CONNECTIONS")
+        pg_max_connections = int(raw or "120")
+        total = (
+            self.DB_POOL_SIZE + self.DB_MAX_OVERFLOW
+            + self.DB_ASYNC_POOL_SIZE + self.DB_ASYNC_MAX_OVERFLOW
+        ) * self.POOL_WORKERS
+        safe_cap = pg_max_connections - self.PG_CONNECTION_RESERVE
+        if total > safe_cap:
+            raise ValueError(
+                f"连接池配置总量 {total}（(DB_POOL_SIZE+DB_MAX_OVERFLOW+"
+                f"DB_ASYNC_POOL_SIZE+DB_ASYNC_MAX_OVERFLOW)×{self.POOL_WORKERS} workers）"
+                f"超过自建 PostgreSQL 的安全上限 {safe_cap}"
+                f"（PG_MAX_CONNECTIONS={pg_max_connections} 减去为 Netdata 监控角色/"
+                "人工管理连接/迁移与备份脚本预留的余量）。多半是从独立 RDS 配置"
+                "（20/10/20/10）升级到自建部署时忘了同步调小这四项——按 .env.example "
+                "的新起点值（2/3/8/8）改小，或提高 PG_MAX_CONNECTIONS 并确认自建机器"
+                "有余量承受。"
+            )
+        return self
 
     @field_validator("ENABLED_SITES")
     @classmethod

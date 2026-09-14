@@ -1,0 +1,77 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    ports:
+      # 只绑本地回环——host nginx 反代到这个地址，不对公网暴露裸 uvicorn。
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # logs/ 与 uploads/ 挂宿主机目录，容器重建不丢日志与（OSS 未启用时的）本地文件。
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+
+  db:
+    image: postgres:15.8
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # 不写 ports——只在 compose 内部网络对 app/netdata 可达，不监听宿主机端口。
+    volumes:
+      # bind mount 而非具名卷：备份脚本、磁盘用量监控、灾难恢复都要能直接摸到文件，
+      # 不必先 `docker volume inspect` 找路径。见 design.md 决策 3。
+      - ${PGDATA_HOST_PATH:-./pgdata}:/var/lib/postgresql/data
+      # 只读监控角色，容器首次初始化（空数据目录）时执行一次，非首次启动会被跳过。
+      - ./docker/postgres-initdb:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-120}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-2GB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-16MB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  netdata:
+    image: netdata/netdata:stable
+    restart: unless-stopped
+    hostname: keywordiq-ecs
+    cap_add:
+      - SYS_PTRACE
+      # diskspace 采集器需要进宿主机的 mount namespace 才能正确 stat 各挂载点
+      # （PR #84 Codex 第十一轮复审）——只挂 /proc 和 /sys 给不了这个能力，见下方
+      # /host/root 挂载的注释。
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    # 只读挂载：Netdata 只需要读容器/系统状态，不需要写权限。PostgreSQL 采集配置是
+    # 唯一的例外——那是需要 Netdata 读的配置文件，不是它要写的状态。
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker/netdata/go.d/postgres.conf:/etc/netdata/go.d/postgres.conf:ro
+      # 只挂 /proc、/sys 拿到的是宿主机的挂载点*元数据*，diskspace 采集器要看到真实
+      # 磁盘用量还得对这些挂载点本身发起 statvfs()——那个调用作用于本容器自己的挂载
+      # 命名空间，看到的是容器 rootfs（很小的 overlay 层），不是宿主机真实磁盘
+      # （PR #84 Codex 第十一轮复审：只有这个挂载，"磁盘使用率超过 70% 触发扩容"
+      # 这条运维阈值永远不会被正确的数字命中）。挂真实宿主机根目录到 /host/root，
+      # `rslave` 保证宿主机后续新增的挂载点（如另接一块盘）也能被看见。
+      - /:/host/root:ro,rslave
+    ports:
+      # 只绑本地回环，不对公网暴露——面板默认无鉴权（design.md 决策 9）。远程查看走
+      # SSH 隧道（`ssh -L 19999:127.0.0.1:19999 <host>`）或加了 Basic Auth 的 nginx
+      # 反代，两者都在这个前提上工作：面板本身只在 127.0.0.1 可达。
+      - "127.0.0.1:19999:19999"

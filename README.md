@@ -71,15 +71,24 @@ pnpm dev                    # 默认 http://localhost:8000，/api 反代到后�
 
 ### 生产部署
 
-部署形态是**宿主机 nginx + uvicorn**（不使用容器）：nginx 托管前端 SPA 产物并反代 `/api`
-到本机 uvicorn（4 workers）。
+部署形态是 **Docker Compose（应用 + 自建 PostgreSQL + Netdata）+ host nginx**：
+nginx 托管前端 SPA 产物并反代 `/api` 到应用容器（`127.0.0.1:8000`），数据库与监控都是
+容器、不对公网暴露端口。详见 `openspec/changes/dockerize-selfhosted-infra/design.md`。
 
 ```bash
 # 首次部署
 git clone <project-repo> && cd KeywordIQ
-uv sync
-cp .env.example .env        # 填写生产配置：数据库、ADMIN_SECRET_KEY、OSS_*、ENABLED_SITES 等
-uv run alembic upgrade head
+cp .env.example .env        # 填写生产配置：POSTGRES_*/PG_*、ADMIN_SECRET_KEY、OSS_*、ENABLED_SITES 等
+mkdir -p logs uploads       # 必须在第一次 docker compose run/up 之前建好：docker-compose.yml
+                             # 的 `./logs:/app/logs` 是 bind mount，源目录不存在时由 Docker
+                             # 自动创建，属主是运行 dockerd 的 root——之后 crontab 里非特权用户
+                             # 追加写 logs/backup.log 会因权限不足直接失败（Codex 审核 PR #84
+                             # 第二十二轮）。这里用当前用户先建好目录，之后 docker compose
+                             # 只会挂载已存在的目录、不会改属主；容器内进程是 root（Dockerfile
+                             # 未声明 USER），写入不受宿主机目录属主影响，不受此步骤影响。
+docker compose build app
+docker compose up -d db
+docker compose run --rm app alembic upgrade head   # db 不对宿主机暴露端口，迁移必须在容器内跑
 cd frontend && pnpm install && pnpm build && cd ..
 rsync -a --delete frontend/dist/ /var/www/keywordiq/
 
@@ -87,14 +96,12 @@ sudo cp etc/keywordiq-nginx.conf /etc/nginx/sites-available/keywordiq
 sudo ln -sf /etc/nginx/sites-available/keywordiq /etc/nginx/sites-enabled/keywordiq
 sudo nginx -t && sudo systemctl reload nginx
 
-uv run python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次登录后请修改
-
-# 后端托管为 systemd 服务（崩溃自动拉起、开机自启；此前靠手动 start.sh）
-sudo cp etc/keywordiq.service /etc/systemd/system/keywordiq.service   # 按本机改 User 与路径
-sudo systemctl daemon-reload && sudo systemctl enable --now keywordiq
+docker compose run --rm app python scripts/seed_admin.py   # 初始管理员 admin / pwd123，首次登录后请修改
+docker compose up -d   # 拉起应用容器（restart: unless-stopped，崩溃/宿主机重启由 Docker 自动拉起，不需要额外的 systemd unit）
 ```
 
-后续发布用 `./deploy.sh`（`uv sync` → 迁移 → 构建前端 → 发布产物 → reload nginx）：
+后续发布用 `./deploy.sh`（构建镜像 → 容器内迁移 → 构建前端 → 发布产物 → reload nginx →
+切换容器到新镜像）：
 
 ```bash
 ./deploy.sh                  # 全量发布
@@ -102,9 +109,23 @@ sudo systemctl daemon-reload && sudo systemctl enable --now keywordiq
 ./deploy.sh --yes            # 不交互确认迁移（无人值守）
 ```
 
-> **后端重启**：装了 `etc/keywordiq.service` 后，`deploy.sh` 第 6 步会自动
-> `systemctl restart keywordiq`。未安装该 unit 时 deploy.sh 跳过后端重启并提示手动处理
-> （停掉旧 uvicorn 后跑 `./start.sh`）。
+> **备份**：自建 PostgreSQL 没有阿里云 RDS 那样的自动备份，用
+> `scripts/backup_selfhosted_pg.py` 定时执行，产物存到 OSS（脚本文档里同时给了验证过的
+> 恢复命令）。**这一步同样需要手动安装**（与上面的 nginx 反代配置一样，不随 `./deploy.sh`
+> 自动发生）——`crontab -e` 加一行，例如每天 03:00 执行一次全量备份：
+>
+> ```bash
+> 0 3 * * * cd /path/to/KeywordIQ && /home/<user>/.local/bin/uv run python scripts/backup_selfhosted_pg.py >> logs/backup.log 2>&1
+> ```
+>
+> **`uv` 必须写字面绝对路径，不能写 `$(command -v uv)`。** 后者是 cron **在触发这条
+> job 的那一刻**才求值的 shell 命令替换，而 cron 执行 job 时用的是它自己精简到几乎
+> 找不到任何用户程序的默认 `PATH`（这正是这里要绕开的问题）——`command -v uv` 在那个
+> `PATH` 下什么也找不到，展开成空字符串，实际执行的命令变成 `run python ...`，每次
+> 定时备份都会失败。写安装步骤前先在交互 shell 里跑一次 `command -v uv`，把它打印出的
+> 绝对路径（如 `/home/ubuntu/.local/bin/uv`）抄进这一行；`cd` 到项目目录是因为
+> `config.py` 的 `env_file=".env"` 按当前工作目录解析。
+> 保留策略见脚本文档，用 OSS 生命周期规则管理即可，不需要在这条 cron 里额外处理。
 >
 > **已知边界**：进程在导入中途被杀（崩溃/OOM/发布重启）时，该批次记录会停留在
 > `PROCESSING`（回收逻辑只覆盖 `UPLOADING`/`QUEUED`）。数据无损——事实写入在单事务里
