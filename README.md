@@ -108,11 +108,16 @@ docker compose up -d   # 拉起应用容器（restart: unless-stopped，崩溃/�
 > 自动发生）——`crontab -e` 加一行，例如每天 03:00 执行一次全量备份：
 >
 > ```bash
-> 0 3 * * * cd /path/to/KeywordIQ && $(command -v uv) run python scripts/backup_selfhosted_pg.py >> logs/backup.log 2>&1
+> 0 3 * * * cd /path/to/KeywordIQ && /home/<user>/.local/bin/uv run python scripts/backup_selfhosted_pg.py >> logs/backup.log 2>&1
 > ```
 >
-> `uv` 用绝对路径是因为 cron 默认 `PATH` 通常找不到它（不同于交互 shell 已把它加进
-> `PATH`）；`cd` 到项目目录是因为 `config.py` 的 `env_file=".env"` 按当前工作目录解析。
+> **`uv` 必须写字面绝对路径，不能写 `$(command -v uv)`。** 后者是 cron **在触发这条
+> job 的那一刻**才求值的 shell 命令替换，而 cron 执行 job 时用的是它自己精简到几乎
+> 找不到任何用户程序的默认 `PATH`（这正是这里要绕开的问题）——`command -v uv` 在那个
+> `PATH` 下什么也找不到，展开成空字符串，实际执行的命令变成 `run python ...`，每次
+> 定时备份都会失败。写安装步骤前先在交互 shell 里跑一次 `command -v uv`，把它打印出的
+> 绝对路径（如 `/home/ubuntu/.local/bin/uv`）抄进这一行；`cd` 到项目目录是因为
+> `config.py` 的 `env_file=".env"` 按当前工作目录解析。
 > 保留策略见脚本文档，用 OSS 生命周期规则管理即可，不需要在这条 cron 里额外处理。
 >
 > **已知边界**：进程在导入中途被杀（崩溃/OOM/发布重启）时，该批次记录会停留在
