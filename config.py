@@ -277,6 +277,25 @@ class Settings(BaseSettings):
         if host != self.SELF_HOSTED_DB_HOST:
             return self
 
+        # SQLAlchemy `QueuePool` 把 `pool_size<=0` 与 `max_overflow=-1` 当作"无界"
+        # 的哨兵值（分别表示不限制常驻连接数、不限制溢出连接数），不是"0 个"或
+        # "-1 个"。下面的算术按字面数值求和，这类哨兵值会被当成 0 或负数参与加总，
+        # 让实际会撑爆 `PG_MAX_CONNECTIONS` 的配置从这条校验里蒙混过去——必须先
+        # 拒绝这些取值，再进入总量算术（Codex 审核 PR #84 第二十一轮）。
+        if (
+            self.DB_POOL_SIZE <= 0
+            or self.DB_ASYNC_POOL_SIZE <= 0
+            or self.DB_MAX_OVERFLOW < 0
+            or self.DB_ASYNC_MAX_OVERFLOW < 0
+        ):
+            raise ValueError(
+                "自建部署下 DB_POOL_SIZE/DB_ASYNC_POOL_SIZE 必须为正数、"
+                "DB_MAX_OVERFLOW/DB_ASYNC_MAX_OVERFLOW 必须非负——SQLAlchemy 把 "
+                "pool_size<=0 或 max_overflow=-1 当作不限连接数的哨兵值，不是字面的 "
+                "0 或负数，套用这几个值会让连接池实际不受限，绕开本条校验想要保证的 "
+                "PG_MAX_CONNECTIONS 安全上限。"
+            )
+
         raw = os.environ.get("PG_MAX_CONNECTIONS")
         if raw is None:
             from dotenv import dotenv_values

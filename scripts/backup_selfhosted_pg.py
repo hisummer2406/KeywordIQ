@@ -22,6 +22,14 @@ schema，不能依赖恢复时还记得先跑一遍迁移。
 
 恢复演练（tasks 5.3 已用真实 OSS 桶实测跑通，下面是验证过、可直接照抄的命令）::
 
+    # 0. 先停 app，再动数据库。`docker-compose.yml` 给 app 配的是
+    #    `restart: unless-stopped`——它此刻很可能还在跑，持续接受 API 请求、跑后台
+    #    轮询（导入队列、独立站/竞对拉取）。`pg_restore --clean` 是"先 DROP 已有对象、
+    #    再按备份重建"的多条语句序列，不是单一事务；app 若还在写，可能在 DROP 与
+    #    重建之间的窗口里持锁导致恢复失败，或恢复顺利完成但立刻被 app 的写入盖掉，
+    #    让恢复出来的库已经不代表备份那一刻的快照。
+    docker compose stop app
+
     # 1. 从 OSS 下载备份文件（或用 docker compose cp 从别处复制进容器）
     docker compose cp <本地备份文件> db:/tmp/restore.custom
 
@@ -41,6 +49,10 @@ schema，不能依赖恢复时还记得先跑一遍迁移。
     #    证明 schema 与种子数据都恢复了，不只是恢复了个空壳）
     docker compose exec -T db sh -c 'psql -U postgres -d "$POSTGRES_DB" \\
         -tAc "SELECT count(*) FROM analysis.permission"'
+
+    # 4. 核对通过后才重新拉起 app——顺序反过来（先起 app 再核对）等于让应用在核对
+    #    结果出来之前就已经在读写这份还未确认完整的数据。
+    docker compose start app
 """
 
 from __future__ import annotations

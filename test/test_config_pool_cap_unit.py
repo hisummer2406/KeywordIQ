@@ -103,6 +103,34 @@ def test_宿主机cron进程读不到os_environ时回退读env文件里调高的
     assert settings.DB_POOL_SIZE == 20
 
 
+@pytest.mark.parametrize(
+    "sentinel_pool",
+    [
+        {**_NEW_SELF_HOSTED_POOL, "DB_POOL_SIZE": 0},
+        {**_NEW_SELF_HOSTED_POOL, "DB_ASYNC_POOL_SIZE": 0},
+        {**_NEW_SELF_HOSTED_POOL, "DB_MAX_OVERFLOW": -1},
+        {**_NEW_SELF_HOSTED_POOL, "DB_ASYNC_MAX_OVERFLOW": -1},
+    ],
+)
+def test_host为db时拒绝SQLAlchemy无界池哨兵值(sentinel_pool):
+    """`pool_size<=0`/`max_overflow=-1` 是 SQLAlchemy `QueuePool` 表示"不限制"的
+    哨兵值，不是字面的 0 或负数；按算术字面求和会把它们当成 0 或负数计入总量，
+    让实际不受限的连接池从总量校验里蒙混过去（Codex 审核 PR #84 第二十一轮）。
+    这几组取值单独看总量算式都不超 110，必须靠专门的哨兵值校验挡住，不能指望
+    总量算式本身发现问题。"""
+    with pytest.raises(ValueError, match="不限连接数的哨兵值"):
+        _settings(host="db", pool=sentinel_pool)
+
+
+def test_host不是db时不受哨兵值校验约束():
+    """本地开发/RDS 路线不受自建 Postgres 连接数硬顶约束，同样不该被这条哨兵值
+    校验挡住——它是自建部署那条校验的一部分，不是独立生效的通用规则。"""
+    settings = _settings(
+        host="localhost", pool={**_NEW_SELF_HOSTED_POOL, "DB_MAX_OVERFLOW": -1}
+    )
+    assert settings.DB_MAX_OVERFLOW == -1
+
+
 def test_os_environ与env文件都没有时仍回退到120默认值():
     """两个来源都取不到 `PG_MAX_CONNECTIONS` 时（`.env` 里从没写过这一项），
     不能让 `dotenv_values(...).get(...)` 返回 `None` 时的 `int(None)` 直接炸——
