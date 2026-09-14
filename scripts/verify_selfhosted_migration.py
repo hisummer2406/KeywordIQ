@@ -3,17 +3,35 @@
 迁移路径见 ``migrate_to_selfhosted_pg.py``。这个脚本单独成文件，是因为核对不只在
 迁移那一刻用一次——切换 `.env` 指向自建库之后、释放 RDS 之前的整个观察窗口内，
 都可能需要重新核对（见 openspec/changes/dockerize-selfhosted-infra/design.md
-「Migration Plan」第 4/6 步）。
+「Migration Plan」第 4/6 步），但两次核对的判据不同，**不能共用同一条比较逻辑**。
 
 核对的是**行数与最新期次**，不是逐行 diff——`fact_daily`/`fact_weekly` 满窗上亿行，
 逐行比较代价过高；行数一致 + 最新 `report_date`/主键一致，足以发现"迁移中途中断、
 少拷贝了几个分区"这类真实会发生的问题。
 
-用法::
+**两种用法，判据不同**：
 
-    uv run python scripts/verify_selfhosted_migration.py --source-url <RDS DATABASE_URL>
+- **迁移前的一次性门禁**（Migration Plan 第 4 步，切换 `.env` 之前）：默认模式，
+  要求源库与目标库**严格相等**。此刻目标库还没开始服务，任何差异都意味着搬迁本身
+  不完整。
 
-退出码非 0 表示有表核对不一致，可直接用于迁移流程的门禁。
+      uv run python scripts/verify_selfhosted_migration.py --source-url <RDS DATABASE_URL>
+
+- **观察窗口内的重新核对**（Migration Plan 第 6 步，切换 `.env` 之后、释放 RDS
+  之前）：加 `--observation-window`。这个窗口里 RDS 已被
+  `migrate_to_selfhosted_pg.py` 的 `_quiesce_source` 持久切为拒绝新写、不再变化，
+  天然是一份冻结的迁移基准；而自建库在正常服务、行数与最新期次只会比基准更多、
+  更新，不会再跟基准完全相等。若仍按严格相等比较，观察窗口内第一条真实的用户/
+  竞对/导入写入就会让核对报"不一致"，而这正是观察窗口应该发生、也应该放行的事——
+  把它跟"搬迁不完整"混为一谈会让这个工具在它自称支持的场景下反而没法用（Codex
+  审核 PR #84 第二十三轮）。这个模式改成校验目标库**不低于**基准（行数
+  `target ≥ source`，最新期次 `target ≥ source` 或源库当时本就为空），不要求相等。
+
+      uv run python scripts/verify_selfhosted_migration.py --source-url <RDS DATABASE_URL> \\
+          --observation-window
+
+退出码非 0 表示有表核对不一致（或观察窗口模式下目标库反而落后于冻结的源库快照），
+可直接用于迁移流程的门禁。
 """
 
 from __future__ import annotations
@@ -115,6 +133,35 @@ def _target_counts(compose_service: str, db_name: str) -> dict[str, tuple[int, s
     return results
 
 
+def _latest_not_behind(source_latest: str | None, target_latest: str | None) -> bool:
+    """观察窗口模式下判断目标库的最新期次没有落后于冻结的源库快照。
+
+    `report_date`/`anchor_date` 都是 ISO 格式日期字符串，按字典序比较即按时间序
+    比较，与既有的相等比较用的是同一种字符串。源库当时为空（`None`）时目标库
+    此后长出任何数据都不算落后；源库当时有数据而目标库现在反而是空的，才是真正
+    的倒退（不应该发生——除非搬迁本身就不完整），必须拦住。
+    """
+    if source_latest is None:
+        return True
+    if target_latest is None:
+        return False
+    return target_latest >= source_latest
+
+
+def _table_ok(
+    s_count: int,
+    s_latest: str | None,
+    t_count: int,
+    t_latest: str | None,
+    *,
+    observation_window: bool,
+) -> bool:
+    """单张表的核对判据，抽成纯函数方便直接单测（main() 只负责取数与打印）。"""
+    if observation_window:
+        return t_count >= s_count and _latest_not_behind(s_latest, t_latest)
+    return s_count == t_count and s_latest == t_latest
+
+
 def _psql_scalar(compose_service: str, db_name: str, sql: str) -> str:
     proc = subprocess.run(
         [
@@ -137,6 +184,15 @@ def main() -> int:
         "--db-name", default=default_db_name(),
         help="自建库里的数据库名，默认跟 .env 的 POSTGRES_DB 走",
     )
+    parser.add_argument(
+        "--observation-window", action="store_true",
+        help=(
+            "切换 .env 后、释放 RDS 前的观察窗口内重新核对时加上此参数：源库（RDS）"
+            "此时已被 migrate_to_selfhosted_pg.py 持久切为拒绝新写，是冻结的迁移"
+            "基准；目标库（自建）在正常服务，行数与最新期次只会比基准更多/更新。"
+            "默认（迁移前的一次性核对门禁）要求严格相等。"
+        ),
+    )
     args = parser.parse_args()
 
     print("核对源库（RDS）...")
@@ -148,7 +204,10 @@ def main() -> int:
     for table, _ in _TABLES_WITH_LATEST_COL:
         s_count, s_latest = source[table]
         t_count, t_latest = target[table]
-        ok = s_count == t_count and s_latest == t_latest
+        ok = _table_ok(
+            s_count, s_latest, t_count, t_latest,
+            observation_window=args.observation_window,
+        )
         status = "OK" if ok else "MISMATCH"
         print(
             f"  [{status}] {table}: 源 count={s_count} latest={s_latest} | "
@@ -158,10 +217,14 @@ def main() -> int:
             mismatches.append(table)
 
     if mismatches:
-        print(f"\n核对不通过：{mismatches} 与源库不一致，不应切换 DATABASE_URL。")
+        if args.observation_window:
+            print(f"\n核对不通过：{mismatches} 落后于冻结的源库快照，需排查后再继续观察窗口。")
+        else:
+            print(f"\n核对不通过：{mismatches} 与源库不一致，不应切换 DATABASE_URL。")
         return 1
 
-    print("\n核对通过：关键表行数与最新期次均一致。")
+    verdict = "均不落后于迁移基准" if args.observation_window else "均一致"
+    print(f"\n核对通过：关键表行数与最新期次{verdict}。")
     return 0
 
 
