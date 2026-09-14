@@ -138,3 +138,38 @@ def test_os_environ与env文件都没有时仍回退到120默认值():
     with patch("dotenv.dotenv_values", return_value={}):
         with pytest.raises(ValueError, match="超过自建 PostgreSQL 的安全上限"):
             _settings(host="db", pool=_LEGACY_RDS_POOL)  # 240 > 120-10=110，仍应拒绝
+
+
+def test_只改DATABASE_URL_ASYNC指向自建库而DATABASE_URL仍留在RDS时启动拒绝():
+    """切库若只改了一半——这是本条校验要挡住的真实场景。若不拒绝，池子总量校验
+    会因为只看 `DATABASE_URL` 的 host（仍是 RDS，非 `db`）直接 return self 放行，
+    异步引擎实际已经指向自建库却完全不受连接数上限约束；`/health` 对两个引擎各自
+    `SELECT 1`，两边分别健康就都探活通过，同样发现不了这个分裂（Codex 审核 PR #84
+    第二十三轮）。"""
+    with pytest.raises(ValueError, match="指向了不同的数据库"):
+        Settings(
+            DATABASE_URL=(
+                "postgresql://postgres:pwd123@"
+                "pgm-bp1pj6573n99v582po.pg.rds.aliyuncs.com/amazon_search"
+            ),
+            DATABASE_URL_ASYNC="postgresql+asyncpg://postgres:pwd123@db/amazon_search",
+            **_LEGACY_RDS_POOL,
+        )
+
+
+def test_同步与异步URL的host相同但库名不同时启动拒绝():
+    """host 一致不代表指向同一份数据——库名也必须一致，否则两个引擎各自读写
+    的是同一台 Postgres 实例上互不相关的两个数据库。"""
+    with pytest.raises(ValueError, match="指向了不同的数据库"):
+        Settings(
+            DATABASE_URL="postgresql://postgres:pwd123@db/amazon_search",
+            DATABASE_URL_ASYNC="postgresql+asyncpg://postgres:pwd123@db/other_db",
+            **_NEW_SELF_HOSTED_POOL,
+        )
+
+
+def test_同步与异步URL一致且host不是db时不受此校验影响():
+    """两个 URL 一致是这条新校验唯一放行的条件；host 是否为 `db` 只影响后面的池子
+    总量校验，两者独立。"""
+    settings = _settings(host="localhost", pool=_LEGACY_RDS_POOL)
+    assert settings.DATABASE_URL.endswith("localhost/amazon_search")

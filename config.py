@@ -231,14 +231,18 @@ class Settings(BaseSettings):
         PR #84 第十五轮）。在启动期把这笔账算一遍，超出安全余量直接拒绝启动，
         好过等生产真把连接吃光了才发现。
 
-        **只在 `DATABASE_URL` 的 host 恰好是 `db`（docker-compose.yml 里自建 `db`
-        服务的内部网络主机名，只有这条自建部署路径会用这个值）时才启用这条校验**——
-        本地开发直连 `localhost`、还留在 RDS 路线的部署直连
+        **池子总量校验只在 `DATABASE_URL` 的 host 恰好是 `db`（docker-compose.yml
+        里自建 `db` 服务的内部网络主机名，只有这条自建部署路径会用这个值）时才
+        启用**——本地开发直连 `localhost`、还留在 RDS 路线的部署直连
         `*.rds.aliyuncs.com`，都不受自建 Postgres 这个连接数硬顶约束，套用这条校验
         反而会把根本不受影响的部署方式一并挡在启动之外：本仓库自己的本地开发
         `.env` 就还留着旧的 `DB_POOL_SIZE=20`/`DB_MAX_OVERFLOW=10`（指向
         `localhost` 直连的本地 Postgres），若不按 host 收窄，这条校验会连本地
-        `uv run pytest`/`uv run uvicorn` 都启动不了。
+        `uv run pytest`/`uv run uvicorn` 都启动不了。**但两个 URL 必须指向同一个
+        数据库这一条，不分部署形态、无条件校验**——分开配置 `DATABASE_URL`/
+        `DATABASE_URL_ASYNC` 是为了让同步/异步两个引擎各自有独立的池子大小，不是
+        为了让它们指向不同的库；本仓库任何一份 `.env.example` 场景（本地/自建/RDS）
+        两者都写的是同一个 host 与库名。
 
         `PG_MAX_CONNECTIONS` 是 docker-compose.yml 专用变量，不进 `Settings`
         （与 `POSTGRES_DB` 同一条既有约定），这里只读一次原始值做校验，不新增字段。
@@ -271,9 +275,34 @@ class Settings(BaseSettings):
         from sqlalchemy.engine import make_url
 
         try:
-            host = make_url(self.DATABASE_URL).host
+            sync_url = make_url(self.DATABASE_URL)
+            async_url = make_url(self.DATABASE_URL_ASYNC)
         except Exception:
             return self
+
+        # 只看 DATABASE_URL 曾经放过一个真实缺口：切库若只改了 DATABASE_URL_ASYNC
+        # （请求/鉴权走的异步引擎），DATABASE_URL（导入/导出/迁移走的同步引擎）仍留
+        # 在旧库，这条校验会因为只查同步 host 直接在下面 return self，之后既不做
+        # 哨兵值/总量校验，应用还会在两个库上静默分裂——异步查询与鉴权读写新库，
+        # 同步的导入/导出/迁移仍读写旧库。`/health` 也发现不了这个问题：它对两个
+        # 引擎各自单独 `SELECT 1`，两个库分别都健康就都探活通过，看不出两边是不是
+        # 同一个库（Codex 审核 PR #84 第二十三轮）。两个 URL 本就该指向同一个数据库
+        # ——分开配置的是池子大小，不是目标库，本仓库任何一份 .env 示例（本地/自建/
+        # RDS）都没有让两者指向不同库的场景，故在任何部署形态下都无条件拒绝不一致，
+        # 不只在自建部署下才查。
+        sync_target = (sync_url.host, sync_url.port, sync_url.database)
+        async_target = (async_url.host, async_url.port, async_url.database)
+        if sync_target != async_target:
+            raise ValueError(
+                "DATABASE_URL 与 DATABASE_URL_ASYNC 指向了不同的数据库："
+                f"{sync_url.host}:{sync_url.port}/{sync_url.database} 对 "
+                f"{async_url.host}:{async_url.port}/{async_url.database}。"
+                "同步引擎（导入/导出/迁移）与异步引擎（请求/鉴权）必须指向同一个库，"
+                "否则应用会在两份数据上静默分裂，且 /health 各自探活各自的库看不出"
+                "这一点。切库时两个 URL 必须一起改。"
+            )
+
+        host = sync_url.host
         if host != self.SELF_HOSTED_DB_HOST:
             return self
 
