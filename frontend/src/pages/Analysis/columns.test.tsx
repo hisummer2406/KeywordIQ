@@ -361,16 +361,20 @@ describe('搜索趋势列的详情入口', () => {
 });
 
 // --------------------------------------------------------------------------
-// 操作列的「历史走势」文字入口（issue #94）：可发现性入口，打开同一个详情面板
+// 操作列的「历史走势」图标入口（issue #94）：可发现性入口，打开同一个详情面板
+//
+// 用图标而非文字：与既有 Google/Meta/TikTok 三个外链入口同一套视觉语言（纵向堆叠的
+// 图标 + title 悬浮提示），文字标签会在这一窄列里破坏一致性。可访问的文案落在
+// title/aria-label 上，不落在可见文本上。
 // --------------------------------------------------------------------------
 
-describe('操作列的「历史走势」文字入口', () => {
-  it('传入 onOpenTrend 时操作列渲染历史走势文字入口，点击触发同一个回调', () => {
+describe('操作列的「历史走势」图标入口', () => {
+  it('传入 onOpenTrend 时操作列渲染历史走势图标，点击触发同一个回调', () => {
     const onOpenTrend = vi.fn();
     const col: any = buildColumns('DAY', undefined, onOpenTrend).find((c) => c.title === '操作');
-    const { getByText } = render(<>{col.render(null, listedRow)}</>);
+    const { getByLabelText } = render(<>{col.render(null, listedRow)}</>);
 
-    fireEvent.click(getByText('历史走势'));
+    fireEvent.click(getByLabelText('查看历史走势'));
     expect(onOpenTrend).toHaveBeenCalledWith(listedRow);
   });
 
@@ -378,26 +382,27 @@ describe('操作列的「历史走势」文字入口', () => {
     const onOpenTrend = vi.fn();
     const emptyTrendRow = { ...listedRow, trend: [], trend_dates: [] };
     const col: any = buildColumns('DAY', undefined, onOpenTrend).find((c) => c.title === '操作');
-    const { getByText } = render(<>{col.render(null, emptyTrendRow)}</>);
+    const { getByLabelText } = render(<>{col.render(null, emptyTrendRow)}</>);
 
-    fireEvent.click(getByText('历史走势'));
+    fireEvent.click(getByLabelText('查看历史走势'));
     expect(onOpenTrend).toHaveBeenCalledWith(emptyTrendRow);
   });
 
   it('拿不到站点码、但有 onOpenTrend 时仍渲染历史走势入口（不依赖外链是否可用）', () => {
     const onOpenTrend = vi.fn();
     const col: any = buildColumns('DAY', 'amazon.com', onOpenTrend).find((c) => c.title === '操作');
-    const { getByText, queryByText } = render(<>{col.render(null, listedRow)}</>);
+    const { getByLabelText, container } = render(<>{col.render(null, listedRow)}</>);
 
-    expect(getByText('历史走势')).toBeInTheDocument();
-    // 没有 siteCode，三条外链入口仍应各自判空
-    expect(queryByText('历史走势')?.closest('span')?.querySelectorAll('a[target="_blank"]').length).toBe(0);
+    expect(getByLabelText('查看历史走势')).toBeInTheDocument();
+    // 没有 siteCode，三条外链入口仍应各自判空——只剩历史走势这一条链接
+    expect(container.querySelectorAll('a[target="_blank"]').length).toBe(0);
+    expect(container.querySelectorAll('a').length).toBe(1);
   });
 
   it('不传 onOpenTrend 时不渲染历史走势入口，行为与既有外链入口一致', () => {
     const col: any = buildColumns('DAY', 'amazon.com', undefined, 'US').find((c) => c.title === '操作');
-    const { queryByText } = render(<>{col.render(null, listedRow)}</>);
+    const { queryByLabelText } = render(<>{col.render(null, listedRow)}</>);
 
-    expect(queryByText('历史走势')).toBeNull();
+    expect(queryByLabelText('查看历史走势')).toBeNull();
   });
 });
