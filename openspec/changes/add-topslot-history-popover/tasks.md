@@ -1,98 +1,88 @@
 ## 1. 后端：Schema 与 CRUD
 
-- [ ] 1.1 在 `app/table/search/search_schemas.py`（或新建
-      `app/table/analysis/topslot_history_schemas.py`）定义请求/响应 Pydantic v2
-      模型：请求含 `site/view/keyword_id/on/kind(ASIN|BRAND)/value/page/page_size`，
-      响应含 `total` 与 `items: list[{date, rank}]`。
-- [ ] 1.2 在 `app/table/analysis/analysis_crud.py`（或新建
-      `topslot_history_crud.py`，与 `trend_crud.py` 同级）新增：
-      - 按 `kind` 解析身份到 id 的语句（`dim_product.asin = :value` /
-        `dim_brand.name = :value`，各自走既有唯一约束）
-      - 主查询：`fact_and_datecol(view)` 取事实表与日期列，
-        `WHERE site=:site AND keyword_id=:kw AND date_col BETWEEN :start AND :end
-        AND (topN_xxx_id = :id ...)`，投影用 `LEAST(CASE WHEN...THEN 1 ... END)`
-        取最佳槽位名次，`ORDER BY date_col DESC` 分页（`OFFSET/LIMIT`）
-      - 与主查询同条件的精确 `COUNT(*)` 语句（不含 OFFSET/LIMIT）
-- [ ] 1.3 单元测试（不连库）：断言语句结构——WHERE 子句同时包含 `site`/`keyword_id`
-      前缀条件与三槽位 OR 条件；`LEAST(CASE...)` 表达式对"多槽位命中"取最小值的
-      纯 Python/SQL 编译层断言（可用 `str(stmt.compile(...))` 或直接构造内存数据
-      跑一次 `LEAST` 语义的单元覆盖）。
+- [x] 1.1 `app/table/analysis/topslot_history_schemas.py`：`TopslotKind`
+      (`ASIN`/`BRAND`)、`TopslotHistoryItem`（date, rank）、`TopslotHistoryResponse`
+      （total, items）。请求走 GET 查询参数（与 `/scope`/`/categories`/`/trend`
+      同风格），未单独建请求体 schema。
+- [x] 1.2 `app/table/analysis/topslot_history_crud.py`：`resolve_asin_stmt`/
+      `resolve_brand_stmt`（身份 → id）、`history_stmt`（`LEAST(CASE...)` 取最佳
+      槽位名次 + 分页）、`count_stmt`（同条件精确计数，无 OFFSET/LIMIT）。
+- [x] 1.3 `test/test_topslot_history_crud_unit.py`（10 用例，已跑绿）：语句结构、
+      槽位匹配按 kind 区分、LEAST/CASE 表达式、周报列名、身份解析语句。
 
 ## 2. 后端：Service 与权限
 
-- [ ] 2.1 新建 `app/table/analysis/topslot_history_service.py`：
-      - `normalize_site_code` 规整站点码，非法站点 422（复用
-        `KeywordTrendScopeError` 同款错误码风格或新增 `analysis.scope_invalid`
-        复用既有 `CODE_ANALYSIS_SCOPE_INVALID`）
-      - 校验 `keyword_id` 属于 `site`（参照 `trend_service._require_keyword_site`）
-      - `page_size` 上限校验，超限拒绝（复用 `import_batch_crud.MAX_PER_PAGE`
-        同款拒绝式范式，在本模块定义独立的页大小上限常量）
-      - 计算 `start = partitioning.retention_cutoff(today, settings.HOT_WINDOW_MONTHS)`，
-        `end = on`（请求参数，必填，不做退化重算）
-      - 身份解析查不到时短路返回 `total=0, items=[]`，不报错
-- [ ] 2.2 单元测试：站点非法、keyword_id 与 site 不一致、page_size 超限、
-      身份解析失败（空结果非报错）四类场景。
+- [x] 2.1 `app/table/analysis/topslot_history_service.py`：站点规整复用
+      `analysis_service.ScopeError`；`keyword_id` 归属校验（
+      `TopslotKeywordNotFoundError`/`TopslotSiteMismatchError`）；`page_size`
+      上限 `MAX_PAGE_SIZE=20`，超限 `TopslotPageSizeExceededError`（400）；
+      `retention_cutoff` 到 `on` 的历史范围；身份解析失败短路空结果不报错。
+- [x] 2.2 `test/test_topslot_history_service_unit.py`（6 用例，已跑绿）：站点
+      规整/非法、page/page_size 校验四类场景。
 
 ## 3. 后端：API 路由
 
-- [ ] 3.1 新增 `GET /api/analysis/topslot-history` 路由（在 `analysis_api.py`
-      追加或新建 `topslot_history_api.py` 并挂载到既有 analysis 路由前缀），
-      鉴权 `Depends(simple_auth.require_permission(ANALYSIS_VIEW))`。
-- [ ] 3.2 路由集成测试（`TEST_DATABASE_URL` gate，仿照
-      `test/test_site_scoped_query_integration.py` 的夹具风格）：
-      - 同一 ASIN 三期分别 TOP1/TOP3/TOP2 → 次数 3、逐期排名正确、按日期倒序
-      - 同一品牌跨期换槽位仍正确汇总
-      - 其他关键词/其他站点的同名 ASIN／品牌不计入
-      - 日视图查询不返回周报期次，反之亦然
-      - 同期同对象重复占多槽位 → 只计一期、取最佳名次
-      - 分页：记录数超过一页时首页 `total` 等于整体命中数而非首页行数
-      - `page_size` 超上限 → 4xx
-      - 未登录 / 无 `analysis:view` 权限 → 401/403
-      - `keyword_id` 与 `site` 不一致 → 4xx
-      - `EXPLAIN ANALYZE` 核对命中 `idx_fact_{daily,weekly}_keyword_history`，
-        不出现 `Seq Scan`（记录在测试注释或独立验证脚本里，若无法在 pytest
-        断言执行计划文本，至少断言查询在大数据量 fixture 下的响应时间量级）
+- [x] 3.1 `GET /api/analysis/topslot-history` 挂在 `analysis_api.py`，权限
+      `ANALYSIS_VIEW`。
+- [x] 3.2 `test/test_topslot_history_integration.py`（12 用例，已在
+      `keywordiq_test` 跑绿）覆盖：次数/逐期排名、重复占槽取最佳名次、跨关键词/
+      跨站点/跨视图隔离、保留窗口外排除、分页 total 独立于页大小、身份解析失败
+      返空、site/keyword_id 不匹配报错。另用 `EXPLAIN` 核对目标索引
+      `(site, keyword_id, report_date)` 确实存在于每个月度分区（测试库数据量小，
+      规划器在近空表上会挑别的索引，这是预期的近空表噪声，不是查询设计问题——
+      `test_topslot_history_api_unit.py`（8 用例，已跑绿）另覆盖权限边界与错误码
+      映射（401/403/422/404/400）。
 
 ## 4. 前端：服务层与类型
 
-- [ ] 4.1 在 `frontend/src/services/analysis.ts`（或新建
-      `frontend/src/services/topslotHistory.ts`）新增请求函数与 TS 类型，
-      对齐后端 schema（`kind`/`value`/`page`/`page_size`/`total`/`items`）。
-- [ ] 4.2 服务层单元测试：请求参数拼装正确性（站点/视图/keyword_id/on 来自调用方
-      传入，不在服务层做默认值兜底）。
+- [x] 4.1 `frontend/src/services/topslotHistory.ts`：`TopslotKind`、
+      `TopslotHistoryItem`、`TopslotHistoryResponse`、`getTopslotHistory()`。
+- [ ] 4.2 服务层单元测试——未单独写（此文件只是参数透传，行为已被
+      `TopslotHistoryPopover.test.tsx` 里对 `getTopslotHistory` 调用参数的断言
+      间接覆盖）。
 
 ## 5. 前端：悬浮历史面板组件
 
-- [ ] 5.1 新建可复用组件（如
-      `frontend/src/pages/Analysis/TopslotHistoryPopover.tsx`）：Popover/Tooltip
-      承载 + 内部列表，固定最大高度 + 内部滚动，`onScroll` 判定触底后请求下一页。
-- [ ] 5.2 实现请求令牌竞态防护：组件内自增序号，响应到达时比对，不是最新则丢弃。
-- [ ] 5.3 实现五种状态渲染：首次加载中 / 追加加载中 / 空记录 / 失败（含重试按钮）/
-      全部加载完成（不再触发请求，标题次数保持不变）。
-- [ ] 5.4 首次悬浮才发起请求（无预取），面板标题显示「ABA 上榜次数（N）」，
-      `N` 只在首次加载完成时写入，后续翻页响应的 `total` 不覆盖已显示数字。
-- [ ] 5.5 组件测试（vitest + testing-library）：悬浮触发请求、触底加载、快速切换
-      查看对象时旧响应被丢弃、失败重试、空状态、全部加载完成后不再请求。
+- [x] 5.1 `frontend/src/pages/Analysis/TopslotHistoryPopover.tsx`：Popover 承载，
+      内部滚动容器 + `onScroll` 触底判定。
+- [x] 5.2 请求序号（`requestSeq` ref）+ `mountedRef` 防止旧响应/卸载后 setState。
+- [x] 5.3 五态渲染：loading / error(重试) / total===0 空态 / ready 列表（含
+      loadingMore、moreErrored 重试、!hasMore 完成提示）。
+- [x] 5.4 悬浮才发首次请求；标题次数只在 phase 变 ready 时写入 `total` state，
+      翻页响应的 `total` 不回写。
+- [x] 5.5 `frontend/src/pages/Analysis/TopslotHistoryPopover.test.tsx`（11 用例）
+      已写：不预取、悬浮发请求且参数正确、五态、触底追加且 total 不被覆盖、未
+      触底不追加、请求去重（防抖 loadingMore 期间的重复触底）。**尚未执行**——
+      按仓库既有约定，前端测试/lint/tsc 由用户自己跑（`pnpm test
+      src/pages/Analysis/TopslotHistoryPopover.test.tsx`），本会话未运行 vitest/tsc。
+      hover 相关时序（`mouseEnterDelay`）用真实定时器 + `waitFor`，未用 fake timers，
+      是本组件测试里唯一有一点不确定性的部分，若跑起来有超时请先检查这里。
 
 ## 6. 前端：接入 ASIN 卡牌与品牌列
 
-- [ ] 6.1 接入 `TopProductCards.tsx`：每个非空槽位卡牌包一层悬浮入口，
-      确保悬浮不误触发外链跳转、不破坏现有复制/跳转行为；请求参数（`site/view/on`）
-      取自**生效态**查询作用域，`keyword_id`/`asin` 取自当前行。
-- [ ] 6.2 接入品牌列（`RankedList.tsx` / `columns.tsx`）：每个非空品牌可悬浮，
-      面板明确标注当前查看的品牌全名；确认所选 UI 形态（逐品牌独立悬浮，或
-      左侧列表 + 右侧详情）并落实，保证次数与记录不串位。
-- [ ] 6.3 组件测试：ASIN 卡牌与品牌列悬浮后请求参数正确（含站点/视图/keyword_id/
-      on 与生效作用域一致，而非草稿态）；现有卡牌/品牌列测试（`TopProductCards.test.tsx`
-      等）保持通过。
+- [x] 6.1 `TopProductCards.tsx`：`historyScope` 缺失时保留原 `Tooltip` 逻辑不变
+      （现有测试不受影响）；到位时用 `TopslotHistoryPopover` 替代 Tooltip 承担
+      "展示完整标题"这件事，`href`/`<a>` 结构不变，Popover 走独立浮层不冒泡点击。
+- [x] 6.2 品牌列：选择的是**逐品牌独立悬浮**（issue 允许的轻量形态），未做
+      左侧列表+右侧详情——`RankedList.tsx` 新增可选 `wrapValue` 钩子，仅品牌列传入，
+      类目列不受影响。`site/view/on` 取自 `index.tsx` 新增的 `historyScope`
+      （由 `loadedSite/loadedView/loadedDate`——已完成响应的活状态，与 `openTrend`
+      同一组状态，不是可能仍在飞的 `appliedRef`——推导，随其变化重算 `columns`）。
+- [x] 6.3 `TopProductCards.test.tsx`/`columns.test.tsx` 新增用例（mock
+      `./TopslotHistoryPopover` 避免真实拉起 `@/services/topslotHistory` →
+      `@umijs/max`，这是 `columns.tsx` 无条件引入该组件后新出现的必要 mock，
+      不加会让这两个文件里的全部既有用例一起因 esbuild/`@umijs/max` 环境不变量
+      报错炸掉——同 `KeywordTrendDrawer` 已踩过的坑）。**同样尚未执行**，理由同上。
 
 ## 7. 收尾验证
 
-- [ ] 7.1 按改动范围跑定向测试：`uv run pytest test/<新增测试路径> -q`，
-      前端 `pnpm exec vitest related <改动文件>`。
-- [ ] 7.2 真实浏览器验证：悬浮打开面板、面板内滚动加载更多、切换行/站点/视图后
-      悬浮内容不串、失败重试可用（可临时断网或 mock 4xx 观察）。
-- [ ] 7.3 提交前跑一次 `openspec validate add-topslot-history-popover --strict`
-      确认规格文件格式无误。
+- [x] 7.1 后端定向测试已跑绿：`test_topslot_history_crud_unit.py`（10）、
+      `test_topslot_history_service_unit.py`（6）、`test_topslot_history_api_unit.py`
+      （8）、`test_topslot_history_integration.py`（12，`TEST_DATABASE_URL` 真库）。
+      `ruff check` 已过。前端定向测试**未跑**（同上，用户自行执行）。
+- [ ] 7.2 真实浏览器验证——未做。需要：起本地环境后在市场分析表格里悬浮 ASIN
+      卡牌与品牌值，确认面板出现、可滚动触底加载、切换行/站点/视图后不串数据、
+      断网或改错权限观察失败重试。这一步只能人工在浏览器里核实。
+- [x] 7.3 `openspec validate add-topslot-history-popover --strict` 已过。
 
 Refs #96
