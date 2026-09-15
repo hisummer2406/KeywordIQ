@@ -1,6 +1,21 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AnalysisRow } from '@/services/analysis';
+
+// TopslotHistoryPopover 自身的悬浮/分页/竞态行为在它自己的测试文件里覆盖（issue #96）；
+// 这里只关心"历史作用域到位时是否把正确的身份参数接进了它"，用一个透传 props 的桩替身
+// 避免重复驱动真实的 hover 计时与网络请求。
+vi.mock('./TopslotHistoryPopover', () => ({
+  default: (props: any) => (
+    <div data-testid="topslot-history-popover" data-props={JSON.stringify({
+      site: props.site, view: props.view, keywordId: props.keywordId,
+      on: props.on, kind: props.kind, value: props.value, label: props.label,
+    })}>
+      {props.children}
+    </div>
+  ),
+}));
+
 import TopProductCards, { topSlots } from './TopProductCards';
 
 /** 一行数据。`slots` 控制有几个槽位有商品。 */
@@ -120,5 +135,31 @@ describe('卡牌可点击至商品页', () => {
     render(<TopProductCards row={row(1)} />);
 
     expect(screen.getByTestId('slot-card-1').closest('a')).toBeNull();
+  });
+});
+
+describe('悬浮历史入口（issue #96）', () => {
+  const historyScope = { site: 'US', view: 'DAY' as const, on: '2026-07-10' };
+
+  it('没有历史作用域时不接入悬浮历史（还没查出首屏数据）', () => {
+    render(<TopProductCards row={row(1)} />);
+    expect(screen.queryByTestId('topslot-history-popover')).toBeNull();
+  });
+
+  it('历史作用域到位时，每个非空槽位都接入正确的身份参数', () => {
+    render(<TopProductCards row={row(2)} historyScope={historyScope} />);
+    const popovers = screen.getAllByTestId('topslot-history-popover');
+    expect(popovers).toHaveLength(2); // 只有两个槽位有商品
+
+    const first = JSON.parse(popovers[0].dataset.props!);
+    expect(first).toEqual({
+      site: 'US', view: 'DAY', keywordId: 1, on: '2026-07-10',
+      kind: 'ASIN', value: 'B0SLOT00001', label: 'Title 1',
+    });
+  });
+
+  it('空槽位不接入悬浮历史', () => {
+    render(<TopProductCards row={row(1)} historyScope={historyScope} />);
+    expect(screen.getAllByTestId('topslot-history-popover')).toHaveLength(1);
   });
 });

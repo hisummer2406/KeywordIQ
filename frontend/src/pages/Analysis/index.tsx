@@ -236,9 +236,20 @@ export default function AnalysisPage() {
     () => sites.find((s) => s.code === appliedRef.current?.site)?.domain,
     [sites, appliedRef, query.appliedSig],
   );
+  /**
+   * 悬浮历史（issue #96）的作用域三元组必须来自 `loadedSite`/`loadedView`/`loadedDate`
+   * ——已完成响应的活状态，不是可能仍在飞的 `appliedRef`。理由与 `openTrend` 用同一组
+   * 状态相同（见上方 `TrendTarget` 注释）：表格当前渲染的行本身就是上一次完成响应的
+   * 数据，悬浮历史查的是"这一行现在显示的这个 ASIN/品牌"，必须与行数据同一个作用域。
+   * 三者任一缺失（还没查出首屏数据）时不提供悬浮入口。
+   */
+  const historyScope = useMemo(
+    () => (loadedSite && loadedView && loadedDate ? { site: loadedSite, view: loadedView, on: loadedDate } : undefined),
+    [loadedSite, loadedView, loadedDate],
+  );
   const columns = useMemo(
-    () => buildColumns(appliedView, appliedDomain, openTrend, appliedRef.current?.site),
-    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend],
+    () => buildColumns(appliedView, appliedDomain, openTrend, appliedRef.current?.site, historyScope),
+    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend, historyScope],
   );
 
   return (
