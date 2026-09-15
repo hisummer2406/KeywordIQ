@@ -25,13 +25,28 @@ const STATUS_META: Record<TrendPointStatus, { label: string; color: string }> = 
 };
 
 const HEIGHT = 220;
-const PAD_X = 28;
+// 左右留白不再对称：左边要放排名刻度文字（六位数排名需要更宽的空间），右边只需容纳
+// 最后一个点的半径，不需要跟左边同宽。
+const PAD_LEFT = 52;
+const PAD_RIGHT = 16;
 const PAD_TOP = 16;
-const PAD_BOTTOM = 36;
+const PAD_BOTTOM = 32;
 const BASELINE_Y = HEIGHT - PAD_BOTTOM;
+// y 轴刻度条数（不含基线本身）；x 轴标签上限——点数超过这个数就按等距下标抽样，
+// 而不是每个点都标日期，否则详情范围拉到「全部可用历史」时几十个日期会挤成一团。
+const Y_TICK_COUNT = 4;
+const X_LABEL_MAX = 6;
 
 function toTime(dateStr: string): number {
   return new Date(`${dateStr}T00:00:00Z`).getTime();
+}
+
+/** 轴上的日期标签用简短的「MM/DD」，不复用悬浮提示的完整格式（含年份/周区间）——
+ * 那是给单点详情看的，六个标签一起摆出来会挤爆横向空间。两者信息来源相同，只是
+ * 呈现的详略程度不同，不是又造了一套日期口径。 */
+function axisDateLabel(dateStr: string): string {
+  const match = /^\d{4}-(\d{2})-(\d{2})$/.exec(dateStr);
+  return match ? `${match[1]}/${match[2]}` : dateStr;
 }
 
 export default function TrendTimelineChart({
@@ -46,25 +61,50 @@ export default function TrendTimelineChart({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const gradientId = useId().replace(/:/g, '');
 
-  const { xOf, yOf, ranked, plotTop, plotHeight } = useMemo(() => {
+  const {
+    xOf, yOf, ranked, plotTop, plotHeight, minR, maxR,
+  } = useMemo(() => {
     const times = points.map((p) => toTime(p.date));
     const minT = Math.min(...times);
     const maxT = Math.max(...times);
     const spanT = maxT - minT || 1;
-    const x = (i: number) => PAD_X + ((times[i] - minT) / spanT) * (width - PAD_X * 2);
+    const x = (i: number) => PAD_LEFT + ((times[i] - minT) / spanT) * (width - PAD_LEFT - PAD_RIGHT);
 
     const rankedPts = points.filter((p) => p.status === 'RANKED' && p.ranking !== null);
     const rankings = rankedPts.map((p) => p.ranking as number);
-    const minR = rankings.length ? Math.min(...rankings) : 0;
-    const maxR = rankings.length ? Math.max(...rankings) : 1;
-    const spanR = maxR - minR || 1;
+    const rMin = rankings.length ? Math.min(...rankings) : 0;
+    const rMax = rankings.length ? Math.max(...rankings) : 1;
+    const spanR = rMax - rMin || 1;
     const top = PAD_TOP;
     const plotH = BASELINE_Y - PAD_TOP;
     // 排名越小越靠上：y 与 ranking 正相关（ranking 大 → y 大 → 越靠下）
-    const y = (ranking: number) => top + ((ranking - minR) / spanR) * (plotH - 12) + 6;
+    const y = (ranking: number) => top + ((ranking - rMin) / spanR) * (plotH - 12) + 6;
 
-    return { xOf: x, yOf: y, ranked: rankedPts.length > 0, plotTop: top, plotHeight: plotH };
+    return {
+      xOf: x, yOf: y, ranked: rankedPts.length > 0, plotTop: top, plotHeight: plotH, minR: rMin, maxR: rMax,
+    };
   }, [points, width]);
+
+  // y 轴刻度：按「最好排名（minR，画在上方）→ 最差排名（maxR，画在下方）」等分。
+  // 只有一个在榜值时（minR === maxR）只标这一个刻度，不强行摊出 5 条重合的线。
+  const yTicks = useMemo(() => {
+    if (!ranked) return [];
+    if (minR === maxR) return [minR];
+    return Array.from(
+      { length: Y_TICK_COUNT + 1 },
+      (_, i) => Math.round(minR + ((maxR - minR) * i) / Y_TICK_COUNT),
+    );
+  }, [ranked, minR, maxR]);
+
+  // x 轴标签：点数超过上限时按等距下标抽样，但恒保留首尾——「全部可用历史」范围可能
+  // 有几十个期次，每个都标日期会挤成一团看不清任何一个。
+  const xLabelIndices = useMemo(() => {
+    if (points.length <= X_LABEL_MAX) return points.map((_, i) => i);
+    const step = (points.length - 1) / (X_LABEL_MAX - 1);
+    const picked = new Set<number>();
+    for (let i = 0; i < X_LABEL_MAX; i += 1) picked.add(Math.round(i * step));
+    return [...picked].sort((a, b) => a - b);
+  }, [points.length]);
 
   if (points.length === 0) {
     return <div style={{ color: '#999', padding: 24, textAlign: 'center' }}>无数据</div>;
@@ -131,16 +171,75 @@ export default function TrendTimelineChart({
           </linearGradient>
         </defs>
 
+        {/* y 轴：排名刻度线（浅色横向网格线）+ 左侧数值标签。数值越小排名越好，
+            画在越上方——与下方各点的映射（yOf）同一套方向。 */}
+        {yTicks.map((tick) => (
+          <g key={`y-${tick}`}>
+            <line
+              x1={PAD_LEFT}
+              x2={width - PAD_RIGHT}
+              y1={yOf(tick)}
+              y2={yOf(tick)}
+              stroke="#f5f5f5"
+            />
+            <text
+              data-testid="trend-y-tick"
+              x={PAD_LEFT - 8}
+              y={yOf(tick) + 4}
+              textAnchor="end"
+              fill="#8c8c8c"
+              fontSize={11}
+            >
+              {tick.toLocaleString()}
+            </text>
+          </g>
+        ))}
+
+        {/* x 轴：轴线本身 + 底部日期刻度。轴线兼作基线（在榜/非在榜的点都以它为参照）。 */}
         <line
-          x1={PAD_X}
-          x2={width - PAD_X}
+          x1={PAD_LEFT}
+          x2={width - PAD_RIGHT}
           y1={BASELINE_Y}
           y2={BASELINE_Y}
-          stroke="#f0f0f0"
+          stroke="#d9d9d9"
         />
+        <line
+          x1={PAD_LEFT}
+          x2={PAD_LEFT}
+          y1={PAD_TOP}
+          y2={BASELINE_Y}
+          stroke="#d9d9d9"
+        />
+        {xLabelIndices.map((i) => (
+          <g key={`x-${points[i].date}`}>
+            <line
+              x1={xOf(i)}
+              x2={xOf(i)}
+              y1={BASELINE_Y}
+              y2={BASELINE_Y + 4}
+              stroke="#d9d9d9"
+            />
+            <text
+              data-testid="trend-x-tick"
+              x={xOf(i)}
+              y={BASELINE_Y + 16}
+              textAnchor="middle"
+              fill="#8c8c8c"
+              fontSize={11}
+            >
+              {axisDateLabel(points[i].date)}
+            </text>
+          </g>
+        ))}
 
         {!ranked && (
-          <text x={width / 2} y={plotTop + plotHeight / 2} textAnchor="middle" fill="#bfbfbf" fontSize={13}>
+          <text
+            x={PAD_LEFT + (width - PAD_LEFT - PAD_RIGHT) / 2}
+            y={plotTop + plotHeight / 2}
+            textAnchor="middle"
+            fill="#bfbfbf"
+            fontSize={13}
+          >
             所选范围内没有在榜排名
           </text>
         )}
