@@ -24,7 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.common import errors
 from app.common.errors import APIError
-from app.common.request_context import get_request_id
+from app.common.request_context import REQUEST_ID_HEADER, get_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -155,9 +155,24 @@ async def unhandled_exception_handler(request, exc: Exception) -> JSONResponse:
     原始异常字符串可能含 SQL、文件路径、object key 甚至凭证，**绝不进响应体**；
     完整栈以 ERROR 级进 ``logs/app.log``（此前未捕获异常只到 uvicorn 的 stderr，
     应用日志里没有任何痕迹）。
+
+    **单独把 request_id 写进响应头**：Starlette 把注册给裸 ``Exception`` 的处理器
+    拆到最外层的 ``ServerErrorMiddleware``，它在自己的 except 块里直接用最原始的
+    ``send`` 发送这里返回的响应，不会再经过 ``RequestIdMiddleware`` 的 send 包装
+    ——其余四个处理器（``APIError``/``RequestValidationError``/
+    ``StarletteHTTPException``/``SQLAlchemyError``）留在更靠内的
+    ``ExceptionMiddleware``，响应会正常流经 ``RequestIdMiddleware`` 并被打上头，
+    只有这一个处理器的响应结构性地绕不过去（Codex 复审 PR #98 P2）。响应体的
+    ``request_id`` 字段本身已经由 ``error_body()`` 读 ``get_request_id()`` 得到
+    （配合 `request_context.RequestIdMiddleware` 不在异常路径 reset 的修复），
+    这里只补响应头。
     """
     logger.exception("未捕获异常 %s %s", request.method, request.url.path)
-    return json_error(500, errors.CODE_INTERNAL_UNHANDLED, UNHANDLED_MESSAGE)
+    response = json_error(500, errors.CODE_INTERNAL_UNHANDLED, UNHANDLED_MESSAGE)
+    request_id = get_request_id()
+    if request_id:
+        response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 
 def register_error_handlers(app: FastAPI) -> None:

@@ -71,7 +71,19 @@ class RequestIdMiddleware:
 
         try:
             await self.app(scope, receive, send_with_header)
-        finally:
+        except Exception:
+            # 不在异常路径 reset：裸 Exception（未被 APIError/RequestValidationError/
+            # StarletteHTTPException/SQLAlchemyError 截住）会被 Starlette 拆到最外层的
+            # ServerErrorMiddleware，在本中间件之外——它调用 error_handlers.py 的兜底
+            # 处理器时要靠 get_request_id() 把编号写进响应体与日志。这里若照常 reset，
+            # contextvar 会在那次真正构造 500 响应之前就被清空，让这批"最该被追踪"的
+            # 失败响应体里 request_id 恒为 null、日志里恒为 "-"（Codex 复审 PR #98 P2）。
+            # 异常路径下这个请求对应的 Task 不会再处理别的请求，残留的值随 Task 结束
+            # 一起回收，不会泄漏进下一个请求；`app/common/error_handlers.py` 的
+            # `unhandled_exception_handler` 额外显式把它写回响应头，因为那个响应绕过了
+            # 下面 `send_with_header` 的包装（见该函数注释）。
+            raise
+        else:
             reset_request_id(token)
 
 

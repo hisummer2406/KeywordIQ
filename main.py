@@ -15,6 +15,7 @@ from app.auth.simple_auth import simple_auth
 from app.common import errors
 from app.common.error_handlers import json_error, register_error_handlers
 from app.common.request_context import RequestIdLogFilter, RequestIdMiddleware
+from app.common.request_logging import RequestLoggingMiddleware
 from app.jobs.poller import run_poller
 from app.table.competitor.store_service import refresh_due_store_round
 from app.table.competitor.watch_service import purge_expired_previews_round
@@ -24,17 +25,26 @@ from database import async_engine, engine
 from monitoring import SystemMonitor
 
 
-# 配置应用日志，每天自动生成新文件
+# 配置应用日志，轮转交给宿主机 logrotate（见 etc/keywordiq-logrotate.conf）
 def configure_logging():
     import logging.handlers
     os.makedirs("logs", exist_ok=True)
 
     # 每条日志带 request_id，使用户口述的"刚才报错了"能对回具体一次请求。
     # 不在请求上下文中（后台任务、启动期）时填 "-"。
+    #
+    # 用 WatchedFileHandler 而非 TimedRotatingFileHandler：Dockerfile 以 4 个独立
+    # worker 进程起 uvicorn，每个进程各自 import 本文件时都会调一次
+    # configure_logging()，即 4 个独立 handler 实例共同指向同一个物理文件。
+    # TimedRotatingFileHandler 的轮转判断与 rename+reopen 都在进程内部独立发生，
+    # 没有跨进程协调——Python 官方文档明确说明这不是多进程安全的，4 个进程可能在
+    # 午夜前后的同一毫秒级窗口各自尝试 rename，部分进程此后写入指向已改名的旧文件，
+    # 表现为"轮转后部分请求日志丢失"。WatchedFileHandler 没有轮转逻辑，只在每次
+    # emit() 时比较当前文件的 (dev, ino) 是否变化，变了就重新打开——这是标准库推荐的
+    # 多进程安全模式，配合外部按 rename+新建方式做轮转（`create` 模式的 logrotate，
+    # 不是 copytruncate——后者对多进程独立写偏移量不安全，见 design.md 决策 A）。
     handlers = [
-        logging.handlers.TimedRotatingFileHandler(
-            "logs/app.log", when="midnight", backupCount=7, encoding="utf-8"
-        ),
+        logging.handlers.WatchedFileHandler("logs/app.log", encoding="utf-8"),
         logging.StreamHandler(),
     ]
     request_id_filter = RequestIdLogFilter()
@@ -43,7 +53,12 @@ def configure_logging():
 
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - [%(request_id)s] - %(levelname)s - %(message)s",
+        # %(process)d 辅助多进程定位：一次请求可能落在 4 个 worker 中的任意一个，
+        # 出问题时需要知道是哪个进程在写。
+        format=(
+            "%(asctime)s - %(name)s - [%(request_id)s] - pid=%(process)d - "
+            "%(levelname)s - %(message)s"
+        ),
         handlers=handlers,
     )
 
@@ -192,6 +207,8 @@ register_error_handlers(app)
 
 # request id 中间件必须在最外层（后添加的中间件在更外层），这样它建立的上下文对内层的
 # CORS、路由与异常处理器都可见，且响应头在任何路径下都能带上。
+# RequestLoggingMiddleware 必须在它之前添加（更内层）——这样执行到这里时 request_id
+# 已经建立，摘要日志才能带上正确的值。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -199,6 +216,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
 # 挂载静态文件目录
