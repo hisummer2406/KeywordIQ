@@ -7,7 +7,7 @@ issue #86 已经实现了单关键词的排名趋势详情（日/周历史核验
 
 ## What Changes
 
-- 市场分析与我的词库的关键词表格，「操作」列增加「历史走势」图标入口（`LineChartOutlined`
+- 市场分析与我的词库的关键词表格，「操作」列增加「历史走势」图标入口（`BarChartOutlined`
   + title/aria-label「查看历史走势」，与既有 Google/Meta/TikTok 三个外链入口同一套
   纵向堆叠图标语言，不用文字标签——避免在这一窄列里破坏视觉一致性），与「搜索趋势」
   小图单元格打开**同一个**详情面板（`KeywordTrendDrawer`），不新建第二套图表或查询路径。
