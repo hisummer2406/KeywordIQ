@@ -133,6 +133,25 @@ describe('TrendTimelineChart', () => {
       expect(texts).toEqual(['100', '101']);
     });
 
+    it('排名达到百万级时左边距按刻度文字位数动态撑开，不裁掉前几位数字（Codex 审核 PR #95 第二轮）', () => {
+      // 固定左边距 52px 时，"1,000,000"（9 字符）右对齐画在 x=44，比默认六位数场景
+      // （"100,000" 7 字符）宽得多，会越过 x=0 被 SVG 根元素默认的 overflow:hidden
+      // 裁掉前几位——两个点同一排名只产生一条刻度（minR === maxR 分支），便于精确断言。
+      const points = [
+        point('2026-07-01', 'RANKED', 1000000),
+        point('2026-07-08', 'RANKED', 1000000),
+      ];
+      const { container } = render(<TrendTimelineChart points={points} view="WEEK" />);
+
+      const yTick = container.querySelector('[data-testid="trend-y-tick"]')!;
+      expect(yTick.textContent).toBe('1,000,000');
+      // PAD_LEFT = max(52, 9 字符 × 7 + 12) = 75，刻度文字画在 PAD_LEFT - 8 = 67，
+      // 比默认场景的 44 更靠右，此时才不会有任何数字落在 x<0 的裁剪区域内。
+      expect(Number(yTick.getAttribute('x'))).toBe(67);
+      const axisLine = container.querySelectorAll('svg > line')[1]; // 第二条 line 是竖直轴线
+      expect(Number(axisLine.getAttribute('x1'))).toBe(75);
+    });
+
     it('全部为非在榜状态时不渲染 y 轴刻度（没有排名数值可标）', () => {
       const points = [point('2026-07-01', 'NOT_IMPORTED'), point('2026-07-02', 'OUT_OF_RETENTION')];
       const { container } = render(<TrendTimelineChart points={points} view="DAY" />);

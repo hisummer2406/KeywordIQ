@@ -28,9 +28,9 @@ const STATUS_META: Record<TrendPointStatus, { label: string; color: string }> = 
 };
 
 const HEIGHT = 220;
-// 左右留白不再对称：左边要放排名刻度文字（六位数排名需要更宽的空间），右边只需容纳
-// 最后一个点的半径，不需要跟左边同宽。
-const PAD_LEFT = 52;
+// 左右留白不再对称：左边要放排名刻度文字，右边只需容纳最后一个点的半径，不需要跟
+// 左边同宽。PAD_LEFT 不再是固定值——见下方按刻度文字实际位数动态撑开的计算。
+const PAD_LEFT_MIN = 52;
 const PAD_RIGHT = 16;
 const PAD_TOP = 16;
 const PAD_BOTTOM = 32;
@@ -64,35 +64,24 @@ export default function TrendTimelineChart({
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const gradientId = useId().replace(/:/g, '');
 
-  const {
-    xOf, yOf, ranked, plotTop, plotHeight, minR, maxR,
-  } = useMemo(() => {
-    const times = points.map((p) => toTime(p.date));
-    const minT = Math.min(...times);
-    const maxT = Math.max(...times);
-    const spanT = maxT - minT || 1;
-    const x = (i: number) => PAD_LEFT + ((times[i] - minT) / spanT) * (width - PAD_LEFT - PAD_RIGHT);
-
+  // 先只算排名的统计量（最好/最差值），不依赖任何留白常量——下面要用它先定出
+  // y 轴刻度，再用刻度文字的实际位数反过来撑开左边距（PAD_LEFT），两者不能反过来算。
+  const { ranked, minR, maxR } = useMemo(() => {
     const rankedPts = points.filter((p) => p.status === 'RANKED' && p.ranking !== null);
     const rankings = rankedPts.map((p) => p.ranking as number);
-    const rMin = rankings.length ? Math.min(...rankings) : 0;
-    const rMax = rankings.length ? Math.max(...rankings) : 1;
-    const spanR = rMax - rMin || 1;
-    const top = PAD_TOP;
-    const plotH = BASELINE_Y - PAD_TOP;
-    // 排名越小越靠上：y 与 ranking 正相关（ranking 大 → y 大 → 越靠下）
-    const y = (ranking: number) => top + ((ranking - rMin) / spanR) * (plotH - 12) + 6;
-
     return {
-      xOf: x, yOf: y, ranked: rankedPts.length > 0, plotTop: top, plotHeight: plotH, minR: rMin, maxR: rMax,
+      ranked: rankedPts.length > 0,
+      minR: rankings.length ? Math.min(...rankings) : 0,
+      maxR: rankings.length ? Math.max(...rankings) : 1,
     };
-  }, [points, width]);
+  }, [points]);
 
   // y 轴刻度：按「最好排名（minR，画在上方）→ 最差排名（maxR，画在下方）」等分。
   // 只有一个在榜值时（minR === maxR）只标这一个刻度，不强行摊出 5 条重合的线。
   // 排名范围很窄时（如 100~101）等分后取整会撞出重复值——[100,100,101,101,101]，
-  // 去重前会画出重叠的网格线与文字、且 `key={`y-${tick}`}` 撞键（Codex 审核 PR #95）。
-  // 用 `Set` 去重，保留升序（Array.from 本就按 i 递增生成，Set 保留插入顺序）。
+  // 去重前会画出重叠的网格线与文字、且 `key={`y-${tick}`}` 撞键（Codex 审核 PR #95
+  // 第一轮 P2）。用 `Set` 去重，保留升序（Array.from 本就按 i 递增生成，Set 保留
+  // 插入顺序）。
   const yTicks = useMemo(() => {
     if (!ranked) return [];
     if (minR === maxR) return [minR];
@@ -102,6 +91,36 @@ export default function TrendTimelineChart({
     );
     return [...new Set(raw)];
   }, [ranked, minR, maxR]);
+
+  // 左边距按最长的刻度文字动态撑开，不再假定六位数封顶——周报的 ABA 排名可以到
+  // 百万级尾部，"1,000,000" 这类 9 字符标签在固定 52px（含千分位逗号的六位数留白）
+  // 下会越过 SVG 左边界，被根元素默认的 overflow:hidden 裁掉前几位数字（Codex 审核
+  // PR #95 第二轮 P2）。7px/字符是 11px sans-serif 下数字与逗号字符的保守宽度上界，
+  // PAD_LEFT_MIN(52) 继续作为六位数以内场景的下限，不因为这次改动收窄留白。
+  const maxTickChars = yTicks.length
+    ? Math.max(...yTicks.map((t) => t.toLocaleString().length))
+    : 0;
+  const PAD_LEFT = Math.max(PAD_LEFT_MIN, maxTickChars * 7 + 12);
+
+  const {
+    xOf, yOf, plotTop, plotHeight,
+  } = useMemo(() => {
+    const times = points.map((p) => toTime(p.date));
+    const minT = Math.min(...times);
+    const maxT = Math.max(...times);
+    const spanT = maxT - minT || 1;
+    const x = (i: number) => PAD_LEFT + ((times[i] - minT) / spanT) * (width - PAD_LEFT - PAD_RIGHT);
+
+    const spanR = maxR - minR || 1;
+    const top = PAD_TOP;
+    const plotH = BASELINE_Y - PAD_TOP;
+    // 排名越小越靠上：y 与 ranking 正相关（ranking 大 → y 大 → 越靠下）
+    const y = (ranking: number) => top + ((ranking - minR) / spanR) * (plotH - 12) + 6;
+
+    return {
+      xOf: x, yOf: y, plotTop: top, plotHeight: plotH,
+    };
+  }, [points, width, PAD_LEFT, minR, maxR]);
 
   // x 轴标签：点数超过上限时按等距下标抽样，但恒保留首尾——「全部可用历史」范围可能
   // 有几十个期次，每个都标日期会挤成一团看不清任何一个。
