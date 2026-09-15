@@ -122,10 +122,11 @@ export default function KeywordTrendDrawer({
       onClose={onClose}
       destroyOnClose
     >
-      {/* 抽屉铺满视口宽度（placement="bottom"），但内容（含固定 760px 宽的图表）没有
-          必要跟着铺满——不加这层居中容器，图表会贴在视口左侧，右边留一大片空白，看起来
-          像是没对齐（用户反馈）。900px 比图表默认宽度 760px 略宽，给两侧留一点呼吸感。 */}
-      <div style={{ maxWidth: 900, margin: '0 auto' }}>
+      {/* 抽屉铺满视口宽度（placement="bottom"），但内容没有必要跟着铺满——不加这层居中
+          容器，内容会贴在视口左侧，右边留一大片空白，看起来像没对齐（用户反馈）。
+          `width: fit-content` 让容器宽度跟着实际内容（文字列 + 760px 图表）走，
+          不用猜一个固定像素值，两栏布局改动时也不必跟着改这个数字。 */}
+      <div style={{ width: 'fit-content', maxWidth: '100%', margin: '0 auto' }}>
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <Space size={24} wrap>
             <Radio.Group
@@ -162,8 +163,9 @@ export default function KeywordTrendDrawer({
               仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
               ——数字没变但含义被读反了（PR #87 复审 P2）。 */}
           {!errored && data !== null && data.on !== null && (
-            <>
-              <Space size={32} wrap style={{ fontSize: 13 }}>
+            // 文字统计在左（竖排）、图表在右——用户反馈两者原本上下排列、图表居左不协调。
+            <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
+              <Space direction="vertical" size={12} style={{ fontSize: 13, flexShrink: 0 }}>
                 <div>
                   <Text type="secondary">实际使用的锚定期：</Text>
                   <Text strong>{formatScopeDateLabel(data.on, data.view)}</Text>
@@ -183,29 +185,29 @@ export default function KeywordTrendDrawer({
                 <StatLine label="最近可用排名" stat={data.latest_available} view={data.view} />
               </Space>
 
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <div>
                 <Spin spinning={loading}>
                   <TrendTimelineChart points={data.points} view={data.view} />
                 </Spin>
-              </div>
 
-              {/* 图例只常驻三种常见状态（用户反馈），另外两种少见情况（该期报表已导入但未
-                  收录/已超出保留范围）不占常驻位置——但判定口径不变，真出现时图上的点与
-                  悬浮提示仍按各自真实状态显示，见 COMMON_STATUSES 的注释。 */}
-              <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c' }}>
-                {COMMON_STATUSES.map((s) => (
-                  <Space key={s} size={4}>
-                    <span
-                      style={{
-                        display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                        background: STATUS_META[s].color,
-                      }}
-                    />
-                    {STATUS_META[s].label}
-                  </Space>
-                ))}
-              </Space>
-            </>
+                {/* 图例只常驻三种常见状态（用户反馈），另外两种少见情况（该期报表已导入但未
+                    收录/已超出保留范围）不占常驻位置——但判定口径不变，真出现时图上的点与
+                    悬浮提示仍按各自真实状态显示，见 COMMON_STATUSES 的注释。 */}
+                <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c', marginTop: 12 }}>
+                  {COMMON_STATUSES.map((s) => (
+                    <Space key={s} size={4}>
+                      <span
+                        style={{
+                          display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                          background: STATUS_META[s].color,
+                        }}
+                      />
+                      {STATUS_META[s].label}
+                    </Space>
+                  ))}
+                </Space>
+              </div>
+            </div>
           )}
         </Space>
       </div>
