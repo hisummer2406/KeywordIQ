@@ -125,18 +125,65 @@
       `TEST_DATABASE_URL=...keywordiq_test uv run pytest test/ -q` —— 993 passed,
       1 skipped（较修复前 989 passed 净增 4 个新增回归测试，无一失败）
 
-## 8. 生产待验收（不在本次会话范围内，需人工执行并回填结果）
+## 9. Codex 二轮复审修复（PR #98，commit 48cbfff 上的两次 review）
 
-- [ ] 8.1 生产宿主机确认存在可用的 `logrotate` 定时触发机制（cron.daily 或等价）
-      ——配置文件本身的安装已由 7.1 的 `deploy.sh` 步骤自动化，这里只需确认触发
-      机制存在
-- [ ] 8.2 在生产触发一次真实轮转（或等到自然轮转），核对轮转前后日志完整、
-      `logs/app.log*` 保留数量符合预期
-- [ ] 8.3 生产 `nginx -t` 校验新 `log_format` 配置语法后 reload，核对
+- [x] 9.1（P1）`deploy.sh` 第 7.1 步只在 `logrotate` 命令不存在时警告放行——
+      正常部署仍可能悄悄跑在一台没装 `logrotate` 的机器上而不失败。升级为硬性
+      前置条件（`need logrotate ...`），并新增对定时触发机制的检查
+      （`/etc/cron.daily/logrotate` 或 systemd 的 `logrotate.timer` 二者之一必须
+      存在，否则 `fail`）——装了配置没人定时跑与完全没装是同一个后果，只是更隐蔽
+- [x] 9.2（P2）`app/common/request_context.py::RequestIdMiddleware` 此前在
+      `finally` 里无条件 reset contextvar，导致未被 `APIError`/
+      `RequestValidationError`/`StarletteHTTPException`/`SQLAlchemyError` 截住的
+      异常传播到 Starlette 最外层的 `ServerErrorMiddleware` 时，`request_id` 早已
+      被清空——那批"最该被追踪"的 500 响应体里 `request_id` 恒为 `null`、日志里
+      恒为 `-`。改为只在正常路径 reset，异常路径原样重新抛出、不 reset（Task 到此
+      为止，不会泄漏进下一个请求）。`app/common/error_handlers.py::
+      unhandled_exception_handler` 额外显式把 `request_id` 写回响应头——那个响应
+      由 `ServerErrorMiddleware` 用最原始的 `send` 直接发出，结构性地绕过了
+      `RequestIdMiddleware` 自己的头注入。回归测试：
+      `test_context_not_reset_when_exception_propagates`、
+      `test_unhandled_exception_preserves_request_id_in_body_and_header`（后者
+      打真实 `main.app` 端到端验证）
+- [x] 9.3（P2）`database.py` 的通用慢查询监听只在 `after_cursor_execute` 记录，
+      对失败的执行完全失明——语句超时/锁等待超时/连接池 checkout 超时都是"等了
+      很久才失败"，恰是最该被诊断的一类（连接卡死、锁等待，见 issue #4）。新增
+      `handle_error` 事件监听，读同一个 `execution_context._query_start_time`；
+      `execution_context` 为 `None` 或没有该属性时安静跳过，不臆造耗时、不修改
+      或吞掉原始异常。`analysis_service.py::search()` 同理：`_timed_execute` 改
+      用 `finally` 记录耗时（此前失败的 `await db.execute` 完全不进 `db_ms`），
+      `search()` 整体包一层 `try/except`，超阈值时即使请求最终失败也照常输出诊断
+      （标 `request_failed=True`），原样重新抛出。回归测试：
+      `test_failed_query_exceeding_threshold_logs_warning`、
+      `test_failed_query_under_threshold_does_not_log`、
+      `test_timed_execute_records_elapsed_time_even_on_failure`、
+      `test_failed_request_still_emits_diagnostic_marked_failed`
+- [x] 9.4（P2）`app/common/request_logging.py::RequestLoggingMiddleware` 只
+      `except Exception`，捕不到继承自 `BaseException` 的 `asyncio.CancelledError`
+      （3.8+）——Uvicorn 优雅关闭超时、上游任务级超时都是通过取消请求 Task 实现的，
+      此前这类请求在 app.log 里彻底消失。新增单独的 `except asyncio.CancelledError`
+      分支，记录 `outcome=cancelled` 后原样重新抛出（绝不能吞，会破坏取消语义）。
+      回归测试：`test_cancelled_task_produces_cancelled_summary`
+- [x] 9.5（P2）`etc/observability-runbook.md` 第 1 节的 `grep` 示例找不到
+      `compress`+`delaycompress` 轮转出的 `.gz` 历史文件（从第二份轮转文件起）。
+      改用 `zgrep`（对未压缩文件行为等同 `grep`），nginx 侧同理补充说明。
+- [x] 9.6 `uv run ruff check .` 全部通过；
+      `TEST_DATABASE_URL=...keywordiq_test uv run pytest test/ -q` —— 1000 passed,
+      1 skipped（较上一轮 993 passed 净增 7 个新增回归测试，无一失败）；CI 见 PR。
+
+## 10. 生产待验收（不在本次会话范围内，需人工执行并回填结果）
+
+- [ ] 10.1 生产宿主机确认存在可用的 `logrotate` 定时触发机制（cron.daily 或等价）
+      ——`deploy.sh` 现在会在部署前硬性校验命令与触发机制均存在（9.1），这里只需
+      在真实生产机上跑一次 `deploy.sh` 确认它确实通过
+- [ ] 10.2 在生产触发一次真实轮转（或等到自然轮转），核对轮转前后日志完整、
+      `logs/app.log*` 保留数量符合预期；轮转出的压缩历史文件用 `zgrep` 而不是
+      `grep` 检索（9.5）
+- [ ] 10.3 生产 `nginx -t` 校验新 `log_format` 配置语法后 reload，核对
       access log 出现 `request_time`/`upstream_time`/`request_id` 字段
-- [ ] 8.4 生产环境验证一次 nginx 与应用日志按同一 request_id 关联成功
+- [ ] 10.4 生产环境验证一次 nginx 与应用日志按同一 request_id 关联成功
       （可用 `scripts/check_logging.py --base-url https://<生产域名>`，第 3 项现在
       打 `/api/auth/sso/status` 而不是 `/`；本地日志检索那部分需要在应用所在
       主机上跑才能核实）
-- [ ] 8.5 核实生产磁盘余量在新增诊断日志量下的增长速率，确认现有磁盘监控阈值
+- [ ] 10.5 核实生产磁盘余量在新增诊断日志量下的增长速率，确认现有磁盘监控阈值
       （见 CLAUDE.md「扩容触发条件」）仍然适用，不需要单独为日志新增磁盘告警

@@ -11,11 +11,19 @@
 `X-Request-Id`。拿到这个编号后：
 
 ```bash
-# 应用日志（宿主机路径，容器内 bind mount 到同一份）
-grep '<request_id>' logs/app.log logs/app.log.*  # .log.* 是 logrotate 归档的历史文件
+# 应用日志（宿主机路径，容器内 bind mount 到同一份）。etc/keywordiq-logrotate.conf
+# 配了 compress + delaycompress：当天的 logs/app.log 与轮转出的第一份历史文件
+# （app.log.1）是明文，从第二份起（app.log.2.gz、app.log.3.gz……）已经是 gzip——
+# 普通 grep 认不出压缩内容，找 2 天前的编号会一无所获且不会报错，看起来像是
+# "这个编号在日志里不存在"（Codex 复审 PR #98 P2）。用 zgrep 统一处理，它对未压缩
+# 文件的行为等同 grep：
+zgrep '<request_id>' logs/app.log logs/app.log.1 logs/app.log.*.gz 2>/dev/null
 
-# nginx 访问日志（同一个编号，跨层关联）
-grep 'request_id=<request_id>' /var/log/nginx/keywordiq.access.log
+# nginx 访问日志（同一个编号，跨层关联）。nginx 侧没有配 etc/keywordiq-logrotate.conf
+# 这条轮转（那是应用日志专用），实际轮转策略与是否压缩以宿主机上 nginx 自带的
+# logrotate 配置（通常在 /etc/logrotate.d/nginx）为准，历史文件也可能是 .gz——
+# 同样用 zgrep 兜底，没有压缩文件时会静默跳过（不存在的文件模式匹配为空）：
+zgrep "request_id=<request_id>" /var/log/nginx/keywordiq.access.log /var/log/nginx/keywordiq.access.log*.gz 2>/dev/null
 ```
 
 **应用日志里能看到什么**：一条"请求摘要"记录（`outcome=completed|interrupted|error|

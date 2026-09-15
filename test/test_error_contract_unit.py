@@ -201,6 +201,19 @@ def test_unhandled_exception_does_not_leak_internals(probe_app):
         assert secret not in r.text
 
 
+def test_unhandled_exception_preserves_request_id_in_body_and_header(probe_app):
+    """未捕获异常最终由 `unhandled_exception_handler` 兜底，而那个处理器被 Starlette
+    拆到最外层的 `ServerErrorMiddleware`——在本仓库全部 `add_middleware` 注册的中间件
+    之外。此前 `RequestIdMiddleware` 会在异常路径提前 reset 掉 contextvar，且这个
+    兜底处理器的响应绕过了 `RequestIdMiddleware` 自身的响应头注入，导致这类恰恰
+    "最该被追踪"的 500 响应体里 `request_id` 是 `null`、也没有 `X-Request-Id`
+    响应头（Codex 复审 PR #98 P2）。"""
+    r = probe_app.get("/__probe/unhandled", headers={"X-Request-Id": "probe123"})
+    assert r.status_code == 500
+    assert r.json()["request_id"] == "probe123"
+    assert r.headers.get("X-Request-Id") == "probe123"
+
+
 def test_unhandled_exception_is_logged_with_stack(probe_app, caplog):
     """未捕获异常必须进应用日志且带栈——此前只到 uvicorn 的 stderr。"""
     import logging
