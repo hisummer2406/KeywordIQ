@@ -12,6 +12,11 @@
 # `alembic`/`uv` 够不到它，必须在 app 容器内执行（第 3 步用新镜像 `run --rm`，早于
 # `up -d` 把旧容器换成新镜像——避免用旧代码接一份已经迁移过的新 schema）。
 #
+# 每次部署都会安装/更新 etc/keywordiq-logrotate.conf 到 /etc/logrotate.d/keywordiq
+# （第 6 步，替换掉模板里的占位路径为真实绝对路径）——应用侧只用 WatchedFileHandler
+# 检测文件被替换后重新打开，不做轮转，轮转的权威在宿主机 logrotate，见
+# openspec/changes/add-request-diagnostics-logging/design.md 决策 A。
+#
 # 用法：
 #   ./deploy.sh                  # 全量：构建镜像 + 迁移 + 前端构建 + 发布 + reload nginx
 #   ./deploy.sh --skip-frontend  # 只更新后端（镜像 + 迁移）
@@ -66,7 +71,7 @@ echo -e "${GREEN}KeywordIQ 部署（Docker Compose + host nginx）${NC}"
 echo -e "${GREEN}======================================${NC}"
 
 # ---------- 1. 前置检查 ----------
-info "1/6 前置检查..."
+info "1/7 前置检查..."
 
 [ -f main.py ]            || fail "错误: 未在项目根目录执行（找不到 main.py）"
 [ -f .env ]                || fail "错误: .env 不存在。先 cp .env.example .env 并按注释填写"
@@ -84,14 +89,14 @@ fi
 echo "  WEB_ROOT = $WEB_ROOT"
 
 # ---------- 2. 构建应用镜像 ----------
-info "2/6 构建应用镜像（docker compose build）..."
+info "2/7 构建应用镜像（docker compose build）..."
 docker compose build app
 
 # ---------- 3. 数据库迁移 ----------
 if [ "$SKIP_MIGRATE" -eq 1 ]; then
-    warn "3/6 跳过数据库迁移（--skip-migrate）"
+    warn "3/7 跳过数据库迁移（--skip-migrate）"
 else
-    info "3/6 数据库迁移..."
+    info "3/7 数据库迁移..."
     # db 服务不暴露端口给宿主机，迁移必须在容器内执行；先起 db（若还没起）再迁移。
     docker compose up -d db
     echo "  当前版本："
@@ -112,22 +117,50 @@ fi
 
 # ---------- 4. 前端构建 ----------
 if [ "$SKIP_FRONTEND" -eq 1 ]; then
-    warn "4/6 跳过前端构建（--skip-frontend）"
-    warn "5/6 跳过产物发布（--skip-frontend）"
+    warn "4/7 跳过前端构建（--skip-frontend）"
+    warn "5/7 跳过产物发布（--skip-frontend）"
 else
-    info "4/6 构建前端 SPA..."
+    info "4/7 构建前端 SPA..."
     (cd frontend && pnpm install --frozen-lockfile && pnpm build)
     [ -f frontend/dist/index.html ] || fail "错误: 构建未产出 frontend/dist/index.html"
 
     # ---------- 5. 发布产物 ----------
-    info "5/6 发布产物到 $WEB_ROOT ..."
+    info "5/7 发布产物到 $WEB_ROOT ..."
     as_root mkdir -p "$WEB_ROOT"
     # --delete 清掉上一版的哈希文件；结尾斜杠保证同步的是目录内容而非目录本身
     as_root rsync -a --delete frontend/dist/ "$WEB_ROOT/"
 fi
 
-# ---------- 6. 重载 nginx + 切换容器到新镜像 ----------
-info "6/6 重载 nginx 并切换容器到新镜像..."
+# ---------- 6. 安装/更新 logrotate 配置 ----------
+# WatchedFileHandler（main.py::configure_logging）本身不做轮转，轮转的权威在宿主机
+# logrotate；etc/keywordiq-logrotate.conf 此前只是仓库里的模板，从没有任何自动化步骤
+# 把它装进 /etc/logrotate.d/ ——一次正常的容器化部署因此会让 logs/app.log 无限增长
+# 直到打满磁盘，且不会有任何报错（Codex 审核 PR #98 P1）。这里替换掉模板里的占位路径
+# 为本次部署的真实绝对路径并安装，每次部署自动做，不再指望人工记得这一步。
+info "6/7 安装/更新 logrotate 配置..."
+LOGROTATE_CONF_SRC="etc/keywordiq-logrotate.conf"
+LOGROTATE_CONF_DST="/etc/logrotate.d/keywordiq"
+REAL_LOG_PATH="$(pwd)/logs/app.log"
+tmp_logrotate="$(mktemp)"
+sed "s#/path/to/keywordiq/logs/app.log#${REAL_LOG_PATH}#" "$LOGROTATE_CONF_SRC" > "$tmp_logrotate"
+if as_root cmp -s "$tmp_logrotate" "$LOGROTATE_CONF_DST" 2>/dev/null; then
+    echo "  logrotate 配置未变化，跳过安装"
+else
+    as_root cp "$tmp_logrotate" "$LOGROTATE_CONF_DST"
+    echo "  已安装 $LOGROTATE_CONF_DST（日志路径：$REAL_LOG_PATH）"
+fi
+rm -f "$tmp_logrotate"
+# 空跑校验语法，配置错误比没配置更隐蔽——cron.daily 触发的失败通常没人第一时间看到。
+if command -v logrotate >/dev/null 2>&1; then
+    as_root logrotate -d "$LOGROTATE_CONF_DST" >/dev/null \
+        || fail "错误: logrotate 配置校验未通过（sudo logrotate -d $LOGROTATE_CONF_DST 查看详情）"
+else
+    warn "  本机未安装 logrotate 命令，跳过语法校验"
+    warn "  （cron.daily 是否已配置好 logrotate 本身是系统级前提，不在本脚本职责内，见 tasks.md「生产待验收」7.1）"
+fi
+
+# ---------- 7. 重载 nginx + 切换容器到新镜像 ----------
+info "7/7 重载 nginx 并切换容器到新镜像..."
 as_root nginx -t
 as_root systemctl reload nginx
 echo "  nginx 已重载"

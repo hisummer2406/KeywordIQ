@@ -82,7 +82,7 @@ grep"，且不知道一次请求落在哪个文件（worker 由 uvicorn 内部�
 `.conf` 文件是模板，真正生效需要运维人工 `cp` 进 `/etc/logrotate.d/` 并确认宿主机的
 `cron`/`logrotate` 定时任务本身在跑（多数发行版默认有每日 cron 触发 `/etc/cron.daily/
 logrotate`，但不是所有精简镜像/裸机都保证存在）——这一步**本会话无法在生产环境验证**，
-必须在 tasks.md 里列为待验收，且在 `docs/observability-runbook.md` 里写明验证方法
+必须在 tasks.md 里列为待验收，且在 `etc/observability-runbook.md` 里写明验证方法
 （`logrotate -d /etc/logrotate.d/keywordiq` 空跑不落地检查配置是否被读取）。
 
 ### B. 请求摘要中间件：三种结束形态，而非"成功/失败"二元
@@ -213,7 +213,7 @@ access_log /var/log/nginx/keywordiq.access.log keywordiq_main;
 
 ### E. 排查说明文档落在 `docs/`，不落在 `CLAUDE.md`
 
-**决策**：新增 `docs/observability-runbook.md` 而不是把内容并入 `CLAUDE.md`。
+**决策**：新增 `etc/observability-runbook.md` 而不是把内容并入 `CLAUDE.md`。
 `CLAUDE.md` 是"开发约定与设计记录"（面向写代码的智能体），这份文档是"服务出问题时
 按步骤查"的运维操作手册（面向排查故障的人，可能是同一个人但心智模式不同：一个是
 "我要改代码，需要知道有哪些约束"，一个是"服务慢/报错了，我要在 5 分钟内定位到哪里"）。
@@ -238,7 +238,7 @@ access_log /var/log/nginx/keywordiq.access.log keywordiq_main;
 ## Risks / Trade-offs
 
 - **[风险] `logrotate` 依赖宿主机本身有可用的 cron/logrotate 定时任务** →
-  缓解：`docs/observability-runbook.md` 给出 `logrotate -d` 空跑验证命令；
+  缓解：`etc/observability-runbook.md` 给出 `logrotate -d` 空跑验证命令；
   tasks.md 把"生产环境确认 logrotate 定时任务存在且已装配置"列为独立的待验收项，
   不与代码改动的完成状态混在一起。
 - **[风险] `WatchedFileHandler` 依赖 `emit()` 被调用才能检测到 inode 变化**——

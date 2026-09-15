@@ -39,7 +39,7 @@ issue #4 的导入期卡死至今根因未证实；#90（运维巡检/告警）�
   分页/排序、筛选维度的白名单摘要（布尔/计数字段，不含检索词或 ASIN 原文）、以及既有执行阶段
   （可用日期、计数、取行、趋势回溯、品牌探测）的分段耗时 + 应用处理耗时；不新增查询次数、
   不在阈值以下时输出。
-- 新增排查说明文档 `docs/observability-runbook.md`：如何用 request_id 关联 nginx/应用日志、
+- 新增排查说明文档 `etc/observability-runbook.md`：如何用 request_id 关联 nginx/应用日志、
   如何读慢查询诊断、issue #4 类导入期卡死复发时重启前需要采集的证据（py-spy 栈等）、以及
   "请求完成后的日志"与"进程被杀/尚未走到日志点"的局限区分。
 - 新增 `scripts/check_logging.py`：仿照 `scripts/check_oss.py`/`check_dingtalk_sso.py` 的
@@ -70,7 +70,7 @@ issue #4 的导入期卡死至今根因未证实；#90（运维巡检/告警）�
   （阶段计时与诊断日志）、新增 `app/common/request_logging.py`（请求摘要中间件实现）。
 - **部署配置**：`etc/keywordiq-nginx.conf`（log_format + X-Request-Id 下发）、新增
   `etc/keywordiq-logrotate.conf`。
-- **文档**：新增 `docs/observability-runbook.md`；CLAUDE.md 视需要补一条指向该文档的引用。
+- **文档**：新增 `etc/observability-runbook.md`；CLAUDE.md 视需要补一条指向该文档的引用。
 - **脚本**：新增 `scripts/check_logging.py`。
 - **测试**：新增/扩展单元测试覆盖请求摘要中间件的三种结束形态、慢查询诊断的字段白名单与
   阈值行为、日志格式改动不破坏 `RequestIdLogFilter` 现有契约。

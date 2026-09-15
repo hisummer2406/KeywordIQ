@@ -41,9 +41,23 @@ class RequestLoggingMiddleware:
       的协程，这个取消不会作为异常传播到这里，只是最后一条 body 消息永远不会带上
       ``more_body=False``。不加这一档，所有中途断连的导出都会被误记成 completed
       （CLAUDE.md："取消/断连不能伪造正常完成"）。
-    - ``error``：``self.app()`` 抛出的异常传播到了这里——说明异常发生在响应头已经
-      发出之后（若在此之前，全局异常处理器已经把它转成了 JSONResponse，不会传播到
-      这一层），如导出生成器中途报错。记录后原样重新抛出，不吞异常。
+    - ``error``：``self.app()`` 抛出的异常传播到了这里，且响应头已经发出——如导出
+      生成器中途报错。
+    - ``error_before_response``：异常传播到这里时响应头还没发出。**这不代表客户端
+      什么都没收到**：`app/common/error_handlers.py` 给裸 ``Exception`` 注册的兜底
+      处理器（``unhandled_exception_handler``）会被 Starlette 拆到最外层的
+      ``ServerErrorMiddleware`` 里（凡是注册给 `Exception`/500 的处理器都会被
+      ``Starlette.build_middleware_stack`` 挪到那一层，而不是留在更靠内、与
+      ``APIError``/``RequestValidationError``/``StarletteHTTPException``/
+      ``SQLAlchemyError`` 那四个处理器同层的 ``ExceptionMiddleware``），那一层在
+      本中间件（乃至全部 ``add_middleware`` 注册的中间件）之外——异常能传播到这里，
+      说明它没被那四个"挂在 ExceptionMiddleware 上"的处理器截住，因此必然会被
+      ``ServerErrorMiddleware`` 外层的兜底处理器转成 500 发给客户端，只是这里的
+      ``send`` 包装看不到那次发送。``status`` 因此显式记 500，不留 ``None``——
+      ``None`` 会被读成"连响应都没发"，而客户端实际收到的是确定的 500
+      （Codex 复审 PR #98 P2）。这个假设耦合着 error_handlers.py 仍然给 `Exception`
+      注册兜底处理器；那条注册若被移除，这里要一并回来重新核实。
+    两种都记录、都原样重新抛出，不吞异常。
     """
 
     def __init__(self, app):
@@ -72,14 +86,18 @@ class RequestLoggingMiddleware:
             await self.app(scope, receive, send_wrapper)
         except Exception:
             duration_ms = int((time.monotonic() - started) * 1000)
-            # 正常情况下异常会在响应头发出之前被全局异常处理器转成 JSONResponse，
-            # 不会传播到这里；传播到这里说明要么是响应头已发出后才炸的（导出生成器
-            # 中途报错），要么是响应头尚未发出就跳过了全局处理器（框架层缺陷）。
-            # 两种都要记录、都原样重新抛出，只用 outcome 区分是哪一种。
-            outcome = "error" if state["response_started"] else "error_before_response"
+            if state["response_started"]:
+                outcome = "error"
+                status = state["status"]
+            else:
+                # 见类 docstring：这里看不到发送动作，不代表客户端最终没收到响应——
+                # 兜底的 Exception 处理器在 ServerErrorMiddleware 里，必然会把它转成
+                # 500。显式记 500 而不是 None，避免被读成"连响应都没发"。
+                outcome = "error_before_response"
+                status = 500
             logger.exception(
                 "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
-                method, path, state["status"], duration_ms, outcome, get_request_id(),
+                method, path, status, duration_ms, outcome, get_request_id(),
             )
             raise
         else:
