@@ -1,4 +1,3 @@
-import { Tooltip } from 'antd';
 import { useId, useMemo, useState } from 'react';
 import { formatScopeDateLabel } from '@/pages/Analysis/scopeDateLabel';
 import type { KeywordTrendPoint, TrendPointStatus } from '@/services/keywordTrend';
@@ -135,6 +134,14 @@ export default function TrendTimelineChart({
   // 否则提示框会跟点对不上。此前 Tooltip 包住整个 <svg>，只能贴在整块图表的固定
   // 位置（近似顶部居中），既不随左右移动、也不随排名高低变化——用户反馈"应该跟着
   // 线走"（issue #94）。
+  //
+  // **不用 antd 的 `<Tooltip>`。** 试过用一个绝对定位的 1x1 锚点配合 `open`
+  // 受控的 Tooltip，结果鼠标连续滑动、`active` 从一个点切到另一个点时提示框位置
+  // 不动——rc-trigger 只在 `open` 从 false 变 true 那一刻测量锚点位置，锚点已经
+  // 挂载着（`open` 全程为 true）时改它的 `left`/`top` 不会触发重新对齐（用户反馈
+  // "按天的悬浮有 bug，鼠标滑动，悬浮位置不动"）。改为自己画一个绝对定位的提示框，
+  // 位置完全由 React state 驱动，每次渲染都是全新计算的坐标，不依赖任何缓存的
+  // 对齐结果。
   const anchorX = active !== null && activeIndex !== null ? xOf(activeIndex) : 0;
   const anchorY = active !== null && active.status === 'RANKED' && active.ranking !== null
     ? yOf(active.ranking)
@@ -291,30 +298,36 @@ export default function TrendTimelineChart({
       </svg>
 
       {active !== null && (
-        <Tooltip
-          open
-          trigger={[]}
-          title={(
-            <div style={{ minWidth: 160 }}>
-              <div>{formatScopeDateLabel(active.date, view)}</div>
-              <div>
-                {STATUS_META[active.status].label}
-                {active.status === 'RANKED' && active.ranking !== null
-                  ? `：ABA 排名 ${active.ranking.toLocaleString()}`
-                  : ''}
-              </div>
-            </div>
-          )}
+        // 自己画的提示框，位置每次渲染都重新算，不经过任何会缓存对齐结果的库组件
+        // （见上方大注释）。`translate(-50%, -100%)` 让框水平居中在锚点上方、垂直
+        // 贴在锚点上边缘，再上移 8px 留出与点的间距；`pointerEvents: 'none'` 避免
+        // 提示框本身挡住 <svg> 的 onMouseMove。
+        <div
+          data-testid="trend-tooltip"
+          style={{
+            position: 'absolute',
+            left: anchorX,
+            top: anchorY,
+            transform: 'translate(-50%, -100%) translateY(-8px)',
+            background: 'rgba(0, 0, 0, 0.85)',
+            color: '#fff',
+            padding: '6px 10px',
+            borderRadius: 4,
+            fontSize: 12,
+            lineHeight: 1.6,
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+            zIndex: 10,
+          }}
         >
-          {/* 1x1 的透明锚点，定位到当前悬浮点的真实像素坐标——Tooltip 贴着这个点走，
-              不是贴着整个图表的固定位置。`pointerEvents: 'none'` 避免它挡住下面
-              <svg> 的 onMouseMove，坐标已由 svg 的鼠标事件算好，这里只负责挂载点。 */}
-          <span
-            style={{
-              position: 'absolute', left: anchorX, top: anchorY, width: 1, height: 1, pointerEvents: 'none',
-            }}
-          />
-        </Tooltip>
+          <div>{formatScopeDateLabel(active.date, view)}</div>
+          <div>
+            {STATUS_META[active.status].label}
+            {active.status === 'RANKED' && active.ranking !== null
+              ? `：ABA 排名 ${active.ranking.toLocaleString()}`
+              : ''}
+          </div>
+        </div>
       )}
     </div>
   );
