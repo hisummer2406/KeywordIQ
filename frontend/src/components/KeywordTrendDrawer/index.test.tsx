@@ -141,9 +141,11 @@ describe('KeywordTrendDrawer', () => {
     fireEvent.click(screen.getByText('按周'));
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
 
-    // 第二次请求先落地——响应的 view 是 WEEK，锚定期按周格式渲染
-    // （"2026年第N周（...）"），不是 DAY 格式的"2026年07月10日"。
-    await screen.findByText(/2026年第\d+周/);
+    // 第二次请求先落地——响应的 view 是 WEEK，锚定期/覆盖范围/历史排名日期都按周格式
+    // 渲染（"2026年第N周（...）"），不是 DAY 格式的"2026年07月10日"。用
+    // findAllByText 而非 findByText：这条正则同时命中锚定期、覆盖范围、两个
+    // StatLine 的日期几处文案，不是唯一匹配。
+    expect((await screen.findAllByText(/2026年第\d+周/)).length).toBeGreaterThan(0);
 
     // 第一次（更早发出、更晚落地）的结果到达时不应覆盖已经展示的第二次结果
     resolveFirst(baseResponse({ on: '2026-06-01' }));
