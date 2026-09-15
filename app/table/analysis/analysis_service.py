@@ -143,12 +143,31 @@ def _resolve_date(
     return given
 
 
-async def _available_dates(db: AsyncSession, site: str, view: str) -> list[date]:
-    return list((await db.execute(crud.available_dates_stmt(site, view))).scalars().all())
+async def _timed_execute(db: AsyncSession, stmt, db_ms: list[int] | None):
+    """包裹 ``await db.execute(...)``，可选地把这次等待耗时（含连接池 checkout）
+    追加进 ``db_ms``——慢请求诊断只信这个累加值是"数据库耗时"，不再信"阶段耗时求和"
+    （后者会把阶段内纯 Python 的结果整形也算作数据库时间，见 ``search()`` 的说明与
+    Codex 复审 P2）。``db_ms`` 为 ``None`` 时（未触发诊断的调用方，如 ``get_scope``）
+    不计时，避免无意义的 `time.monotonic()` 调用。
+    """
+    if db_ms is None:
+        return await db.execute(stmt)
+    t0 = time.monotonic()
+    result = await db.execute(stmt)
+    db_ms.append(int((time.monotonic() - t0) * 1000))
+    return result
+
+
+async def _available_dates(
+    db: AsyncSession, site: str, view: str, db_ms: list[int] | None = None
+) -> list[date]:
+    result = await _timed_execute(db, crud.available_dates_stmt(site, view), db_ms)
+    return list(result.scalars().all())
 
 
 async def _fetch_trends(
-    db: AsyncSession, site: str, keyword_ids: list[int], on: date, view: str
+    db: AsyncSession, site: str, keyword_ids: list[int], on: date, view: str,
+    db_ms: list[int] | None = None,
 ) -> tuple[dict[int, list[int]], dict[int, list[date]], dict[int, list[int | None]]]:
     """一次回溯查询同时喂趋势与历史排名。
 
@@ -158,7 +177,7 @@ async def _fetch_trends(
     """
     if not keyword_ids:
         return {}, {}, {}
-    rows = (await db.execute(crud.trends_stmt(site, keyword_ids, on, view))).all()
+    rows = (await _timed_execute(db, crud.trends_stmt(site, keyword_ids, on, view), db_ms)).all()
     return (
         crud.shape_trends(rows, on=on, view=view),
         crud.shape_trend_dates(rows, on=on, view=view),
@@ -169,6 +188,7 @@ async def _fetch_trends(
 async def _listed_total(
     db: AsyncSession, site: str, view: str, on: date,
     req: AnalysisSearchRequest, has_filters: bool, user_id: int,
+    db_ms: list[int] | None = None,
 ) -> int:
     """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
 
@@ -177,18 +197,17 @@ async def _listed_total(
     无筛选时读预存值，O(1)。
     """
     if not has_filters:
-        return (
-            await db.execute(crud.scope_row_count_stmt(site, view, on))
-        ).scalar_one_or_none() or 0
-    return (
-        await db.execute(crud.count_filtered_stmt(site, view, on, req, user_id))
-    ).scalar_one()
+        result = await _timed_execute(db, crud.scope_row_count_stmt(site, view, on), db_ms)
+        return result.scalar_one_or_none() or 0
+    result = await _timed_execute(db, crud.count_filtered_stmt(site, view, on, req, user_id), db_ms)
+    return result.scalar_one()
 
 
-async def _dropped_total(db: AsyncSession, site: str, view: str, on: date) -> int:
-    return (
-        await db.execute(crud.scope_dropped_count_stmt(site, view, on))
-    ).scalar_one_or_none() or 0
+async def _dropped_total(
+    db: AsyncSession, site: str, view: str, on: date, db_ms: list[int] | None = None
+) -> int:
+    result = await _timed_execute(db, crud.scope_dropped_count_stmt(site, view, on), db_ms)
+    return result.scalar_one_or_none() or 0
 
 
 def _combined_total(
@@ -246,9 +265,17 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
     总耗时超过 ``settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS`` 才在结尾输出一条 WARNING，
     不新增查询次数、不在阈值以下时输出。计时点是既有 ``await db.execute(...)`` 调用的
     包裹，不是新增的探测。
+
+    ``db_ms`` 单独累加每一次 ``await db.execute(...)`` 的等待时间（经 ``_timed_execute``），
+    与 ``stage_ms`` 分开：后者按既有阶段划分、每个阶段内部混杂着数据库往返与纯 Python
+    的结果整形（``shape_rows``/构造响应模型等），直接把 ``stage_ms`` 求和当成"数据库
+    耗时"会让整形慢的请求也显得像是数据库慢（Codex 复审 PR #98 P2：`sum(stage_ms.values())`
+    恒等于 `total_ms`，`app_ms` 恒等于 0，诊断从不指向应用侧）。``stage_ms`` 仍然保留在
+    日志里，用来进一步定位是哪个阶段慢，只是不再充当 db/app 二分的依据。
     """
     request_started = time.monotonic()
     stage_ms: dict[str, int] = {}
+    db_ms: list[int] = []
     checkpoint = request_started
 
     def _stage(name: str) -> None:
@@ -257,22 +284,40 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
         stage_ms[name] = int((now - checkpoint) * 1000)
         checkpoint = now
 
+    def _log_slow_diagnostic(total_ms: int, *, site: str, view: str, on: date | None) -> None:
+        db_total_ms = sum(db_ms)
+        logger.warning(
+            "分析查询慢请求诊断 site=%s view=%s on=%s page=%d perPage=%d "
+            "orderBy=%s orderDir=%s filters=%s stage_ms=%s "
+            "db_total_ms(仅 await db.execute 等待时间,含连接获取)=%d "
+            "app_ms(其余应用处理:结果整形/序列化等)=%d total_ms=%d",
+            site, view, on, req.page, req.perPage, req.orderBy, req.orderDir,
+            _search_filter_summary(req), stage_ms,
+            db_total_ms, max(total_ms - db_total_ms, 0), total_ms,
+        )
+
     site = _resolve_site(req.site)
     view = req.view
-    dates = await _available_dates(db, site, view)
+    dates = await _available_dates(db, site, view, db_ms=db_ms)
     on = _resolve_date(req.date, dates)
     _stage("scope_ms")
 
-    # 该站点该视图无任何数据：正常返回空结果（非报错），耗时必然可忽略，不产出诊断。
+    # 该站点该视图无任何数据：正常返回空结果（非报错）。耗时通常可忽略，但
+    # `_available_dates` 本身也可能因连接池排队/锁等待而慢——不能因为结果集是空的就
+    # 假定这次调用一定快，否则恰恰是"作用域解析变慢"这种情形永远不出现在诊断里
+    # （Codex 复审 PR #98 P2）。
     if on is None:
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+            _log_slow_diagnostic(total_ms, site=site, view=view, on=None)
         return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
 
     # 筛选一律以锚定期那一行为准，掉榜行在锚定期没有行可供匹配——所以**任何筛选一生效，
     # 掉榜段就为空**。这不是优化，是「只看选定期」这条口径的必然结果，界面侧须明示。
     has_filters = crud.request_has_filters(req)
 
-    listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id)
-    dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on)
+    listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id, db_ms=db_ms)
+    dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on, db_ms=db_ms)
     _stage("count_ms")
 
     # 两段各自有序且永不交错（掉榜恒在末尾），故按边界切分、各发一条查询，而不是
@@ -287,8 +332,10 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
         offset, limit = plan.listed
         rows += crud.shape_rows(
             (
-                await db.execute(
-                    crud.search_stmt(site, view, on, req, offset=offset, limit=limit, user_id=user_id)
+                await _timed_execute(
+                    db,
+                    crud.search_stmt(site, view, on, req, offset=offset, limit=limit, user_id=user_id),
+                    db_ms,
                 )
             ).all()
         )
@@ -299,7 +346,7 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
         take = remaining_for_dropped(limit, len(rows)) if plan.listed is not None else limit
         if take > 0:
             rows += crud.shape_dropped_rows(
-                (await db.execute(crud.dropped_stmt(site, view, on, offset, take))).all()
+                (await _timed_execute(db, crud.dropped_stmt(site, view, on, offset, take), db_ms)).all()
             )
     _stage("rows_ms")
 
@@ -310,7 +357,7 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
     # 掉榜行同样补——它那一行除了历史排名与趋势之外几乎是空的。
     row_type = DayRowItem if view == "DAY" else WeekRowItem
     ids = [r["keyword_id"] for r in rows]
-    trends, trend_dates, history = await _fetch_trends(db, site, ids, on, view)
+    trends, trend_dates, history = await _fetch_trends(db, site, ids, on, view, db_ms=db_ms)
     _stage("trend_ms")
     data = []
     for r in rows:
@@ -323,22 +370,13 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
     # 该切片有没有重建过品牌/类目。一次 LIMIT 1 探测，相对本页的多次查询可忽略。
     # 未重建时前端要明确提示——静默返回空是最难排查的形态。
     has_brand = (
-        await db.execute(crud.slice_has_brand_data_stmt(site, view, on))
+        await _timed_execute(db, crud.slice_has_brand_data_stmt(site, view, on), db_ms)
     ).first() is not None
     _stage("brand_probe_ms")
 
     total_ms = int((time.monotonic() - request_started) * 1000)
     if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
-        db_total_ms = sum(stage_ms.values())
-        logger.warning(
-            "分析查询慢请求诊断 site=%s view=%s on=%s page=%d perPage=%d "
-            "orderBy=%s orderDir=%s filters=%s stage_ms=%s "
-            "db_total_ms(连接获取+SQL执行,未细分)=%d app_ms(应用处理:结果整形/序列化等)=%d "
-            "total_ms=%d",
-            site, view, on, req.page, req.perPage, req.orderBy, req.orderDir,
-            _search_filter_summary(req), stage_ms,
-            db_total_ms, total_ms - db_total_ms, total_ms,
-        )
+        _log_slow_diagnostic(total_ms, site=site, view=view, on=on)
 
     return AnalysisSearchResponse(
         success=True, data=data, total=total, site=site, view=view, date=on,

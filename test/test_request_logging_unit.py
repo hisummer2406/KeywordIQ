@@ -107,6 +107,11 @@ async def test_error_outcome_after_response_started_reraises(caplog):
 
 @pytest.mark.asyncio
 async def test_error_before_response_started_reraises(caplog):
+    """响应头发出前就抛出的异常仍然记 status=500，不是 None——本仓库给裸 Exception
+    注册了兜底处理器（error_handlers.py 的 unhandled_exception_handler），它被
+    Starlette 拆到最外层的 ServerErrorMiddleware，本中间件看不到那次发送，但客户端
+    确实会收到 500，不是"什么都没收到"（Codex 复审 PR #98 P2）。"""
+
     async def downstream(scope, receive, send):
         raise RuntimeError("响应头发出前就炸了")
 
@@ -117,6 +122,7 @@ async def test_error_before_response_started_reraises(caplog):
     records = [r for r in caplog.records if "请求摘要" in r.message]
     assert len(records) == 1
     assert "outcome=error_before_response" in records[0].message
+    assert "status=500" in records[0].message
 
 
 @pytest.mark.asyncio
