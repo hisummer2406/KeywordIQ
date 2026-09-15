@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import AddToLibraryModal from '@/pages/Analysis/AddToLibraryModal';
 import { formatScopeDateLabel } from '@/pages/Analysis/scopeDateLabel';
 import type { View } from '@/services/analysis';
-import { getKeywordTrend, type KeywordTrendResponse, type TrendRange } from '@/services/keywordTrend';
-import TrendTimelineChart, { STATUS_META } from './TrendTimelineChart';
+import { getKeywordTrend, type KeywordTrendResponse } from '@/services/keywordTrend';
+import TrendTimelineChart, { COMMON_STATUSES, STATUS_META } from './TrendTimelineChart';
 
 const { Text } = Typography;
 
@@ -12,9 +12,13 @@ const { Text } = Typography;
  * 关键词排名趋势详情：市场分析与我的词库共用同一个抽屉组件（issue #86）。
  *
  * **来源锚点固定不变**：`on` 取打开那一刻所在页面正在看的期次（不是"今天"），此后切换
- * 视图/范围时原样重发同一个 `on`——后端按"取 <= 该日期的最新一期"映射到目标视图
+ * 视图时原样重发同一个 `on`——后端按"取 <= 该日期的最新一期"映射到目标视图
  * （见 keyword_trend_service 的 design 决策 4）。这里不在前端重新计算映射，避免与后端
  * 各算一遍、漂移后互相矛盾。
+ *
+ * **范围恒为「全部可用历史」，不提供切换**（issue #94）：曾经有过「近 30 天 / 全部可用
+ * 历史」的切换，用户反馈日常只用得到全部历史，30 天窗口反而是多余的一步选择，故直接
+ * 去掉切换、固定传 `range: 'ALL'`。后端接口仍接受 `RECENT_30D`，只是前端不再暴露入口。
  *
  * **旧请求不覆盖新结果**：用递增的请求序号而非 AbortController——umi 的 `request` 没有
  * 现成的取消口子，序号比较更简单也更不容易漏判。
@@ -47,11 +51,6 @@ interface Props {
   canAddToLibrary?: boolean;
 }
 
-const RANGE_OPTIONS: { label: string; value: TrendRange }[] = [
-  { label: '近 30 天', value: 'RECENT_30D' },
-  { label: '全部可用历史', value: 'ALL' },
-];
-
 const VIEW_OPTIONS: { label: string; value: View }[] = [
   { label: '按天', value: 'DAY' },
   { label: '按周', value: 'WEEK' },
@@ -80,18 +79,17 @@ export default function KeywordTrendDrawer({
 }: Props) {
   const showAddToLibrary = canAddToLibrary && !hideAddToLibrary;
   const [viewState, setViewState] = useState<View>(view);
-  const [range, setRange] = useState<TrendRange>('RECENT_30D');
   const [data, setData] = useState<KeywordTrendResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errored, setErrored] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const requestSeq = useRef(0);
 
-  // 每次打开重置到来源视图与默认范围——不保留上一个关键词遗留的切换状态。
+  // 每次打开（含关闭后重开、切换到另一个关键词）都重置到来源视图——不保留上一个关键词
+  // 遗留的视图切换状态。范围恒为「全部可用历史」（issue #94），不提供切换，无需重置。
   useEffect(() => {
     if (open) {
       setViewState(view);
-      setRange('RECENT_30D');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, keywordId]);
@@ -101,7 +99,7 @@ export default function KeywordTrendDrawer({
     const seq = (requestSeq.current += 1);
     setLoading(true);
     setErrored(false);
-    getKeywordTrend({ keywordId, site, view: viewState, range, on })
+    getKeywordTrend({ keywordId, site, view: viewState, range: 'ALL', on })
       .then((res) => {
         if (seq !== requestSeq.current) return; // 旧请求，不覆盖新结果
         setData(res);
@@ -113,7 +111,7 @@ export default function KeywordTrendDrawer({
       .finally(() => {
         if (seq === requestSeq.current) setLoading(false);
       });
-  }, [open, keywordId, site, viewState, range, on]);
+  }, [open, keywordId, site, viewState, on]);
 
   return (
     <Drawer
@@ -124,61 +122,30 @@ export default function KeywordTrendDrawer({
       onClose={onClose}
       destroyOnClose
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Space size={24} wrap>
-          <Radio.Group
-            optionType="button"
-            buttonStyle="solid"
-            options={VIEW_OPTIONS}
-            value={viewState}
-            onChange={(e) => setViewState(e.target.value as View)}
-          />
-          <Radio.Group
-            optionType="button"
-            buttonStyle="solid"
-            options={RANGE_OPTIONS}
-            value={range}
-            onChange={(e) => setRange(e.target.value as TrendRange)}
-          />
-          {showAddToLibrary && (
-            <a onClick={() => setLibraryOpen(true)}>加入词库</a>
-          )}
-        </Space>
-
-        {/* 范围（近 30 天 / 全部可用历史）与视图不同，不能沿用"留存旧数据展示"那条
-            纪律：`data.range` 与 `range`（Radio 当前选中值）不一致时，下面这段展示的
-            coverage/最好排名/最近可用排名是**另一个范围窗口的真实数值**，不是同一份
-            数据换个格式化——继续显示会让用户把 30 天窗口的结果误当成"全部可用历史"的
-            结果（PR #87 复审第四轮 P2）。这与 view 的处理刻意不同：view 只影响日期
-            格式化，同一份 `data` 换个 view 标签仍然自洽；range 直接决定了数值本身。
-            一旦请求结算（`!loading`），`data.range` 必然已与 `range` 一致（见下方
-            useEffect：`range` 一变就会带着新值发起新请求、用请求序号丢弃旧响应），
-            这里的判断只在切换范围、新响应还没落地的那段窗口内生效。 */}
-        {loading && (data === null || data.range !== range) && (
-          <div style={{ textAlign: 'center', padding: 40 }}>
-            <Spin />
-          </div>
-        )}
-
-        {errored && (
-          <Alert type="error" showIcon message="加载失败，请重试" />
-        )}
-
-        {/* `data !== null` 排除首次挂载、请求还没回来的那一瞬间——那时不该说"暂无数据"，
-            只是"还没查完"，两者含义不同。 */}
-        {!errored && !loading && data !== null && data.on === null && (
-          <Alert type="info" showIcon message={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
-        )}
-
-        {/* 下面这段一律读 `data.view`（响应自带的视图），不读 `viewState`（用户当前选中
-            的视图）：切换 DAY/WEEK 时 `viewState` 立即变、`data` 要等新响应回来才换，
-            中间这段窗口里 `loading` 只包住小图（见下方 Spin），若统计文字与日期格式化
-            仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
-            ——数字没变但含义被读反了（PR #87 复审 P2）。`data.range === range` 见上方
-            大注释——range 与 view 不同，不满足就整段不渲染。 */}
-        {!errored && data !== null && data.range === range && data.on !== null && (
-          <>
-            <Space size={32} wrap style={{ fontSize: 13 }}>
+      {/* 抽屉铺满视口宽度（placement="bottom"），但内容没有必要跟着铺满——不加这层居中
+          容器，内容会贴在视口左侧，右边留一大片空白，看起来像没对齐（用户反馈）。
+          `width: fit-content` 让容器宽度跟着实际内容（文字列 + 760px 图表）走，
+          不用猜一个固定像素值，两栏布局改动时也不必跟着改这个数字。 */}
+      <div style={{ width: 'fit-content', maxWidth: '100%', margin: '0 auto' }}>
+        {/* 文字统计在左（竖排），日/周切换 + 图表 + 图例在右——切换控件紧贴在图表正上方，
+            不放在整个内容区顶部：用户反馈原先放在最上面时，图表看起来像是另起一段、跟
+            控件对不上。控件不放进下面的 `data !== null` 条件里，是为了在加载中/失败/
+            无数据这几种状态下也能切视图重试，不因为还没数据就把控件一起藏起来。
+            `flexWrap: 'wrap'`：左列 `flexShrink: 0` 且右列内嵌一个固定 760px 宽的
+            `<svg>`，两者所需宽度是相加而非取大——视口窄于「文字列宽度 + 32 + 760」时
+            没有收缩空间，会被迫横向溢出、右侧图表被裁掉一截（Codex 审核 PR #95 第三轮
+            P2）。允许换行后窄视口下改为上下堆叠，不再横向溢出；正常宽度下两列仍并排，
+            这行改动不影响当前的默认视觉。 */}
+        <div
+          data-testid="trend-drawer-columns"
+          style={{
+            display: 'flex', gap: 32, alignItems: 'flex-start', flexWrap: 'wrap',
+          }}
+        >
+          {/* `data !== null` 排除首次挂载、请求还没回来的那一瞬间——那时不该说"暂无数据"，
+              两者含义不同；这一列在没有数据前干脆不渲染，不留一个空的占位列。 */}
+          {!errored && data !== null && data.on !== null && (
+            <Space direction="vertical" size={12} style={{ fontSize: 13, flexShrink: 0 }}>
               <div>
                 <Text type="secondary">实际使用的锚定期：</Text>
                 <Text strong>{formatScopeDateLabel(data.on, data.view)}</Text>
@@ -197,27 +164,71 @@ export default function KeywordTrendDrawer({
               <StatLine label="区间最好排名" stat={data.best_ranking} view={data.view} />
               <StatLine label="最近可用排名" stat={data.latest_available} view={data.view} />
             </Space>
+          )}
 
-            <Spin spinning={loading}>
-              <TrendTimelineChart points={data.points} view={data.view} />
-            </Spin>
-
-            <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c' }}>
-              {(Object.keys(STATUS_META) as (keyof typeof STATUS_META)[]).map((s) => (
-                <Space key={s} size={4}>
-                  <span
-                    style={{
-                      display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                      background: STATUS_META[s].color,
-                    }}
-                  />
-                  {STATUS_META[s].label}
-                </Space>
-              ))}
+          <div>
+            <Space size={24} wrap style={{ marginBottom: 12 }}>
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                options={VIEW_OPTIONS}
+                value={viewState}
+                onChange={(e) => setViewState(e.target.value as View)}
+              />
+              {showAddToLibrary && (
+                <a onClick={() => setLibraryOpen(true)}>加入词库</a>
+              )}
             </Space>
-          </>
-        )}
-      </Space>
+
+            {loading && data === null && (
+              <div style={{ textAlign: 'center', padding: 40 }}>
+                <Spin />
+              </div>
+            )}
+
+            {errored && (
+              <Alert type="error" showIcon message="加载失败，请重试" />
+            )}
+
+            {!errored && !loading && data !== null && data.on === null && (
+              <Alert type="info" showIcon message={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
+            )}
+
+            {/* 下面这段一律读 `data.view`（响应自带的视图），不读 `viewState`（用户当前选中
+                的视图）：切换 DAY/WEEK 时 `viewState` 立即变、`data` 要等新响应回来才换，
+                中间这段窗口里 `loading` 只包住小图（见下方 Spin），若统计文字与日期格式化
+                仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
+                ——数字没变但含义被读反了（PR #87 复审 P2）。 */}
+            {!errored && data !== null && data.on !== null && (
+              <>
+                <Spin spinning={loading}>
+                  <TrendTimelineChart points={data.points} view={data.view} />
+                </Spin>
+
+                {/* 图例只常驻三种常见状态（用户反馈），另外两种少见情况（该期报表已导入但未
+                    收录/已超出保留范围）不占常驻位置——但判定口径不变，真出现时图上的点与
+                    悬浮提示仍按各自真实状态显示，见 COMMON_STATUSES 的注释。居中对齐图表
+                    ——默认左对齐时图例贴在图表左侧，跟图表的视觉中心对不上（用户反馈）。 */}
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+                  <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c' }}>
+                    {COMMON_STATUSES.map((s) => (
+                      <Space key={s} size={4}>
+                        <span
+                          style={{
+                            display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                            background: STATUS_META[s].color,
+                          }}
+                        />
+                        {STATUS_META[s].label}
+                      </Space>
+                    ))}
+                  </Space>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
 
       {showAddToLibrary && (
         <AddToLibraryModal

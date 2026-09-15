@@ -1,4 +1,4 @@
-import { FacebookOutlined, GoogleOutlined, TikTokOutlined } from '@ant-design/icons';
+import { BarChartOutlined, FacebookOutlined, GoogleOutlined, TikTokOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
@@ -311,10 +311,27 @@ export function buildColumns(
         const trendsUrl = googleTrendsUrl(r.keyword, siteCode);
         const adLibraryUrl = facebookAdLibraryUrl(r.keyword, siteCode);
         const tiktokUrl = tiktokAdLibraryUrl(r.keyword, siteCode);
-        if (!trendsUrl && !adLibraryUrl && !tiktokUrl) return PLACEHOLDER;
+        // 「历史走势」图标不依赖站点码或该行是否有小图数据——关键词身份已知就该能查
+        // （issue #86 已确立的原则），只依赖调用方是否传入了 onOpenTrend。它与「搜索
+        // 趋势」小图格打开**同一个**详情面板，不新建第二套图表或查询路径（issue #94）。
+        if (!trendsUrl && !adLibraryUrl && !tiktokUrl && !onOpenTrend) return PLACEHOLDER;
         // 上下排列：这一列窄，横向摆图标会挤压相邻列；纵向堆叠不占额外横向空间。
+        // 四个图标共用同一个 fontSize（16px），不给任何一个单独加码。
         return (
-          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <span
+            style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, fontSize: 16,
+            }}
+          >
+            {onOpenTrend && (
+              <a
+                onClick={() => onOpenTrend(r)}
+                title="查看关键词 ABA 排名趋势详情（含完整历史）"
+                aria-label="查看历史走势"
+              >
+                <BarChartOutlined />
+              </a>
+            )}
             {trendsUrl && (
               <a
                 href={trendsUrl}
