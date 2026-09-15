@@ -194,6 +194,34 @@ async def test_failed_request_still_emits_diagnostic_marked_failed(monkeypatch, 
     assert "request_failed=True" in records[0].message
 
 
+async def test_cancelled_request_still_emits_diagnostic_marked_cancelled(monkeypatch, caplog):
+    """``asyncio.CancelledError`` 继承自 ``BaseException`` 而不是 ``Exception``
+    （3.8+），普通的 ``except Exception`` 捕不到它——Uvicorn 优雅关闭超时/应用层
+    超时都是通过取消这个请求的 Task 实现的。不单独捕获的话，
+    ``app/common/request_logging.py`` 只会记一条通用的 ``outcome=cancelled``
+    摘要，没有这里的 site/view/filters/stage_ms 明细，而取消往往发生在请求已经
+    很慢的时候，明细恰恰最有价值（Codex 复审 PR #98 第三轮 P2）。原始的
+    ``CancelledError`` 必须原样重新抛出，不能被诊断逻辑吞掉——吞掉会破坏取消语义
+    本身。"""
+    monkeypatch.setattr(settings, "ANALYSIS_SLOW_QUERY_THRESHOLD_MS", 30)
+    _patch_fast_helpers(monkeypatch)
+
+    async def _slow_then_cancelled_fetch_trends(*_args, **_kwargs):
+        await asyncio.sleep(0.06)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(service, "_fetch_trends", _slow_then_cancelled_fetch_trends)
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        with pytest.raises(asyncio.CancelledError):
+            await service.search(_FakeSession(), _req(), user_id=1)
+
+    records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
+    assert len(records) == 1
+    assert "request_failed=True" in records[0].message
+    assert "request_cancelled=True" in records[0].message
+
+
 async def test_no_data_scope_but_slow_scope_resolution_still_diagnoses(monkeypatch, caplog):
     """无可用日期的早退路径此前会无条件跳过诊断，哪怕 `_available_dates` 本身因连接池
     排队/锁等待而慢——那恰恰是最该被诊断出来的情形之一，却因为"结果集是空的"被短路

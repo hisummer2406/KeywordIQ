@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -287,6 +288,13 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
     监听（``database.py``）也只在 ``after_cursor_execute`` 记录、对失败的执行同样
     失明——恰是最该被诊断出来的一类（连接卡死、锁等待，见 issue #4）
     （Codex 复审 PR #98 P2）。
+
+    **取消路径单独处理**：`asyncio.CancelledError` 继承自 `BaseException`，
+    `except Exception` 捕不到它——Uvicorn 优雅关闭超时/应用层超时都是通过取消
+    这个请求的 Task 实现的。不单独捕获的话，`request_logging.py` 只会记一条通用的
+    `outcome=cancelled` 摘要，没有这里的 site/view/filters/stage_ms/db_total_ms
+    明细——而取消往往发生在请求已经很慢的时候，明细恰恰最有价值（Codex 复审
+    PR #98 第三轮 P2）。同样标记后原样重新抛出，不吞。
     """
     request_started = time.monotonic()
     stage_ms: dict[str, int] = {}
@@ -302,14 +310,14 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
         stage_ms[name] = int((now - checkpoint) * 1000)
         checkpoint = now
 
-    def _log_slow_diagnostic(total_ms: int, *, failed: bool = False) -> None:
+    def _log_slow_diagnostic(total_ms: int, *, failed: bool = False, cancelled: bool = False) -> None:
         db_total_ms = sum(db_ms)
         logger.warning(
-            "分析查询慢请求诊断 request_failed=%s site=%s view=%s on=%s page=%d perPage=%d "
-            "orderBy=%s orderDir=%s filters=%s stage_ms=%s "
+            "分析查询慢请求诊断 request_failed=%s request_cancelled=%s site=%s view=%s on=%s "
+            "page=%d perPage=%d orderBy=%s orderDir=%s filters=%s stage_ms=%s "
             "db_total_ms(仅 await db.execute 等待时间,含连接获取)=%d "
             "app_ms(其余应用处理:结果整形/序列化等)=%d total_ms=%d",
-            failed, site, view, on, req.page, req.perPage, req.orderBy, req.orderDir,
+            failed, cancelled, site, view, on, req.page, req.perPage, req.orderBy, req.orderDir,
             _search_filter_summary(req), stage_ms,
             db_total_ms, max(total_ms - db_total_ms, 0), total_ms,
         )
@@ -401,6 +409,17 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
             success=True, data=data, total=total, site=site, view=view, date=on,
             pending_rebuild=not has_brand,
         )
+    except asyncio.CancelledError:
+        # asyncio.CancelledError 继承自 BaseException 而不是 Exception（3.8+），
+        # 下面的 except Exception 捕不到它——Uvicorn 优雅关闭超时/应用层超时都是
+        # 通过取消这个请求的 Task 实现的。`_timed_execute` 的 finally 已经把取消前
+        # 已等待的耗时计进 db_ms，但如果这里不单独捕获，那些数据永远不会被写进日志：
+        # request_logging.py 那一层只有一条通用的 outcome=cancelled 摘要，没有这里的
+        # site/view/filters/stage_ms/db_total_ms 明细（Codex 复审 PR #98 第三轮 P2）。
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+            _log_slow_diagnostic(total_ms, failed=True, cancelled=True)
+        raise
     except Exception:
         total_ms = int((time.monotonic() - request_started) * 1000)
         if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
