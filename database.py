@@ -83,27 +83,32 @@ AsyncSessionFactory = async_sessionmaker(
 
 
 # ========================================
-# 慢查询日志配置 (同步引擎)
+# 慢查询日志（同步 + 异步引擎均覆盖）
 # ========================================
-SLOW_QUERY_THRESHOLD = 1.0  # 超过 1 秒记录为慢查询
+# 此前这两个事件监听只挂在同步引擎（engine）上——服务导入/导出/迁移；而
+# /api/analysis/search 等面向请求的查询全部走异步引擎（async_engine，asyncpg），
+# 对这条最高频的读路径完全没有慢查询记录。cursor 级事件是 DBAPI 层面的，
+# AsyncEngine 没有自己的这套事件，要挂在它内部持有的同步 Engine 上
+# （``async_engine.sync_engine``）才会在异步查询时同样触发。
+# 阈值改为可配置（settings.SLOW_QUERY_THRESHOLD_SECONDS），不再硬编码。
 
 
-@event.listens_for(engine, "before_cursor_execute")
-def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-    """记录查询开始时间"""
-    context._query_start_time = time.time()
+def _register_slow_query_listener(target_engine) -> None:
+    @event.listens_for(target_engine, "before_cursor_execute")
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        context._query_start_time = time.time()
+
+    @event.listens_for(target_engine, "after_cursor_execute")
+    def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        total = time.time() - context._query_start_time
+        if total > settings.SLOW_QUERY_THRESHOLD_SECONDS:
+            # 截断过长的 SQL 语句；只记语句文本不记参数值，参数可能带筛选/检索词。
+            sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
+            logger.warning(f"慢查询检测 ({total:.2f}s): {sql_preview}")
 
 
-@event.listens_for(engine, "after_cursor_execute")
-def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-    """查询结束后记录慢查询"""
-    total = time.time() - context._query_start_time
-    if total > SLOW_QUERY_THRESHOLD:
-        # 截断过长的 SQL 语句
-        sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
-        logger.warning(
-            f"慢查询检测 ({total:.2f}s): {sql_preview}"
-        )
+_register_slow_query_listener(engine)
+_register_slow_query_listener(async_engine.sync_engine)
 
 
 # 获取同步数据库会话 (FastAPI 依赖注入)

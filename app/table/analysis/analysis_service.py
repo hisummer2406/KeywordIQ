@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import time
 from collections.abc import Iterator
 from datetime import date
 
@@ -221,18 +222,48 @@ async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
     )
 
 
+def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
+    """慢请求诊断用的筛选白名单摘要——只出布尔/计数字段，MUST NOT 含检索词或 ASIN
+    原文，与「校验错误不回显请求内容」是同一条纪律在诊断日志上的延伸。"""
+    return {
+        "has_keyword_search": bool(req.keyword or req.product_title),
+        "has_asin_filter": bool(req.asin),
+        "categories_count": len(req.categories) if req.categories else 0,
+        "brands_count": len(req.brands) if req.brands else 0,
+        "is_new": req.is_new,
+        "competitor_new": req.competitor_new,
+        "include": req.include,
+    }
+
+
 async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> AnalysisSearchResponse:
     """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。
 
     ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新发现」筛选判定关注
     关系，MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
+
+    **慢请求诊断**（design.md 决策 D 第二层）：围绕既有阶段用 ``time.monotonic()`` 打点，
+    总耗时超过 ``settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS`` 才在结尾输出一条 WARNING，
+    不新增查询次数、不在阈值以下时输出。计时点是既有 ``await db.execute(...)`` 调用的
+    包裹，不是新增的探测。
     """
+    request_started = time.monotonic()
+    stage_ms: dict[str, int] = {}
+    checkpoint = request_started
+
+    def _stage(name: str) -> None:
+        nonlocal checkpoint
+        now = time.monotonic()
+        stage_ms[name] = int((now - checkpoint) * 1000)
+        checkpoint = now
+
     site = _resolve_site(req.site)
     view = req.view
     dates = await _available_dates(db, site, view)
     on = _resolve_date(req.date, dates)
+    _stage("scope_ms")
 
-    # 该站点该视图无任何数据：正常返回空结果（非报错）
+    # 该站点该视图无任何数据：正常返回空结果（非报错），耗时必然可忽略，不产出诊断。
     if on is None:
         return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
 
@@ -242,6 +273,7 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
 
     listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id)
     dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on)
+    _stage("count_ms")
 
     # 两段各自有序且永不交错（掉榜恒在末尾），故按边界切分、各发一条查询，而不是
     # UNION ALL 之后整体排序——后者会强制物化两段全部行，而在榜段就有四十多万行。
@@ -269,6 +301,7 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
             rows += crud.shape_dropped_rows(
                 (await db.execute(crud.dropped_stmt(site, view, on, offset, take))).all()
             )
+    _stage("rows_ms")
 
     total = _combined_total(listed_total, dropped_total, req, has_filters)
 
@@ -278,6 +311,7 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
     row_type = DayRowItem if view == "DAY" else WeekRowItem
     ids = [r["keyword_id"] for r in rows]
     trends, trend_dates, history = await _fetch_trends(db, site, ids, on, view)
+    _stage("trend_ms")
     data = []
     for r in rows:
         item = row_type(**r)
@@ -291,6 +325,20 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
     has_brand = (
         await db.execute(crud.slice_has_brand_data_stmt(site, view, on))
     ).first() is not None
+    _stage("brand_probe_ms")
+
+    total_ms = int((time.monotonic() - request_started) * 1000)
+    if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+        db_total_ms = sum(stage_ms.values())
+        logger.warning(
+            "分析查询慢请求诊断 site=%s view=%s on=%s page=%d perPage=%d "
+            "orderBy=%s orderDir=%s filters=%s stage_ms=%s "
+            "db_total_ms(连接获取+SQL执行,未细分)=%d app_ms(应用处理:结果整形/序列化等)=%d "
+            "total_ms=%d",
+            site, view, on, req.page, req.perPage, req.orderBy, req.orderDir,
+            _search_filter_summary(req), stage_ms,
+            db_total_ms, total_ms - db_total_ms, total_ms,
+        )
 
     return AnalysisSearchResponse(
         success=True, data=data, total=total, site=site, view=view, date=on,
