@@ -130,23 +130,18 @@ export default function TrendTimelineChart({
   // 直接崩掉整个抽屉（PR #87 复审第四轮 P2）。
   const active = activeIndex === null ? null : (points[activeIndex] ?? null);
 
+  // 悬浮提示的锚点坐标要跟着这个点实际画在哪——在榜点在折线上（yOf(ranking)），
+  // 非在榜点在基线上（BASELINE_Y），与下方 <circle> 的 cy 取值必须是同一套逻辑，
+  // 否则提示框会跟点对不上。此前 Tooltip 包住整个 <svg>，只能贴在整块图表的固定
+  // 位置（近似顶部居中），既不随左右移动、也不随排名高低变化——用户反馈"应该跟着
+  // 线走"（issue #94）。
+  const anchorX = active !== null && activeIndex !== null ? xOf(activeIndex) : 0;
+  const anchorY = active !== null && active.status === 'RANKED' && active.ranking !== null
+    ? yOf(active.ranking)
+    : BASELINE_Y;
+
   return (
-    <Tooltip
-      open={active !== null}
-      title={
-        active === null ? null : (
-          <div style={{ minWidth: 160 }}>
-            <div>{formatScopeDateLabel(active.date, view)}</div>
-            <div>
-              {STATUS_META[active.status].label}
-              {active.status === 'RANKED' && active.ranking !== null
-                ? `：ABA 排名 ${active.ranking.toLocaleString()}`
-                : ''}
-            </div>
-          </div>
-        )
-      }
-    >
+    <div style={{ position: 'relative', width, height: HEIGHT }}>
       <svg
         width={width}
         height={HEIGHT}
@@ -294,7 +289,34 @@ export default function TrendTimelineChart({
           );
         })}
       </svg>
-    </Tooltip>
+
+      {active !== null && (
+        <Tooltip
+          open
+          trigger={[]}
+          title={(
+            <div style={{ minWidth: 160 }}>
+              <div>{formatScopeDateLabel(active.date, view)}</div>
+              <div>
+                {STATUS_META[active.status].label}
+                {active.status === 'RANKED' && active.ranking !== null
+                  ? `：ABA 排名 ${active.ranking.toLocaleString()}`
+                  : ''}
+              </div>
+            </div>
+          )}
+        >
+          {/* 1x1 的透明锚点，定位到当前悬浮点的真实像素坐标——Tooltip 贴着这个点走，
+              不是贴着整个图表的固定位置。`pointerEvents: 'none'` 避免它挡住下面
+              <svg> 的 onMouseMove，坐标已由 svg 的鼠标事件算好，这里只负责挂载点。 */}
+          <span
+            style={{
+              position: 'absolute', left: anchorX, top: anchorY, width: 1, height: 1, pointerEvents: 'none',
+            }}
+          />
+        </Tooltip>
+      )}
+    </div>
   );
 }
 
