@@ -40,9 +40,14 @@ export default function RankedList({
           值全换行会明显撑高行，故按列传 1。完全放开则不可取——一格三个值全展开会把行高
           顶到卡牌的一倍以上，而这两列只是辅助信息，不该主导行高。
         */
+        // 这个值会被 wrapValue 包一层（悬浮历史面板）时，禁用 Paragraph 自带的省略号
+        // 提示——它与外层面板同样按 hover 触发，两个浮层会同时弹出、彼此遮挡，而且
+        // 恰恰是长到需要截断的品牌名最容易撞上这种情况。全名此时已经由外层面板的
+        // 标题栏承担展示，不需要这里再重复一份（issue #96，PR #97 Codex 审核 P2）。
+        const suppressTooltip = Boolean(v && wrapValue);
         const paragraph = (
           <Typography.Paragraph
-            ellipsis={{ rows, tooltip: v ?? undefined }}
+            ellipsis={{ rows, tooltip: suppressTooltip ? false : (v ?? undefined) }}
             style={{ fontSize: 12, marginBottom: 0, color: v ? undefined : '#ccc', flex: 1 }}
           >
             {v || '—'}

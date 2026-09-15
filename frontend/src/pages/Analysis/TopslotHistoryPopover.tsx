@@ -10,9 +10,16 @@ import { formatScopeDateLabel } from './scopeDateLabel';
 
 /**
  * ASIN/品牌悬浮历史面板（issue #96）。每个非空槽位/品牌各挂一个独立实例——不是
- * 左侧列表 + 右侧详情共享一个实例的形态。这个选择让"快速切换查看对象不串位"这条
- * 竞态要求由结构本身满足：不同身份对应不同的组件实例，各自的请求序号、状态互不
- * 可见，不需要在一个共享实例里应对"身份变了但上一次请求还没回来"。
+ * 左侧列表 + 右侧详情共享一个实例的形态。「悬浮 A 与悬浮 B 是两个不同组件」这条
+ * 只解决了跨对象的竞态：A、B 各自的请求序号、状态互不可见，不会互相覆盖。
+ *
+ * **但同一个位置的实例会被 React 复用，不会因为身份变了就重新挂载。** 表格按
+ * `keyword_id` 复用行组件是 ProTable 的既有行为（同一个关键词横跨两次查询结果时，
+ * React 认的是这把 key，不是这一刻具体渲染了哪个 ASIN/品牌）：切换查询日期/视图后，
+ * 同一行同一槽位的 `value`/`on`/`view` 这些 props 变了，但这个 `TopslotHistoryPopover`
+ * 实例本身、它内部的 `open`/`items`/`requestSeq` 状态原样留着。不主动应对的话，
+ * 面板还开着时背后换了身份，上一次仍在飞的旧身份请求一旦回来，会通过序号校验把
+ * 旧身份的历史数据渲染在新身份下面——见下方按身份/作用域重置的 effect。
  *
  * 悬浮触发前不发请求；打开时发首次请求，面板内滚动触底翻页；请求序号防止同一实例
  * 内旧响应覆盖新响应（组件被关闭又快速重新打开时）。总次数只在首次加载成功时写入，
@@ -54,10 +61,27 @@ export default function TopslotHistoryPopover({
   const [moreErrored, setMoreErrored] = useState(false);
 
   const requestSeq = useRef(0);
+  // 写成 effect 里置位而不是 `useRef(true)` 一次性赋值：StrictMode 下 setup → cleanup →
+  // setup 会跑两轮，只在 cleanup 里置 false 会让第二轮之后永远写不进去——组件其实还挂着，
+  // 但每次响应都会被这道闸当成"已卸载"丢弃，面板卡在首次加载的转圈上不会再变化
+  // （与 `useCachedState.ts`/`useAnalysisSession.ts` 同一条纪律，PR #97 Codex 审核）。
   const mountedRef = useRef(true);
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
+
+  /** 清空分页与列表状态，为一次全新的首次加载做准备。不动 `phase`——调用方决定。 */
+  function resetForFreshLoad() {
+    setItems([]);
+    setTotal(null);
+    setPage(1);
+    setHasMore(false);
+    setLoadingMore(false);
+    setMoreErrored(false);
+  }
 
   function loadFirstPage() {
     const seq = (requestSeq.current += 1);
@@ -101,6 +125,27 @@ export default function TopslotHistoryPopover({
       });
   }
 
+  /**
+   * 身份/作用域变了（`site`/`view`/`keywordId`/`kind`/`value`/`on` 任一）就让旧请求作废
+   * 并清空状态——组件实例可能被 React 复用（同一行位置的槽位/品牌切了值，或来源页面
+   * 换了站点/视图/日期），不是每次身份变化都会重新挂载。不这样做的表现是：面板还开着
+   * 悬浮在同一个位置，背后已经换成了另一个 ASIN/品牌，之前那次仍在飞的请求一旦回来，
+   * 会通过 `requestSeq` 校验（它是同一个组件实例，没人让它作废）把旧身份的历史数据
+   * 渲染在新身份下面（PR #97 Codex 审核 P2）。
+   *
+   * 面板此刻若仍打开，直接按新身份重新拉取；关着则只清状态，下次打开走正常首次加载。
+   */
+  useEffect(() => {
+    requestSeq.current += 1;
+    resetForFreshLoad();
+    if (open) {
+      loadFirstPage();
+    } else {
+      setPhase('loading');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [site, view, keywordId, kind, value, on]);
+
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_THRESHOLD) {
@@ -112,11 +157,11 @@ export default function TopslotHistoryPopover({
     setOpen(next);
     if (next) {
       // 每次打开都重新拉取：面板不跨次缓存，站点/视图/锚定日随来源页面变化。
-      setItems([]);
-      setTotal(null);
-      setPage(1);
-      setHasMore(false);
-      setMoreErrored(false);
+      // 必须连 `loadingMore` 一起清：若上次关闭前有一次"加载更多"仍在飞，重开会让
+      // `loadFirstPage` 抢先把 `requestSeq` 往前推，那次旧响应回来时通不过序号校验、
+      // 连 `setLoadingMore(false)` 都执行不到——不清的话，这次新打开会带着一个永远
+      // 转不停的"加载更多"转圈（PR #97 Codex 审核 P2）。
+      resetForFreshLoad();
       loadFirstPage();
     }
   }
