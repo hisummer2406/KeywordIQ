@@ -96,11 +96,22 @@ need logrotate "宿主机需已安装 logrotate（多数发行版随基础安装
 # 是同一个后果（磁盘无限增长），只是更隐蔽：`logrotate -d` 语法校验会通过，看起来
 # 一切正常。RHEL/CentOS/Alibaba Cloud Linux 系发行版走 /etc/cron.daily/logrotate，
 # 较新的发行版可能改用 systemd 的 logrotate.timer，两种都认。
-if [ -f /etc/cron.daily/logrotate ] || systemctl is-enabled --quiet logrotate.timer 2>/dev/null; then
-    :
-else
-    fail "错误: 找不到 logrotate 的定时触发机制（/etc/cron.daily/logrotate 与 systemd 的 logrotate.timer 均不存在）。装了配置也不会被执行，需要先在宿主机上补上其一"
-fi
+#
+# 光看文件/unit 是否存在不够：`-f` 只说明钩子脚本躺在那，不说明 cron 守护进程本身在跑
+# （可能被停掉）；`systemctl is-enabled` 只说明开机会自启，不说明此刻是 active（可能
+# enabled 但从未成功启动，或启动后又失败退出）。两种都是"装了触发机制却没人真的在跑"，
+# 后果与完全没装相同，只是更隐蔽（Codex 复审 PR #98 第三轮 P1）。必须额外确认对应的
+# 守护进程/定时器当前处于 active 状态。crond 在不同发行版下的服务名不同
+# （RHEL 系是 crond，Debian 系是 cron），两个都探测。
+logrotate_scheduler_running() {
+    if [ -x /etc/cron.daily/logrotate ]; then
+        systemctl is-active --quiet crond 2>/dev/null && return 0
+        systemctl is-active --quiet cron 2>/dev/null && return 0
+    fi
+    systemctl is-active --quiet logrotate.timer 2>/dev/null && return 0
+    return 1
+}
+logrotate_scheduler_running || fail "错误: logrotate 的触发机制未在实际运行——/etc/cron.daily/logrotate 存在但 crond/cron 服务未激活，且 systemd 的 logrotate.timer 也未激活。请先执行 systemctl start crond（或 cron / logrotate.timer）再重新部署"
 
 echo "  WEB_ROOT = $WEB_ROOT"
 

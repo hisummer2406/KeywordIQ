@@ -21,21 +21,24 @@ zgrep '<request_id>' logs/app.log logs/app.log.1 logs/app.log.*.gz 2>/dev/null
 
 # nginx 访问日志（同一个编号，跨层关联）。nginx 侧没有配 etc/keywordiq-logrotate.conf
 # 这条轮转（那是应用日志专用），实际轮转策略与是否压缩以宿主机上 nginx 自带的
-# logrotate 配置（通常在 /etc/logrotate.d/nginx）为准，历史文件也可能是 .gz——
-# 同样用 zgrep 兜底，没有压缩文件时会静默跳过（不存在的文件模式匹配为空）：
-zgrep "request_id=<request_id>" /var/log/nginx/keywordiq.access.log /var/log/nginx/keywordiq.access.log*.gz 2>/dev/null
+# logrotate 配置（通常在 /etc/logrotate.d/nginx）为准——若同样配了 delaycompress，
+# 最近一次轮转出的 .1 文件也是明文，遗漏它会让"最近一次轮转"这个最常查的区间恰好
+# 查不到（Codex 复审 PR #98 第三轮 P2，与上面应用日志漏过同一个坑是同一类问题）。
+# 同样用 zgrep 兜底，不存在的文件模式匹配为空、不会报错：
+zgrep "request_id=<request_id>" /var/log/nginx/keywordiq.access.log /var/log/nginx/keywordiq.access.log.1 /var/log/nginx/keywordiq.access.log*.gz 2>/dev/null
 ```
 
 **应用日志里能看到什么**：一条"请求摘要"记录（`outcome=completed|interrupted|error|
-error_before_response`），以及（如果失败）`error_handlers.py` 记录的错误码/细节。
-`outcome` 字段的含义：
+error_before_response|cancelled`），以及（如果失败）`error_handlers.py` 记录的错误码/
+细节。`outcome` 字段的含义：
 
 | outcome | 含义 |
 |---|---|
 | `completed` | 正常发完响应，不代表业务一定成功——2xx/4xx/5xx 都可能是 `completed` |
-| `interrupted` | 响应头已发出，但客户端断连或任务被取消，body 未发完（典型：导出 CSV 中途关掉浏览器标签页） |
+| `interrupted` | 响应头已发出，但客户端断连，body 未发完（典型：导出 CSV 中途关掉浏览器标签页） |
 | `error` | 响应头发出后才抛出的未处理异常（如导出生成器中途报错），`status` 是响应头里已经确定的那个状态码 |
 | `error_before_response` | 响应头发出前就抛出的异常，且没有被 `APIError`/`RequestValidationError`/`StarletteHTTPException`/`SQLAlchemyError` 这四类处理器截住——它固定记 `status=500`：这类异常最终会被 `error_handlers.py` 给裸 `Exception` 注册的兜底处理器接住并转成 500 发给客户端，只是那个处理器在本中间件的可见范围之外，看不到那次发送动作。看到这一档不代表框架有缺陷，只代表"这是一次没被具体错误类型覆盖到的未预期异常"，值得去看栈本身（同一条日志的 traceback）而不是怀疑日志记录逻辑 |
+| `cancelled` | 请求所在的 Task 被取消（Uvicorn 优雅关闭超时、应用层超时等），不是客户端主动断连——若命中的是 `/api/analysis/search` 且已经超过慢查询阈值，同一个 request_id 下应该还能找到一条带 site/view/filters/stage_ms 明细的"分析查询慢请求诊断"（`request_cancelled=True`），比这条通用摘要更有诊断价值 |
 
 **nginx 日志里能看到什么**：`status`（nginx 返回给客户端的状态码）、
 `upstream_status`（应用实际返回的状态码，502/504 时为 `-`）、`request_time`（nginx
@@ -85,6 +88,13 @@ error_before_response`），以及（如果失败）`error_handlers.py` 记录�
 返回空结果，但如果这个判定过程本身很慢（`scope_ms` 偏高，通常是连接池排队或数据库侧
 锁等待），同样会输出这条诊断，只是 `on` 字段是 `None`、后面几个阶段没有值——看到
 `on=None` 不代表数据丢了，只代表"判断没有数据"这件事本身耗时超过了阈值。
+
+**`request_failed`/`request_cancelled` 字段**：请求最终失败（`request_failed=True`）
+或被取消（额外带 `request_cancelled=True`，如 Uvicorn 优雅关闭超时）也照常输出这条
+诊断——这两种恰恰是连接卡死/锁等待（issue #4 那一类）最可能触发的形态，此前这里一旦
+出异常就直接跳过诊断，是诊断盲区里最不该漏的一块。看到这两个字段为 `True` 时，
+`db_total_ms`/`stage_ms` 仍然可信（记录的是"失败/取消前已经等了多久"），但
+`app_ms`/`total_ms` 不再代表"成功处理完一次请求的总耗时"。
 
 ## 3. issue #4 类"导入期卡死"复发时，重启前先采集这些证据
 

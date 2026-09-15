@@ -171,19 +171,50 @@
       `TEST_DATABASE_URL=...keywordiq_test uv run pytest test/ -q` —— 1000 passed,
       1 skipped（较上一轮 993 passed 净增 7 个新增回归测试，无一失败）；CI 见 PR。
 
-## 10. 生产待验收（不在本次会话范围内，需人工执行并回填结果）
+## 11. Codex 三轮复审修复（PR #98，commit 474ee89 上的一次 review）
 
-- [ ] 10.1 生产宿主机确认存在可用的 `logrotate` 定时触发机制（cron.daily 或等价）
-      ——`deploy.sh` 现在会在部署前硬性校验命令与触发机制均存在（9.1），这里只需
-      在真实生产机上跑一次 `deploy.sh` 确认它确实通过
-- [ ] 10.2 在生产触发一次真实轮转（或等到自然轮转），核对轮转前后日志完整、
+- [x] 11.1（P1）`deploy.sh` 9.1 的检查只验证 `/etc/cron.daily/logrotate` 文件存在
+      或 `logrotate.timer` 已 `enabled`——前者不说明 crond/cron 守护进程本身在跑
+      （可能被停掉），后者不说明此刻是 `active`（可能只是开机自启但从未成功启动）。
+      两种都是"装了触发机制却没人真的在跑"，后果与完全没装相同、只是更隐蔽。改为
+      新增 `logrotate_scheduler_running()`：cron.daily 路径额外确认 `crond`/`cron`
+      服务 `is-active`，systemd 路径把 `is-enabled` 换成 `is-active`（timer 直接
+      `is-active` 才代表已启动，不只是会开机自启）
+- [x] 11.2（P2）`analysis_service.py::search()` 的失败路径诊断（9.3）只
+      `except Exception`，捕不到继承自 `BaseException` 的 `asyncio.CancelledError`
+      ——一个已经超过慢查询阈值的 `/api/analysis/search` 请求若在此时被取消（优雅
+      关闭超时/应用层超时），`request_logging.py` 只会记一条通用的
+      `outcome=cancelled` 摘要，这里的 site/view/filters/stage_ms/db_total_ms
+      明细完全丢失，而取消往往发生在请求已经很慢的时候，明细恰恰最有价值。新增
+      单独的 `except asyncio.CancelledError` 分支，标 `request_cancelled=True`
+      后原样重新抛出。`_log_slow_diagnostic` 增加 `cancelled` 参数与
+      `request_cancelled=%s` 字段。回归测试：
+      `test_cancelled_request_still_emits_diagnostic_marked_cancelled`
+- [x] 11.3（P2）`etc/observability-runbook.md` 应用日志一侧的 `zgrep` 示例（9.5
+      修复时）已包含 `.1` 未压缩历史文件，但 nginx 一侧的示例遗漏了同样的
+      `.log.1`——若 nginx 侧的 logrotate 也配了 `delaycompress`，最近一次轮转出的
+      文件是明文而非 `.gz`，恰是最常查的区间反而查不到。补上
+      `/var/log/nginx/keywordiq.access.log.1`。顺带补全了 outcome 表格与「慢查询
+      诊断读法」一节里此前遗漏的 `cancelled`/`request_failed`/`request_cancelled`
+      说明（9.4/11.2 引入的字段，此前只改了代码没同步改文档）
+- [x] 11.4 `uv run ruff check .` 全部通过；
+      `TEST_DATABASE_URL=...keywordiq_test uv run pytest test/ -q` —— 1001 passed,
+      1 skipped（较上一轮 1000 passed 净增 1 个新增回归测试）；CI 见 PR。
+
+## 12. 生产待验收（不在本次会话范围内，需人工执行并回填结果）
+
+- [ ] 12.1 生产宿主机确认存在可用的 `logrotate` 定时触发机制（cron.daily 或等价）
+      ——`deploy.sh` 现在会在部署前硬性校验命令、触发机制文件/unit 与守护进程/
+      定时器均处于 active 状态（9.1、11.1），这里只需在真实生产机上跑一次
+      `deploy.sh` 确认它确实通过
+- [ ] 12.2 在生产触发一次真实轮转（或等到自然轮转），核对轮转前后日志完整、
       `logs/app.log*` 保留数量符合预期；轮转出的压缩历史文件用 `zgrep` 而不是
       `grep` 检索（9.5）
-- [ ] 10.3 生产 `nginx -t` 校验新 `log_format` 配置语法后 reload，核对
+- [ ] 12.3 生产 `nginx -t` 校验新 `log_format` 配置语法后 reload，核对
       access log 出现 `request_time`/`upstream_time`/`request_id` 字段
-- [ ] 10.4 生产环境验证一次 nginx 与应用日志按同一 request_id 关联成功
+- [ ] 12.4 生产环境验证一次 nginx 与应用日志按同一 request_id 关联成功
       （可用 `scripts/check_logging.py --base-url https://<生产域名>`，第 3 项现在
       打 `/api/auth/sso/status` 而不是 `/`；本地日志检索那部分需要在应用所在
       主机上跑才能核实）
-- [ ] 10.5 核实生产磁盘余量在新增诊断日志量下的增长速率，确认现有磁盘监控阈值
+- [ ] 12.5 核实生产磁盘余量在新增诊断日志量下的增长速率，确认现有磁盘监控阈值
       （见 CLAUDE.md「扩容触发条件」）仍然适用，不需要单独为日志新增磁盘告警
