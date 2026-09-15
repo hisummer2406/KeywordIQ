@@ -97,4 +97,65 @@ describe('TrendTimelineChart', () => {
     // 越界的下标 2 在新数组（长度 1）里不对应任何点，唯一剩下的点不应被画成悬停态（r=5）
     expect(container.querySelector('[data-testid="trend-point-RANKED-2026-07-10"]')).toHaveAttribute('r', '3.5');
   });
+
+  describe('可用的横纵坐标系（issue #94）', () => {
+    it('有在榜点时渲染 y 轴刻度，标签为该范围内的最好与最差排名', () => {
+      const points = [
+        point('2026-07-01', 'RANKED', 100),
+        point('2026-07-02', 'RANKED', 20),
+      ];
+      const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
+
+      const yTicks = container.querySelectorAll('[data-testid="trend-y-tick"]');
+      expect(yTicks.length).toBeGreaterThan(0);
+      const texts = [...yTicks].map((el) => el.textContent);
+      expect(texts).toContain('20');
+      expect(texts).toContain('100');
+    });
+
+    it('只有一个在榜值时只渲染一条 y 轴刻度，不强行摊出多条重合的线', () => {
+      const points = [point('2026-07-01', 'RANKED', 50), point('2026-07-02', 'RANKED', 50)];
+      const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
+
+      const yTicks = container.querySelectorAll('[data-testid="trend-y-tick"]');
+      expect(yTicks).toHaveLength(1);
+      expect(yTicks[0].textContent).toBe('50');
+    });
+
+    it('全部为非在榜状态时不渲染 y 轴刻度（没有排名数值可标）', () => {
+      const points = [point('2026-07-01', 'NOT_IMPORTED'), point('2026-07-02', 'OUT_OF_RETENTION')];
+      const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
+
+      expect(container.querySelectorAll('[data-testid="trend-y-tick"]')).toHaveLength(0);
+      // x 轴日期刻度与状态无关，两个期次都应标出
+      expect(container.querySelectorAll('[data-testid="trend-x-tick"]')).toHaveLength(2);
+    });
+
+    it('x 轴日期标签按简短的 MM/DD 呈现，且恒包含首尾两个期次', () => {
+      const points = [
+        point('2026-07-01', 'RANKED', 100),
+        point('2026-07-15', 'RANKED', 90),
+        point('2026-07-30', 'RANKED', 80),
+      ];
+      const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
+
+      const texts = [...container.querySelectorAll('[data-testid="trend-x-tick"]')].map((el) => el.textContent);
+      expect(texts).toContain('07/01');
+      expect(texts).toContain('07/30');
+    });
+
+    it('点数超过上限时按等距抽样标注，不是每个点都标日期', () => {
+      const points = Array.from({ length: 30 }, (_, i) => {
+        const day = String(i + 1).padStart(2, '0');
+        return point(`2026-07-${day}`, 'RANKED', 100 - i);
+      });
+      const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
+
+      const xTicks = container.querySelectorAll('[data-testid="trend-x-tick"]');
+      expect(xTicks.length).toBeLessThan(points.length);
+      const texts = [...xTicks].map((el) => el.textContent);
+      expect(texts).toContain('07/01');
+      expect(texts).toContain('07/30');
+    });
+  });
 });
