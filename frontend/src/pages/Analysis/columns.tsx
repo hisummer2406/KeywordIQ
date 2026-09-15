@@ -306,15 +306,29 @@ export function buildColumns(
     {
       title: '操作',
       dataIndex: 'operations',
-      width: 48,
+      // 48→80：新增「历史走势」文字入口后，四字标签在纵向堆叠布局里需要比图标更宽的空间，
+      // 否则会被挤成两行或超出列宽（issue #94）。
+      width: 80,
       render: (_, r) => {
         const trendsUrl = googleTrendsUrl(r.keyword, siteCode);
         const adLibraryUrl = facebookAdLibraryUrl(r.keyword, siteCode);
         const tiktokUrl = tiktokAdLibraryUrl(r.keyword, siteCode);
-        if (!trendsUrl && !adLibraryUrl && !tiktokUrl) return PLACEHOLDER;
+        // 「历史走势」不依赖站点码或该行是否有小图数据——关键词身份已知就该能查
+        // （issue #86 已确立的原则），只依赖调用方是否传入了 onOpenTrend。它与「搜索
+        // 趋势」小图格打开**同一个**详情面板，不新建第二套图表或查询路径（issue #94）。
+        if (!trendsUrl && !adLibraryUrl && !tiktokUrl && !onOpenTrend) return PLACEHOLDER;
         // 上下排列：这一列窄，横向摆图标会挤压相邻列；纵向堆叠不占额外横向空间。
         return (
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            {onOpenTrend && (
+              <a
+                onClick={() => onOpenTrend(r)}
+                title="查看关键词 ABA 排名趋势详情（含完整历史）"
+                aria-label="查看历史走势"
+              >
+                历史走势
+              </a>
+            )}
             {trendsUrl && (
               <a
                 href={trendsUrl}

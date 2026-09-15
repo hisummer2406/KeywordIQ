@@ -30,7 +30,7 @@ function baseResponse(overrides: Partial<Awaited<ReturnType<typeof getKeywordTre
     keyword: 'coffee maker',
     site: 'US',
     view: 'DAY',
-    range: 'RECENT_30D',
+    range: 'ALL',
     on: '2026-07-10',
     coverage: { start: '2026-07-05', end: '2026-07-10' },
     points: [{ date: '2026-07-10', status: 'RANKED', ranking: 100 }],
@@ -62,14 +62,34 @@ function setup(props: Partial<Parameters<typeof KeywordTrendDrawer>[0]> = {}) {
 }
 
 describe('KeywordTrendDrawer', () => {
-  it('打开时按来源锚点请求数据，并展示统计条', async () => {
+  it('打开时按来源锚点请求数据，默认范围为「全部可用历史」（issue #94）', async () => {
     getKeywordTrend.mockResolvedValue(baseResponse());
     setup();
 
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledWith(
-      expect.objectContaining({ keywordId: 1, site: 'US', view: 'DAY', range: 'RECENT_30D', on: '2026-07-10' }),
+      expect.objectContaining({ keywordId: 1, site: 'US', view: 'DAY', range: 'ALL', on: '2026-07-10' }),
     ));
     expect(await screen.findByText('2026年07月10日')).toBeInTheDocument();
+  });
+
+  it('重新打开（切换到另一个关键词）后仍默认「全部可用历史」，不沿用上一个词遗留的「近 30 天」选择', async () => {
+    getKeywordTrend.mockResolvedValue(baseResponse());
+    const { rerender } = render(
+      <KeywordTrendDrawer open onClose={vi.fn()} keywordId={1} keyword="coffee maker" site="US" view="DAY" on="2026-07-10" />,
+    );
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByText('近 30 天'));
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledWith(
+      expect.objectContaining({ range: 'RECENT_30D' }),
+    ));
+
+    rerender(
+      <KeywordTrendDrawer open onClose={vi.fn()} keywordId={2} keyword="another word" site="US" view="DAY" on="2026-07-10" />,
+    );
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenLastCalledWith(
+      expect.objectContaining({ keywordId: 2, range: 'ALL' }),
+    ));
   });
 
   it('无有效点时区间最好排名与最近可用排名显示无数据', async () => {
@@ -109,19 +129,19 @@ describe('KeywordTrendDrawer', () => {
       resolveFirst = resolve;
     });
     getKeywordTrend.mockImplementationOnce(() => first);
-    getKeywordTrend.mockResolvedValueOnce(baseResponse({ range: 'ALL', coverage: { start: '2026-01-01', end: '2026-07-10' } }));
+    getKeywordTrend.mockResolvedValueOnce(baseResponse({ range: 'RECENT_30D' }));
 
     setup();
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByText('全部可用历史'));
+    fireEvent.click(screen.getByText('近 30 天'));
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
 
     // 第二次请求先落地
     await screen.findByText('2026年07月10日');
 
     // 第一次（更早发出、更晚落地）的结果到达时不应覆盖已经展示的第二次结果
-    resolveFirst(baseResponse({ on: '2026-06-01' }));
+    resolveFirst(baseResponse({ range: 'ALL', on: '2026-06-01' }));
     await new Promise((r) => {
       setTimeout(r, 0);
     });
@@ -174,7 +194,7 @@ describe('KeywordTrendDrawer', () => {
     expect(screen.queryByText(/2026年第\d+周/)).not.toBeInTheDocument();
   });
 
-  it('切范围（近30天/全部可用历史）新响应落地前，不展示上一个范围的统计数值（PR #87 复审第四轮 P2）', async () => {
+  it('切范围（全部可用历史/近30天）新响应落地前，不展示上一个范围的统计数值（PR #87 复审第四轮 P2）', async () => {
     getKeywordTrend.mockResolvedValueOnce(baseResponse());
     setup();
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
@@ -182,13 +202,13 @@ describe('KeywordTrendDrawer', () => {
     // 用例同样的取法。
     await screen.findByText('2026年07月10日');
 
-    // 卡住切到「全部可用历史」触发的第二次请求（永不 resolve），制造"range 状态已经是
-    // ALL、data 仍是上一次 RECENT_30D 响应"这段窗口。与 view 不同，range 直接决定了
+    // 卡住切到「近 30 天」触发的第二次请求（永不 resolve），制造"range 状态已经是
+    // RECENT_30D、data 仍是上一次 ALL 响应"这段窗口。与 view 不同，range 直接决定了
     // coverage/最好排名/最近可用排名这些数值本身（不是同一份数据换个格式化），继续显示
-    // 会让用户把 30 天窗口的结果误当成"全部可用历史"的结果。
+    // 会让用户把「全部可用历史」的结果误当成 30 天窗口的结果。
     getKeywordTrend.mockImplementationOnce(() => new Promise(() => {}));
 
-    fireEvent.click(screen.getByText('全部可用历史'));
+    fireEvent.click(screen.getByText('近 30 天'));
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
 
     // 这段窗口内统计区必须整段不显示，不能留存上一次响应的数值
