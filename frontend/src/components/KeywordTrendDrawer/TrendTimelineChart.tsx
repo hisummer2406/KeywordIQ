@@ -298,4 +298,16 @@ export default function TrendTimelineChart({
   );
 }
 
-export { STATUS_META };
+/**
+ * 图例常驻展示的三种状态——「在榜」「已掉榜」「该期报表未导入」是用户日常会遇到的，
+ * 「该期报表已导入但未收录」与「已超出保留范围」是少见情况（用户反馈"没见过，好奇怪"）。
+ *
+ * **这只是图例的呈现范围，不是判定口径的合并**：五态分类本身不变，`STATUS_META`
+ * 仍有五个键，图上的点、悬浮提示（`formatScopeDateLabel` 那段）该显示什么状态照旧显示
+ * 真实状态——少见的两态一旦真的出现在数据里，点和悬浮提示上依然是它们各自的颜色与文案，
+ * 只是不占图例的常驻位置。把这两态在判定上合并进「未导入」会违反 keyword-trend-detail
+ * spec 的 MUST NOT（已超出保留范围的数据已被永久清理，不该被误读成"等一等就有"）。
+ */
+const COMMON_STATUSES: TrendPointStatus[] = ['RANKED', 'DROPPED', 'NOT_IMPORTED'];
+
+export { STATUS_META, COMMON_STATUSES };
