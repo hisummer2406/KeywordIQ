@@ -316,18 +316,22 @@ export function buildColumns(
         // 趋势」小图格打开**同一个**详情面板，不新建第二套图表或查询路径（issue #94）。
         if (!trendsUrl && !adLibraryUrl && !tiktokUrl && !onOpenTrend) return PLACEHOLDER;
         // 上下排列：这一列窄，横向摆图标会挤压相邻列；纵向堆叠不占额外横向空间。
+        // 四个图标共用同一个 fontSize（16px），不给任何一个单独加码——各自默认继承字号
+        // 会让 LineChartOutlined 的细线条与三个品牌图标显得不一致，但解法是统一字号，
+        // 不是把某一个单独放大。
         return (
-          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <span
+            style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, fontSize: 16,
+            }}
+          >
             {onOpenTrend && (
               <a
                 onClick={() => onOpenTrend(r)}
                 title="查看关键词 ABA 排名趋势详情（含完整历史）"
                 aria-label="查看历史走势"
               >
-                {/* LineChartOutlined 本身线条比 Google/Meta/TikTok 三个品牌图标细很多——
-                    品牌图标设计上就是粗笔画，同字号下视觉粗细不同不是尺寸问题。放大到
-                    18px（其余三个维持默认）让线条粗细更接近，不需要改动共用的图标风格。 */}
-                <LineChartOutlined style={{ fontSize: 18 }} />
+                <LineChartOutlined />
               </a>
             )}
             {trendsUrl && (
