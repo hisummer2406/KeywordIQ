@@ -142,6 +142,11 @@ CODE_RESOURCE_CONFLICT: Final = "resource.conflict"
 CODE_ANALYSIS_SCOPE_INVALID: Final = "analysis.scope_invalid"
 CODE_ANALYSIS_EXPORT_TOO_LARGE: Final = "analysis.export_too_large"
 
+# ASIN/品牌悬浮历史（issue #96）
+CODE_ANALYSIS_TOPSLOT_NOT_FOUND: Final = "analysis.topslot_keyword_not_found"
+CODE_ANALYSIS_TOPSLOT_SITE_MISMATCH: Final = "analysis.topslot_site_mismatch"
+CODE_ANALYSIS_TOPSLOT_PAGE_SIZE_EXCEEDED: Final = "analysis.topslot_page_size_exceeded"
+
 # 关键词工具（增长榜与词库共用——两屏的作用域解析是同一套站点/期次判定）
 CODE_KEYWORD_SCOPE_INVALID: Final = "keyword.scope_invalid"
 

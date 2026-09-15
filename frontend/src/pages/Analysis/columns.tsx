@@ -10,6 +10,24 @@ import { facebookAdLibraryUrl } from './facebookAdLibraryUrl';
 import { googleTrendsUrl } from './googleTrendsUrl';
 import { tiktokAdLibraryUrl } from './tiktokAdLibraryUrl';
 import TopProductCards from './TopProductCards';
+import TopslotHistoryPopover from './TopslotHistoryPopover';
+
+/**
+ * 悬浮历史面板需要的作用域三元组（issue #96）：站点、视图、锚定日。
+ *
+ * **必须来自 `loadedSite`/`loadedView`/`loadedDate`（已完成响应的活状态），不是
+ * `appliedRef`（已提交但可能仍在飞的请求）。** 表格当前渲染的行本身就是上一次完成
+ * 响应的数据，悬浮历史查的是"这一行现在显示的这个 ASIN/品牌"，必须与行数据同一个
+ * 作用域——用 `appliedRef` 会在"新查询已提交、旧行还没被替换"这个短暂窗口里，把
+ * 新站点/视图配上旧行的 keyword_id 发出去，多数情况下后端会因 site/keyword_id
+ * 不匹配报错，即便凑巧不报错也会读到与当前行不属于同一次查询的数据。三个字段全部
+ * 到位才提供悬浮入口，缺一个（还没查询出首屏数据）就不渲染，不给一个注定失败的入口。
+ */
+export interface HistoryScope {
+  site: string;
+  view: View;
+  on: string;
+}
 
 /**
  * 结果表格的列定义。
@@ -131,6 +149,7 @@ export function buildColumns(
   siteDomain?: string,
   onOpenTrend?: (row: AnalysisRow) => void,
   siteCode?: string,
+  historyScope?: HistoryScope,
 ): ProColumns<AnalysisRow>[] {
   return alignColumns([
     {
@@ -263,7 +282,9 @@ export function buildColumns(
       title: '点击前三 ASIN',
       dataIndex: 'top1_asin',
       width: 360,
-      render: (_, r) => <TopProductCards row={r} siteDomain={siteDomain} />,
+      render: (_, r) => (
+        <TopProductCards row={r} siteDomain={siteDomain} historyScope={historyScope} />
+      ),
     },
     // 类目与品牌同为长文本列，各给 180px 并允许换行。**所有列都定宽**是刻意的：只要有
     // 任何一列不定宽，它就会独吞全部横向富余，在它与相邻列之间造出一个显眼的洞——这一点
@@ -289,7 +310,28 @@ export function buildColumns(
       title: '点击前三品牌',
       dataIndex: 'top1_brand',
       width: 130,
-      render: (_, r) => <RankedList values={[r.top1_brand, r.top2_brand, r.top3_brand]} />,
+      render: (_, r) => (
+        <RankedList
+          values={[r.top1_brand, r.top2_brand, r.top3_brand]}
+          wrapValue={
+            historyScope
+              ? (_i, value, node) => (
+                  <TopslotHistoryPopover
+                    site={historyScope.site}
+                    view={historyScope.view}
+                    on={historyScope.on}
+                    keywordId={r.keyword_id}
+                    kind="BRAND"
+                    value={value}
+                    label={value}
+                  >
+                    {node}
+                  </TopslotHistoryPopover>
+                )
+              : undefined
+          }
+        />
+      ),
     },
     // 「操作」是恒定的最末列（issue #78 V0：Google 搜索趋势 + Meta 广告库 + TikTok
     // 广告库）。三项都是**直接新标签页跳转的外链**，不做抽屉/弹窗——那是这一屏在与用户
