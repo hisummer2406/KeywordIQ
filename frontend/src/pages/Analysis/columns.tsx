@@ -1,4 +1,4 @@
-import { FacebookOutlined, GoogleOutlined, LineChartOutlined, TikTokOutlined } from '@ant-design/icons';
+import { BarChartOutlined, FacebookOutlined, GoogleOutlined, TikTokOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
 import type { AnalysisRow, View } from '@/services/analysis';
@@ -316,9 +316,7 @@ export function buildColumns(
         // 趋势」小图格打开**同一个**详情面板，不新建第二套图表或查询路径（issue #94）。
         if (!trendsUrl && !adLibraryUrl && !tiktokUrl && !onOpenTrend) return PLACEHOLDER;
         // 上下排列：这一列窄，横向摆图标会挤压相邻列；纵向堆叠不占额外横向空间。
-        // 四个图标共用同一个 fontSize（16px），不给任何一个单独加码——各自默认继承字号
-        // 会让 LineChartOutlined 的细线条与三个品牌图标显得不一致，但解法是统一字号，
-        // 不是把某一个单独放大。
+        // 四个图标共用同一个 fontSize（16px），不给任何一个单独加码。
         return (
           <span
             style={{
@@ -331,7 +329,7 @@ export function buildColumns(
                 title="查看关键词 ABA 排名趋势详情（含完整历史）"
                 aria-label="查看历史走势"
               >
-                <LineChartOutlined />
+                <BarChartOutlined />
               </a>
             )}
             {trendsUrl && (

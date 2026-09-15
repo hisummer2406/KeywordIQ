@@ -1,10 +1,11 @@
 ## 1. 操作列图标入口
 
 - [x] 1.1 `frontend/src/pages/Analysis/columns.tsx`：「操作」列新增「历史走势」图标入口
-      （`LineChartOutlined` + title/aria-label「查看历史走势」），仅依赖 `onOpenTrend`
+      （`BarChartOutlined` + title/aria-label「查看历史走势」），仅依赖 `onOpenTrend`
       是否传入，不依赖站点码或该行是否有小图数据
 - [x] 1.2 改用图标后与既有三个外链图标同一视觉语言，列宽维持 48 不变（最初曾按文字方案
-      改成 80，用户反馈改用图标后已改回）
+      改成 80，用户反馈改用图标后已改回）；四个图标统一 fontSize 16px，不单独放大任何一个；
+      图标最终定为柱状图（`BarChartOutlined`），中途曾试过折线图（`LineChartOutlined`）
 - [x] 1.3 `KeywordLibrary/columns.tsx` 复用 `buildAnalysisColumns`，无需单独改动即可同步生效
 
 ## 2. 默认范围改为「全部可用历史」
