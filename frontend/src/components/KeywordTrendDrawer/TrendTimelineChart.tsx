@@ -16,17 +16,16 @@ import { TREND_COLORS } from '../trendColors';
  * 或任一端不是 RANKED 都不连线，这是"不跨缺口连线"的直接实现，不是事后过滤。
  */
 
-// 灰阶整体下移一档：此前最浅的 #f0f0f0 在白底上（图例圆点、非在榜期次的描边）
-// 接近不可见，四档非在榜状态互相之间也分不清。现在最浅的一档（已超出保留范围）
-// 仍是 #d9d9d9，在白底上依然清楚可辨；「已掉榜」用最深的灰——它是四档里唯一
-// 表示"这个词真实存在过、只是掉出去了"的状态，理应比"未导入"/"超出保留"这类
-// 单纯的数据缺失更显眼。
+// 四档非在榜状态改用互不相同的色相，不再是灰阶深浅——同一色系深浅差异在小圆点/图例上
+// 很难一眼分辨，用户反馈"都是灰色"正是这个问题。避开 TREND_COLORS 的 up/绿、down/红、
+// flat/蓝三色（那三色在别处已经承载"名次升降"与"在榜"的含义，混进来会让人把"已掉榜"
+// 误读成"名次下降"），四档各取一个独立色相：
 const STATUS_META: Record<TrendPointStatus, { label: string; color: string }> = {
   RANKED: { label: '在榜', color: TREND_COLORS.flat },
-  DROPPED: { label: '已掉榜', color: '#595959' },
-  NO_DATA: { label: '该期报表已导入但未收录', color: '#8c8c8c' },
-  NOT_IMPORTED: { label: '该期报表未导入', color: '#bfbfbf' },
-  OUT_OF_RETENTION: { label: '已超出保留范围', color: '#d9d9d9' },
+  DROPPED: { label: '已掉榜', color: '#d46b08' }, // 橙：真实存在过、掉出去了，四档里最该显眼
+  NO_DATA: { label: '该期报表已导入但未收录', color: '#531dab' }, // 紫：报表在，只是没这个词
+  NOT_IMPORTED: { label: '该期报表未导入', color: '#874d00' }, // 深金：数据还没进来
+  OUT_OF_RETENTION: { label: '已超出保留范围', color: '#08979c' }, // 青：正常边界，不是问题
 };
 
 const HEIGHT = 220;
