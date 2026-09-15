@@ -10,9 +10,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
+import time
 from collections.abc import Iterator
 from datetime import date
 
@@ -142,12 +144,37 @@ def _resolve_date(
     return given
 
 
-async def _available_dates(db: AsyncSession, site: str, view: str) -> list[date]:
-    return list((await db.execute(crud.available_dates_stmt(site, view))).scalars().all())
+async def _timed_execute(db: AsyncSession, stmt, db_ms: list[int] | None):
+    """包裹 ``await db.execute(...)``，可选地把这次等待耗时（含连接池 checkout）
+    追加进 ``db_ms``——慢请求诊断只信这个累加值是"数据库耗时"，不再信"阶段耗时求和"
+    （后者会把阶段内纯 Python 的结果整形也算作数据库时间，见 ``search()`` 的说明与
+    Codex 复审 P2）。``db_ms`` 为 ``None`` 时（未触发诊断的调用方，如 ``get_scope``）
+    不计时，避免无意义的 `time.monotonic()` 调用。
+
+    **``finally`` 而不是执行完再记**：语句超时/锁等待超时/连接池 checkout 超时会让
+    ``await db.execute(...)`` 直接抛出，之前的实现在这种情况下完全不记录这次等待
+    耗时——恰恰是最该被诊断出来的一类失败（Codex 复审 PR #98 P2）。不吞异常，只是
+    在传播前把已经等待的时间计进去。
+    """
+    if db_ms is None:
+        return await db.execute(stmt)
+    t0 = time.monotonic()
+    try:
+        return await db.execute(stmt)
+    finally:
+        db_ms.append(int((time.monotonic() - t0) * 1000))
+
+
+async def _available_dates(
+    db: AsyncSession, site: str, view: str, db_ms: list[int] | None = None
+) -> list[date]:
+    result = await _timed_execute(db, crud.available_dates_stmt(site, view), db_ms)
+    return list(result.scalars().all())
 
 
 async def _fetch_trends(
-    db: AsyncSession, site: str, keyword_ids: list[int], on: date, view: str
+    db: AsyncSession, site: str, keyword_ids: list[int], on: date, view: str,
+    db_ms: list[int] | None = None,
 ) -> tuple[dict[int, list[int]], dict[int, list[date]], dict[int, list[int | None]]]:
     """一次回溯查询同时喂趋势与历史排名。
 
@@ -157,7 +184,7 @@ async def _fetch_trends(
     """
     if not keyword_ids:
         return {}, {}, {}
-    rows = (await db.execute(crud.trends_stmt(site, keyword_ids, on, view))).all()
+    rows = (await _timed_execute(db, crud.trends_stmt(site, keyword_ids, on, view), db_ms)).all()
     return (
         crud.shape_trends(rows, on=on, view=view),
         crud.shape_trend_dates(rows, on=on, view=view),
@@ -168,6 +195,7 @@ async def _fetch_trends(
 async def _listed_total(
     db: AsyncSession, site: str, view: str, on: date,
     req: AnalysisSearchRequest, has_filters: bool, user_id: int,
+    db_ms: list[int] | None = None,
 ) -> int:
     """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
 
@@ -176,18 +204,17 @@ async def _listed_total(
     无筛选时读预存值，O(1)。
     """
     if not has_filters:
-        return (
-            await db.execute(crud.scope_row_count_stmt(site, view, on))
-        ).scalar_one_or_none() or 0
-    return (
-        await db.execute(crud.count_filtered_stmt(site, view, on, req, user_id))
-    ).scalar_one()
+        result = await _timed_execute(db, crud.scope_row_count_stmt(site, view, on), db_ms)
+        return result.scalar_one_or_none() or 0
+    result = await _timed_execute(db, crud.count_filtered_stmt(site, view, on, req, user_id), db_ms)
+    return result.scalar_one()
 
 
-async def _dropped_total(db: AsyncSession, site: str, view: str, on: date) -> int:
-    return (
-        await db.execute(crud.scope_dropped_count_stmt(site, view, on))
-    ).scalar_one_or_none() or 0
+async def _dropped_total(
+    db: AsyncSession, site: str, view: str, on: date, db_ms: list[int] | None = None
+) -> int:
+    result = await _timed_execute(db, crud.scope_dropped_count_stmt(site, view, on), db_ms)
+    return result.scalar_one_or_none() or 0
 
 
 def _combined_total(
@@ -221,81 +248,183 @@ async def get_scope(db: AsyncSession, site: str | None, view: str) -> ScopeInfo:
     )
 
 
+def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
+    """慢请求诊断用的筛选白名单摘要——只出布尔/计数字段，MUST NOT 含检索词或 ASIN
+    原文，与「校验错误不回显请求内容」是同一条纪律在诊断日志上的延伸。"""
+    return {
+        "has_keyword_search": bool(req.keyword or req.product_title),
+        "has_asin_filter": bool(req.asin),
+        "categories_count": len(req.categories) if req.categories else 0,
+        "brands_count": len(req.brands) if req.brands else 0,
+        "is_new": req.is_new,
+        "competitor_new": req.competitor_new,
+        "include": req.include,
+    }
+
+
 async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> AnalysisSearchResponse:
     """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。
 
     ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新发现」筛选判定关注
     关系，MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
+
+    **慢请求诊断**（design.md 决策 D 第二层）：围绕既有阶段用 ``time.monotonic()`` 打点，
+    总耗时超过 ``settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS`` 才在结尾输出一条 WARNING，
+    不新增查询次数、不在阈值以下时输出。计时点是既有 ``await db.execute(...)`` 调用的
+    包裹，不是新增的探测。
+
+    ``db_ms`` 单独累加每一次 ``await db.execute(...)`` 的等待时间（经 ``_timed_execute``），
+    与 ``stage_ms`` 分开：后者按既有阶段划分、每个阶段内部混杂着数据库往返与纯 Python
+    的结果整形（``shape_rows``/构造响应模型等），直接把 ``stage_ms`` 求和当成"数据库
+    耗时"会让整形慢的请求也显得像是数据库慢（Codex 复审 PR #98 P2：`sum(stage_ms.values())`
+    恒等于 `total_ms`，`app_ms` 恒等于 0，诊断从不指向应用侧）。``stage_ms`` 仍然保留在
+    日志里，用来进一步定位是哪个阶段慢，只是不再充当 db/app 二分的依据。
+
+    **失败路径同样诊断**：语句超时/锁等待超时/连接池 checkout 超时会让某次
+    ``await db.execute(...)`` 直接抛出——``_timed_execute`` 已经在 ``finally`` 里
+    把这次等待耗时计进 ``db_ms``，这里再用一层 ``try/except`` 包住主体：超阈值时
+    照常输出同一条结构化诊断（标 `request_failed=True`），再原样重新抛出，不吞异常、
+    不改变最终返回给调用方的行为。此前失败请求既不会走到这里的诊断，通用 SQL 级
+    监听（``database.py``）也只在 ``after_cursor_execute`` 记录、对失败的执行同样
+    失明——恰是最该被诊断出来的一类（连接卡死、锁等待，见 issue #4）
+    （Codex 复审 PR #98 P2）。
+
+    **取消路径单独处理**：`asyncio.CancelledError` 继承自 `BaseException`，
+    `except Exception` 捕不到它——Uvicorn 优雅关闭超时/应用层超时都是通过取消
+    这个请求的 Task 实现的。不单独捕获的话，`request_logging.py` 只会记一条通用的
+    `outcome=cancelled` 摘要，没有这里的 site/view/filters/stage_ms/db_total_ms
+    明细——而取消往往发生在请求已经很慢的时候，明细恰恰最有价值（Codex 复审
+    PR #98 第三轮 P2）。同样标记后原样重新抛出，不吞。
     """
+    request_started = time.monotonic()
+    stage_ms: dict[str, int] = {}
+    db_ms: list[int] = []
+    checkpoint = request_started
     site = _resolve_site(req.site)
     view = req.view
-    dates = await _available_dates(db, site, view)
-    on = _resolve_date(req.date, dates)
+    on: date | None = None
 
-    # 该站点该视图无任何数据：正常返回空结果（非报错）
-    if on is None:
-        return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
+    def _stage(name: str) -> None:
+        nonlocal checkpoint
+        now = time.monotonic()
+        stage_ms[name] = int((now - checkpoint) * 1000)
+        checkpoint = now
 
-    # 筛选一律以锚定期那一行为准，掉榜行在锚定期没有行可供匹配——所以**任何筛选一生效，
-    # 掉榜段就为空**。这不是优化，是「只看选定期」这条口径的必然结果，界面侧须明示。
-    has_filters = crud.request_has_filters(req)
-
-    listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id)
-    dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on)
-
-    # 两段各自有序且永不交错（掉榜恒在末尾），故按边界切分、各发一条查询，而不是
-    # UNION ALL 之后整体排序——后者会强制物化两段全部行，而在榜段就有四十多万行。
-    plan = plan_segments(
-        offset=(req.page - 1) * req.perPage, limit=req.perPage,
-        listed_total=listed_total, include=req.include,
-    )
-
-    rows: list[dict] = []
-    if plan.listed is not None:
-        offset, limit = plan.listed
-        rows += crud.shape_rows(
-            (
-                await db.execute(
-                    crud.search_stmt(site, view, on, req, offset=offset, limit=limit, user_id=user_id)
-                )
-            ).all()
+    def _log_slow_diagnostic(total_ms: int, *, failed: bool = False, cancelled: bool = False) -> None:
+        db_total_ms = sum(db_ms)
+        logger.warning(
+            "分析查询慢请求诊断 request_failed=%s request_cancelled=%s site=%s view=%s on=%s "
+            "page=%d perPage=%d orderBy=%s orderDir=%s filters=%s stage_ms=%s "
+            "db_total_ms(仅 await db.execute 等待时间,含连接获取)=%d "
+            "app_ms(其余应用处理:结果整形/序列化等)=%d total_ms=%d",
+            failed, cancelled, site, view, on, req.page, req.perPage, req.orderBy, req.orderDir,
+            _search_filter_summary(req), stage_ms,
+            db_total_ms, max(total_ms - db_total_ms, 0), total_ms,
         )
-    if plan.dropped is not None and not has_filters:
-        offset, limit = plan.dropped
-        # 只补「整页还差的那几条」。在榜段实际返回多少由查询说了算，不由预存计数决定
-        # ——计数偏小时多出来的在榜行照常返回，这里少补几条即可，不会有行凭空消失。
-        take = remaining_for_dropped(limit, len(rows)) if plan.listed is not None else limit
-        if take > 0:
-            rows += crud.shape_dropped_rows(
-                (await db.execute(crud.dropped_stmt(site, view, on, offset, take))).all()
+
+    try:
+        dates = await _available_dates(db, site, view, db_ms=db_ms)
+        on = _resolve_date(req.date, dates)
+        _stage("scope_ms")
+
+        # 该站点该视图无任何数据：正常返回空结果（非报错）。耗时通常可忽略，但
+        # `_available_dates` 本身也可能因连接池排队/锁等待而慢——不能因为结果集是空的
+        # 就假定这次调用一定快，否则恰恰是"作用域解析变慢"这种情形永远不出现在诊断里
+        # （Codex 复审 PR #98 P2）。
+        if on is None:
+            total_ms = int((time.monotonic() - request_started) * 1000)
+            if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+                _log_slow_diagnostic(total_ms)
+            return AnalysisSearchResponse(success=True, data=[], total=0, site=site, view=view, date=None)
+
+        # 筛选一律以锚定期那一行为准，掉榜行在锚定期没有行可供匹配——所以**任何筛选一
+        # 生效，掉榜段就为空**。这不是优化，是「只看选定期」这条口径的必然结果，界面侧
+        # 须明示。
+        has_filters = crud.request_has_filters(req)
+
+        listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id, db_ms=db_ms)
+        dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on, db_ms=db_ms)
+        _stage("count_ms")
+
+        # 两段各自有序且永不交错（掉榜恒在末尾），故按边界切分、各发一条查询，而不是
+        # UNION ALL 之后整体排序——后者会强制物化两段全部行，而在榜段就有四十多万行。
+        plan = plan_segments(
+            offset=(req.page - 1) * req.perPage, limit=req.perPage,
+            listed_total=listed_total, include=req.include,
+        )
+
+        rows: list[dict] = []
+        if plan.listed is not None:
+            offset, limit = plan.listed
+            rows += crud.shape_rows(
+                (
+                    await _timed_execute(
+                        db,
+                        crud.search_stmt(site, view, on, req, offset=offset, limit=limit, user_id=user_id),
+                        db_ms,
+                    )
+                ).all()
             )
+        if plan.dropped is not None and not has_filters:
+            offset, limit = plan.dropped
+            # 只补「整页还差的那几条」。在榜段实际返回多少由查询说了算，不由预存计数
+            # 决定——计数偏小时多出来的在榜行照常返回，这里少补几条即可，不会有行凭空
+            # 消失。
+            take = remaining_for_dropped(limit, len(rows)) if plan.listed is not None else limit
+            if take > 0:
+                rows += crud.shape_dropped_rows(
+                    (await _timed_execute(db, crud.dropped_stmt(site, view, on, offset, take), db_ms)).all()
+                )
+        _stage("rows_ms")
 
-    total = _combined_total(listed_total, dropped_total, req, has_filters)
+        total = _combined_total(listed_total, dropped_total, req, has_filters)
 
-    # 两个视图都附带只读的搜索趋势与历史排名：先分页拿本页 keyword_id，再批量补附加，
-    # 避免在整切片上做相关子查询。两者取自**同一次**回溯查询。附加信息不改变结果集构成。
-    # 掉榜行同样补——它那一行除了历史排名与趋势之外几乎是空的。
-    row_type = DayRowItem if view == "DAY" else WeekRowItem
-    ids = [r["keyword_id"] for r in rows]
-    trends, trend_dates, history = await _fetch_trends(db, site, ids, on, view)
-    data = []
-    for r in rows:
-        item = row_type(**r)
-        item.trend = trends.get(r["keyword_id"], [])
-        item.trend_dates = trend_dates.get(r["keyword_id"], [])
-        item.history = history.get(r["keyword_id"], [None, None, None])
-        data.append(item.model_dump())
+        # 两个视图都附带只读的搜索趋势与历史排名：先分页拿本页 keyword_id，再批量补
+        # 附加，避免在整切片上做相关子查询。两者取自**同一次**回溯查询。附加信息不
+        # 改变结果集构成。掉榜行同样补——它那一行除了历史排名与趋势之外几乎是空的。
+        row_type = DayRowItem if view == "DAY" else WeekRowItem
+        ids = [r["keyword_id"] for r in rows]
+        trends, trend_dates, history = await _fetch_trends(db, site, ids, on, view, db_ms=db_ms)
+        _stage("trend_ms")
+        data = []
+        for r in rows:
+            item = row_type(**r)
+            item.trend = trends.get(r["keyword_id"], [])
+            item.trend_dates = trend_dates.get(r["keyword_id"], [])
+            item.history = history.get(r["keyword_id"], [None, None, None])
+            data.append(item.model_dump())
 
-    # 该切片有没有重建过品牌/类目。一次 LIMIT 1 探测，相对本页的多次查询可忽略。
-    # 未重建时前端要明确提示——静默返回空是最难排查的形态。
-    has_brand = (
-        await db.execute(crud.slice_has_brand_data_stmt(site, view, on))
-    ).first() is not None
+        # 该切片有没有重建过品牌/类目。一次 LIMIT 1 探测，相对本页的多次查询可忽略。
+        # 未重建时前端要明确提示——静默返回空是最难排查的形态。
+        has_brand = (
+            await _timed_execute(db, crud.slice_has_brand_data_stmt(site, view, on), db_ms)
+        ).first() is not None
+        _stage("brand_probe_ms")
 
-    return AnalysisSearchResponse(
-        success=True, data=data, total=total, site=site, view=view, date=on,
-        pending_rebuild=not has_brand,
-    )
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+            _log_slow_diagnostic(total_ms)
+
+        return AnalysisSearchResponse(
+            success=True, data=data, total=total, site=site, view=view, date=on,
+            pending_rebuild=not has_brand,
+        )
+    except asyncio.CancelledError:
+        # asyncio.CancelledError 继承自 BaseException 而不是 Exception（3.8+），
+        # 下面的 except Exception 捕不到它——Uvicorn 优雅关闭超时/应用层超时都是
+        # 通过取消这个请求的 Task 实现的。`_timed_execute` 的 finally 已经把取消前
+        # 已等待的耗时计进 db_ms，但如果这里不单独捕获，那些数据永远不会被写进日志：
+        # request_logging.py 那一层只有一条通用的 outcome=cancelled 摘要，没有这里的
+        # site/view/filters/stage_ms/db_total_ms 明细（Codex 复审 PR #98 第三轮 P2）。
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+            _log_slow_diagnostic(total_ms, failed=True, cancelled=True)
+        raise
+    except Exception:
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
+            _log_slow_diagnostic(total_ms, failed=True)
+        raise
 
 
 def resolve_export_scope(

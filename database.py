@@ -83,27 +83,54 @@ AsyncSessionFactory = async_sessionmaker(
 
 
 # ========================================
-# 慢查询日志配置 (同步引擎)
+# 慢查询日志（同步 + 异步引擎均覆盖）
 # ========================================
-SLOW_QUERY_THRESHOLD = 1.0  # 超过 1 秒记录为慢查询
+# 此前这两个事件监听只挂在同步引擎（engine）上——服务导入/导出/迁移；而
+# /api/analysis/search 等面向请求的查询全部走异步引擎（async_engine，asyncpg），
+# 对这条最高频的读路径完全没有慢查询记录。cursor 级事件是 DBAPI 层面的，
+# AsyncEngine 没有自己的这套事件，要挂在它内部持有的同步 Engine 上
+# （``async_engine.sync_engine``）才会在异步查询时同样触发。
+# 阈值改为可配置（settings.SLOW_QUERY_THRESHOLD_SECONDS），不再硬编码。
 
 
-@event.listens_for(engine, "before_cursor_execute")
-def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-    """记录查询开始时间"""
-    context._query_start_time = time.time()
+def _register_slow_query_listener(target_engine) -> None:
+    @event.listens_for(target_engine, "before_cursor_execute")
+    def before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        context._query_start_time = time.time()
+
+    @event.listens_for(target_engine, "after_cursor_execute")
+    def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+        total = time.time() - context._query_start_time
+        if total > settings.SLOW_QUERY_THRESHOLD_SECONDS:
+            # 截断过长的 SQL 语句；只记语句文本不记参数值，参数可能带筛选/检索词。
+            sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
+            logger.warning(f"慢查询检测 ({total:.2f}s): {sql_preview}")
+
+    @event.listens_for(target_engine, "handle_error")
+    def handle_error(exception_context):
+        """执行失败（语句超时、锁等待超时、连接池 checkout 超时等）不会走到
+        ``after_cursor_execute``——DBAPI 根本没有成功返回，慢查询检测因此对"执行
+        失败的慢查询"完全失明，而这恰恰是最值得诊断的一类（连接卡死、锁等待，见
+        issue #4）（Codex 复审 PR #98 P2）。
+
+        ``execution_context`` 在游标执行之外发生的失败（建连、``pool_pre_ping``
+        探测）里可能是 ``None``，或没有 ``before_cursor_execute`` 设过的起始
+        时间，两种都跳过不报——没有起始时间就无法判断"慢"，报了也是编造。
+        不返回任何值：不修改、不吞掉异常，原始异常照常向上传播。
+        """
+        ctx = exception_context.execution_context
+        start = getattr(ctx, "_query_start_time", None) if ctx is not None else None
+        if start is None:
+            return
+        total = time.time() - start
+        if total > settings.SLOW_QUERY_THRESHOLD_SECONDS:
+            statement = exception_context.statement or ""
+            sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
+            logger.warning(f"慢查询检测（执行失败） ({total:.2f}s): {sql_preview}")
 
 
-@event.listens_for(engine, "after_cursor_execute")
-def after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
-    """查询结束后记录慢查询"""
-    total = time.time() - context._query_start_time
-    if total > SLOW_QUERY_THRESHOLD:
-        # 截断过长的 SQL 语句
-        sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
-        logger.warning(
-            f"慢查询检测 ({total:.2f}s): {sql_preview}"
-        )
+_register_slow_query_listener(engine)
+_register_slow_query_listener(async_engine.sync_engine)
 
 
 # 获取同步数据库会话 (FastAPI 依赖注入)
