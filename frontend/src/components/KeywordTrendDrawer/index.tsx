@@ -130,8 +130,18 @@ export default function KeywordTrendDrawer({
         {/* 文字统计在左（竖排），日/周切换 + 图表 + 图例在右——切换控件紧贴在图表正上方，
             不放在整个内容区顶部：用户反馈原先放在最上面时，图表看起来像是另起一段、跟
             控件对不上。控件不放进下面的 `data !== null` 条件里，是为了在加载中/失败/
-            无数据这几种状态下也能切视图重试，不因为还没数据就把控件一起藏起来。 */}
-        <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
+            无数据这几种状态下也能切视图重试，不因为还没数据就把控件一起藏起来。
+            `flexWrap: 'wrap'`：左列 `flexShrink: 0` 且右列内嵌一个固定 760px 宽的
+            `<svg>`，两者所需宽度是相加而非取大——视口窄于「文字列宽度 + 32 + 760」时
+            没有收缩空间，会被迫横向溢出、右侧图表被裁掉一截（Codex 审核 PR #95 第三轮
+            P2）。允许换行后窄视口下改为上下堆叠，不再横向溢出；正常宽度下两列仍并排，
+            这行改动不影响当前的默认视觉。 */}
+        <div
+          data-testid="trend-drawer-columns"
+          style={{
+            display: 'flex', gap: 32, alignItems: 'flex-start', flexWrap: 'wrap',
+          }}
+        >
           {/* `data !== null` 排除首次挂载、请求还没回来的那一瞬间——那时不该说"暂无数据"，
               两者含义不同；这一列在没有数据前干脆不渲染，不留一个空的占位列。 */}
           {!errored && data !== null && data.on !== null && (
