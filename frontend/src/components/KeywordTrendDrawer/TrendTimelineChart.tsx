@@ -90,13 +90,17 @@ export default function TrendTimelineChart({
 
   // y 轴刻度：按「最好排名（minR，画在上方）→ 最差排名（maxR，画在下方）」等分。
   // 只有一个在榜值时（minR === maxR）只标这一个刻度，不强行摊出 5 条重合的线。
+  // 排名范围很窄时（如 100~101）等分后取整会撞出重复值——[100,100,101,101,101]，
+  // 去重前会画出重叠的网格线与文字、且 `key={`y-${tick}`}` 撞键（Codex 审核 PR #95）。
+  // 用 `Set` 去重，保留升序（Array.from 本就按 i 递增生成，Set 保留插入顺序）。
   const yTicks = useMemo(() => {
     if (!ranked) return [];
     if (minR === maxR) return [minR];
-    return Array.from(
+    const raw = Array.from(
       { length: Y_TICK_COUNT + 1 },
       (_, i) => Math.round(minR + ((maxR - minR) * i) / Y_TICK_COUNT),
     );
+    return [...new Set(raw)];
   }, [ranked, minR, maxR]);
 
   // x 轴标签：点数超过上限时按等距下标抽样，但恒保留首尾——「全部可用历史」范围可能

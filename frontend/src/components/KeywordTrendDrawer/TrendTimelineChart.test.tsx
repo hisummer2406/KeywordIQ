@@ -122,6 +122,17 @@ describe('TrendTimelineChart', () => {
       expect(yTicks[0].textContent).toBe('50');
     });
 
+    it('排名范围很窄时（等分后取整会撞出重复值）y 轴刻度去重，不渲染重叠的刻度线（Codex 审核 PR #95）', () => {
+      // minR=100 maxR=101，五等分取整为 [100,100,101,101,101]——去重前会撞出重复的
+      // `key={`y-${tick}`}` 与重叠的网格线/文字标签，去重后应只剩 100 与 101 两条。
+      const points = [point('2026-07-01', 'RANKED', 100), point('2026-07-02', 'RANKED', 101)];
+      const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
+
+      const yTicks = container.querySelectorAll('[data-testid="trend-y-tick"]');
+      const texts = [...yTicks].map((el) => el.textContent);
+      expect(texts).toEqual(['100', '101']);
+    });
+
     it('全部为非在榜状态时不渲染 y 轴刻度（没有排名数值可标）', () => {
       const points = [point('2026-07-01', 'NOT_IMPORTED'), point('2026-07-02', 'OUT_OF_RETENTION')];
       const { container } = render(<TrendTimelineChart points={points} view="DAY" />);
