@@ -80,18 +80,22 @@ export default function KeywordTrendDrawer({
 }: Props) {
   const showAddToLibrary = canAddToLibrary && !hideAddToLibrary;
   const [viewState, setViewState] = useState<View>(view);
-  const [range, setRange] = useState<TrendRange>('RECENT_30D');
+  // 默认「全部可用历史」，不是「近 30 天」——后者藏得太深，用户不容易发现完整历史能力
+  // （issue #94）。「近 30 天」仍保留为可切换选项。
+  const [range, setRange] = useState<TrendRange>('ALL');
   const [data, setData] = useState<KeywordTrendResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [errored, setErrored] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const requestSeq = useRef(0);
 
-  // 每次打开重置到来源视图与默认范围——不保留上一个关键词遗留的切换状态。
+  // 每次打开（含关闭后重开、切换到另一个关键词）都重置到来源视图与默认范围「全部可用
+  // 历史」——不保留上一个关键词遗留的切换状态，也不让「近 30 天」的选择跨关键词残留
+  // （issue #94）。
   useEffect(() => {
     if (open) {
       setViewState(view);
-      setRange('RECENT_30D');
+      setRange('ALL');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, keywordId]);
