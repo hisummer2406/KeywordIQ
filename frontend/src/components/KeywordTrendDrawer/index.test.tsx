@@ -141,8 +141,9 @@ describe('KeywordTrendDrawer', () => {
     fireEvent.click(screen.getByText('按周'));
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
 
-    // 第二次请求先落地
-    await screen.findByText('2026年07月10日');
+    // 第二次请求先落地——响应的 view 是 WEEK，锚定期按周格式渲染
+    // （"2026年第N周（...）"），不是 DAY 格式的"2026年07月10日"。
+    await screen.findByText(/2026年第\d+周/);
 
     // 第一次（更早发出、更晚落地）的结果到达时不应覆盖已经展示的第二次结果
     resolveFirst(baseResponse({ on: '2026-06-01' }));
