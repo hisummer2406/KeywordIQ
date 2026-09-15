@@ -324,7 +324,10 @@ export function buildColumns(
                 title="查看关键词 ABA 排名趋势详情（含完整历史）"
                 aria-label="查看历史走势"
               >
-                <LineChartOutlined />
+                {/* LineChartOutlined 本身线条比 Google/Meta/TikTok 三个品牌图标细很多——
+                    品牌图标设计上就是粗笔画，同字号下视觉粗细不同不是尺寸问题。放大到
+                    18px（其余三个维持默认）让线条粗细更接近，不需要改动共用的图标风格。 */}
+                <LineChartOutlined style={{ fontSize: 18 }} />
               </a>
             )}
             {trendsUrl && (
