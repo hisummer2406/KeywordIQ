@@ -4,6 +4,7 @@
 - POST /api/analysis/export   作用域内流式导出 CSV
 - GET  /api/analysis/scope    作用域元信息（可选日期集 + 最新日期），日期选择器用
 - GET  /api/analysis/categories  类目下拉选项（按作用域）
+- GET  /api/analysis/topslot-history  ASIN/品牌悬浮历史（issue #96），分页
 
 失败一律**抛**不**返**：`ScopeError`（422）与 `ExportTooLargeError`（413）都是 `APIError`
 子类，由 `app/common/error_handlers.py` 统一产出错误体。这里不再 try/except 转译——
@@ -28,6 +29,8 @@ from sqlalchemy.orm import Session
 from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW, COMPETITOR_VIEW
 from app.auth.simple_auth import simple_auth
 from app.table.analysis import analysis_service as service
+from app.table.analysis import topslot_history_service
+from app.table.analysis.topslot_history_schemas import TopslotHistoryResponse, TopslotKind
 from app.table.search.search_schemas import (
     AnalysisSearchRequest,
     AnalysisSearchResponse,
@@ -131,3 +134,27 @@ async def get_brands(
 ) -> list[BrandOption]:
     """品牌下拉选项（按作用域三元组）。与 /categories 同构，同一套权限点。"""
     return await service.get_brands(db, site, view, date)
+
+
+@analysis_router.get("/topslot-history", response_model=TopslotHistoryResponse)
+async def get_topslot_history(
+    site: str = Query(..., description="站点码，必须与 keyword_id 实际归属的站点一致"),
+    view: _View = Query("DAY"),
+    keyword_id: int = Query(..., description="dim_keyword.keyword_id"),
+    kind: TopslotKind = Query(..., description="ASIN 或 BRAND"),
+    value: str = Query(..., min_length=1, description="ASIN 原文或品牌原文"),
+    on: _Date = Query(..., description="来源页面已生效查询的锚定日，不做退化重算"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1),
+    db: AsyncSession = Depends(get_async_db),
+    _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
+) -> TopslotHistoryResponse:
+    """某 ASIN／品牌在当前关键词下、保留窗口到 `on` 之间实际进入点击前三的期次历史。
+
+    `keyword_id` 与 `site` 不一致时 422；`value` 从未出现过时返回 `total=0` 的空结果
+    而非报错。见 openspec 变更 `add-topslot-history-popover`。
+    """
+    return await topslot_history_service.get_topslot_history(
+        db, site=site, view=view, keyword_id=keyword_id, kind=kind, value=value,
+        on=on, page=page, page_size=page_size,
+    )

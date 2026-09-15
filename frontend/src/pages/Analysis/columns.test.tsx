@@ -1,7 +1,21 @@
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { buildColumns, totalColumnWidth } from './columns';
 import { TREND_COLORS } from '@/components/trendColors';
+
+// `TopslotHistoryPopover` 的真实实现经 `@/services/topslotHistory` 引入
+// `import { request } from '@umijs/max'`——在 vitest 环境下加载真实的 `@umijs/max`
+// 会触发一个与本文件无关的 esbuild 环境不变量报错（同
+// `KeywordTrendDrawer/index.test.tsx`、`AddToLibraryModal.test.tsx` 已经踩过的坑）。
+// `columns.tsx` 无条件 import 了它，不 mock 会让这个文件里所有既有用例一起炸。
+vi.mock('./TopslotHistoryPopover', () => ({
+  default: (props: any) => (
+    <div data-testid="topslot-history-popover" data-kind={props.kind} data-value={props.value}>
+      {props.children}
+    </div>
+  ),
+}));
+
+import { buildColumns, totalColumnWidth } from './columns';
 
 describe('buildColumns', () => {
   it('表头不提供点击排序，统一使用表格工具栏排序', () => {

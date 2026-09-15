@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Tooltip, Typography } from 'antd';
 import type { AnalysisRow } from '@/services/analysis';
 import { amazonProductUrl } from './amazonProductUrl';
+import type { HistoryScope } from './columns';
 import { PLACEHOLDER_PIXEL_SIZE, productImageUrl } from './productImage';
+import TopslotHistoryPopover from './TopslotHistoryPopover';
 
 /**
  * 点击量前三商品的卡牌列与品牌列。
@@ -109,7 +111,14 @@ function Thumbnail({ asin }: { asin: string }) {
   );
 }
 
-function SlotCard({ slot, siteDomain }: { slot: TopSlot; siteDomain?: string }) {
+function SlotCard({
+  slot, siteDomain, keywordId, historyScope,
+}: {
+  slot: TopSlot;
+  siteDomain?: string;
+  keywordId: number;
+  historyScope?: HistoryScope;
+}) {
   // 空槽位渲染等宽占位：位置必须留着，否则名次与位置的对应关系就断了
   if (!slot.asin) {
     return (
@@ -146,16 +155,37 @@ function SlotCard({ slot, siteDomain }: { slot: TopSlot; siteDomain?: string }) 
   // 链接包在**整张卡牌**外而不是图片上：图床覆盖率很低（实测 12 个 ASIN 仅 2 个有图），
   // 占位方块是常态，而那恰恰是用户最需要"去看看这到底是什么商品"的时候。
   // 拿不到域名就不给链接——宁可不可点，也不要拼出一个会跳错的地址。
+  const linked = href ? (
+    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>
+      {card}
+    </a>
+  ) : (
+    card
+  );
+
+  // 悬浮历史面板（issue #96）取代普通 Tooltip 承担"展示完整商品标题"这件事——面板
+  // 标题栏就是这个身份的展示位。历史作用域拿不到（还没查出首屏数据）时退化回原来的
+  // 纯 Tooltip，不给一个必定失败的入口。Popover 由 rc-trigger 挂载到独立浮层容器，
+  // 与这里的 <a> 不共享 DOM 树，面板内的滚动/重试点击不会冒泡触发外链跳转。
+  if (!historyScope) {
+    return (
+      <Tooltip title={slot.title || slot.asin} placement="top">
+        {linked}
+      </Tooltip>
+    );
+  }
   return (
-    <Tooltip title={slot.title || slot.asin} placement="top">
-      {href ? (
-        <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>
-          {card}
-        </a>
-      ) : (
-        card
-      )}
-    </Tooltip>
+    <TopslotHistoryPopover
+      site={historyScope.site}
+      view={historyScope.view}
+      on={historyScope.on}
+      keywordId={keywordId}
+      kind="ASIN"
+      value={slot.asin}
+      label={slot.title || slot.asin}
+    >
+      {linked}
+    </TopslotHistoryPopover>
   );
 }
 
@@ -163,14 +193,22 @@ function SlotCard({ slot, siteDomain }: { slot: TopSlot; siteDomain?: string }) 
 export default function TopProductCards({
   row,
   siteDomain,
+  historyScope,
 }: {
   row: AnalysisRow;
   siteDomain?: string;
+  historyScope?: HistoryScope;
 }) {
   return (
     <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
       {topSlots(row).map((slot) => (
-        <SlotCard key={slot.rank} slot={slot} siteDomain={siteDomain} />
+        <SlotCard
+          key={slot.rank}
+          slot={slot}
+          siteDomain={siteDomain}
+          keywordId={row.keyword_id}
+          historyScope={historyScope}
+        />
       ))}
     </div>
   );
