@@ -16,12 +16,17 @@ import { TREND_COLORS } from '../trendColors';
  * 或任一端不是 RANKED 都不连线，这是"不跨缺口连线"的直接实现，不是事后过滤。
  */
 
+// 灰阶整体下移一档：此前最浅的 #f0f0f0 在白底上（图例圆点、非在榜期次的描边）
+// 接近不可见，四档非在榜状态互相之间也分不清。现在最浅的一档（已超出保留范围）
+// 仍是 #d9d9d9，在白底上依然清楚可辨；「已掉榜」用最深的灰——它是四档里唯一
+// 表示"这个词真实存在过、只是掉出去了"的状态，理应比"未导入"/"超出保留"这类
+// 单纯的数据缺失更显眼。
 const STATUS_META: Record<TrendPointStatus, { label: string; color: string }> = {
   RANKED: { label: '在榜', color: TREND_COLORS.flat },
-  DROPPED: { label: '已掉榜', color: '#8c8c8c' },
-  NO_DATA: { label: '该期报表已导入但未收录', color: '#bfbfbf' },
-  NOT_IMPORTED: { label: '该期报表未导入', color: '#d9d9d9' },
-  OUT_OF_RETENTION: { label: '已超出保留范围', color: '#f0f0f0' },
+  DROPPED: { label: '已掉榜', color: '#595959' },
+  NO_DATA: { label: '该期报表已导入但未收录', color: '#8c8c8c' },
+  NOT_IMPORTED: { label: '该期报表未导入', color: '#bfbfbf' },
+  OUT_OF_RETENTION: { label: '已超出保留范围', color: '#d9d9d9' },
 };
 
 const HEIGHT = 220;
