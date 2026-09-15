@@ -85,6 +85,22 @@ if [ "$SKIP_FRONTEND" -eq 0 ]; then
     need pnpm "npm i -g pnpm，或 corepack enable"
     need rsync "用于发布 SPA 产物"
 fi
+# WatchedFileHandler（main.py::configure_logging）本身不做轮转，logrotate 是唯一的
+# 轮转权威。此前这里只是警告、放行部署——一次正常的容器化部署因此可能悄悄跑在一台
+# 没有 logrotate 的机器上，logs/app.log 无限增长直到打满磁盘，且部署本身不会失败
+# （Codex 复审 PR #98 P1：第一轮修复只处理了"配置文件没装"，没处理"命令本身缺失"这个
+# 更基础的前提）。升级为硬性前置条件，与 docker/nginx 同等对待。
+need logrotate "宿主机需已安装 logrotate（多数发行版随基础安装自带，缺失时用发行版包管理器安装，如 yum install logrotate）"
+# 命令存在只说明能装配置，不说明有人定期跑它——logrotate 本身不是常驻进程，缺少定时
+# 触发（cron.daily 或对应的 systemd timer）时装了配置也不会生效，和完全没装 logrotate
+# 是同一个后果（磁盘无限增长），只是更隐蔽：`logrotate -d` 语法校验会通过，看起来
+# 一切正常。RHEL/CentOS/Alibaba Cloud Linux 系发行版走 /etc/cron.daily/logrotate，
+# 较新的发行版可能改用 systemd 的 logrotate.timer，两种都认。
+if [ -f /etc/cron.daily/logrotate ] || systemctl is-enabled --quiet logrotate.timer 2>/dev/null; then
+    :
+else
+    fail "错误: 找不到 logrotate 的定时触发机制（/etc/cron.daily/logrotate 与 systemd 的 logrotate.timer 均不存在）。装了配置也不会被执行，需要先在宿主机上补上其一"
+fi
 
 echo "  WEB_ROOT = $WEB_ROOT"
 
@@ -151,13 +167,9 @@ else
 fi
 rm -f "$tmp_logrotate"
 # 空跑校验语法，配置错误比没配置更隐蔽——cron.daily 触发的失败通常没人第一时间看到。
-if command -v logrotate >/dev/null 2>&1; then
-    as_root logrotate -d "$LOGROTATE_CONF_DST" >/dev/null \
-        || fail "错误: logrotate 配置校验未通过（sudo logrotate -d $LOGROTATE_CONF_DST 查看详情）"
-else
-    warn "  本机未安装 logrotate 命令，跳过语法校验"
-    warn "  （cron.daily 是否已配置好 logrotate 本身是系统级前提，不在本脚本职责内，见 tasks.md「生产待验收」7.1）"
-fi
+# logrotate 命令本身与定时触发机制已在第 1 步确认存在，这里不再需要分支判断。
+as_root logrotate -d "$LOGROTATE_CONF_DST" >/dev/null \
+    || fail "错误: logrotate 配置校验未通过（sudo logrotate -d $LOGROTATE_CONF_DST 查看详情）"
 
 # ---------- 7. 重载 nginx + 切换容器到新镜像 ----------
 info "7/7 重载 nginx 并切换容器到新镜像..."

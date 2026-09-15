@@ -10,6 +10,7 @@ uvicorn 自带的访问日志，`app/common/error_handlers.py` 的异常处理�
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -57,7 +58,16 @@ class RequestLoggingMiddleware:
       ``None`` 会被读成"连响应都没发"，而客户端实际收到的是确定的 500
       （Codex 复审 PR #98 P2）。这个假设耦合着 error_handlers.py 仍然给 `Exception`
       注册兜底处理器；那条注册若被移除，这里要一并回来重新核实。
-    两种都记录、都原样重新抛出，不吞异常。
+    - ``cancelled``：``asyncio.CancelledError`` 传播到了这里——它继承自
+      ``BaseException`` 而不是 ``Exception``（3.8+），普通的 ``except Exception``
+      捕不到它。Uvicorn 的优雅关闭超时、上游任务级超时等都是通过取消这个请求的
+      Task 实现的，不加这一档，这类请求在 `app.log` 里彻底消失，甚至比
+      ``error_before_response`` 更难排查——原因是"发生过"这件事本身都没有留痕
+      （Codex 复审 PR #98 P2）。
+
+    以上都记录、都原样重新抛出，不吞异常——``cancelled`` 这一档尤其不能吞：
+    ``asyncio.CancelledError`` 是协作式取消的信号，吞掉会让上层以为任务已正常
+    结束，破坏取消语义本身。
     """
 
     def __init__(self, app):
@@ -84,6 +94,14 @@ class RequestLoggingMiddleware:
         started = time.monotonic()
         try:
             await self.app(scope, receive, send_wrapper)
+        except asyncio.CancelledError:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            outcome = "cancelled"
+            logger.warning(
+                "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
+                method, path, state["status"], duration_ms, outcome, get_request_id(),
+            )
+            raise
         except Exception:
             duration_ms = int((time.monotonic() - started) * 1000)
             if state["response_started"]:

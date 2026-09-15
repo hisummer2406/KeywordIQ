@@ -106,6 +106,28 @@ def _register_slow_query_listener(target_engine) -> None:
             sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
             logger.warning(f"慢查询检测 ({total:.2f}s): {sql_preview}")
 
+    @event.listens_for(target_engine, "handle_error")
+    def handle_error(exception_context):
+        """执行失败（语句超时、锁等待超时、连接池 checkout 超时等）不会走到
+        ``after_cursor_execute``——DBAPI 根本没有成功返回，慢查询检测因此对"执行
+        失败的慢查询"完全失明，而这恰恰是最值得诊断的一类（连接卡死、锁等待，见
+        issue #4）（Codex 复审 PR #98 P2）。
+
+        ``execution_context`` 在游标执行之外发生的失败（建连、``pool_pre_ping``
+        探测）里可能是 ``None``，或没有 ``before_cursor_execute`` 设过的起始
+        时间，两种都跳过不报——没有起始时间就无法判断"慢"，报了也是编造。
+        不返回任何值：不修改、不吞掉异常，原始异常照常向上传播。
+        """
+        ctx = exception_context.execution_context
+        start = getattr(ctx, "_query_start_time", None) if ctx is not None else None
+        if start is None:
+            return
+        total = time.time() - start
+        if total > settings.SLOW_QUERY_THRESHOLD_SECONDS:
+            statement = exception_context.statement or ""
+            sql_preview = statement[:200] + "..." if len(statement) > 200 else statement
+            logger.warning(f"慢查询检测（执行失败） ({total:.2f}s): {sql_preview}")
+
 
 _register_slow_query_listener(engine)
 _register_slow_query_listener(async_engine.sync_engine)

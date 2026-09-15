@@ -10,6 +10,8 @@ import asyncio
 import logging
 from datetime import date
 
+import pytest
+
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import AnalysisSearchRequest
 from config import settings
@@ -149,6 +151,47 @@ async def test_no_data_scope_fast_skips_diagnostic(monkeypatch, caplog):
     assert resp.total == 0
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
     assert not records
+
+
+async def test_timed_execute_records_elapsed_time_even_on_failure():
+    """``_timed_execute`` 用 ``finally`` 而不是"执行完再记"——语句超时/锁等待超时/
+    连接池 checkout 超时会让 ``await db.execute(...)`` 直接抛出，此前这种情况下
+    完全不记录这次等待耗时（Codex 复审 PR #98 P2）。"""
+    db_ms: list[int] = []
+
+    class _FailingSession:
+        async def execute(self, _stmt):
+            await asyncio.sleep(0.05)
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await service._timed_execute(_FailingSession(), "stmt", db_ms)
+
+    assert len(db_ms) == 1
+    assert db_ms[0] >= 40
+
+
+async def test_failed_request_still_emits_diagnostic_marked_failed(monkeypatch, caplog):
+    """请求中途失败（这里模拟 ``_fetch_trends`` 本身超时/失败）不能让诊断彻底消失
+    ——此前 ``search()`` 一旦抛异常就直接跳过结尾的诊断输出，而这恰恰是最该被诊断
+    出来的一类失败（连接卡死、锁等待，见 issue #4）（Codex 复审 PR #98 P2）。原始
+    异常必须原样重新抛出，不能被诊断逻辑吞掉。"""
+    monkeypatch.setattr(settings, "ANALYSIS_SLOW_QUERY_THRESHOLD_MS", 30)
+    _patch_fast_helpers(monkeypatch)
+
+    async def _slow_then_failing_fetch_trends(*_args, **_kwargs):
+        await asyncio.sleep(0.06)
+        raise RuntimeError("模拟连接卡死或锁等待超时")
+
+    monkeypatch.setattr(service, "_fetch_trends", _slow_then_failing_fetch_trends)
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        with pytest.raises(RuntimeError, match="模拟连接卡死或锁等待超时"):
+            await service.search(_FakeSession(), _req(), user_id=1)
+
+    records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
+    assert len(records) == 1
+    assert "request_failed=True" in records[0].message
 
 
 async def test_no_data_scope_but_slow_scope_resolution_still_diagnoses(monkeypatch, caplog):

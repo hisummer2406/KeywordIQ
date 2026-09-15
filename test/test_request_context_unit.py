@@ -7,6 +7,8 @@ design.md 决策 C 把 nginx 定为 request id 的唯一权威生成者，应用
 """
 from __future__ import annotations
 
+import pytest
+
 from app.common.request_context import (
     REQUEST_ID_HEADER,
     RequestIdMiddleware,
@@ -79,6 +81,35 @@ async def test_context_reset_after_request():
     上一个请求的 request_id（后台任务/启动期也依赖它复位为 None）。"""
     await _run_and_capture_id(_scope([(b"x-request-id", b"leaked-id")]))
     assert get_request_id() is None
+
+
+async def test_context_not_reset_when_exception_propagates():
+    """未处理异常继续外传时不能 reset：那类异常最终会被 Starlette 拆到最外层的
+    `ServerErrorMiddleware`（本中间件之外），它调用 `error_handlers.py` 的兜底
+    处理器时要靠这个 contextvar 仍然有效，才能把 request_id 写进响应体与日志——
+    此前这里的 `finally` 会在异常真正被处理之前就清空它，导致这批"最该被追踪"的
+    500 响应体里 request_id 恒为 null（Codex 复审 PR #98 P2，端到端回归见
+    test/test_error_contract_unit.py::test_unhandled_exception_preserves_request_id_in_body_and_header）。
+    """
+
+    async def downstream(scope, receive, send):
+        raise RuntimeError("boom")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        pass
+
+    middleware = RequestIdMiddleware(downstream)
+    with pytest.raises(RuntimeError):
+        await middleware(_scope([(b"x-request-id", b"keep-me")]), receive, send)
+
+    assert get_request_id() == "keep-me"
+    # 清理，避免这个测试的残留值渗进同一进程里跑的其他测试。
+    from app.common.request_context import _request_id
+
+    _request_id.set(None)
 
 
 async def test_concurrent_requests_do_not_leak_request_id():

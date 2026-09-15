@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
@@ -175,6 +176,29 @@ async def test_logging_failure_does_not_break_the_response(caplog):
 
     assert len(sent_bodies) == 1
     assert sent_bodies[0]["body"] == b"ok"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_task_produces_cancelled_summary(caplog):
+    """``asyncio.CancelledError`` 继承自 ``BaseException`` 而不是 ``Exception``
+    （3.8+），普通的 ``except Exception`` 捕不到它——Uvicorn 的优雅关闭超时、上游
+    任务级超时等都是通过取消这个请求的 Task 实现的，此前这类请求在 app.log 里
+    彻底消失，比 ``error_before_response`` 更难排查（Codex 复审 PR #98 P2）。
+    必须原样重新抛出，不能吞掉——那会破坏 asyncio 的取消语义本身。"""
+
+    async def downstream(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        raise asyncio.CancelledError()
+
+    with caplog.at_level(logging.INFO, logger="app.common.request_logging"):
+        with pytest.raises(asyncio.CancelledError):
+            await _run(downstream, _scope())
+
+    records = [r for r in caplog.records if "请求摘要" in r.message]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert "outcome=cancelled" in records[0].message
+    assert "status=200" in records[0].message
 
 
 @pytest.mark.asyncio
