@@ -30,7 +30,7 @@ function baseResponse(overrides: Partial<Awaited<ReturnType<typeof getKeywordTre
     keyword: 'coffee maker',
     site: 'US',
     view: 'DAY',
-    range: 'RECENT_30D',
+    range: 'ALL',
     on: '2026-07-10',
     coverage: { start: '2026-07-05', end: '2026-07-10' },
     points: [{ date: '2026-07-10', status: 'RANKED', ranking: 100 }],
@@ -62,14 +62,38 @@ function setup(props: Partial<Parameters<typeof KeywordTrendDrawer>[0]> = {}) {
 }
 
 describe('KeywordTrendDrawer', () => {
-  it('打开时按来源锚点请求数据，并展示统计条', async () => {
+  it('打开时按来源锚点请求数据，默认范围为「全部可用历史」（issue #94）', async () => {
     getKeywordTrend.mockResolvedValue(baseResponse());
     setup();
 
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledWith(
-      expect.objectContaining({ keywordId: 1, site: 'US', view: 'DAY', range: 'RECENT_30D', on: '2026-07-10' }),
+      expect.objectContaining({ keywordId: 1, site: 'US', view: 'DAY', range: 'ALL', on: '2026-07-10' }),
     ));
     expect(await screen.findByText('2026年07月10日')).toBeInTheDocument();
+  });
+
+  it('切换到另一个关键词时仍固定请求「全部可用历史」——范围不提供切换，恒为 ALL（issue #94）', async () => {
+    getKeywordTrend.mockResolvedValue(baseResponse());
+    const { rerender } = render(
+      <KeywordTrendDrawer open onClose={vi.fn()} keywordId={1} keyword="coffee maker" site="US" view="DAY" on="2026-07-10" />,
+    );
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <KeywordTrendDrawer open onClose={vi.fn()} keywordId={2} keyword="another word" site="US" view="DAY" on="2026-07-10" />,
+    );
+    await waitFor(() => expect(getKeywordTrend).toHaveBeenLastCalledWith(
+      expect.objectContaining({ keywordId: 2, range: 'ALL' }),
+    ));
+  });
+
+  it('不再提供「近 30 天」切换入口（issue #94：用户反馈日常只用全部历史，去掉多余的一步选择）', async () => {
+    getKeywordTrend.mockResolvedValue(baseResponse());
+    setup();
+
+    await screen.findByText('2026年07月10日');
+    expect(screen.queryByText('近 30 天')).not.toBeInTheDocument();
+    expect(screen.queryByText('全部可用历史')).not.toBeInTheDocument();
   });
 
   it('无有效点时区间最好排名与最近可用排名显示无数据', async () => {
@@ -109,16 +133,19 @@ describe('KeywordTrendDrawer', () => {
       resolveFirst = resolve;
     });
     getKeywordTrend.mockImplementationOnce(() => first);
-    getKeywordTrend.mockResolvedValueOnce(baseResponse({ range: 'ALL', coverage: { start: '2026-01-01', end: '2026-07-10' } }));
+    getKeywordTrend.mockResolvedValueOnce(baseResponse({ view: 'WEEK' }));
 
     setup();
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByText('全部可用历史'));
+    fireEvent.click(screen.getByText('按周'));
     await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
 
-    // 第二次请求先落地
-    await screen.findByText('2026年07月10日');
+    // 第二次请求先落地——响应的 view 是 WEEK，锚定期/覆盖范围/历史排名日期都按周格式
+    // 渲染（"2026年第N周（...）"），不是 DAY 格式的"2026年07月10日"。用
+    // findAllByText 而非 findByText：这条正则同时命中锚定期、覆盖范围、两个
+    // StatLine 的日期几处文案，不是唯一匹配。
+    expect((await screen.findAllByText(/2026年第\d+周/)).length).toBeGreaterThan(0);
 
     // 第一次（更早发出、更晚落地）的结果到达时不应覆盖已经展示的第二次结果
     resolveFirst(baseResponse({ on: '2026-06-01' }));
@@ -174,25 +201,41 @@ describe('KeywordTrendDrawer', () => {
     expect(screen.queryByText(/2026年第\d+周/)).not.toBeInTheDocument();
   });
 
-  it('切范围（近30天/全部可用历史）新响应落地前，不展示上一个范围的统计数值（PR #87 复审第四轮 P2）', async () => {
-    getKeywordTrend.mockResolvedValueOnce(baseResponse());
+  it('图例只常驻三种常见状态，不展示「该期报表已导入但未收录」与「已超出保留范围」（用户反馈"没见过"）', async () => {
+    getKeywordTrend.mockResolvedValue(baseResponse({
+      points: [
+        { date: '2026-07-08', status: 'NO_DATA', ranking: null },
+        { date: '2026-07-09', status: 'OUT_OF_RETENTION', ranking: null },
+        { date: '2026-07-10', status: 'RANKED', ranking: 100 },
+      ],
+    }));
     setup();
-    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(1));
-    // 「实际使用的锚定期」行——唯一不带括号/不与其他日期拼接的精确匹配，见文件内其他
-    // 用例同样的取法。
+
+    await screen.findByText('2026年07月10日');
+    expect(screen.getByText('在榜')).toBeInTheDocument();
+    expect(screen.getByText('已掉榜')).toBeInTheDocument();
+    expect(screen.getByText('该期报表未导入')).toBeInTheDocument();
+    // 少见状态即便真的出现在这次响应的数据里，图例也不常驻展示这两个标签
+    expect(screen.queryByText('该期报表已导入但未收录')).not.toBeInTheDocument();
+    expect(screen.queryByText('已超出保留范围')).not.toBeInTheDocument();
+  });
+
+  it('两栏布局允许换行，窄视口下改为上下堆叠而不是横向溢出（Codex 审核 PR #95 第三轮）', async () => {
+    // 左列文字统计 `flexShrink: 0` 且右列内嵌一个固定 760px 宽的图表，两者所需宽度是
+    // 相加的——不允许换行时，视口窄于两者之和会被迫横向溢出、图表右侧被裁掉一截。
+    // jsdom 不做真实布局计算，这里只能断言样式声明本身（flex-wrap: wrap），不能断言
+    // 换行后的实际像素位置。
+    getKeywordTrend.mockResolvedValue(baseResponse());
+    render(
+      <KeywordTrendDrawer open onClose={vi.fn()} keywordId={1} keyword="coffee maker" site="US" view="DAY" on="2026-07-10" />,
+    );
     await screen.findByText('2026年07月10日');
 
-    // 卡住切到「全部可用历史」触发的第二次请求（永不 resolve），制造"range 状态已经是
-    // ALL、data 仍是上一次 RECENT_30D 响应"这段窗口。与 view 不同，range 直接决定了
-    // coverage/最好排名/最近可用排名这些数值本身（不是同一份数据换个格式化），继续显示
-    // 会让用户把 30 天窗口的结果误当成"全部可用历史"的结果。
-    getKeywordTrend.mockImplementationOnce(() => new Promise(() => {}));
-
-    fireEvent.click(screen.getByText('全部可用历史'));
-    await waitFor(() => expect(getKeywordTrend).toHaveBeenCalledTimes(2));
-
-    // 这段窗口内统计区必须整段不显示，不能留存上一次响应的数值
-    expect(screen.queryByText('2026年07月10日')).not.toBeInTheDocument();
-    expect(screen.queryByText('区间最好排名：')).not.toBeInTheDocument();
+    // antd Drawer 把内容 portal 到 document.body，不在 render() 返回的 container 里
+    // ——其余用例都靠 `screen`（默认搜整个文档）读取，这里同理用 testid 搜整个文档。
+    // 不按 `style.flexWrap === 'wrap'` 筛选：antd 的 `<Space wrap>`（日/周切换那行）
+    // 自己也会渲染出 flex-wrap: wrap 的容器，按样式模糊匹配会误命中那一个。
+    const row = screen.getByTestId('trend-drawer-columns');
+    expect(row).toHaveStyle({ display: 'flex', flexWrap: 'wrap' });
   });
 });
