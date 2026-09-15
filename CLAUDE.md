@@ -1102,6 +1102,10 @@ PG_WORK_MEM=16MB
 
 ## Production Environment
 
+**服务出问题排查看 `docs/observability-runbook.md`**（怎么用 request_id 关联 nginx/
+应用日志、怎么读慢查询诊断、issue #4 类导入期卡死复发时重启前要采集什么），本文件不
+重复那些操作步骤。
+
 | Category | Spec |
 |----------|------|
 | App Server | Alibaba Cloud ECS · Alibaba Cloud Linux 3.2104 LTS 64-bit · 4 vCPU / 8 GiB RAM |

@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     # 一次性下载令牌，该路径尚未实现，故此处以拒绝代替。
     EXPORT_ROW_CAP: int = 50000
 
+    # 慢查询定位：两层独立阈值，触发不同的排查动作，不共用一个配置。
+    # 见 openspec/changes/add-request-diagnostics-logging/design.md 决策 D。
+    #
+    # 第一层——通用 SQL 语句级（database.py 的 before/after_cursor_execute 事件监听，
+    # 同时挂在同步与异步引擎上）：单条 SQL 语句本身慢（索引缺失、锁等待）。
+    SLOW_QUERY_THRESHOLD_SECONDS: float = 1.0
+    # 第二层——/api/analysis/search 专属结构化诊断：整个调用慢（可能是多个本身不慢的
+    # 阶段叠加，或应用层整形耗时占比异常），超阈值才输出已解析的生效作用域/筛选摘要/
+    # 各阶段耗时，不新增查询次数。
+    ANALYSIS_SLOW_QUERY_THRESHOLD_MS: int = 1000
+
     # 持续增长市场（工具箱）的判定口径。三项都在**日报导入收尾时**参与算定，命中结果写进
     # analysis.fact_growth；查询侧只读，不重算。
     #
@@ -400,6 +411,20 @@ class Settings(BaseSettings):
         if self.DEFAULT_SITE and self.DEFAULT_SITE in enabled:
             return self.DEFAULT_SITE
         return enabled[0]
+
+    @field_validator("SLOW_QUERY_THRESHOLD_SECONDS")
+    @classmethod
+    def _validate_slow_query_threshold(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("SLOW_QUERY_THRESHOLD_SECONDS 必须为正数（配成 0 或负数会让每条 SQL 都被记为慢查询）")
+        return value
+
+    @field_validator("ANALYSIS_SLOW_QUERY_THRESHOLD_MS")
+    @classmethod
+    def _validate_analysis_slow_query_threshold(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("ANALYSIS_SLOW_QUERY_THRESHOLD_MS 必须为正数（配成 0 或负数会让每次查询都输出诊断日志）")
+        return value
 
     @field_validator("HOT_WINDOW_MONTHS")
     @classmethod
