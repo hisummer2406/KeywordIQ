@@ -219,4 +219,23 @@ describe('KeywordTrendDrawer', () => {
     expect(screen.queryByText('该期报表已导入但未收录')).not.toBeInTheDocument();
     expect(screen.queryByText('已超出保留范围')).not.toBeInTheDocument();
   });
+
+  it('两栏布局允许换行，窄视口下改为上下堆叠而不是横向溢出（Codex 审核 PR #95 第三轮）', async () => {
+    // 左列文字统计 `flexShrink: 0` 且右列内嵌一个固定 760px 宽的图表，两者所需宽度是
+    // 相加的——不允许换行时，视口窄于两者之和会被迫横向溢出、图表右侧被裁掉一截。
+    // jsdom 不做真实布局计算，这里只能断言样式声明本身（flex-wrap: wrap），不能断言
+    // 换行后的实际像素位置。
+    getKeywordTrend.mockResolvedValue(baseResponse());
+    render(
+      <KeywordTrendDrawer open onClose={vi.fn()} keywordId={1} keyword="coffee maker" site="US" view="DAY" on="2026-07-10" />,
+    );
+    await screen.findByText('2026年07月10日');
+
+    // antd Drawer 把内容 portal 到 document.body，不在 render() 返回的 container 里
+    // ——其余用例都靠 `screen`（默认搜整个文档）读取，这里同理用 testid 搜整个文档。
+    // 不按 `style.flexWrap === 'wrap'` 筛选：antd 的 `<Space wrap>`（日/周切换那行）
+    // 自己也会渲染出 flex-wrap: wrap 的容器，按样式模糊匹配会误命中那一个。
+    const row = screen.getByTestId('trend-drawer-columns');
+    expect(row).toHaveStyle({ display: 'flex', flexWrap: 'wrap' });
+  });
 });
