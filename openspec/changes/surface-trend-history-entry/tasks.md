@@ -1,8 +1,10 @@
-## 1. 操作列文字入口
+## 1. 操作列图标入口
 
-- [x] 1.1 `frontend/src/pages/Analysis/columns.tsx`：「操作」列新增「历史走势」文字入口，
-      仅依赖 `onOpenTrend` 是否传入，不依赖站点码或该行是否有小图数据
-- [x] 1.2 列宽 48→80，容纳四字文案与既有三个外链图标的纵向堆叠
+- [x] 1.1 `frontend/src/pages/Analysis/columns.tsx`：「操作」列新增「历史走势」图标入口
+      （`LineChartOutlined` + title/aria-label「查看历史走势」），仅依赖 `onOpenTrend`
+      是否传入，不依赖站点码或该行是否有小图数据
+- [x] 1.2 改用图标后与既有三个外链图标同一视觉语言，列宽维持 48 不变（最初曾按文字方案
+      改成 80，用户反馈改用图标后已改回）
 - [x] 1.3 `KeywordLibrary/columns.tsx` 复用 `buildAnalysisColumns`，无需单独改动即可同步生效
 
 ## 2. 默认范围改为「全部可用历史」
@@ -12,8 +14,8 @@
 
 ## 3. 测试
 
-- [x] 3.1 `columns.test.tsx`：新增「历史走势」入口的渲染、点击回调、无小图行可用、
-      不传 `onOpenTrend` 时不渲染四组用例
+- [x] 3.1 `columns.test.tsx`：新增「历史走势」图标入口的渲染、点击回调、无小图行可用、
+      不传 `onOpenTrend` 时不渲染四组用例（按 aria-label 查询，不按可见文本）
 - [x] 3.2 `KeywordTrendDrawer/index.test.tsx`：更新默认范围相关断言（`baseResponse`
       默认值、打开即请求 `ALL`、切换关键词不残留「近 30 天」选择、两条"新响应落地前
       不展示旧范围数值"用例的方向对调）
