@@ -127,89 +127,97 @@ export default function KeywordTrendDrawer({
           `width: fit-content` 让容器宽度跟着实际内容（文字列 + 760px 图表）走，
           不用猜一个固定像素值，两栏布局改动时也不必跟着改这个数字。 */}
       <div style={{ width: 'fit-content', maxWidth: '100%', margin: '0 auto' }}>
-        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          <Space size={24} wrap>
-            <Radio.Group
-              optionType="button"
-              buttonStyle="solid"
-              options={VIEW_OPTIONS}
-              value={viewState}
-              onChange={(e) => setViewState(e.target.value as View)}
-            />
-            {showAddToLibrary && (
-              <a onClick={() => setLibraryOpen(true)}>加入词库</a>
-            )}
-          </Space>
-
-          {loading && data === null && (
-            <div style={{ textAlign: 'center', padding: 40 }}>
-              <Spin />
-            </div>
-          )}
-
-          {errored && (
-            <Alert type="error" showIcon message="加载失败，请重试" />
-          )}
-
+        {/* 文字统计在左（竖排），日/周切换 + 图表 + 图例在右——切换控件紧贴在图表正上方，
+            不放在整个内容区顶部：用户反馈原先放在最上面时，图表看起来像是另起一段、跟
+            控件对不上。控件不放进下面的 `data !== null` 条件里，是为了在加载中/失败/
+            无数据这几种状态下也能切视图重试，不因为还没数据就把控件一起藏起来。 */}
+        <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
           {/* `data !== null` 排除首次挂载、请求还没回来的那一瞬间——那时不该说"暂无数据"，
-              只是"还没查完"，两者含义不同。 */}
-          {!errored && !loading && data !== null && data.on === null && (
-            <Alert type="info" showIcon message={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
+              两者含义不同；这一列在没有数据前干脆不渲染，不留一个空的占位列。 */}
+          {!errored && data !== null && data.on !== null && (
+            <Space direction="vertical" size={12} style={{ fontSize: 13, flexShrink: 0 }}>
+              <div>
+                <Text type="secondary">实际使用的锚定期：</Text>
+                <Text strong>{formatScopeDateLabel(data.on, data.view)}</Text>
+              </div>
+              <div>
+                <Text type="secondary">实际数据覆盖范围：</Text>
+                {data.coverage ? (
+                  <Text>
+                    {formatScopeDateLabel(data.coverage.start, data.view)} ～{' '}
+                    {formatScopeDateLabel(data.coverage.end, data.view)}
+                  </Text>
+                ) : (
+                  <Text type="secondary">无数据</Text>
+                )}
+              </div>
+              <StatLine label="区间最好排名" stat={data.best_ranking} view={data.view} />
+              <StatLine label="最近可用排名" stat={data.latest_available} view={data.view} />
+            </Space>
           )}
 
-          {/* 下面这段一律读 `data.view`（响应自带的视图），不读 `viewState`（用户当前选中
-              的视图）：切换 DAY/WEEK 时 `viewState` 立即变、`data` 要等新响应回来才换，
-              中间这段窗口里 `loading` 只包住小图（见下方 Spin），若统计文字与日期格式化
-              仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
-              ——数字没变但含义被读反了（PR #87 复审 P2）。 */}
-          {!errored && data !== null && data.on !== null && (
-            // 文字统计在左（竖排）、图表在右——用户反馈两者原本上下排列、图表居左不协调。
-            <div style={{ display: 'flex', gap: 32, alignItems: 'flex-start' }}>
-              <Space direction="vertical" size={12} style={{ fontSize: 13, flexShrink: 0 }}>
-                <div>
-                  <Text type="secondary">实际使用的锚定期：</Text>
-                  <Text strong>{formatScopeDateLabel(data.on, data.view)}</Text>
-                </div>
-                <div>
-                  <Text type="secondary">实际数据覆盖范围：</Text>
-                  {data.coverage ? (
-                    <Text>
-                      {formatScopeDateLabel(data.coverage.start, data.view)} ～{' '}
-                      {formatScopeDateLabel(data.coverage.end, data.view)}
-                    </Text>
-                  ) : (
-                    <Text type="secondary">无数据</Text>
-                  )}
-                </div>
-                <StatLine label="区间最好排名" stat={data.best_ranking} view={data.view} />
-                <StatLine label="最近可用排名" stat={data.latest_available} view={data.view} />
-              </Space>
+          <div>
+            <Space size={24} wrap style={{ marginBottom: 12 }}>
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                options={VIEW_OPTIONS}
+                value={viewState}
+                onChange={(e) => setViewState(e.target.value as View)}
+              />
+              {showAddToLibrary && (
+                <a onClick={() => setLibraryOpen(true)}>加入词库</a>
+              )}
+            </Space>
 
-              <div>
+            {loading && data === null && (
+              <div style={{ textAlign: 'center', padding: 40 }}>
+                <Spin />
+              </div>
+            )}
+
+            {errored && (
+              <Alert type="error" showIcon message="加载失败，请重试" />
+            )}
+
+            {!errored && !loading && data !== null && data.on === null && (
+              <Alert type="info" showIcon message={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
+            )}
+
+            {/* 下面这段一律读 `data.view`（响应自带的视图），不读 `viewState`（用户当前选中
+                的视图）：切换 DAY/WEEK 时 `viewState` 立即变、`data` 要等新响应回来才换，
+                中间这段窗口里 `loading` 只包住小图（见下方 Spin），若统计文字与日期格式化
+                仍按 `viewState` 走，会把上一次响应（比如 DAY）的日期当新视图（WEEK）格式化
+                ——数字没变但含义被读反了（PR #87 复审 P2）。 */}
+            {!errored && data !== null && data.on !== null && (
+              <>
                 <Spin spinning={loading}>
                   <TrendTimelineChart points={data.points} view={data.view} />
                 </Spin>
 
                 {/* 图例只常驻三种常见状态（用户反馈），另外两种少见情况（该期报表已导入但未
                     收录/已超出保留范围）不占常驻位置——但判定口径不变，真出现时图上的点与
-                    悬浮提示仍按各自真实状态显示，见 COMMON_STATUSES 的注释。 */}
-                <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c', marginTop: 12 }}>
-                  {COMMON_STATUSES.map((s) => (
-                    <Space key={s} size={4}>
-                      <span
-                        style={{
-                          display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                          background: STATUS_META[s].color,
-                        }}
-                      />
-                      {STATUS_META[s].label}
-                    </Space>
-                  ))}
-                </Space>
-              </div>
-            </div>
-          )}
-        </Space>
+                    悬浮提示仍按各自真实状态显示，见 COMMON_STATUSES 的注释。居中对齐图表
+                    ——默认左对齐时图例贴在图表左侧，跟图表的视觉中心对不上（用户反馈）。 */}
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+                  <Space size={16} wrap style={{ fontSize: 12, color: '#8c8c8c' }}>
+                    {COMMON_STATUSES.map((s) => (
+                      <Space key={s} size={4}>
+                        <span
+                          style={{
+                            display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                            background: STATUS_META[s].color,
+                          }}
+                        />
+                        {STATUS_META[s].label}
+                      </Space>
+                    ))}
+                  </Space>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       {showAddToLibrary && (
