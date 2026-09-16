@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ops_bot.model import (
+    TASK_CONFIRMED,
+    TASK_EXPIRED,
     TASK_FAILED,
+    TASK_PENDING_CONFIRM,
     TASK_RUNNING,
     TASK_SUCCEEDED,
     OpsAlertState,
@@ -50,6 +53,64 @@ async def mark_task_failed(session: AsyncSession, task_id: str, output: str = ""
         .where(OpsTask.id == task_id)
         .values(status=TASK_FAILED, output=output, finished_at=func.now())
     )
+
+
+async def create_pending_confirm_task(
+    session: AsyncSession,
+    *,
+    kind: str,
+    payload: dict,
+    requested_by_open_id: str | None,
+    ttl_minutes: int,
+) -> tuple[str, str]:
+    """新建一条待确认任务，返回 `(task_id, confirm_token)`——重启/发布专用
+    （design.md D5）。`confirm_token` 与 `task_id` 一起编进卡片按钮的 value，
+    回调时两者都要匹配，防止已失效卡片的按钮被重放。
+    """
+    task_id = str(uuid.uuid4())
+    confirm_token = str(uuid.uuid4())
+    session.add(
+        OpsTask(
+            id=task_id,
+            kind=kind,
+            status=TASK_PENDING_CONFIRM,
+            payload=payload,
+            confirm_token=confirm_token,
+            confirm_expires_at=datetime.now(UTC) + timedelta(minutes=ttl_minutes),
+            requested_by_open_id=requested_by_open_id,
+        )
+    )
+    await session.flush()
+    return task_id, confirm_token
+
+
+async def get_task(session: AsyncSession, task_id: str) -> OpsTask | None:
+    return await session.get(OpsTask, task_id)
+
+
+async def try_confirm_task(session: AsyncSession, task_id: str) -> bool:
+    """乐观锁：只有仍处于 `PENDING_CONFIRM` 时才能转 `CONFIRMED`。返回 `True`
+    表示这次调用真正完成了转移——并发重复点击（双击、飞书重放）只有一次会拿到
+    `True`，其余直接判"已处理"，不会执行两次（design.md D5）。
+    """
+    result = await session.execute(
+        update(OpsTask)
+        .where(OpsTask.id == task_id, OpsTask.status == TASK_PENDING_CONFIRM)
+        .values(status=TASK_CONFIRMED)
+    )
+    return result.rowcount > 0
+
+
+async def mark_task_expired(session: AsyncSession, task_id: str) -> None:
+    await session.execute(
+        update(OpsTask)
+        .where(OpsTask.id == task_id, OpsTask.status == TASK_PENDING_CONFIRM)
+        .values(status=TASK_EXPIRED, finished_at=func.now())
+    )
+
+
+async def mark_task_running(session: AsyncSession, task_id: str) -> None:
+    await session.execute(update(OpsTask).where(OpsTask.id == task_id).values(status=TASK_RUNNING))
 
 
 async def last_succeeded_at(session: AsyncSession, kind: str) -> datetime | None:

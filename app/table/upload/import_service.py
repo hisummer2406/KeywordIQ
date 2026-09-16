@@ -44,6 +44,12 @@ logger = logging.getLogger(__name__)
 # 导入串行锁的固定 key（任意常量，全局一致即可）。'KI' 的十六进制。
 _IMPORT_LOCK_KEY = 0x4B49
 
+# 飞书运维机器人（ops-bot）执行重启/发布时持有的咨询锁 key。'KO' 的十六进制——
+# 与 _IMPORT_LOCK_KEY 不同值，避免两把锁互相误判。ops_bot/executor 里定义了同一个
+# 常量值（两边各自定义、不共享 import，因为 ops_bot 不依赖业务 app.* 代码，见
+# openspec/changes/add-feishu-ops-bot/design.md D5「导入协调锁机制」）。
+_OPS_ACTION_LOCK_KEY = 0x4B4F
+
 
 class ImportRejected(ConflictError):
     """导入被拒（另一个导入正在进行）→ 409。
@@ -128,6 +134,37 @@ def _import_lock(session: Session) -> Iterator[bool]:
         finally:
             # 即便解锁语句失败，关连接也会让 PostgreSQL 释放它，锁不会留下。
             conn.close()
+
+
+def _ops_action_in_progress(session: Session) -> bool:
+    """探测 ops-bot 的运维动作锁当前是否被占用（重启/发布正在执行）。
+
+    用独立连接抢一次锁、立刻释放——不是要长期持有，只是想知道"此刻它是不是被
+    别人攥着"，与 :func:`_import_lock` 不复用连接的理由相同（咨询锁是连接级的，
+    跨连接的抢锁/解锁会静默失败）。拿到即说明没人占着（同时顺手把它交还），
+    拿不到说明 ops-bot 正握着。
+
+    这是"检查与执行之间的竞态"里较弱的一侧：认领新批次前只做这一次性探测，
+    真正的互斥保证在 ops-bot 那侧执行前的 `pg_try_advisory_lock`——谁先真正抢到
+    谁执行，见 design.md D5。这里探测到"没人占着"之后到真正跑完这批导入之间，
+    ops-bot 仍可能后发制人拿到锁并等待；那种情况下重启/发布会在它自己那侧的
+    锁探测中发现导入已经在跑（`import_batch` 状态检查）而中止，不会出现两者
+    同时改写状态的交叉写。
+    """
+    conn = session.get_bind().connect()
+    try:
+        got = bool(
+            conn.execute(
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": _OPS_ACTION_LOCK_KEY}
+            ).scalar()
+        )
+        conn.commit()
+        if got:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _OPS_ACTION_LOCK_KEY})
+            conn.commit()
+        return not got
+    finally:
+        conn.close()
 
 
 def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) -> ImportBatch:
@@ -451,6 +488,12 @@ def drain_import_queue(
             .limit(1)
         ).scalars().first()
         if batch is None:
+            return None
+
+        # 运维动作（重启/发布）正在执行时不认领新批次——与 ops-bot 那侧的执行前锁
+        # 探测互为镜像，见 _ops_action_in_progress 与 design.md D5「导入协调锁机制」。
+        if _ops_action_in_progress(session):
+            logger.info("运维动作（重启/发布）进行中，本轮跳过认领排队批次 %s", batch.file_name)
             return None
 
         # 先查队列再抢锁：反过来会在队列为空时白拿一次锁。

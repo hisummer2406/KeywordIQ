@@ -1,0 +1,210 @@
+"""重启/发布的确认状态机：生成确认卡片 → 处理确认回调 → 执行前重新核实 → 执行 →
+回报结果（design.md D5）。
+
+**执行前重新核实，不信任确认时刻的快照**——CI 状态、SHA 归属、导入是否空闲都在
+真正执行的这一刻重新查一遍；确认卡片展示的是生成那一刻的判断，人工确认可能过去
+了好几分钟，期间任何一项都可能已经变化。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from config import settings
+from ops_bot import alerts, crud, executor
+from ops_bot.checks import import_status
+from ops_bot.database import OpsAsyncSessionFactory
+from ops_bot.feishu import cards
+from ops_bot.model import TASK_FAILED, TASK_PENDING_CONFIRM
+from ops_bot.release import ci, git_ref, lock
+
+logger = logging.getLogger(__name__)
+
+# 重启/发布期间可能触发的巡检告警键，执行开始时一并打开维护窗口——
+# 与 alerts.py 的键名保持一致（design.md D3「维护窗口」）。
+_MAINTENANCE_ALERT_KEYS = ("service-down",)
+
+
+@dataclass
+class ConfirmPlan:
+    task_id: str
+    card: dict
+
+
+async def _import_active_or_unknown(session) -> bool:
+    """`True` 表示"应视为不空闲"——查询失败也算不空闲，design.md 要求"取不到任务
+    状态时不得当作空闲"。
+    """
+    try:
+        return await import_status.any_active(session)
+    except Exception:
+        logger.exception("查询导入状态失败，按不空闲处理")
+        return True
+
+
+async def build_restart_plan(requested_by_open_id: str | None) -> tuple[ConfirmPlan | None, str | None]:
+    async with OpsAsyncSessionFactory() as session:
+        if await _import_active_or_unknown(session):
+            return None, "导入进行中，暂不可发起重启"
+        task_id, token = await crud.create_pending_confirm_task(
+            session, kind="RESTART_APP", payload={},
+            requested_by_open_id=requested_by_open_id, ttl_minutes=settings.OPS_CONFIRM_TTL_MINUTES,
+        )
+        await session.commit()
+
+    card = cards.build_confirm_card(
+        action="重启应用", task_id=task_id, confirm_token=token,
+        summary_lines=["目标：docker compose restart app", f"有效期：{settings.OPS_CONFIRM_TTL_MINUTES} 分钟"],
+    )
+    return ConfirmPlan(task_id, card), None
+
+
+async def build_deploy_plan(
+    target_sha: str, requested_by_open_id: str | None
+) -> tuple[ConfirmPlan | None, str | None]:
+    if not git_ref.is_valid_sha_format(target_sha):
+        return None, "目标必须是完整的 40 位 commit SHA，不接受分支名或短 SHA"
+
+    is_ancestor = await asyncio.to_thread(git_ref.is_ancestor_of_branch, target_sha)
+    if is_ancestor is not True:
+        return None, "目标 SHA 不在允许分支（v2）的历史上，或无法核实"
+
+    ci_result = await ci.check(target_sha)
+    if not ci_result.passing:
+        detail = "；".join(f"{k}: {v}" for k, v in ci_result.details.items())
+        return None, f"CI 未全部通过：{detail}"
+
+    needs_review = await asyncio.to_thread(git_ref.rollback_needs_review, target_sha)
+    if needs_review is None:
+        return None, "无法核实回滚边界，暂不可发起发布"
+    if needs_review:
+        return None, "目标版本落后于当前数据库结构，不支持自动降级数据库，需人工评估后手动处理"
+
+    with_migration = await asyncio.to_thread(git_ref.migrations_changed, target_sha)
+    if with_migration is None:
+        return None, "无法核实是否包含数据库迁移，暂不可发起发布"
+
+    async with OpsAsyncSessionFactory() as session:
+        if await _import_active_or_unknown(session):
+            return None, "导入进行中，暂不可发起发布"
+        payload = {"target_sha": target_sha, "with_migration": with_migration}
+        task_id, token = await crud.create_pending_confirm_task(
+            session, kind="DEPLOY", payload=payload,
+            requested_by_open_id=requested_by_open_id, ttl_minutes=settings.OPS_CONFIRM_TTL_MINUTES,
+        )
+        await session.commit()
+
+    current = await asyncio.to_thread(git_ref.current_sha)
+    changes = await asyncio.to_thread(git_ref.change_summary, current, target_sha) if current else None
+
+    summary = [
+        f"当前 SHA：{current[:12] if current else '（无法核实）'}",
+        f"目标 SHA：{target_sha[:12]}",
+        "CI：" + "；".join(f"{k}={v}" for k, v in ci_result.details.items()),
+        f"数据库迁移：{'是' if with_migration else '否'}",
+        f"有效期：{settings.OPS_CONFIRM_TTL_MINUTES} 分钟",
+    ]
+    if changes:
+        summary.append("变更：" + "；".join(changes))
+    card = cards.build_confirm_card(action="发布", task_id=task_id, confirm_token=token, summary_lines=summary)
+    return ConfirmPlan(task_id, card), None
+
+
+async def handle_confirm_callback(task_id: str, confirm_token: str, decision: str) -> str:
+    """处理卡片按钮回调，返回要发给用户的结果文本。"""
+    async with OpsAsyncSessionFactory() as session:
+        task = await crud.get_task(session, task_id)
+        if task is None or task.confirm_token != confirm_token:
+            return "该确认已失效，请重新发起"
+        if task.status != TASK_PENDING_CONFIRM:
+            return "该任务已处理或已过期"
+        if task.confirm_expires_at is not None and datetime.now(UTC) > task.confirm_expires_at:
+            await crud.mark_task_expired(session, task_id)
+            await session.commit()
+            return "已过期，请重新发起"
+
+        if decision != "confirm":
+            await crud.mark_task_failed(session, task_id, output="用户取消")
+            await session.commit()
+            return "已取消"
+
+        confirmed = await crud.try_confirm_task(session, task_id)
+        await session.commit()
+        if not confirmed:
+            # 与上面的状态检查之间存在竞态窗口（双击、飞书重放）——乐观锁兜底。
+            return "该任务已处理或已过期"
+
+        kind, payload = task.kind, dict(task.payload)
+
+    return await _execute_confirmed(task_id, kind, payload)
+
+
+async def _execute_confirmed(task_id: str, kind: str, payload: dict) -> str:
+    async with OpsAsyncSessionFactory() as session:
+        if await _import_active_or_unknown(session):
+            await crud.mark_task_failed(session, task_id, output="执行前重新核实：导入进行中")
+            await session.commit()
+        else:
+            await crud.mark_task_running(session, task_id)
+            await session.commit()
+        # 上面两个分支都已提交，这里重新读一次任务状态判断是否已经被判失败。
+        task = await crud.get_task(session, task_id)
+    if task is not None and task.status == TASK_FAILED:
+        return f"❌ {task.output}"
+
+    if kind == "DEPLOY":
+        target_sha = payload["target_sha"]
+        ci_result = await ci.check(target_sha)
+        if not ci_result.passing:
+            return await _fail(task_id, "执行前重新核实：CI 未通过")
+        is_ancestor = await asyncio.to_thread(git_ref.is_ancestor_of_branch, target_sha)
+        if is_ancestor is not True:
+            return await _fail(task_id, "执行前重新核实：SHA 已不在允许分支历史上")
+
+    async with lock.try_acquire() as got_lock:
+        if not got_lock:
+            # 抢不到这把锁只有一种成因：另一个重启/发布正握着它——导入侧对同一个
+            # key 只做"探测后立即释放"（app/table/upload/import_service.py 的
+            # _ops_action_in_progress），从不长期持有，不会是这里抢不到锁的原因。
+            # 这是 design.md D5"重启/发布互斥"落地的地方，不是导入协调那一层。
+            return await _fail(task_id, "另一个重启/发布任务正在执行中，已中止")
+
+        await _open_maintenance()
+
+        if kind == "RESTART_APP":
+            action_label = "重启应用"
+            result = await asyncio.to_thread(executor.restart_app)
+        else:
+            action_label = "发布"
+            plan = executor.DeployPlan(
+                target_sha=payload["target_sha"], with_migration=payload["with_migration"]
+            )
+            result = await asyncio.to_thread(executor.deploy, plan)
+
+    async with OpsAsyncSessionFactory() as session:
+        if result.success:
+            await crud.mark_task_succeeded(session, task_id, output=result.output)
+        else:
+            await crud.mark_task_failed(session, task_id, output=result.output)
+        await session.commit()
+
+    status_word = "成功" if result.success else "失败"
+    return f"{'✅' if result.success else '❌'} {action_label}{status_word}"
+
+
+async def _fail(task_id: str, reason: str) -> str:
+    async with OpsAsyncSessionFactory() as session:
+        await crud.mark_task_failed(session, task_id, output=reason)
+        await session.commit()
+    return f"❌ {reason}"
+
+
+async def _open_maintenance() -> None:
+    async with OpsAsyncSessionFactory() as session:
+        await alerts.open_maintenance_window(
+            session, list(_MAINTENANCE_ALERT_KEYS), minutes=settings.OPS_MAINTENANCE_WINDOW_MINUTES
+        )
+        await session.commit()

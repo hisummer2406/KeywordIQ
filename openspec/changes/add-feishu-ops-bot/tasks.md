@@ -195,34 +195,69 @@
 
 ## 6. 重启与发布确认（`ops-release-control`）
 
-- [ ] 6.1 重启动作：预定义 `RESTART_APP`/`RELOAD_NGINX`，确认卡片生成前先查
-      `import_batch` 快速拦截（design.md D5 第一层）。
-- [ ] 6.2 发布 CI 校验：调用 GitHub Checks API 核实目标 SHA 的 `backend`/`frontend`/
-      `extension` 三个 job 结论全部 `success`；等待中/失败/找不到均判定为不放行。
-- [ ] 6.3 SHA 校验：只接受完整 40 位 SHA，`git merge-base --is-ancestor` 校验落在允许
-      分支历史上。
-- [ ] 6.4 发布确认卡片：当前/目标 SHA、变更摘要、CI 结果、迁移标注（对比目标 SHA 的
-      alembic heads 与生产 `alembic current`）、预期影响。
-- [ ] 6.5 确认状态机：`PENDING_CONFIRM`→乐观锁 `UPDATE ... RETURNING` 转
-      `CONFIRMED`→执行；过期判定与 `EXPIRED` 状态回写；`confirm_token` 校验。
-- [ ] 6.6 双向咨询锁：新增 `_OPS_ACTION_LOCK_KEY = 0x4B4F`，`executor` 执行前
-      `pg_try_advisory_lock`；同步修改 `app/table/upload/import_queue.py` 的认领查询，
-      认领前对同一 key 做 `pg_try_advisory_lock` 探测并立即释放，抢不到则本轮跳过。
-- [ ] 6.7 执行前重新核实：CI 状态、SHA 归属、导入空闲状态、`_OPS_ACTION_LOCK_KEY` 均
-      在执行的这一刻重新查询，不复用确认时的快照。
-- [ ] 6.8 非交互调用 `deploy.sh`：按迁移标注显式传 `--migrate --yes` 或
-      `--skip-migrate --yes`（布尔字段驱动，不做字符串拼接）；捕获阶段化的失败信息
-      （前置检查/构建部署/迁移/健康验证）。
-- [ ] 6.9 互斥：重启/发布任务级互斥（同一时刻只允许一个执行中的运维动作），拒绝时
-      明确提示当前占用的任务。
-- [ ] 6.10 回滚边界：目标 SHA 的 alembic heads 落后于当前生产版本时拒绝执行并说明
-      原因。
-- [ ] 6.11 测试：确认状态机各分支（未确认/已确认/过期/重复点击/目标变化）单元测试；
-      CI 校验各失败模式单元测试（mock GitHub API）；SHA 校验单元测试；互斥单元测试；
-      迁移标注/回滚边界单元测试。
-- [ ] 6.12 集成测试（`local-db`）：模拟"确认后、执行前导入抢先获得咨询锁"与"导入
-      认领中途运维动作抢锁"两种交叉时序，断言互斥生效、任一方失败时报告清晰原因（对应
-      design.md 风险段与 `ops-release-control` spec 的"确认期间导入抢先开始"场景）。
+- [x] 6.1（部分）重启动作：`RESTART_APP` 已接入完整确认流程
+      （`release/flow.py::build_restart_plan`），确认卡片生成前先查
+      `import_batch` 快速拦截（`_import_active_or_unknown`，design.md D5 第一层）。
+      **`RELOAD_NGINX` 只在 `executor.py` 里实现并测试了执行原语，没有接独立的
+      聊天触发入口**——Issue 与 design.md D5 通篇只讨论"重启""发布"两个动作需要
+      确认流程，没有点名 `RELOAD_NGINX` 要单独可从飞书触发；它目前只会作为
+      `deploy.sh` 内部流程的一部分间接生效，判定为本次范围内合理的取舍而非遗漏。
+- [x] 6.2 发布 CI 校验：`release/ci.py`，调用 GitHub Checks API 核实目标 SHA 的
+      `backend`/`frontend`/`extension` 三个 job 结论全部 `success`；等待中/失败/
+      找不到/查询本身失败均判定为不放行（`GH_TOKEN` 未配置同样不放行）。同名 job
+      因重跑产生多条记录时取 `started_at` 最新的一条。
+- [x] 6.3 SHA 校验：`release/git_ref.py` 的 `is_valid_sha_format`（只接受完整 40 位
+      小写十六进制）+ `is_ancestor_of_branch`（`git fetch` 后
+      `git merge-base --is-ancestor`）。
+- [x] 6.4 发布确认卡片：当前 SHA（`git_ref.current_sha`）、目标 SHA、变更摘要
+      （`git_ref.change_summary`，超过 10 行截断并注明总条数）、CI 结果、迁移标注
+      （`git_ref.migrations_changed`）均已展示；"预期影响"没有单独成行，隐含在
+      "数据库迁移：是/否"与变更摘要里，没有另外生成一段自由文本描述。
+- [x] 6.5 确认状态机：`crud.create_pending_confirm_task` /
+      `crud.try_confirm_task`（乐观锁 `UPDATE ... WHERE status=PENDING_CONFIRM`）/
+      `crud.mark_task_expired`，`release/flow.py::handle_confirm_callback` 编排
+      "未找到/token 不匹配→已失效"、"状态不是 PENDING_CONFIRM→已处理或已过期"、
+      "已过期→标记 EXPIRED"、"取消→标记 FAILED"、"并发确认竞态→乐观锁兜底" 五条
+      分支，全部有单元测试。
+- [x] 6.6 双向咨询锁：`ops_bot/release/lock.py` 的 `OPS_ACTION_LOCK_KEY = 0x4B4F`
+      与 `app/table/upload/import_service.py` 新增的 `_OPS_ACTION_LOCK_KEY = 0x4B4F`
+      （同值，两边独立定义）；`import_service.drain_import_queue` 在查到排队批次、
+      抢导入锁之前先探测这把锁（`_ops_action_in_progress`，抢到即放，只做"此刻是否
+      被占用"的判断），占用中则本轮跳过认领。
+- [x] 6.7 执行前重新核实：`_execute_confirmed` 重新查导入空闲状态（失败判定为"不
+      空闲"）、`DEPLOY` 额外重新查 CI 与 SHA 归属，均不复用 `build_deploy_plan` /
+      确认时的快照；执行前还要真正抢到 `lock.try_acquire()` 才会继续。
+- [x] 6.8 非交互调用 `deploy.sh`：`executor.deploy()` 按 `DeployPlan.with_migration`
+      显式传 `--migrate` 缺省或 `--skip-migrate`，固定带 `--yes`（布尔字段驱动，
+      不做字符串拼接）；`DEPLOY` 超时放宽到 1800 秒（构建镜像+前端是分钟级操作，
+      通用 300 秒对它不够，其余三个动作仍是 300 秒）；`_run_steps` 按步骤捕获
+      阶段化失败信息（`GIT_FETCH`/`GIT_CHECKOUT`/`DEPLOY_SH`，任一步失败立即停止
+      不继续跑后续步骤）。
+- [x] 6.9 互斥：`lock.try_acquire()` 就是互斥本身（同一时刻只有一个执行能持有
+      `OPS_ACTION_LOCK_KEY`），抢不到时明确提示"另一个重启/发布任务正在执行中"
+      ——**单元测试过程中抓到一个真实 bug**：最初的失败提示写成了"导入进行中"，
+      但实际上导入侧对这把锁只做"探测后立即释放"、从不长期持有，抢不到锁唯一的
+      成因就是另一个重启/发布正在跑，已改正措辞（详见 `flow.py` 里的注释与
+      `test_lock_not_acquired_aborts` 的说明）。
+- [x] 6.10 回滚边界：`git_ref.rollback_needs_review`（目标 SHA 是当前 HEAD 的祖先
+      且迁移目录内容不同）命中时 `build_deploy_plan` 直接拒绝生成确认卡片，不
+      尝试自动降级数据库。**不是对 alembic heads 图的精确比较**——精确判断要在
+      目标 SHA 的树上重建 down_revision 图，这里用"迁移目录内容是否相同"当代理，
+      偏保守（宁可多问一次人工，不能漏判），已在函数文档与两处单元测试里写清楚。
+- [x] 6.11 测试：`test_ops_bot_release_flow_unit.py`（22 个用例，覆盖确认状态机
+      五条分支、`build_restart_plan`/`build_deploy_plan` 的每一层拒绝判据、执行前
+      重新核实、互斥、RESTART_APP/DEPLOY 两种执行路径）、`test_ops_bot_ci_check_unit.py`
+      （7 个用例，含同名 job 重跑取最新、未配置 token 拒绝、未找到 job 不算通过）、
+      `test_ops_bot_git_ref_unit.py`（20 个用例，含 SHA 格式/祖先关系/迁移变化/
+      回滚边界/当前 SHA/变更摘要截断）。
+- [x] 6.12（部分）集成测试：`test_ops_bot_lock_coordination_integration.py` 验证
+      "ops-bot 持有锁时导入侧探测到进行中"与"退出上下文后锁真正释放，不留孤儿锁"，
+      需 `TEST_DATABASE_URL` 且 `ops_bot_role` 已迁移到位——本会话确认能在真实
+      `keywordiq_test` 库上正确 skip（库未迁移），真正的读写断言仍待 local-db
+      迁移后验证。**未覆盖**"确认后、执行前导入抢先获得咨询锁"与"导入认领中途
+      运维动作抢锁"这两种交叉时序的完整场景（design.md 风险段点名的那两条）——
+      现有集成测试只验证了锁本身跨角色可见，没有驱动两个真实并发协程互相竞争，
+      留给 local-db 阶段用真实 asyncio 并发补齐。
 - [ ] 6.13 `[生产/飞书实机]` 受控完成一次真实确认发布：从生成确认卡片、人工点击确认、
       执行、到发布后验证，全流程走一遍；额外构造一次部署失败/健康检查失败场景，确认
       不误报成功且报告正确的失败阶段。
