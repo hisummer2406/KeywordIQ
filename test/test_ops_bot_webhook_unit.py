@@ -48,6 +48,18 @@ class TestOpsHealth(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["status"], "stale")
 
+    def test_database_unreachable_returns_503_not_500(self):
+        """`ops` schema 与业务 schema 同处一个自建 PG 实例，实例整体不可达时这个
+        端点不能裸抛 500——探测方需要一个成形的"数据库不可达"结论。
+        """
+        with patch(
+            "ops_bot.main.crud.last_succeeded_at", new=AsyncMock(side_effect=OSError("连接失败"))
+        ):
+            response = _client().get("/ops/health")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["status"], "db_unreachable")
+
 
 class TestFeishuWebhookUrlVerification(unittest.TestCase):
     def test_challenge_echoed_without_touching_db(self):
@@ -173,6 +185,45 @@ class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
 
         mock_handle.assert_not_called()
         self.assertEqual(response.status_code, 200)
+
+
+class TestDispatchExceptionFallback(unittest.TestCase):
+    """`ops` schema 与业务 schema 同处一个自建 PG 实例，指令分发链路里任何一步
+    数据库查询失败都可能抛出未预期异常——这条兜底必须把它接住，否则事件已经被
+    标记"已处理"（dedup key 已落库），用户的指令会得不到任何回应且无从排查。
+    """
+
+    def test_unhandled_exception_replies_gracefully_and_returns_200(self):
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_VERIFICATION_TOKEN = "tok"
+            mock_settings.FEISHU_ENCRYPT_KEY = ""
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+
+            with patch(
+                "ops_bot.main.crud.try_claim_dedup_key", new=AsyncMock(return_value=True)
+            ), patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+                "ops_bot.main.commands.dispatch", new=AsyncMock(side_effect=OSError("db down"))
+            ), patch("ops_bot.main._reply", new=AsyncMock()) as mock_reply:
+                factory.return_value.__aenter__.return_value = AsyncMock()
+
+                response = _client().post(
+                    "/ops/feishu/webhook",
+                    content=json.dumps(
+                        {
+                            "token": "tok",
+                            "header": {"event_id": "evt-1"},
+                            "event": {
+                                "sender": {"sender_id": {"open_id": "ou_owner"}},
+                                "message": {"chat_id": "oc_ops", "content": json.dumps({"text": "状态"})},
+                            },
+                        }
+                    ),
+                )
+
+        self.assertEqual(response.status_code, 200)
+        mock_reply.assert_awaited_once()
+        self.assertIn("处理失败", mock_reply.call_args.args[0])
 
 
 if __name__ == "__main__":

@@ -70,9 +70,20 @@ async def health(response: Response) -> dict:
     """机器人自身心跳：读取 quick 分组心跳任务最近一次成功时间，超过容忍窗口未更新
     判定为"事件循环已卡死"，返回 503——探测的是循环是否仍在推进，不只是 HTTP
     层能否响应（design.md D4，用于区分"整机失联"与"进程活着但卡死"两种失联）。
+
+    `ops` schema 与业务 `analysis` schema 同处一个自建 PostgreSQL 实例（design.md
+    D1），数据库连接本身失败时不能让这个端点裸抛 500——那样探测方只看到一次
+    不成形的错误，而不是"数据库不可用"这条明确诊断（design.md「业务应用/数据库
+    异常时仍须可报告健康失败」，虽然字面说的是业务库，但同一实例整体不可达时
+    ops-bot 自己的查询同样会失败，需要同一条纪律兜底）。
     """
-    async with OpsAsyncSessionFactory() as session:
-        last = await crud.last_succeeded_at(session, heartbeat.KIND)
+    try:
+        async with OpsAsyncSessionFactory() as session:
+            last = await crud.last_succeeded_at(session, heartbeat.KIND)
+    except Exception:
+        logger.exception("/ops/health 查询心跳记录失败，数据库可能不可达")
+        response.status_code = 503
+        return {"status": "db_unreachable"}
 
     if last is None:
         # 服务刚启动，第一次心跳还没跑完——不算异常，quick 循环最迟 60 秒内会补上。
@@ -134,37 +145,52 @@ async def feishu_webhook(request: Request) -> Response:
 
     logger.info("收到已授权的飞书事件，event_id=%s", event_id)
     text = _extract_text(message.get("content", "{}")).strip()
+    open_id = sender.get("open_id")
 
-    # 手动备份是本变更唯一一个"不需要确认卡片就能直接创建任务"的写操作
-    # （design.md D5 只要求重启/发布走确认卡片，备份未被点名，且备份本身可重复、
-    # 不影响正在提供服务的应用，风险量级与前两者不同）。备份要跑几分钟，不能让
-    # webhook 等它跑完才回 200——先回执行中，任务本身放到后台跑，完成后再单独
-    # 发一条结果消息，这与飞书回调"及时应答、后台执行、再回报结果"的协议一致。
-    if text in _MANUAL_BACKUP_WORDS:
-        _spawn_background(_run_manual_backup(sender.get("open_id")))
-        await _reply("已受理备份任务，执行中…")
-        return Response(status_code=200)
-
-    # 重启/发布：生成确认卡片，不直接执行——人工点击卡片按钮才会真正触发
-    # （design.md D5，走 _handle_card_action）。
-    head, _, rest = text.partition(" ")
-    if head in _RESTART_WORDS:
-        plan, reason = await release_flow.build_restart_plan(sender.get("open_id"))
-        await _send_plan_or_reason(plan, reason)
-        return Response(status_code=200)
-    if head in _DEPLOY_WORDS:
-        target_sha = rest.strip()
-        if not target_sha:
-            await _reply("用法：发布 <完整 40 位 commit SHA>")
+    # 整段指令分发包一层兜底：`ops` schema 与业务 `analysis` schema 同处一个自建
+    # PostgreSQL 实例（design.md D1），数据库不可达时这里任何一条查询都可能抛出
+    # 未预期的异常。没有这层兜底，异常会从这个端点裸抛出去变成 500——事件已经在
+    # 上面标记过"已处理"（dedup key 已落库），飞书不会重投，用户会发现自己的指令
+    # 得不到任何回应且无从排查。兜底后至少能告诉用户"失败了"，详细原因留给日志
+    # （design.md「业务应用/数据库异常时仍须可报告健康失败」，此处适用于 ops-bot
+    # 自己与业务共享的数据库实例整体不可达的情形）。
+    try:
+        # 手动备份是本变更唯一一个"不需要确认卡片就能直接创建任务"的写操作
+        # （design.md D5 只要求重启/发布走确认卡片，备份未被点名，且备份本身可
+        # 重复、不影响正在提供服务的应用，风险量级与前两者不同）。备份要跑几分钟，
+        # 不能让 webhook 等它跑完才回 200——先回执行中，任务本身放到后台跑，完成
+        # 后再单独发一条结果消息，这与飞书回调"及时应答、后台执行、再回报结果"的
+        # 协议一致。
+        if text in _MANUAL_BACKUP_WORDS:
+            _spawn_background(_run_manual_backup(open_id))
+            await _reply("已受理备份任务，执行中…")
             return Response(status_code=200)
-        plan, reason = await release_flow.build_deploy_plan(target_sha, sender.get("open_id"))
-        await _send_plan_or_reason(plan, reason)
+
+        # 重启/发布：生成确认卡片，不直接执行——人工点击卡片按钮才会真正触发
+        # （design.md D5，走 _handle_card_action）。
+        head, _, rest = text.partition(" ")
+        if head in _RESTART_WORDS:
+            plan, reason = await release_flow.build_restart_plan(open_id)
+            await _send_plan_or_reason(plan, reason)
+            return Response(status_code=200)
+        if head in _DEPLOY_WORDS:
+            target_sha = rest.strip()
+            if not target_sha:
+                await _reply("用法：发布 <完整 40 位 commit SHA>")
+                return Response(status_code=200)
+            plan, reason = await release_flow.build_deploy_plan(target_sha, open_id)
+            await _send_plan_or_reason(plan, reason)
+            return Response(status_code=200)
+
+        # 其余只读指令分发（状态/任务/日志查询）。
+        reply = await commands.dispatch(text)
+    except Exception:
+        logger.exception("处理飞书指令时发生未预期异常，text=%r", text)
+        await _reply("❌ 处理失败，详见应用日志（可能是数据库暂时不可达）")
         return Response(status_code=200)
 
-    # 其余只读指令分发（状态/任务/日志查询）。这里的回复失败不影响 webhook 本身的
-    # 200 响应：飞书重试的是回调本身，不是我们主动发消息这一步，两者失败模式要
-    # 分开（design.md 风险段"通知失败与执行失败分开记录"）。
-    reply = await commands.dispatch(text)
+    # 回复失败不影响 webhook 本身的 200 响应：飞书重试的是回调本身，不是我们主动
+    # 发消息这一步，两者失败模式要分开（design.md「通知失败与执行失败分开记录」）。
     await _reply(reply)
     return Response(status_code=200)
 
@@ -224,7 +250,11 @@ async def _run_manual_backup(requested_by_open_id: str | None) -> None:
         await session.commit()
 
     try:
-        output = await backup.run_backup(retention_days=settings.OPS_BACKUP_RETENTION_DAYS)
+        output = await backup.run_backup(
+            retention_days=settings.OPS_BACKUP_RETENTION_DAYS,
+            task_id=task_id,
+            actor_open_id=requested_by_open_id,
+        )
     except Exception:
         logger.exception("手动备份失败")
         async with OpsAsyncSessionFactory() as session:

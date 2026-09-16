@@ -38,7 +38,9 @@ def _parse_result(output: str) -> tuple[str | None, int | None, str | None]:
     return None, None, "DUMP"
 
 
-async def run_backup(*, retention_days: int) -> str:
+async def run_backup(
+    *, retention_days: int, task_id: str | None = None, actor_open_id: str | None = None
+) -> str:
     """执行一次全量备份并记录结果，成功时顺带清理超期旧产物
     （design.md D3："每次备份成功后顺带清理"）。失败时抛异常——交给调度循环统一
     记为任务失败，这里只负责"把这次备份的结果如实落一行 `ops_backup_record`"。
@@ -47,6 +49,10 @@ async def run_backup(*, retention_days: int) -> str:
     ops-bot 是单进程单事件循环（`etc/keywordiq-ops-bot.service` 未指定多 worker），
     直接 await 会让备份跑的这几分钟里 `/ops/health`、飞书回调、其余调度任务全部
     停摆——与业务 app 把导入丢进线程池是同一条纪律，这里用 `asyncio.to_thread`。
+
+    `actor_open_id` 留空表示定时触发（没有人工发起者）；备份是本变更唯一不需要
+    确认卡片的受限动作，因此审计记录里 `confirmed_at` 恒为 `None`——它不是"忘了填"，
+    是这个动作本就没有"确认"这一步（design.md D5 只要求重启/发布走确认流程）。
     """
     result = await asyncio.to_thread(executor.backup_now)
     object_key, size_bytes, failed_stage = _parse_result(result.output)
@@ -55,6 +61,17 @@ async def run_backup(*, retention_days: int) -> str:
     async with OpsAsyncSessionFactory() as session:
         await crud.record_backup(
             session, status=status, object_key=object_key, size_bytes=size_bytes, failed_stage=failed_stage
+        )
+        await crud.write_audit_log(
+            session,
+            task_id=task_id,
+            actor_open_id=actor_open_id,
+            action="BACKUP_NOW",
+            target="scripts/backup_selfhosted_pg.py",
+            target_sha=None,
+            confirmed_at=None,
+            result=status,
+            failed_stage=failed_stage,
         )
         await session.commit()
 

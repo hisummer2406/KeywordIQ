@@ -221,19 +221,28 @@ class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
         ) as mock_execute:
             reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
 
-        mock_execute.assert_awaited_once_with("t-1", "RESTART_APP", {})
+        # confirmed_at 是调用瞬间生成的 datetime，不做精确匹配，只核对前三个
+        # 位置参数（task_id/kind/payload）与传了 actor_open_id。
+        call_args = mock_execute.call_args.args
+        self.assertEqual(call_args[0], "t-1")
+        self.assertEqual(call_args[1], "RESTART_APP")
+        self.assertEqual(call_args[2], {})
+        self.assertEqual(call_args[3], "ou_owner")
         self.assertIn("成功", reply)
 
 
 class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _now():
+        return datetime.now(UTC)
+
     async def test_import_active_at_execute_time_aborts(self):
-        failed_task = _task(status="FAILED", output="执行前重新核实：导入进行中")
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=True)
         ), patch("ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()), patch(
-            "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=failed_task)
+            "ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()
         ):
-            reply = await flow._execute_confirmed("t-1", "RESTART_APP", {})
+            reply = await flow._execute_confirmed("t-1", "RESTART_APP", {}, "ou_owner", self._now())
 
         self.assertIn("导入进行中", reply)
 
@@ -242,58 +251,58 @@ class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
         （design.md D5「重启与发布互斥」）落地的地方，错误提示不能说成"导入进行中"，
         那是另一层完全不同的判断。
         """
-        running_task = _task(status="RUNNING")
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
         ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
-            "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=running_task)
-        ), patch("ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
             "ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(False)
         ):
-            reply = await flow._execute_confirmed("t-1", "RESTART_APP", {})
+            reply = await flow._execute_confirmed("t-1", "RESTART_APP", {}, "ou_owner", self._now())
 
         self.assertIn("另一个重启/发布任务正在执行中", reply)
 
     async def test_restart_success_calls_executor_and_marks_succeeded(self):
-        running_task = _task(status="RUNNING")
         mark_succeeded = AsyncMock()
+        write_audit = AsyncMock()
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
         ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
-            "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=running_task)
-        ), patch("ops_bot.release.flow.crud.mark_task_succeeded", mark_succeeded), patch(
+            "ops_bot.release.flow.crud.mark_task_succeeded", mark_succeeded
+        ), patch("ops_bot.release.flow.crud.write_audit_log", write_audit), patch(
             "ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(True)
         ), patch("ops_bot.release.flow._open_maintenance", new=AsyncMock()), patch(
             "ops_bot.release.flow.executor.restart_app",
             return_value=ExecutionResult(True, "ok", None),
         ):
-            reply = await flow._execute_confirmed("t-1", "RESTART_APP", {})
+            reply = await flow._execute_confirmed("t-1", "RESTART_APP", {}, "ou_owner", self._now())
 
         mark_succeeded.assert_awaited_once()
+        write_audit.assert_awaited_once()
+        self.assertEqual(write_audit.call_args.kwargs["result"], "SUCCEEDED")
+        self.assertEqual(write_audit.call_args.kwargs["actor_open_id"], "ou_owner")
         self.assertIn("✅", reply)
 
     async def test_deploy_reverifies_ci_before_executing(self):
         """执行前重新核实 CI——不信任确认时刻的快照。"""
         from ops_bot.release.ci import CICheckResult
 
-        running_task = _task(status="RUNNING", kind="DEPLOY")
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
         ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
-            "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=running_task)
-        ), patch("ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
             "ops_bot.release.flow.ci.check",
             new=AsyncMock(return_value=CICheckResult(passing=False, details={})),
         ) as mock_ci:
             reply = await flow._execute_confirmed(
-                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": False}
+                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": False}, "ou_owner", self._now()
             )
 
         mock_ci.assert_awaited_once()
         self.assertIn("CI 未通过", reply)
 
     async def test_deploy_success_passes_correct_plan_to_executor(self):
-        running_task = _task(status="RUNNING", kind="DEPLOY")
         from ops_bot.release.ci import CICheckResult
 
         captured = {}
@@ -305,8 +314,8 @@ class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
         ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
-            "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=running_task)
-        ), patch("ops_bot.release.flow.crud.mark_task_succeeded", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_succeeded", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
             "ops_bot.release.flow.ci.check",
             new=AsyncMock(return_value=CICheckResult(passing=True, details={})),
         ), patch(
@@ -315,7 +324,7 @@ class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
             "ops_bot.release.flow._open_maintenance", new=AsyncMock()
         ), patch("ops_bot.release.flow.executor.deploy", side_effect=fake_deploy):
             reply = await flow._execute_confirmed(
-                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": True}
+                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": True}, "ou_owner", self._now()
             )
 
         self.assertEqual(captured["plan"].target_sha, "a" * 40)
