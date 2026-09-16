@@ -62,10 +62,17 @@ KeywordIQ v2 已完成容器化自托管部署（docker-compose：app + 自建 P
   去重/告警状态表、`etc/keywordiq-ops-bot.service`（host systemd unit）、
   `docker-compose.yml` 的 `db` 服务新增 `127.0.0.1:5432` 端口映射、nginx 配置新增
   飞书回调路径反代、`.env.example` 新增飞书应用与机器人相关配置项。
-- **少量改动**：`app/table/upload/import_queue.py`（认领逻辑读取运维动作占位锁）、
-  `deploy.sh`（供机器人以非交互方式调用的发布路径，迁移确认闸门保留）、
-  `docs/ops-agent/00-ops-agent-design.md`（标注旧稿中 RDS/CLI-only/自愈/钉钉等假设已被
-  本变更取代，指向本变更）。
+- **少量改动**：`app/table/upload/import_service.py`（`drain_import_queue` 认领前
+  探测运维动作锁）。`deploy.sh` **未改动**——它已有的 `--yes`/`--skip-migrate` 参数
+  够用，执行器只是非交互调用它，不需要改它本身。
+- **`docs/ops-agent/00-ops-agent-design.md` 不在本次改动范围内**：实现期发现
+  `docs/` 整个目录被 `.gitignore` 排除（`.gitignore` 原文"规格的唯一来源是
+  openspec/，不是这里——docs/ 只是本地放参考资料的地方"），那份旧设计稿是本机
+  本地文件，从未进过版本库，编辑它不会被提交、也不会被其他人或未来的会话看到。
+  运维手册改放 `etc/keywordiq-ops-bot-runbook.md`（与已有的
+  `etc/observability-runbook.md` 同一条纪律：CLAUDE.md 点名的运维文档都在
+  `etc/` 下，不在 `docs/`），旧稿被取代这件事记录在本 `proposal.md` 与
+  `design.md` 里，作为面向未来读者的说明已经足够。
 - **部署材料**（不进代码仓库，部署期由用户提供）：飞书企业自建应用凭证、本人飞书稳定
   用户 ID、运维群 ID、阿里云云监控拨测与通知对象配置。
 - **不影响**：v1 部署、业务钉钉 SSO、`analysis` schema 下的任何表结构或查询行为。
