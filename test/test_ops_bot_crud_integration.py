@@ -38,7 +38,12 @@ def _ops_role_async_url() -> str | None:
 
     password = os.environ.get("OPS_DB_ROLE_PASSWORD", "change-me-in-production")
     url = make_url(TEST_URL).set(drivername="postgresql+asyncpg")
-    return str(url.set(username="ops_bot_role", password=password))
+    # **不能用 `str(url)`**：SQLAlchemy 的 URL.__str__ 默认把密码掩码成字面量
+    # "***" 防止意外记进日志——用在这里会构造出一条真的拿 "***" 当密码去连接的
+    # 连接串，永远认证失败，而失败恰好落进下面 fixture 的"未迁移，跳过"分支，
+    # 表现成一个查不出问题的假阴性（实测踩过：即便角色密码确认无误，这里仍然
+    # 每次都判定"库未迁移"）。要拿到真实密码必须显式 `render_as_string(hide_password=False)`。
+    return url.set(username="ops_bot_role", password=password).render_as_string(hide_password=False)
 
 
 @pytest.fixture()

@@ -34,10 +34,21 @@
 - [x] 1.3 同一份迁移建出上述六张表；`uv run alembic upgrade head --sql` 与
       `downgrade d4e5f6a7b8c9:71e646b2d200 --sql` 均已核对生成的 DDL 落在 `ops` schema
       且回滚路径完整。
-- [ ] 1.4 测试：**部分完成**——`test/test_ops_bot_crud_integration.py` 覆盖了
-      `ops_bot_role` 对 `ops.ops_dedup_key` 的幂等读写（需 `TEST_DATABASE_URL`，
-      本会话未接入真实测试库运行，只做了代码走查）。**尚未写**"`ops_bot_role` 对
-      业务表写操作被拒绝"这条断言——留给 local-db 验证阶段一并补。
+- [x] 1.4 测试：**已在真实 `keywordiq_test` 库上跑通**（`alembic upgrade head`
+      迁移执行、`test_ops_bot_crud_integration.py` 幂等读写全绿）。"`ops_bot_role`
+      对业务表写操作被拒绝"这条边界额外用 `psql -U ops_bot_role` 手工核对过：
+      写 `analysis.import_batch` 报 `permission denied`，读 `import_batch`/
+      `site_data_stats` 正常，读未授权表（`dim_keyword`）同样 `permission
+      denied`——与 `scripts/check_feishu_ops.py` 的自检逻辑跑出的结论一致（该脚本
+      也已用这个真实角色实测通过）。**验证过程中发现并修复了一个测试基础设施
+      bug**：`test_ops_bot_crud_integration.py`/`test_ops_bot_lock_coordination_
+      integration.py` 原先用 `str(url)` 拼接 `ops_bot_role` 连接串，
+      SQLAlchemy 的 `URL.__str__` 默认把密码掩码成字面量 `"***"`——这两个文件因此
+      从写下来的第一天起就没有真正连接成功过，每次都落进"未迁移，跳过"分支，
+      即便角色/密码/迁移全部正确也一样，是一个自己不会报错、只会一直假阴性
+      跳过的坑。已改用 `render_as_string(hide_password=False)`，验证后确认
+      5 个用例全部真实通过（而不是优雅跳过）。迁移验证完毕后已重新
+      `alembic upgrade head` 让共享测试库回到 head 状态，不影响其他并行会话。
 
 ## 2. 配置与项目骨架
 
@@ -101,9 +112,9 @@
       动作的 argv、失败/超时/多步骤中断）、`test/test_ops_bot_cards_unit.py`、
       `test/test_ops_bot_scheduler_unit.py`（判据/成功失败记录/取消，全部打桩）、
       `test/test_ops_bot_crud_integration.py`（幂等去重，需 `TEST_DATABASE_URL`，
-      本会话确认能在真实 `keywordiq_test` 库上正确 skip——库未迁移到 ops schema
-      时优雅跳过而非报错，真正的读写断言仍待 local-db 迁移后验证）。**未覆盖**：
-      已授权事件完整路径的端到端测试（依赖真实 DB，webhook 单元测试特意不触库）。
+      **已在真实 `keywordiq_test` 库上跑通并全部通过**，见第 9 组收尾验证）。
+      **未覆盖**：已授权事件完整路径的端到端测试（依赖真实 DB，webhook 单元测试
+      特意不触库）。
 - [x] 3.8 `[生产/飞书实机]` 新建 `scripts/check_feishu_ops.py`（自检脚本，design.md
       D2 列出的四项校验，含对"最小权限"的反向验证）。本地用假凭证实测过"预期失败"
       路径（配置错误时逐项打印 ❌ 且不崩溃退出），**修正了一处实现漏洞**：数据库
@@ -250,14 +261,13 @@
       （7 个用例，含同名 job 重跑取最新、未配置 token 拒绝、未找到 job 不算通过）、
       `test_ops_bot_git_ref_unit.py`（20 个用例，含 SHA 格式/祖先关系/迁移变化/
       回滚边界/当前 SHA/变更摘要截断）。
-- [x] 6.12（部分）集成测试：`test_ops_bot_lock_coordination_integration.py` 验证
-      "ops-bot 持有锁时导入侧探测到进行中"与"退出上下文后锁真正释放，不留孤儿锁"，
-      需 `TEST_DATABASE_URL` 且 `ops_bot_role` 已迁移到位——本会话确认能在真实
-      `keywordiq_test` 库上正确 skip（库未迁移），真正的读写断言仍待 local-db
-      迁移后验证。**未覆盖**"确认后、执行前导入抢先获得咨询锁"与"导入认领中途
-      运维动作抢锁"这两种交叉时序的完整场景（design.md 风险段点名的那两条）——
-      现有集成测试只验证了锁本身跨角色可见，没有驱动两个真实并发协程互相竞争，
-      留给 local-db 阶段用真实 asyncio 并发补齐。
+- [x] 6.12（部分）集成测试：`test_ops_bot_lock_coordination_integration.py` **已在
+      真实 `keywordiq_test` 库上跑通并全部通过**——"ops-bot 持有锁时导入侧探测到
+      进行中"与"退出上下文后锁真正释放、不留孤儿锁"两个场景均验证成功（详见第 9
+      组）。**未覆盖**"确认后、执行前导入抢先获得咨询锁"与"导入认领中途运维动作
+      抢锁"这两种交叉时序的完整场景（design.md 风险段点名的那两条）——现有集成
+      测试只验证了锁本身跨角色可见，没有驱动两个真实并发协程互相竞争，留给
+      local-db 阶段用真实 asyncio 并发补齐。
 - [ ] 6.13 `[生产/飞书实机]` 受控完成一次真实确认发布：从生成确认卡片、人工点击确认、
       执行、到发布后验证，全流程走一遍；额外构造一次部署失败/健康检查失败场景，确认
       不误报成功且报告正确的失败阶段。
@@ -319,9 +329,37 @@
 
 ## 9. 收尾验证
 
-- [ ] 9.1 按改动范围跑 `uv run ruff check .` + `uv run pytest test/ -q`；涉及
-      `ops` schema 迁移与 `import_queue.py` 改动，按 `local-db` 要求跑一次完整回归
-      （含集成测试），不得把跳过集成测试描述为通过。
-- [ ] 9.2 汇总本次未能在实现阶段自动验证、依赖生产/飞书实机的验收条件清单（对应 Issue
-      #90 验收条件中的相应项），作为 PR 说明的一部分明确列为待办，不在 PR 里宣称已完成。
-- [ ] 9.3 `git status --short` 核对索引列，按路径提交（遵守仓库"提交前看索引列"约定）。
+- [x] 9.1 `uv run ruff check .` 全绿；`uv run pytest test/ -q` 在接入真实
+      `TEST_DATABASE_URL`（`keywordiq_test`）+ 真实 `OPS_DB_ROLE_PASSWORD` 后
+      **1156 passed, 1 skipped**（唯一跳过项是无关的 `test_oss_ingestion_
+      integration.py`，需要单独的 `TEST_OSS_*` 真实 OSS 凭证，与本变更无关）。
+      迁移已在该库上完整走过一遍 `upgrade head` → 验证 → `downgrade -1` →
+      重新 `upgrade head`，回滚路径确认干净（角色/schema 消失，`analysis`
+      schema 数据不受影响），收尾后已把共享测试库恢复到 head，不留残留状态
+      影响其他并行会话。**验证过程中额外发现并修复一个测试基础设施 bug**
+      （见 1.4）：两个集成测试文件此前从未真正连接成功过，一直以错误原因
+      "优雅跳过"，掩盖了"测试从来没有真的验证过"这个事实——本次是这两个文件
+      写下来之后第一次真正跑通。
+- [ ] 9.2 未能在实现阶段自动验证、依赖生产/飞书实机的验收条件清单（汇总自本文件
+      各组标注 `[生产/飞书实机]` 的条目，作为 PR 说明的一部分，不在 PR 里宣称
+      已完成）：
+      - 3.8 `check_feishu_ops.py` 用真实飞书凭证跑一次（本地假凭证的失败路径与
+        数据库边界已验证，见 1.4；飞书 token 换取/发消息两项仍需真实 App）。
+      - 4.9 阿里云云监控站点监控配置 + 实测触发一次告警，核对飞书群收到的消息
+        格式。
+      - 4.10 整机失联演练（隔离网络/模拟停机）+ 仅 `ops-bot` 进程被杀的心跳失联
+        演练。
+      - 5.7 部署前核实生产 `crontab -l` 是否已有独立备份任务。
+      - 5.8 真实 OSS 桶的手动备份 + 隔离环境恢复演练。
+      - 6.13 受控完成一次真实确认发布全流程（含卡片按钮回调——`_handle_card_
+        action` 依据飞书官方文档实现，未经真实客户端验证，见 `feishu/cards.py`
+        与 `main.py` 的对应标注）+ 构造一次部署/健康检查失败场景。
+      - 2.4/2.5 host 级 systemd 服务与 nginx 反代的真实部署验证（本地开发环境
+        无法起 systemd 服务，`etc/keywordiq-ops-bot.service` 与
+        `etc/keywordiq-nginx.conf` 的改动只经过人工读检，未实机跑过）。
+      - 9 组以外零散标注的"local-db 阶段"事项已在本组完成（见 1.4/6.12），
+        唯一仍留到 local-db 阶段的是"确认后导入抢锁"与"导入认领中途运维动作
+        抢锁"两种交叉并发时序（6.12）与 `crud.prune_old_task_records` 的独立
+        SQL 正确性验证（7.5）。
+- [x] 9.3 每次提交前均执行 `git status --short` 核对索引列，按路径提交（未出现
+      跨会话索引污染，本变更全程只有一个会话在写）。
