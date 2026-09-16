@@ -45,6 +45,18 @@ async def find_stuck_batches(
     return stuck
 
 
+async def any_active(session: AsyncSession) -> bool:
+    """是否存在 `PROCESSING`/`UPLOADING` 的批次——重启/发布前置检查用
+    （design.md D5「导入运行期间阻止重启与发布」，比 `find_stuck_batches` 更轻量：
+    只要存在就够了，不需要按阈值判断"卡没卡死"）。
+    """
+    result = await session.execute(
+        text("SELECT 1 FROM analysis.import_batch WHERE status = ANY(:statuses) LIMIT 1"),
+        {"statuses": list(STATUS_ACTIVE)},
+    )
+    return result.first() is not None
+
+
 async def find_new_terminal_batches(session: AsyncSession, *, since: datetime | None) -> list[dict]:
     """`since` 之后新完成（`COMPLETED`/`FAILED`）的批次，`since=None` 时返回空列表
     （调用方首次运行没有基准点，不该把历史上所有批次当作"新"一次性通知一遍）。

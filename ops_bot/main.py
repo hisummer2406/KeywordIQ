@@ -22,10 +22,14 @@ from config import settings
 from ops_bot import backup, commands, crud, jobs, scheduler
 from ops_bot.checks import heartbeat
 from ops_bot.database import OpsAsyncSessionFactory
+from ops_bot.feishu import cards
 from ops_bot.feishu.auth import FeishuVerificationError, decode_event_body, is_authorized
 from ops_bot.feishu.client import FeishuAPIError, FeishuClient
+from ops_bot.release import flow as release_flow
 
 _MANUAL_BACKUP_WORDS = frozenset({"备份", "backup"})
+_RESTART_WORDS = frozenset({"重启", "restart"})
+_DEPLOY_WORDS = frozenset({"发布", "deploy"})
 
 # asyncio 文档明确要求：create_task 的返回值若不被任何地方持有，任务可能在
 # 执行期间被垃圾回收而静默中断。这个集合就是那个"持有者"，任务结束时自己从
@@ -100,6 +104,14 @@ async def feishu_webhook(request: Request) -> Response:
     if event.get("type") == "url_verification":
         return _json_response({"challenge": event.get("challenge")})
 
+    # 卡片按钮回调：飞书经典卡片回传交互的请求体在顶层带 `action` 字段，与
+    # `im.message.receive_v1` 事件（顶层是 `header`/`event` 包裹）结构不同，
+    # 走独立分支处理。**这条路径依据飞书官方文档实现，未经真实客户端回调验证**
+    # ——tasks.md 已标注为生产/飞书实机待验证项（design.md D5/`feishu/cards.py`
+    # 同一处标注）。
+    if "action" in event:
+        return await _handle_card_action(event)
+
     event_id = (event.get("header") or {}).get("event_id")
     if event_id:
         async with OpsAsyncSessionFactory() as session:
@@ -130,22 +142,78 @@ async def feishu_webhook(request: Request) -> Response:
     # 发一条结果消息，这与飞书回调"及时应答、后台执行、再回报结果"的协议一致。
     if text in _MANUAL_BACKUP_WORDS:
         _spawn_background(_run_manual_backup(sender.get("open_id")))
-        try:
-            await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, "已受理备份任务，执行中…")
-        except FeishuAPIError:
-            logger.exception("回复消息失败")
+        await _reply("已受理备份任务，执行中…")
         return Response(status_code=200)
 
-    # 其余只读指令分发（状态/任务/日志查询）。重启/发布不走这条文本指令路径——
-    # 那两个走卡片确认流程（第 6 组），这里的回复失败不影响 webhook 本身的 200
-    # 响应：飞书重试的是回调本身，不是我们主动发消息这一步，两者失败模式要分开
-    # （design.md 风险段"通知失败与执行失败分开记录"）。
+    # 重启/发布：生成确认卡片，不直接执行——人工点击卡片按钮才会真正触发
+    # （design.md D5，走 _handle_card_action）。
+    head, _, rest = text.partition(" ")
+    if head in _RESTART_WORDS:
+        plan, reason = await release_flow.build_restart_plan(sender.get("open_id"))
+        await _send_plan_or_reason(plan, reason)
+        return Response(status_code=200)
+    if head in _DEPLOY_WORDS:
+        target_sha = rest.strip()
+        if not target_sha:
+            await _reply("用法：发布 <完整 40 位 commit SHA>")
+            return Response(status_code=200)
+        plan, reason = await release_flow.build_deploy_plan(target_sha, sender.get("open_id"))
+        await _send_plan_or_reason(plan, reason)
+        return Response(status_code=200)
+
+    # 其余只读指令分发（状态/任务/日志查询）。这里的回复失败不影响 webhook 本身的
+    # 200 响应：飞书重试的是回调本身，不是我们主动发消息这一步，两者失败模式要
+    # 分开（design.md 风险段"通知失败与执行失败分开记录"）。
     reply = await commands.dispatch(text)
+    await _reply(reply)
+    return Response(status_code=200)
+
+
+async def _handle_card_action(event: dict) -> Response:
+    """重启/发布确认卡片的按钮回调。见 `feishu_webhook` 上方的格式说明与
+    `feishu/cards.py` 的同一条"未经真实客户端验证"标注。
+    """
+    open_id = event.get("open_id")
+    chat_id = event.get("open_chat_id")
+    if not is_authorized(
+        open_id=open_id,
+        chat_id=chat_id,
+        owner_open_id=settings.FEISHU_OWNER_OPEN_ID,
+        ops_chat_id=settings.FEISHU_OPS_CHAT_ID,
+    ):
+        logger.info("卡片回调来自非授权用户/会话，拒绝处理")
+        return Response(status_code=200)
+
     try:
-        await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, reply)
+        value = cards.parse_button_value((event.get("action") or {}).get("value") or {})
+    except (ValueError, TypeError):
+        logger.warning("卡片回调 value 解析失败")
+        return Response(status_code=200)
+
+    task_id, confirm_token, decision = value.get("task_id"), value.get("confirm_token"), value.get("decision")
+    if not (task_id and confirm_token and decision):
+        return Response(status_code=200)
+
+    reply = await release_flow.handle_confirm_callback(task_id, confirm_token, decision)
+    await _reply(reply)
+    return Response(status_code=200)
+
+
+async def _send_plan_or_reason(plan, reason: str | None) -> None:
+    if plan is None:
+        await _reply(f"❌ {reason}")
+        return
+    try:
+        await _feishu_client.send_card(settings.FEISHU_OPS_CHAT_ID, plan.card)
+    except FeishuAPIError:
+        logger.exception("发送确认卡片失败")
+
+
+async def _reply(text: str) -> None:
+    try:
+        await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, text)
     except FeishuAPIError:
         logger.exception("回复消息失败")
-    return Response(status_code=200)
 
 
 async def _run_manual_backup(requested_by_open_id: str | None) -> None:
@@ -169,10 +237,7 @@ async def _run_manual_backup(requested_by_open_id: str | None) -> None:
             await session.commit()
         reply = f"✅ {output}"
 
-    try:
-        await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, reply)
-    except FeishuAPIError:
-        logger.exception("回复备份结果失败")
+    await _reply(reply)
 
 
 def _extract_text(content_json: str) -> str:

@@ -129,5 +129,51 @@ class TestRunManualBackup(unittest.IsolatedAsyncioTestCase):
         self.assertIn("❌", send_text.call_args.args[1])
 
 
+class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
+    async def test_unauthorized_open_id_ignored(self):
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+            with patch("ops_bot.main.release_flow.handle_confirm_callback") as mock_handle:
+                response = await main._handle_card_action(
+                    {"open_id": "ou_evil", "open_chat_id": "oc_ops", "action": {"value": {}}}
+                )
+
+        mock_handle.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+
+    async def test_authorized_dispatches_to_release_flow(self):
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+            with patch(
+                "ops_bot.main.release_flow.handle_confirm_callback",
+                new=AsyncMock(return_value="✅ 重启应用成功"),
+            ) as mock_handle, patch("ops_bot.main._reply", new=AsyncMock()) as mock_reply:
+                response = await main._handle_card_action(
+                    {
+                        "open_id": "ou_owner",
+                        "open_chat_id": "oc_ops",
+                        "action": {"value": {"task_id": "t-1", "confirm_token": "tok-1", "decision": "confirm"}},
+                    }
+                )
+
+        mock_handle.assert_awaited_once_with("t-1", "tok-1", "confirm")
+        mock_reply.assert_awaited_once()
+        self.assertEqual(response.status_code, 200)
+
+    async def test_missing_value_fields_ignored(self):
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+            with patch("ops_bot.main.release_flow.handle_confirm_callback") as mock_handle:
+                response = await main._handle_card_action(
+                    {"open_id": "ou_owner", "open_chat_id": "oc_ops", "action": {"value": {"task_id": "t-1"}}}
+                )
+
+        mock_handle.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -41,8 +42,13 @@ async def run_backup(*, retention_days: int) -> str:
     """执行一次全量备份并记录结果，成功时顺带清理超期旧产物
     （design.md D3："每次备份成功后顺带清理"）。失败时抛异常——交给调度循环统一
     记为任务失败，这里只负责"把这次备份的结果如实落一行 `ops_backup_record`"。
+
+    `executor.backup_now()` 是同步阻塞调用（`subprocess.run` 直接等子进程退出），
+    ops-bot 是单进程单事件循环（`etc/keywordiq-ops-bot.service` 未指定多 worker），
+    直接 await 会让备份跑的这几分钟里 `/ops/health`、飞书回调、其余调度任务全部
+    停摆——与业务 app 把导入丢进线程池是同一条纪律，这里用 `asyncio.to_thread`。
     """
-    result = executor.backup_now()
+    result = await asyncio.to_thread(executor.backup_now)
     object_key, size_bytes, failed_stage = _parse_result(result.output)
     status = "SUCCEEDED" if result.success else "FAILED"
 
@@ -63,6 +69,11 @@ async def cleanup_old_backups(*, retention_days: int) -> str:
     """清理超过保留期的旧备份产物，返回清理摘要（写进触发本次清理的任务输出，
     供人工核对"清理了哪些"——design.md D3 要求清理动作可追溯）。
     """
+    return await asyncio.to_thread(_cleanup_old_backups_sync, retention_days)
+
+
+def _cleanup_old_backups_sync(retention_days: int) -> str:
+    """`oss2` 是同步 SDK（阻塞网络调用），走线程池——理由同 `run_backup`。"""
     import oss2
 
     from config import settings

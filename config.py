@@ -517,13 +517,19 @@ class Settings(BaseSettings):
     FEISHU_OPS_CHAT_ID: str = ""              # 通知与交互入口的运维群
 
     # 巡检/告警/备份阈值——初始默认值按"先观测后设阈"的保守估计给出（design.md D3），
-    # 部署后须按 ops_import_baseline 记录的真实导入耗时校准。发布相关阈值
-    # （GH_TOKEN/OPS_CONFIRM_TTL_MINUTES/OPS_MAINTENANCE_WINDOW_MINUTES）随第 6 组加入。
+    # 部署后须按 ops_import_baseline 记录的真实导入耗时校准。
     OPS_ALERT_SILENCE_MINUTES: int = 30
     OPS_IMPORT_DAY_TIMEOUT_MINUTES: int = 60
     OPS_IMPORT_WEEK_TIMEOUT_MINUTES: int = 240
     OPS_ERROR_RATE_THRESHOLD: int = 20        # 近 5 分钟 ERROR/5xx 计数阈值
     OPS_BACKUP_RETENTION_DAYS: int = 30
+
+    # 重启/发布确认流程（design.md D5）。GH_TOKEN 最小权限 checks:read+contents:read，
+    # 发布前核实目标 SHA 的必需 CI 是否全部成功；不配置时发布路径直接拒绝（不放行）。
+    GH_TOKEN: str = ""
+    GH_REPO: str = "hisummer2406/KeywordIQ"   # owner/repo，查 CI 状态用
+    OPS_CONFIRM_TTL_MINUTES: int = 10         # 重启/发布确认卡片的有效期
+    OPS_MAINTENANCE_WINDOW_MINUTES: int = 5   # 发布/重启执行期间的维护窗口
 
     @field_validator(
         "OPS_ALERT_SILENCE_MINUTES",
@@ -531,6 +537,8 @@ class Settings(BaseSettings):
         "OPS_IMPORT_WEEK_TIMEOUT_MINUTES",
         "OPS_ERROR_RATE_THRESHOLD",
         "OPS_BACKUP_RETENTION_DAYS",
+        "OPS_CONFIRM_TTL_MINUTES",
+        "OPS_MAINTENANCE_WINDOW_MINUTES",
     )
     @classmethod
     def _validate_ops_bot_thresholds(cls, value: int) -> int:
