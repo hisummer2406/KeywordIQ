@@ -16,6 +16,7 @@ from ops_bot.model import (
     TASK_RUNNING,
     TASK_SUCCEEDED,
     OpsAlertState,
+    OpsAuditLog,
     OpsBackupRecord,
     OpsTask,
 )
@@ -249,3 +250,50 @@ async def recent_tasks(session: AsyncSession, limit: int = 10) -> list[OpsTask]:
     """
     result = await session.execute(select(OpsTask).order_by(OpsTask.created_at.desc()).limit(limit))
     return list(result.scalars())
+
+
+async def write_audit_log(
+    session: AsyncSession,
+    *,
+    task_id: str | None,
+    actor_open_id: str | None,
+    action: str,
+    target: str,
+    target_sha: str | None,
+    confirmed_at: datetime | None,
+    result: str,
+    failed_stage: str | None,
+) -> None:
+    """受限动作（重启/发布/备份）的审计追加记录。表结构本身没有自由文本"输出"字段
+    ——凭证/密钥这类敏感内容原本就没有地方可落，不需要在这一层单独脱敏
+    （design.md 「审计记录」：凭证及敏感日志不发群、不写入审计明文，落在这张表上
+    天然满足，风险面在 `ops_task.output` 那个自由文本字段，见该表的既有截断处理）。
+    """
+    session.add(
+        OpsAuditLog(
+            task_id=task_id,
+            actor_open_id=actor_open_id or "",
+            action=action,
+            target=target,
+            target_sha=target_sha,
+            confirmed_at=confirmed_at,
+            result=result,
+            failed_stage=failed_stage,
+        )
+    )
+
+
+async def prune_old_task_records(session: AsyncSession, *, retention_days: int = 90) -> int:
+    """清理超过保留期的 `ops_task`/`ops_audit_log`/`ops_dedup_key`（design.md D3
+    「任务/审计保留」）。返回删除的 `ops_task` 行数，供 daily 分组的清理任务写进
+    输出摘要。
+
+    `ops_dedup_key`/`ops_audit_log` 不设外键级联，各自独立按自己的时间列清理——
+    `ops_audit_log` 保留審计的完整性不依赖对应的 `ops_task` 是否还在，两者是
+    "同时清理"不是"级联清理"。
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    task_result = await session.execute(text("DELETE FROM ops.ops_task WHERE created_at < :cutoff"), {"cutoff": cutoff})
+    await session.execute(text("DELETE FROM ops.ops_audit_log WHERE created_at < :cutoff"), {"cutoff": cutoff})
+    await session.execute(text("DELETE FROM ops.ops_dedup_key WHERE created_at < :cutoff"), {"cutoff": cutoff})
+    return task_result.rowcount

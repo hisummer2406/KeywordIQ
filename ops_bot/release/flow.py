@@ -18,7 +18,7 @@ from ops_bot import alerts, crud, executor
 from ops_bot.checks import import_status
 from ops_bot.database import OpsAsyncSessionFactory
 from ops_bot.feishu import cards
-from ops_bot.model import TASK_FAILED, TASK_PENDING_CONFIRM
+from ops_bot.model import TASK_PENDING_CONFIRM
 from ops_bot.release import ci, git_ref, lock
 
 logger = logging.getLogger(__name__)
@@ -138,31 +138,51 @@ async def handle_confirm_callback(task_id: str, confirm_token: str, decision: st
             return "该任务已处理或已过期"
 
         kind, payload = task.kind, dict(task.payload)
+        actor_open_id = task.requested_by_open_id
 
-    return await _execute_confirmed(task_id, kind, payload)
+    return await _execute_confirmed(task_id, kind, payload, actor_open_id, datetime.now(UTC))
 
 
-async def _execute_confirmed(task_id: str, kind: str, payload: dict) -> str:
+async def _execute_confirmed(
+    task_id: str, kind: str, payload: dict, actor_open_id: str | None, confirmed_at: datetime
+) -> str:
+    target = "docker compose restart app" if kind == "RESTART_APP" else "deploy.sh"
+    target_sha = payload.get("target_sha")
+
+    async def _finish(success: bool, output: str, failed_stage: str | None = None) -> str:
+        async with OpsAsyncSessionFactory() as session:
+            if success:
+                await crud.mark_task_succeeded(session, task_id, output=output)
+            else:
+                await crud.mark_task_failed(session, task_id, output=output)
+            await crud.write_audit_log(
+                session,
+                task_id=task_id,
+                actor_open_id=actor_open_id,
+                action=kind,
+                target=target,
+                target_sha=target_sha,
+                confirmed_at=confirmed_at,
+                result="SUCCEEDED" if success else "FAILED",
+                failed_stage=failed_stage,
+            )
+            await session.commit()
+        prefix = "✅" if success else "❌"
+        return f"{prefix} {output}"
+
     async with OpsAsyncSessionFactory() as session:
         if await _import_active_or_unknown(session):
-            await crud.mark_task_failed(session, task_id, output="执行前重新核实：导入进行中")
-            await session.commit()
-        else:
-            await crud.mark_task_running(session, task_id)
-            await session.commit()
-        # 上面两个分支都已提交，这里重新读一次任务状态判断是否已经被判失败。
-        task = await crud.get_task(session, task_id)
-    if task is not None and task.status == TASK_FAILED:
-        return f"❌ {task.output}"
+            return await _finish(False, "执行前重新核实：导入进行中", "PRECHECK_IMPORT")
+        await crud.mark_task_running(session, task_id)
+        await session.commit()
 
     if kind == "DEPLOY":
-        target_sha = payload["target_sha"]
         ci_result = await ci.check(target_sha)
         if not ci_result.passing:
-            return await _fail(task_id, "执行前重新核实：CI 未通过")
+            return await _finish(False, "执行前重新核实：CI 未通过", "PRECHECK_CI")
         is_ancestor = await asyncio.to_thread(git_ref.is_ancestor_of_branch, target_sha)
         if is_ancestor is not True:
-            return await _fail(task_id, "执行前重新核实：SHA 已不在允许分支历史上")
+            return await _finish(False, "执行前重新核实：SHA 已不在允许分支历史上", "PRECHECK_SHA")
 
     async with lock.try_acquire() as got_lock:
         if not got_lock:
@@ -170,7 +190,7 @@ async def _execute_confirmed(task_id: str, kind: str, payload: dict) -> str:
             # key 只做"探测后立即释放"（app/table/upload/import_service.py 的
             # _ops_action_in_progress），从不长期持有，不会是这里抢不到锁的原因。
             # 这是 design.md D5"重启/发布互斥"落地的地方，不是导入协调那一层。
-            return await _fail(task_id, "另一个重启/发布任务正在执行中，已中止")
+            return await _finish(False, "另一个重启/发布任务正在执行中，已中止", "MUTEX")
 
         await _open_maintenance()
 
@@ -179,27 +199,11 @@ async def _execute_confirmed(task_id: str, kind: str, payload: dict) -> str:
             result = await asyncio.to_thread(executor.restart_app)
         else:
             action_label = "发布"
-            plan = executor.DeployPlan(
-                target_sha=payload["target_sha"], with_migration=payload["with_migration"]
-            )
+            plan = executor.DeployPlan(target_sha=target_sha, with_migration=payload["with_migration"])
             result = await asyncio.to_thread(executor.deploy, plan)
 
-    async with OpsAsyncSessionFactory() as session:
-        if result.success:
-            await crud.mark_task_succeeded(session, task_id, output=result.output)
-        else:
-            await crud.mark_task_failed(session, task_id, output=result.output)
-        await session.commit()
-
     status_word = "成功" if result.success else "失败"
-    return f"{'✅' if result.success else '❌'} {action_label}{status_word}"
-
-
-async def _fail(task_id: str, reason: str) -> str:
-    async with OpsAsyncSessionFactory() as session:
-        await crud.mark_task_failed(session, task_id, output=reason)
-        await session.commit()
-    return f"❌ {reason}"
+    return await _finish(result.success, f"{action_label}{status_word}：{result.output[-500:]}", result.failed_stage)
 
 
 async def _open_maintenance() -> None:

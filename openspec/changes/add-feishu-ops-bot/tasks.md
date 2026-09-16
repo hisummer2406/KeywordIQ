@@ -264,14 +264,38 @@
 
 ## 7. 权限、审计收尾
 
-- [ ] 7.1 审计记录写入：每个受限动作执行前后写 `OpsAuditLog`（操作者/动作/目标/
-      SHA/确认时间/结果/失败阶段），敏感字段脱敏后再落库。
-- [ ] 7.2 `ops_task`/`ops_audit_log`/`ops_dedup_key` 90 天保留清理（daily 分组）。
-- [ ] 7.3 通知失败与执行失败分开记录：飞书消息发送失败不得覆盖或掩盖任务本身的执行
-      结果；通知重试逻辑 MUST NOT 重新触发已执行过的动作。
-- [ ] 7.4 业务应用/数据库异常时的宿主机级诊断：即便无法连接业务数据库，`ops-bot`
-      仍能报告健康检查失败并提供容器状态/磁盘等不依赖业务库的诊断信息。
-- [ ] 7.5 测试：审计记录脱敏单元测试；通知失败与执行结果分离的单元测试。
+- [x] 7.1 审计记录写入：`crud.write_audit_log` + `release/flow.py::_execute_confirmed`
+      （重启/发布，含 `confirmed_at`）、`backup.run_backup`（备份，`confirmed_at`
+      恒为 `None`——备份不走确认流程，不是漏填）均已接入，记录操作者/动作/目标/
+      SHA/结果/失败阶段。**"脱敏"基本不适用**：`OpsAuditLog` 表结构本身没有自由
+      文本输出字段，凭证/密钥这类敏感内容原本就没有地方可落；风险面在
+      `ops_task.output`（自由文本，已有截断，未做敏感词过滤）——这是既有边界，
+      未在本组新增处理。
+- [x] 7.2 `crud.prune_old_task_records`（90 天，`_TASK_RETENTION_DAYS`），接入
+      `jobs.py` 的 `PRUNE_TASK_RECORDS` daily 任务（`daily_at(4, 0)`）。
+- [x] 7.3（超出原计划范围）通知失败与执行失败分开记录：**单元测试过程中发现两处
+      真实缺口并修复**——(1) `daily_summary.send()` 曾在计算完摘要后不设防地调用
+      `send_card`，卡片发送失败会让"算摘要"这件本已成功的事被记成任务失败；
+      (2) `jobs.py` 的 `import_notify` 曾在 for 循环里裸调用 `send_text`，单条
+      通知发送失败会中途抛出异常，导致**已经算好但还没提交的导入基线记录随事务
+      回滚一起丢失**——这比"少发一条通知"严重得多。两处均已改为捕获发送异常、
+      记录到任务输出文本、不影响任务整体成功判定。`main.py` 的指令分发链路另外
+      加了一层兜底 try/except，防止数据库不可达之类的未预期异常让事件在标记"已
+      处理"后却从未得到任何回复。"通知重试不重新触发已执行动作"这条本就成立：
+      重启/发布走的是确认卡片这套独立状态机，与消息回复的发送/重试机制完全无
+      交集，没有专门测试这个交叉场景（因为它们本来就没有交叉点）。
+- [x] 7.4 业务应用/数据库异常时的宿主机级诊断：`service.is_app_healthy()`（HTTP
+      探测）与 `resources.disk_usage_percent()`（`psutil` 直读）均不依赖数据库；
+      `/ops/health` 新增 `db_unreachable` 分支，`ops`/`analysis` 两个 schema
+      同处一个自建 PG 实例，实例整体不可达时返回成形的 503 而非裸 500。
+- [x] 7.5 测试：`test_ops_bot_jobs_unit.py`（`import_notify` 的通知失败隔离，2 个
+      用例）、`test_ops_bot_webhook_unit.py` 新增
+      `test_database_unreachable_returns_503_not_500`、
+      `TestDispatchExceptionFallback`（指令链路未预期异常兜底）。**未覆盖**：
+      `crud.write_audit_log`/`crud.prune_old_task_records` 的独立单元测试——两者
+      是薄 SQL 组装，已通过调用方（`flow.py`/`backup.py`/`jobs.py`）的测试间接
+      验证"以正确参数被调用"，真正的 SQL 正确性（保留边界是否精确、审计行字段
+      是否如实落库）留给 local-db 阶段验证。
 
 ## 8. 文档与部署材料
 

@@ -13,7 +13,7 @@ from config import settings
 from ops_bot import alerts, backup, crud, daily_summary
 from ops_bot.checks import alembic_drift, heartbeat, import_status, logs, resources, service
 from ops_bot.database import OpsAsyncSessionFactory
-from ops_bot.feishu.client import FeishuClient
+from ops_bot.feishu.client import FeishuAPIError, FeishuClient
 from ops_bot.scheduler import ScheduledJob, daily_at
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,10 @@ _BACKUP_OVERDUE_WARN_HOURS = 24
 _BACKUP_OVERDUE_CRIT_HOURS = 48
 
 _LOG_PATH = "logs/app.log"
+
+# ops_task/ops_audit_log/ops_dedup_key 的保留期（design.md D3「任务/审计保留」）。
+# 数据量远小于业务事实表，不需要分区，daily 分组里直接 DELETE。
+_TASK_RETENTION_DAYS = 90
 
 
 def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
@@ -91,6 +95,7 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
         async with OpsAsyncSessionFactory() as session:
             last = await crud.last_succeeded_at(session, "IMPORT_NOTIFY")
             new_batches = await import_status.find_new_terminal_batches(session, since=last)
+            failed_sends = 0
             for batch in new_batches:
                 if batch["status"] == "COMPLETED":
                     await backup_safe_record_baseline(session, batch)
@@ -103,9 +108,20 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
                         f"❌ 导入失败：{batch['site']} {batch['period_type']} "
                         f"{batch['report_date']}，原因：{batch['error_message']}"
                     )
-                await feishu_client.send_text(chat_id, text)
+                # 通知失败与执行失败分开记录：单条发送失败不能让整轮检查判定失败，
+                # 更不能让 for 循环中途抛出——那会导致本轮已经算好的基线
+                # （backup_safe_record_baseline）因为下面这次 commit 从没执行到而
+                # 连带丢失，是比"少发一条通知"严重得多的后果。
+                try:
+                    await feishu_client.send_text(chat_id, text)
+                except FeishuAPIError:
+                    logger.exception("导入完成/失败通知发送失败：%s", text)
+                    failed_sends += 1
             await session.commit()
-        return f"{len(new_batches)} 条新完成/失败通知"
+        summary = f"{len(new_batches)} 条新完成/失败通知"
+        if failed_sends:
+            summary += f"（其中 {failed_sends} 条发送失败，详见应用日志）"
+        return summary
 
     async def backup_safe_record_baseline(session, batch: dict) -> None:
         # processing_seconds 可能因老数据缺失（列默认 0，语义上"未记录"与"0 秒完成"
@@ -178,6 +194,12 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
     async def daily_summary_job() -> str:
         return await daily_summary.send(feishu_client, chat_id)
 
+    async def prune_task_records_job() -> str:
+        async with OpsAsyncSessionFactory() as session:
+            deleted = await crud.prune_old_task_records(session, retention_days=_TASK_RETENTION_DAYS)
+            await session.commit()
+        return f"清理了 {deleted} 条超过 {_TASK_RETENTION_DAYS} 天的任务记录"
+
     return [
         ScheduledJob(kind=heartbeat.KIND, interval_seconds=_QUICK_SECONDS, run=heartbeat.run),
         ScheduledJob(kind="SERVICE_CHECK", interval_seconds=_FULL_SECONDS, run=service_check),
@@ -195,5 +217,9 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
         ScheduledJob(
             kind="DAILY_SUMMARY", interval_seconds=86400, run=daily_summary_job,
             should_run=daily_at(9, 0),
+        ),
+        ScheduledJob(
+            kind="PRUNE_TASK_RECORDS", interval_seconds=86400, run=prune_task_records_job,
+            should_run=daily_at(4, 0),
         ),
     ]
