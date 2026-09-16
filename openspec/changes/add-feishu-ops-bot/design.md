@@ -47,10 +47,57 @@ Issue 列出的 6 项"实施前须在 OpenSpec 落定"的工程决策拍板，�
 
 ### D1. 服务形态、受限执行器、任务存储、调度机制（Issue 决策项 1）
 
-**服务形态**：新增 docker-compose 服务 `ops-bot`，与 `app` 共用同一个 Dockerfile 镜像、
-不同 entrypoint（`python -m ops_bot.main`），监听 `127.0.0.1:8101`（只本地回环，不对公网
-暴露）。host nginx 新增一个 location（如 `/ops/feishu/webhook`）反代到这个端口，复用现有
-证书与域名——不需要新开公网入口。容器 `restart: unless-stopped`，与 `app`/`db` 同等对待。
+> **实现期修订（2026-09-16）**：本节最初把 `ops-bot` 定为新增的 docker-compose 服务，
+> 动手实现受限执行器（3.5/6.x）时发现这个形态与 `RESTART_APP`/`RELOAD_NGINX`/`DEPLOY`
+> 三个动作直接冲突，遂改为**host 级 systemd 服务**。原因与修订内容见下。
+
+**服务形态**：`ops-bot` 是与 `app` 同机、**跑在宿主机上的独立 systemd 服务**
+（`etc/keywordiq-ops-bot.service`），不是 docker-compose 服务；它用仓库同一份 `uv`
+环境（`uv run python -m ops_bot.main`），独立系统账号运行，监听 `127.0.0.1:8101`
+（只本地回环），host nginx 新增一个 location（如 `/ops/feishu/webhook`）反代到这个端口，
+复用现有证书与域名。`restart: on-failure`（systemd 层面），与 `app` 容器的
+`restart: unless-stopped` 是两套独立的存活保障，互不依赖。
+
+**为什么不是 docker-compose 服务（推翻的理由）**：受限执行器要做的四件事里有三件
+天生是"host 级操作"，容器化会把它们变成 Docker-outside-of-Docker 的路径映射难题：
+
+- `RESTART_APP`（`docker compose restart app`）需要 docker-compose.yml 与 `.env` 的
+  bind-mount 源路径与宿主机路径逐一对应，容器内举着挂载来的 socket 发指令时，client
+  端解析出的相对路径是容器内路径，daemon（宿主机侧）按这个路径在宿主机上找不到对应
+  文件——这是"挂 docker.sock 控制同级容器"这个模式众所周知的坑，唯一解法是把整个项目
+  目录用**与宿主机完全相同的绝对路径**挂进 ops-bot 容器，脆弱且这台机器的部署路径一变
+  就得同步改。
+- `RELOAD_NGINX`（`systemctl reload nginx`）与部分 `DEPLOY` 步骤（`rsync` 到
+  `/var/www/keywordiq`、`logrotate -d`、`nginx -t`）——nginx 本身是 host 进程
+  （不在 compose 管理范围内），这些命令从容器内**没有任何直接路径**能够到，除非再给
+  容器挂一堆 host 的 `/etc/nginx`、`/var/www`、systemd socket，退化成近乎特权容器。
+- `DEPLOY` 还包含 `pnpm install && pnpm build`（前端构建）——ops-bot 目前基于 Python
+  slim 镜像，为了这一步单独塞进 Node 工具链只为该镜像再多背一份与 `app` 无关的体积。
+
+host 级 systemd 服务上，这三件事就是 `deploy.sh` 今天已经在做的事——`docker compose`、
+`rsync`、`systemctl reload nginx` 都是原生可执行的宿主机命令，不需要任何路径转译或
+额外挂载。
+
+**代价与缓解**：
+
+1. **DB 访问不再"同容器网络直达"，db 服务需要多开一个仅本机可达的端口。**
+   `docker-compose.yml` 的 `db` 服务原先"不写 ports"（design 决策 2：不对宿主机暴露
+   端口）；host 级 ops-bot 进程既不在 compose 网络里，必须新增
+   `"127.0.0.1:5432:5432"`——**仍然只绑本地回环，不对公网暴露**，与 `app` 现有的
+   `127.0.0.1:8000:8000` 同一条纪律，不是重新打开这道曾经关掉的口子，只是把它的可达
+   范围从"仅 compose 内部网络"扩大到"仅 localhost"，两者对公网攻击面的暴露程度相同
+   （均为 0）。
+2. **`docker compose`/`sudo` 权限边界**：ops-bot 的系统账号需要在 `docker` 组（跑
+   `docker compose restart app`）——这个组等效于免密 root（能挂载任意宿主机路径的
+   容器），是本设计对"最小权限"唯一不得不做的让步，旧稿的"kwops 独立低权限账号"设想
+   在 docker 化的世界里本来就不成立（谁能控制 Docker daemon 谁就有 root）。`DEPLOY`
+   内部调用 `deploy.sh` 时其余 `sudo`（nginx/logrotate/rsync 到系统目录）走 sudoers
+   白名单，条目对应 `deploy.sh` 里 `as_root()` 实际发起的那几类命令，在部署 runbook
+   （D6/任务组 8）里列出并需要人工配置——这是 OS 层面的账号权限授予，不在本仓库代码
+   范围内，无法靠 code review 确认，只能部署时核对。
+3. **不复用 `app` 镜像**：host 级服务不需要 Dockerfile，直接吃仓库的 `.venv`；
+   进程隔离改由**独立系统账号 + 独立 `.env`**（只含 ops-bot 需要的字段）承担，粒度比
+   容器边界粗，但换来了不需要处理路径映射这一更大的正确性风险。
 
 代码位置：仓库根新增顶层包 `ops_bot/`（与 `app/` 同级，不挂在 `app/table/*` 下——它不是
 一个数据域查询模块，是独立服务），内部仍遵守项目的分层约定（model/crud/service/api）：
@@ -333,16 +380,20 @@ https://www.alibabacloud.com/help/zh/cms/cloudmonitor-2-0/notification-object）
    `ops_import_baseline` 六张表（`DeclarativeBase`，`schema="ops"`）。这条迁移仍然走
    `docker compose run --rm app alembic upgrade head`（与业务迁移同一条流水线，`ops_bot`
    本身不跑迁移，避免多一个迁移入口）。
-2. **代码**：新增 `ops_bot/` 包、`docker-compose.yml` 新增 `ops-bot` 服务、nginx 配置新增
-   `/ops/feishu/webhook` 与 `/ops/health` 反代、`.env.example` 新增全部 `OPS_*`/
+2. **代码**：新增 `ops_bot/` 包、`etc/keywordiq-ops-bot.service`（host systemd unit，
+   D1 修订后的服务形态）、`docker-compose.yml` 的 `db` 服务新增
+   `127.0.0.1:5432:5432` 端口映射（供 host 级 ops-bot 连接，见 D1 代价段）、nginx 配置
+   新增 `/ops/feishu/webhook` 与 `/ops/health` 反代、`.env.example` 新增全部 `OPS_*`/
    `FEISHU_*` 配置项（含安全的本地默认值/留空）、`scripts/check_feishu_ops.py`。
-3. **部署顺序**：`db` 迁移先行 → 部署 `ops-bot`（此时飞书应用尚未配置，服务能起但收不到
-   事件）→ 用户在飞书开放平台完成 D6 材料的配置与事件订阅登记 →
+3. **部署顺序**：`db` 迁移先行 → 暴露 `db` 端口到 127.0.0.1 → 安装
+   `keywordiq-ops-bot.service`（此时飞书应用尚未配置，服务能起但收不到事件）→
+   用户在飞书开放平台完成 D6 材料的配置与事件订阅登记 →
    `uv run python scripts/check_feishu_ops.py` 全绿 → 阿里云云监控拨测配置 → 演练验证
    （见 tasks.md 的演练场景）。
-4. **回滚**：`ops-bot` 是新增的独立服务，回滚即 `docker compose stop ops-bot` +
+4. **回滚**：回滚即 `systemctl stop keywordiq-ops-bot` +
    `alembic downgrade` 到迁移前版本（`ops` schema 整体 `DROP`，不影响 `analysis`）——
-   业务系统不依赖 `ops-bot` 存在与否，回滚零风险。
+   业务系统不依赖 `ops-bot` 存在与否，回滚零风险；`db` 的 127.0.0.1 端口映射可以留着
+   不撤（只本机可达，无安全代价）。
 
 ## Open Questions
 

@@ -52,49 +52,64 @@
       未进 `Settings`（见上方认领记录的偏离说明）。
 - [x] 2.2 同步更新 `.env.example`，范围与 2.1 一致（含 `OPS_DB_ROLE_PASSWORD` 作为
       纯环境变量的文档行，不对应 Settings 字段）。
-- [ ] 2.3 `ops_bot/` 包骨架**部分建好**：`main.py`/`database.py`/`model.py`/
-      `crud.py`/`feishu/client.py`/`feishu/auth.py` 已建；`checks/`/`executor/`/
-      `scheduler.py`/`service.py`/`schemas.py`/`api_internal.py`/`feishu/cards.py`/
-      `feishu/events.py` 尚未建（events.py 的 URL 校验/分发职责暂时直接写在
-      `main.py` 里，事件类型变多、main.py 变臃肿时再拆出独立模块）。未新建
-      `ops_bot/settings.py`——见上方认领记录。
-- [ ] 2.4 新增 `Dockerfile` entrypoint 分支或独立 `ops_bot` 启动命令；
-      `docker-compose.yml` 新增 `ops-bot` 服务（`127.0.0.1:8101` 回环端口，
-      `restart: unless-stopped`，`depends_on: db`）。
-- [ ] 2.5 `etc/keywordiq-nginx.conf` 新增 `/ops/feishu/webhook` 与 `/ops/health` 反代
-      到 `127.0.0.1:8101`。
+- [x] 2.3 `ops_bot/` 包骨架建好：`main.py`/`database.py`/`model.py`/`crud.py`/
+      `scheduler.py`/`checks/`（`heartbeat.py`）/`executor/`/
+      `feishu/{client,auth,cards}.py`。**与原计划的差异**：未拆出独立
+      `feishu/events.py`（URL 校验/分发职责直接写在 `main.py` 里，事件类型变多、
+      main.py 变臃肿时再拆）；未建 `service.py`/`schemas.py`/`api_internal.py`
+      （当前逻辑量不足以证明这层拆分的必要性，`crud.py`/`scheduler.py`/`main.py`
+      已经够用，等第 4-6 组接入更多业务逻辑后视情况再拆）；未新建
+      `ops_bot/settings.py`——`ops_bot/*` 直接 `from config import settings`。
+- [x] 2.4 **修订**（design.md D1 实现期修订，不再是 docker-compose 服务）：新增
+      `etc/keywordiq-ops-bot.service`（host systemd unit）；`docker-compose.yml`
+      的 `db` 服务新增 `"127.0.0.1:5432:5432"` 端口映射供 host 进程连接。
+- [x] 2.5 `etc/keywordiq-nginx.conf` 新增 `upstream keywordiq_ops_bot`（127.0.0.1:8101）
+      与 `location /ops/`，覆盖 `/ops/feishu/webhook` 与 `/ops/health`。
 
 ## 3. 飞书接入底座（`ops-bot-platform`）
 
 - [x] 3.1 `feishu/client.py`：`tenant_access_token` 换取、进程内缓存 + `asyncio.Lock`
       防并发换取（同构 `app/auth/dingtalk_client.py` 的企业 token 段）；额外实现了
-      `send_text`/`send_card`/`update_card`（原任务未列出，但 3.3 的最小回执需要它）。
+      `send_text`/`send_card`/`update_card`（原任务未列出，但 3.3/3.4 需要它）。
 - [x] 3.2（部分）`feishu/auth.py`：Verification Token 校验（含 URL 校验挑战路径）、
       Encrypt Key 场景的 AES-256-CBC 解密、`open_id`/`chat_id` 白名单双重校验均已
       实现。**未拆出独立 `feishu/events.py`**——见 2.3 说明；卡片回调（interactive
-      card action，与消息事件走不同回调机制）尚未接入，只接了消息事件一种。
+      card action，与消息事件走不同回调机制）尚未接入，只接了消息事件一种，回调
+      分发留给第 6 组（发布/重启确认要用到卡片回调）一起接入更合理。
 - [x] 3.3（部分）`ops_bot/main.py`：`/ops/feishu/webhook` 端点完成 URL 校验挑战、
       来源校验、幂等判定（`OpsDedupKey`）、身份白名单、并对已授权事件回一条最小
-      文本确认。**与原任务描述的两处差异**：(1) 未接"丢 `asyncio.create_task` 后台
-      执行"——当前唯一的动作是发一条同步文本回执，没有真正的长任务需要后台化，
-      这一点等 3.5 executor 接入真实动作后再补；(2) `/ops/health` 当前恒返回
-      `{"status": "ok"}`，未读心跳时间——依赖 3.6 scheduler 先把 quick 分组的心跳
-      落到 `OpsTask`。
-- [ ] 3.4 `feishu/cards.py`：状态摘要卡片、确认卡片（重启/发布通用模板）、结果卡片
-      模板函数（强类型入参，不接受自由字符串拼接）。
-- [ ] 3.5 `executor/`：`OpsAction` 枚举 + 每个动作的固定 argv 执行函数，统一 300 秒
-      超时、输出截断落 `OpsTask.output`。
-- [ ] 3.6 `scheduler.py`：quick(60s)/full(300s)/15min(900s)/daily 多组常驻循环，
-      每组判据用"距上次成功执行时间"（查 `OpsTask`），非内存计时器。
+      文本确认；`/ops/health` 已接入 3.6 的心跳判定（详见 3.6）。**与原任务描述的
+      一处差异**：未接"丢 `asyncio.create_task` 后台执行"——当前唯一的动作是发一条
+      同步文本回执，没有真正的长任务需要后台化，等第 6 组把重启/发布接进卡片回调
+      （那才是真正耗时、需要后台化的动作）时再补。
+- [x] 3.4 `feishu/cards.py`：状态摘要卡片、确认卡片（`build_confirm_card`，双按钮
+      携带同一个 `task_id`/`confirm_token`，`decision` 字段区分确认/取消）、结果
+      卡片（`build_result_card`）均已实现，强类型入参。卡片 JSON 结构依据飞书官方
+      文档判断，**未经真实客户端渲染验证**——留给 3.8/演练阶段。
+- [x] 3.5 `executor/`：`OpsAction` 枚举 + `RESTART_APP`/`RELOAD_NGINX`/`BACKUP_NOW`/
+      `DEPLOY` 四个固定 argv 执行函数；`DEPLOY` 超时放宽到 1800 秒（镜像/前端构建是
+      分钟级操作，通用的 300 秒对它不够，其余三个动作仍是 300 秒）。输出截断到 8KB。
+- [x] 3.6 `scheduler.py`：通用的常驻循环机制（`ScheduledJob`/`start`/`stop`），判据
+      用"距上次成功执行时间"（查 `ops_task`）。当前只注册了 quick 分组的
+      `HEARTBEAT` 任务（`checks/heartbeat.py`，60s 间隔）；full/15min/daily 分组
+      的具体检查函数随第 4 组接入。`/ops/health` 已读心跳新鲜度，超过 90 秒
+      （60s 间隔 + 30s 余量）返回 503。
 - [x] 3.7（部分）测试：`test/test_ops_bot_feishu_unit.py`（token 缓存/并发、
       verification token 校验、AES 加解密自洽性、`is_authorized` 白名单）、
-      `test/test_ops_bot_webhook_unit.py`（URL 校验挑战、403 路径，不触库）、
+      `test/test_ops_bot_webhook_unit.py`（URL 校验挑战、403 路径、心跳新鲜度
+      三态含 503，全部打桩不触库）、`test/test_ops_bot_executor_unit.py`（四个
+      动作的 argv、失败/超时/多步骤中断）、`test/test_ops_bot_cards_unit.py`、
+      `test/test_ops_bot_scheduler_unit.py`（判据/成功失败记录/取消，全部打桩）、
       `test/test_ops_bot_crud_integration.py`（幂等去重，需 `TEST_DATABASE_URL`，
-      本会话未实际连库跑过）。**未覆盖**：心跳端点异常返回 503（3.6 未实现）、
+      本会话确认能在真实 `keywordiq_test` 库上正确 skip——库未迁移到 ops schema
+      时优雅跳过而非报错，真正的读写断言仍待 local-db 迁移后验证）。**未覆盖**：
       已授权事件完整路径的端到端测试（依赖真实 DB，webhook 单元测试特意不触库）。
-- [ ] 3.8 `[生产/飞书实机]` 新建 `scripts/check_feishu_ops.py`（自检脚本，design.md
-      D2 列出的四项校验），本地先用假凭证跑通"预期失败"路径，真实凭证的验证留给
-      部署阶段。
+- [x] 3.8 `[生产/飞书实机]` 新建 `scripts/check_feishu_ops.py`（自检脚本，design.md
+      D2 列出的四项校验，含对"最小权限"的反向验证）。本地用假凭证实测过"预期失败"
+      路径（配置错误时逐项打印 ❌ 且不崩溃退出），**修正了一处实现漏洞**：数据库
+      连接失败时反向验证（"写 analysis.import_batch 应被拒绝"）曾把"连不上库"误判
+      成"权限边界生效"打印 ✅——现已改为先单独确认连通性，连不上直接失败并跳过
+      后续子检查。真实凭证的验证留给部署阶段。
 
 ## 4. 巡检检查器与告警（`ops-monitoring-alerting`）
 

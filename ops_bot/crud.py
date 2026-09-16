@@ -2,8 +2,62 @@
 
 from __future__ import annotations
 
-from sqlalchemy import text
+import uuid
+from datetime import datetime
+
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from ops_bot.model import TASK_FAILED, TASK_RUNNING, TASK_SUCCEEDED, OpsTask
+
+
+async def create_task(
+    session: AsyncSession, *, kind: str, payload: dict | None = None, requested_by_open_id: str | None = None
+) -> str:
+    """新建一条 RUNNING 任务记录，返回 task_id。"""
+    task_id = str(uuid.uuid4())
+    session.add(
+        OpsTask(
+            id=task_id,
+            kind=kind,
+            status=TASK_RUNNING,
+            payload=payload or {},
+            requested_by_open_id=requested_by_open_id,
+        )
+    )
+    await session.flush()
+    return task_id
+
+
+async def mark_task_succeeded(session: AsyncSession, task_id: str, output: str = "") -> None:
+    await session.execute(
+        update(OpsTask)
+        .where(OpsTask.id == task_id)
+        .values(status=TASK_SUCCEEDED, output=output, finished_at=func.now())
+    )
+
+
+async def mark_task_failed(session: AsyncSession, task_id: str, output: str = "") -> None:
+    await session.execute(
+        update(OpsTask)
+        .where(OpsTask.id == task_id)
+        .values(status=TASK_FAILED, output=output, finished_at=func.now())
+    )
+
+
+async def last_succeeded_at(session: AsyncSession, kind: str) -> datetime | None:
+    """某类任务最近一次成功完成的时间；从未成功过则 `None`。
+
+    调度循环靠它判断"距上次成功执行的时间"，而不是进程内存里的下次触发时间戳
+    ——见 `ops_bot/scheduler.py` 与 design.md D1。
+    """
+    result = await session.execute(
+        select(OpsTask.finished_at)
+        .where(OpsTask.kind == kind, OpsTask.status == TASK_SUCCEEDED)
+        .order_by(OpsTask.finished_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def try_claim_dedup_key(session: AsyncSession, event_id: str) -> bool:
