@@ -299,13 +299,23 @@
 
 ## 8. 文档与部署材料
 
-- [ ] 8.1 编写 runbook：安装配置步骤、飞书应用权限/事件订阅/回调设置、操作说明、
-      外部探测配置步骤、备份恢复步骤、故障处理、发布分支由 `v2` 切换到 `main` 的简短
-      指引（放 `docs/ops-agent/` 或 `etc/`，与现有 `observability-runbook.md` 并列）。
-- [ ] 8.2 更新 `docs/ops-agent/00-ops-agent-design.md`：标注旧稿的 RDS/CLI-only/自愈/
-      钉钉等假设已被本变更取代，指向本变更文档。
-- [ ] 8.3 D6 部署材料清单文档化（飞书凭证/open_id/chat_id/GH_TOKEN/v2 部署路径/既有
-      crontab 核实/阿里云云监控权限），密钥占位说明"直接配置到部署环境，不写入仓库"。
+- [x] 8.1（修订落点）编写 runbook：`etc/keywordiq-ops-bot-runbook.md`，覆盖安装配置
+      步骤、飞书应用权限/事件订阅/回调设置、操作说明（全部文本指令）、外部探测
+      配置步骤、备份恢复步骤、故障处理表、部署后校准导入阈值、发布分支由 `v2`
+      切换到 `main` 的简短指引。**没有放进 `docs/ops-agent/`**——实现期发现
+      `docs/` 整个目录被 `.gitignore` 排除（"规格的唯一来源是 openspec/，不是
+      这里——docs/ 只是本地放参考资料的地方"），放在那里写了等于没写，PR 里根本
+      看不见。改放 `etc/`，与已有的 `etc/observability-runbook.md`
+      （CLAUDE.md 点名的运维文档入口）同一条路径纪律。
+- [x] 8.2（发现原计划不可行，已改路线）**不更新
+      `docs/ops-agent/00-ops-agent-design.md`**——它是本机本地文件，从未进过
+      版本库，编辑它不会被提交，本变更看不见、未来任何会话也看不见，等于白做。
+      "旧稿假设已被取代"这件事记在 `design.md` 的 Context 一节与本条目里，
+      对面向未来的读者已经足够；proposal.md 也已同步改口径去掉这条不成立的
+      "少量改动"清单项。
+- [x] 8.3 D6 部署材料清单文档化：`etc/keywordiq-ops-bot-runbook.md` 第 3 节
+      （飞书凭证/open_id/chat_id/GH_TOKEN/v2 部署路径/既有 crontab 核实/阿里云
+      云监控权限），密钥占位说明"写进 `.env`，不进代码仓库"。
 
 ## 9. 收尾验证
 

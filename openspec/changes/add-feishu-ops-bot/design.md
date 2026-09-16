@@ -14,6 +14,9 @@ ECS。业务侧已有 `/health`、`/health/pool`、`monitoring.py` 指标采样�
 nginx/systemd 裸 uvicorn + 钉钉 + SSH CLI 交互，三项前提均已被后续变更或本次 Issue 推翻
 （自建 PG 容器、飞书替代钉钉运维入口、互动卡片替代 CLI）。本设计不沿用旧稿的组件选型，
 只沿用其中仍然成立的原则（能脚本判的不用模型判、复用已有资产、最小权限、白名单化操作）。
+**该文件属于 `docs/`，被 `.gitignore` 整体排除**（仓库约定"规格的唯一来源是
+openspec/"），是本机本地的参考资料、从未进过版本库——本设计只是引用它作为背景，
+不对它做任何改动；面向未来的运维文档见 `etc/keywordiq-ops-bot-runbook.md`。
 
 本变更是 GitHub Issue #90 的工程落地，Issue 已完成全部产品决策；本设计文档的任务是把
 Issue 列出的 6 项"实施前须在 OpenSpec 落定"的工程决策拍板，并给出可验证的架构。
