@@ -498,6 +498,27 @@ class Settings(BaseSettings):
             raise ValueError("GROWTH_MIN_DAILY_RATE 必须在 [0, 1) 内（0.10 表示 10%）")
         return value
 
+    # ---- 飞书运维机器人（ops-bot，见 openspec/changes/add-feishu-ops-bot）----
+    #
+    # ops-bot 是与 app 完全独立的进程/容器，这些配置只被它读取——app 进程不使用它们，
+    # 因此这里只声明字段与最小的数值合法性校验，不做"启用时必填"这类强校验（那类校验
+    # 放 ops_bot 自己的启动路径，不能让 app 因为运维机器人没配好而起不来）。
+    OPS_DATABASE_URL: str = ""        # ops_bot_role 的连接串（同步），见迁移里的角色授权
+    OPS_DATABASE_URL_ASYNC: str = ""  # ops_bot_role 的连接串（异步）
+    # 注：ops_bot_role 的密码 OPS_DB_ROLE_PASSWORD **不进 Settings**——它只有一个读取方
+    # （建角色的那条迁移），与 PG_MAX_CONNECTIONS/POSTGRES_DB 同一条既有约定（"只服务单一
+    # 用途的部署期变量不必路由进 pydantic Settings"），迁移里直接读 os.environ。
+
+    FEISHU_APP_ID: str = ""
+    FEISHU_APP_SECRET: str = ""              # 只在服务端持有，绝不出现在日志或响应体里
+    FEISHU_VERIFICATION_TOKEN: str = ""       # 校验事件订阅回调确实来自飞书
+    FEISHU_ENCRYPT_KEY: str = ""              # 事件订阅启用加密时使用，可留空
+    FEISHU_OWNER_OPEN_ID: str = ""            # 唯一授权操作人，见 ops-bot-platform 鉴权
+    FEISHU_OPS_CHAT_ID: str = ""              # 通知与交互入口的运维群
+    # 其余 ops-bot 阈值类配置（巡检/告警/备份/发布相关）随各自消费方在后续任务里加入，
+    # 不在这里预留空字段——test_conventions.py::test_no_new_dead_settings 不允许
+    # 无人读取的配置项存在。
+
     model_config = ConfigDict(env_file=".env", extra="ignore")
 
 
