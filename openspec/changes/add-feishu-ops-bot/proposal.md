@@ -10,8 +10,10 @@ KeywordIQ v2 已完成容器化自托管部署（docker-compose：app + 自建 P
 ## What Changes
 
 - 新增一个独立运行的飞书运维机器人服务（下称 `ops-bot`），与业务 `app` 容器同机、独立
-  docker-compose 服务/进程，共享同一个自建 PostgreSQL 容器但使用新 schema `ops`（不与业务
-  `analysis` schema 混用，不引入 SQLite）。
+  host 级 systemd 服务（实现期修订：docker-compose 化会让受限执行器要做的
+  `docker compose restart`/`nginx reload`/`deploy.sh` 陷入路径映射难题，见 design.md D1），
+  共享同一个自建 PostgreSQL 容器但使用新 schema `ops`（不与业务 `analysis` schema
+  混用，不引入 SQLite）。
 - 新增飞书企业自建应用的事件订阅 + 卡片交互接入：状态/日志/任务查询、导入完成失败通知、
   异常告警（首次/合并限频/恢复）、每日 09:00（Asia/Shanghai）巡检摘要。
 - 新增自动/手动全量备份编排：复用 `scripts/backup_selfhosted_pg.py`，机器人内置调度接管
@@ -56,9 +58,10 @@ KeywordIQ v2 已完成容器化自托管部署（docker-compose：app + 自建 P
 
 ## Impact
 
-- **新增代码**：`ops_bot/`（或等价包名，design.md 定）独立服务代码、Alembic 迁移新增
-  `ops` schema 下的任务/审计/去重/告警状态表、`docker-compose.yml` 新增 `ops-bot` 服务、
-  nginx 配置新增飞书回调路径反代、`.env.example` 新增飞书应用与机器人相关配置项。
+- **新增代码**：`ops_bot/` 独立服务代码、Alembic 迁移新增 `ops` schema 下的任务/审计/
+  去重/告警状态表、`etc/keywordiq-ops-bot.service`（host systemd unit）、
+  `docker-compose.yml` 的 `db` 服务新增 `127.0.0.1:5432` 端口映射、nginx 配置新增
+  飞书回调路径反代、`.env.example` 新增飞书应用与机器人相关配置项。
 - **少量改动**：`app/table/upload/import_queue.py`（认领逻辑读取运维动作占位锁）、
   `deploy.sh`（供机器人以非交互方式调用的发布路径，迁移确认闸门保留）、
   `docs/ops-agent/00-ops-agent-design.md`（标注旧稿中 RDS/CLI-only/自愈/钉钉等假设已被
