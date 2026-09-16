@@ -1,6 +1,19 @@
 > **认领记录**：2026-09-16，Claude Code 会话（worktree `~/.claude-worktrees/add-feishu-ops-bot`，
-> 分支 `change/add-feishu-ops-bot`）。当前状态：proposal/design/specs 四件套已生成并通过
-> `openspec validate`，**尚未开始实现**，任务列表待下一轮会话（或本会话续接）按顺序执行。
+> 分支 `change/add-feishu-ops-bot`）。proposal/design/specs 四件套已生成并通过
+> `openspec validate`（首次提交 `5c5a1b9`）。第二次提交推进了第 1 组全部、第 3 组
+> 3.1-3.3/3.7 的一部分——见下方逐项标注，**未勾选的任务仍待完成**，下一轮会话从
+> 2.3（补 checks/executor/scheduler/service/schemas/api_internal）与 2.4/2.5
+> （docker-compose 服务、nginx 反代）接着做。
+>
+> **实现期发现的一处偏离原设计**：`test_conventions.py::test_no_new_dead_settings`
+> 要求 `config.py` 里声明的每个字段都有真实消费方，且扫描范围只覆盖 `app/`/`scripts/`/
+> 顶层几个文件（现已加入 `ops_bot`）。据此调整了两点，design.md 未来若被引用需注意：
+> （1）阈值类配置（`GH_TOKEN`/`OPS_ALERT_SILENCE_MINUTES` 等）**不再一次性加全**，
+> 改为随各自消费方所在的任务组增量加入；（2）`OPS_DB_ROLE_PASSWORD` 改为不进
+> `config.Settings`，直接在迁移里读 `os.environ`（同构 `PG_MAX_CONNECTIONS`/
+> `POSTGRES_DB` 的既有先例）——它只有迁移这一个读取方，路由进 Settings 反而会被
+> 判定为"声明了但过度暴露"。`ops_bot/settings.py` 也被去掉，`ops_bot/*` 直接
+> `from config import settings`，与业务代码同一份配置来源，未新建独立文件。
 
 ## 0. 实现前置说明
 
@@ -11,33 +24,40 @@
 
 ## 1. 数据库底座：`ops` schema、角色、迁移
 
-- [ ] 1.1 新建 Alembic 迁移：`CREATE SCHEMA ops`、创建 `ops_bot_role` 角色并授予
-      `ops` schema 全部权限、对 `analysis.import_batch` 与 `analysis.site_data_stats`
-      仅授 `SELECT`；用 `op.execute` 写原生 DDL/DCL（非 ORM 可表达部分）。
-- [ ] 1.2 定义 `ops_bot/model.py`：`OpsTask`/`OpsAuditLog`/`OpsDedupKey`/
+- [x] 1.1 新建 Alembic 迁移（`d4e5f6a7b8c9`）：`CREATE SCHEMA ops`、创建
+      `ops_bot_role` 角色并授予 `ops` schema 全部权限、对 `analysis.import_batch`
+      与 `analysis.site_data_stats` 仅授 `SELECT`；用 `op.execute` 写原生 DDL/DCL。
+- [x] 1.2 定义 `ops_bot/model.py`：`OpsTask`/`OpsAuditLog`/`OpsDedupKey`/
       `OpsAlertState`/`OpsBackupRecord`/`OpsImportBaseline` 六个 SQLAlchemy 2.0
-      `DeclarativeBase` 模型，`schema="ops"`，字段按 design.md D1 表格。
-- [ ] 1.3 用同一份迁移（或紧随其后的一条）建出上述六张表；`alembic upgrade head --sql`
-      核对生成的 DDL 落在 `ops` schema。
-- [ ] 1.4 测试：迁移单元测试（不连真实库的部分）+ 需要 `TEST_DATABASE_URL` 的集成测试，
-      断言 `ops_bot_role` 对业务表写操作被拒绝、对 `ops` schema 读写正常
-      （`uv run pytest test/ -q`，集成部分需 `local-db`）。
+      `DeclarativeBase` 模型（独立 `OpsBase`，见 `ops_bot/database.py`），
+      `schema="ops"`，字段按 design.md D1 表格。
+- [x] 1.3 同一份迁移建出上述六张表；`uv run alembic upgrade head --sql` 与
+      `downgrade d4e5f6a7b8c9:71e646b2d200 --sql` 均已核对生成的 DDL 落在 `ops` schema
+      且回滚路径完整。
+- [ ] 1.4 测试：**部分完成**——`test/test_ops_bot_crud_integration.py` 覆盖了
+      `ops_bot_role` 对 `ops.ops_dedup_key` 的幂等读写（需 `TEST_DATABASE_URL`，
+      本会话未接入真实测试库运行，只做了代码走查）。**尚未写**"`ops_bot_role` 对
+      业务表写操作被拒绝"这条断言——留给 local-db 验证阶段一并补。
 
 ## 2. 配置与项目骨架
 
-- [ ] 2.1 `config.py` 的 `Settings` 新增 `OPS_DATABASE_URL`/`OPS_DATABASE_URL_ASYNC`/
+- [x] 2.1 `config.py` 的 `Settings` 新增 `OPS_DATABASE_URL`/`OPS_DATABASE_URL_ASYNC`/
       `FEISHU_APP_ID`/`FEISHU_APP_SECRET`/`FEISHU_VERIFICATION_TOKEN`/
-      `FEISHU_ENCRYPT_KEY`/`FEISHU_OWNER_OPEN_ID`/`FEISHU_OPS_CHAT_ID`/
-      `GH_TOKEN`/`OPS_ALERT_SILENCE_MINUTES`/`OPS_IMPORT_DAY_TIMEOUT_MINUTES`/
-      `OPS_IMPORT_WEEK_TIMEOUT_MINUTES`/`OPS_ERROR_RATE_THRESHOLD`/
-      `OPS_BACKUP_RETENTION_DAYS`/`OPS_CONFIRM_TTL_MINUTES`/
-      `OPS_MAINTENANCE_WINDOW_MINUTES`（design.md D3/D5 给出的默认值）。
-- [ ] 2.2 同步更新 `.env.example`，每项带单位、安全的本地默认值或留空说明。
-- [ ] 2.3 新建 `ops_bot/` 包骨架（`main.py`/`settings.py`/`database.py`/
-      `feishu/`/`checks/`/`executor/`/`scheduler.py`/`model.py`/`crud.py`/
-      `service.py`/`schemas.py`/`api_internal.py`），`database.py` 用
-      `OPS_DATABASE_URL`/`OPS_DATABASE_URL_ASYNC` 建独立引擎（不复用 `database.py` 里
-      业务引擎）。
+      `FEISHU_ENCRYPT_KEY`/`FEISHU_OWNER_OPEN_ID`/`FEISHU_OPS_CHAT_ID`。
+      **偏离原计划**：`GH_TOKEN`/`OPS_ALERT_SILENCE_MINUTES`/
+      `OPS_IMPORT_DAY_TIMEOUT_MINUTES`/`OPS_IMPORT_WEEK_TIMEOUT_MINUTES`/
+      `OPS_ERROR_RATE_THRESHOLD`/`OPS_BACKUP_RETENTION_DAYS`/`OPS_CONFIRM_TTL_MINUTES`/
+      `OPS_MAINTENANCE_WINDOW_MINUTES` 未加入——`test_no_new_dead_settings` 不允许
+      声明无消费方的字段，这些留给第 4/5/6 组各自任务加入。`OPS_DB_ROLE_PASSWORD`
+      未进 `Settings`（见上方认领记录的偏离说明）。
+- [x] 2.2 同步更新 `.env.example`，范围与 2.1 一致（含 `OPS_DB_ROLE_PASSWORD` 作为
+      纯环境变量的文档行，不对应 Settings 字段）。
+- [ ] 2.3 `ops_bot/` 包骨架**部分建好**：`main.py`/`database.py`/`model.py`/
+      `crud.py`/`feishu/client.py`/`feishu/auth.py` 已建；`checks/`/`executor/`/
+      `scheduler.py`/`service.py`/`schemas.py`/`api_internal.py`/`feishu/cards.py`/
+      `feishu/events.py` 尚未建（events.py 的 URL 校验/分发职责暂时直接写在
+      `main.py` 里，事件类型变多、main.py 变臃肿时再拆出独立模块）。未新建
+      `ops_bot/settings.py`——见上方认领记录。
 - [ ] 2.4 新增 `Dockerfile` entrypoint 分支或独立 `ops_bot` 启动命令；
       `docker-compose.yml` 新增 `ops-bot` 服务（`127.0.0.1:8101` 回环端口，
       `restart: unless-stopped`，`depends_on: db`）。
@@ -46,22 +66,32 @@
 
 ## 3. 飞书接入底座（`ops-bot-platform`）
 
-- [ ] 3.1 `feishu/client.py`：`tenant_access_token` 换取、进程内缓存 + `asyncio.Lock`
-      防并发换取（同构 `app/auth/dingtalk_client.py` 的企业 token 段）。
-- [ ] 3.2 `feishu/events.py`：处理 URL 校验挑战（先于签名/鉴权）、消息事件、卡片回调
-      分发；`feishu/auth.py`：Verification Token/Encrypt Key 校验 + `open_id`/`chat_id`
-      白名单双重校验。
-- [ ] 3.3 `ops_bot/main.py`：`/ops/feishu/webhook` 端点在飞书重试窗口内完成幂等判定
-      （查/写 `OpsDedupKey`）与初始响应，业务逻辑丢 `asyncio.create_task` 后台执行；
-      `/ops/health` 端点读取最近一次 quick 分组心跳时间，超过阈值返回 503。
+- [x] 3.1 `feishu/client.py`：`tenant_access_token` 换取、进程内缓存 + `asyncio.Lock`
+      防并发换取（同构 `app/auth/dingtalk_client.py` 的企业 token 段）；额外实现了
+      `send_text`/`send_card`/`update_card`（原任务未列出，但 3.3 的最小回执需要它）。
+- [x] 3.2（部分）`feishu/auth.py`：Verification Token 校验（含 URL 校验挑战路径）、
+      Encrypt Key 场景的 AES-256-CBC 解密、`open_id`/`chat_id` 白名单双重校验均已
+      实现。**未拆出独立 `feishu/events.py`**——见 2.3 说明；卡片回调（interactive
+      card action，与消息事件走不同回调机制）尚未接入，只接了消息事件一种。
+- [x] 3.3（部分）`ops_bot/main.py`：`/ops/feishu/webhook` 端点完成 URL 校验挑战、
+      来源校验、幂等判定（`OpsDedupKey`）、身份白名单、并对已授权事件回一条最小
+      文本确认。**与原任务描述的两处差异**：(1) 未接"丢 `asyncio.create_task` 后台
+      执行"——当前唯一的动作是发一条同步文本回执，没有真正的长任务需要后台化，
+      这一点等 3.5 executor 接入真实动作后再补；(2) `/ops/health` 当前恒返回
+      `{"status": "ok"}`，未读心跳时间——依赖 3.6 scheduler 先把 quick 分组的心跳
+      落到 `OpsTask`。
 - [ ] 3.4 `feishu/cards.py`：状态摘要卡片、确认卡片（重启/发布通用模板）、结果卡片
       模板函数（强类型入参，不接受自由字符串拼接）。
 - [ ] 3.5 `executor/`：`OpsAction` 枚举 + 每个动作的固定 argv 执行函数，统一 300 秒
       超时、输出截断落 `OpsTask.output`。
 - [ ] 3.6 `scheduler.py`：quick(60s)/full(300s)/15min(900s)/daily 多组常驻循环，
       每组判据用"距上次成功执行时间"（查 `OpsTask`），非内存计时器。
-- [ ] 3.7 测试：webhook 幂等（同一 event_id 两次请求只处理一次）、鉴权白名单（伪造
-      open_id/chat_id 被拒）、心跳端点异常返回 503 的单元测试。
+- [x] 3.7（部分）测试：`test/test_ops_bot_feishu_unit.py`（token 缓存/并发、
+      verification token 校验、AES 加解密自洽性、`is_authorized` 白名单）、
+      `test/test_ops_bot_webhook_unit.py`（URL 校验挑战、403 路径，不触库）、
+      `test/test_ops_bot_crud_integration.py`（幂等去重，需 `TEST_DATABASE_URL`，
+      本会话未实际连库跑过）。**未覆盖**：心跳端点异常返回 503（3.6 未实现）、
+      已授权事件完整路径的端到端测试（依赖真实 DB，webhook 单元测试特意不触库）。
 - [ ] 3.8 `[生产/飞书实机]` 新建 `scripts/check_feishu_ops.py`（自检脚本，design.md
       D2 列出的四项校验），本地先用假凭证跑通"预期失败"路径，真实凭证的验证留给
       部署阶段。
