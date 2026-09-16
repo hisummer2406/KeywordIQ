@@ -515,9 +515,28 @@ class Settings(BaseSettings):
     FEISHU_ENCRYPT_KEY: str = ""              # 事件订阅启用加密时使用，可留空
     FEISHU_OWNER_OPEN_ID: str = ""            # 唯一授权操作人，见 ops-bot-platform 鉴权
     FEISHU_OPS_CHAT_ID: str = ""              # 通知与交互入口的运维群
-    # 其余 ops-bot 阈值类配置（巡检/告警/备份/发布相关）随各自消费方在后续任务里加入，
-    # 不在这里预留空字段——test_conventions.py::test_no_new_dead_settings 不允许
-    # 无人读取的配置项存在。
+
+    # 巡检/告警/备份阈值——初始默认值按"先观测后设阈"的保守估计给出（design.md D3），
+    # 部署后须按 ops_import_baseline 记录的真实导入耗时校准。发布相关阈值
+    # （GH_TOKEN/OPS_CONFIRM_TTL_MINUTES/OPS_MAINTENANCE_WINDOW_MINUTES）随第 6 组加入。
+    OPS_ALERT_SILENCE_MINUTES: int = 30
+    OPS_IMPORT_DAY_TIMEOUT_MINUTES: int = 60
+    OPS_IMPORT_WEEK_TIMEOUT_MINUTES: int = 240
+    OPS_ERROR_RATE_THRESHOLD: int = 20        # 近 5 分钟 ERROR/5xx 计数阈值
+    OPS_BACKUP_RETENTION_DAYS: int = 30
+
+    @field_validator(
+        "OPS_ALERT_SILENCE_MINUTES",
+        "OPS_IMPORT_DAY_TIMEOUT_MINUTES",
+        "OPS_IMPORT_WEEK_TIMEOUT_MINUTES",
+        "OPS_ERROR_RATE_THRESHOLD",
+        "OPS_BACKUP_RETENTION_DAYS",
+    )
+    @classmethod
+    def _validate_ops_bot_thresholds(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("ops-bot 的阈值/时长类配置至少为 1（配成 0 或负数会让对应判据失效）")
+        return value
 
     model_config = ConfigDict(env_file=".env", extra="ignore")
 

@@ -9,6 +9,8 @@ URL 校验挑战、来源校验、幂等去重与身份白名单这条底座；�
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -17,11 +19,24 @@ import uvicorn
 from fastapi import FastAPI, Request, Response
 
 from config import settings
-from ops_bot import crud, scheduler
+from ops_bot import backup, commands, crud, jobs, scheduler
 from ops_bot.checks import heartbeat
 from ops_bot.database import OpsAsyncSessionFactory
 from ops_bot.feishu.auth import FeishuVerificationError, decode_event_body, is_authorized
 from ops_bot.feishu.client import FeishuAPIError, FeishuClient
+
+_MANUAL_BACKUP_WORDS = frozenset({"备份", "backup"})
+
+# asyncio 文档明确要求：create_task 的返回值若不被任何地方持有，任务可能在
+# 执行期间被垃圾回收而静默中断。这个集合就是那个"持有者"，任务结束时自己从
+# 集合里摘除。
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +51,7 @@ _HEARTBEAT_STALE_AFTER_SECONDS = 90
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    jobs = [
-        scheduler.ScheduledJob(
-            kind=heartbeat.KIND, interval_seconds=_HEARTBEAT_INTERVAL_SECONDS, run=heartbeat.run
-        ),
-    ]
-    tasks = scheduler.start(jobs)
+    tasks = scheduler.start(jobs.build_jobs(_feishu_client, settings.FEISHU_OPS_CHAT_ID))
     try:
         yield
     finally:
@@ -100,27 +110,76 @@ async def feishu_webhook(request: Request) -> Response:
             return Response(status_code=200)
 
     sender = ((event.get("event") or {}).get("sender") or {}).get("sender_id") or {}
-    chat = (event.get("event") or {}).get("message") or {}
+    message = (event.get("event") or {}).get("message") or {}
     if not is_authorized(
         open_id=sender.get("open_id"),
-        chat_id=chat.get("chat_id"),
+        chat_id=message.get("chat_id"),
         owner_open_id=settings.FEISHU_OWNER_OPEN_ID,
         ops_chat_id=settings.FEISHU_OPS_CHAT_ID,
     ):
         logger.info("飞书事件来自非授权用户/会话，拒绝处理")
         return Response(status_code=200)
 
-    # 具体的查询/指令分发（checks/executor）在后续任务组接入；这里先回一条确认收到的
-    # 文本消息，让"回调及时应答、后台执行、再回报结果"这条协议在最简形态下就能验证通路
-    # （design.md D1）。发送失败不影响 webhook 本身的 200 响应——飞书重试的是回调，
-    # 不是我们主动发消息这一步，两者失败模式要分开，见 design.md 风险段"通知失败与
-    # 执行失败分开记录"。
     logger.info("收到已授权的飞书事件，event_id=%s", event_id)
+    text = _extract_text(message.get("content", "{}")).strip()
+
+    # 手动备份是本变更唯一一个"不需要确认卡片就能直接创建任务"的写操作
+    # （design.md D5 只要求重启/发布走确认卡片，备份未被点名，且备份本身可重复、
+    # 不影响正在提供服务的应用，风险量级与前两者不同）。备份要跑几分钟，不能让
+    # webhook 等它跑完才回 200——先回执行中，任务本身放到后台跑，完成后再单独
+    # 发一条结果消息，这与飞书回调"及时应答、后台执行、再回报结果"的协议一致。
+    if text in _MANUAL_BACKUP_WORDS:
+        _spawn_background(_run_manual_backup(sender.get("open_id")))
+        try:
+            await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, "已受理备份任务，执行中…")
+        except FeishuAPIError:
+            logger.exception("回复消息失败")
+        return Response(status_code=200)
+
+    # 其余只读指令分发（状态/任务/日志查询）。重启/发布不走这条文本指令路径——
+    # 那两个走卡片确认流程（第 6 组），这里的回复失败不影响 webhook 本身的 200
+    # 响应：飞书重试的是回调本身，不是我们主动发消息这一步，两者失败模式要分开
+    # （design.md 风险段"通知失败与执行失败分开记录"）。
+    reply = await commands.dispatch(text)
     try:
-        await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, "已收到，功能开发中")
+        await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, reply)
     except FeishuAPIError:
-        logger.exception("回复确认消息失败")
+        logger.exception("回复消息失败")
     return Response(status_code=200)
+
+
+async def _run_manual_backup(requested_by_open_id: str | None) -> None:
+    async with OpsAsyncSessionFactory() as session:
+        task_id = await crud.create_task(
+            session, kind="BACKUP", requested_by_open_id=requested_by_open_id
+        )
+        await session.commit()
+
+    try:
+        output = await backup.run_backup(retention_days=settings.OPS_BACKUP_RETENTION_DAYS)
+    except Exception:
+        logger.exception("手动备份失败")
+        async with OpsAsyncSessionFactory() as session:
+            await crud.mark_task_failed(session, task_id, output="执行异常，详见应用日志")
+            await session.commit()
+        reply = "❌ 手动备份失败，详见应用日志"
+    else:
+        async with OpsAsyncSessionFactory() as session:
+            await crud.mark_task_succeeded(session, task_id, output=output)
+            await session.commit()
+        reply = f"✅ {output}"
+
+    try:
+        await _feishu_client.send_text(settings.FEISHU_OPS_CHAT_ID, reply)
+    except FeishuAPIError:
+        logger.exception("回复备份结果失败")
+
+
+def _extract_text(content_json: str) -> str:
+    try:
+        return json.loads(content_json).get("text", "")
+    except (ValueError, TypeError):
+        return ""
 
 
 def _json_response(payload: dict) -> Response:

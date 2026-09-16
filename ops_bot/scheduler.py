@@ -16,6 +16,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from datetime import time as dt_time
+from zoneinfo import ZoneInfo
 
 from ops_bot import crud
 from ops_bot.database import OpsAsyncSessionFactory
@@ -28,19 +30,50 @@ JobFn = Callable[[], Awaitable[str]]
 _POLL_GRANULARITY_SECONDS = 60
 
 
+DueFn = Callable[[datetime | None], bool]
+
+
 @dataclass(frozen=True)
 class ScheduledJob:
     kind: str
     interval_seconds: int
     run: JobFn
+    should_run: DueFn | None = None
+    """可选的自定义判据，接收上次成功时间（可能为 `None`），返回现在是否该跑。
+
+    不给时退化为默认的"距上次成功超过 interval_seconds"。daily 巡检摘要这类需要
+    "今天 09:00 之后且今天还没成功过"的日历语义时才需要它——纯粹的"距上次成功多久"
+    表达不出"09:00 之前不要提前发"这条约束。
+    """
 
 
-async def _is_due(kind: str, interval_seconds: int) -> bool:
+def daily_at(hour: int, minute: int = 0) -> DueFn:
+    """构造一个"每日北京时间 HH:MM 之后、今天还没成功过"的 `should_run` 判据。
+
+    `09:00 之前不要提前发`与`09:03 重启仍要补发`这两条约束单靠"距上次成功多久"
+    表达不出来（前者需要日历语义，后者需要幂等语义），这个判据把两者合在一起。
+    """
+
+    def should_run(last: datetime | None) -> bool:
+        now_local = datetime.now(ZoneInfo("Asia/Shanghai"))
+        if now_local.time() < dt_time(hour, minute):
+            return False
+        if last is None:
+            return True
+        last_local = last.astimezone(ZoneInfo("Asia/Shanghai"))
+        return last_local.date() < now_local.date()
+
+    return should_run
+
+
+async def _is_due(job: ScheduledJob) -> bool:
     async with OpsAsyncSessionFactory() as session:
-        last = await crud.last_succeeded_at(session, kind)
+        last = await crud.last_succeeded_at(session, job.kind)
+    if job.should_run is not None:
+        return job.should_run(last)
     if last is None:
         return True
-    return (datetime.now(UTC) - last).total_seconds() >= interval_seconds
+    return (datetime.now(UTC) - last).total_seconds() >= job.interval_seconds
 
 
 async def _run_once(job: ScheduledJob) -> None:
@@ -66,7 +99,7 @@ async def _loop(job: ScheduledJob) -> None:
     sleep_seconds = min(job.interval_seconds, _POLL_GRANULARITY_SECONDS)
     while True:
         try:
-            if await _is_due(job.kind, job.interval_seconds):
+            if await _is_due(job):
                 await _run_once(job)
         except asyncio.CancelledError:
             raise
