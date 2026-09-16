@@ -1,0 +1,79 @@
+"""导入批次巡检：卡死检测、完成/失败通知、耗时基线记录。
+
+只读 `analysis.import_batch`（`ops_bot_role` 的权限边界，见迁移
+`d4e5f6a7b8c9`），**不 import 业务 `app.table.upload.import_batch_model`**——
+`ops_bot/__init__.py` 已经定了这条独立性边界，这里改用裸 SQL 读取需要的列，
+不依赖业务 ORM 模型的 Python 类，两边各自演进互不牵连（业务模型改列名不会让
+这个模块 import 失败，只会在真的用到那一列时才报错，且报错发生在查询执行而非
+import 阶段）。
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+STATUS_ACTIVE = ("PROCESSING", "UPLOADING")
+STATUS_TERMINAL = ("COMPLETED", "FAILED")
+
+
+async def find_stuck_batches(
+    session: AsyncSession, *, day_timeout_minutes: int, week_timeout_minutes: int
+) -> list[dict]:
+    """`PROCESSING`/`UPLOADING` 且已运行超过对应期次类型阈值的批次。
+
+    用 `created_at` 而非"距上次检测有无变化"——`import_batch` 没有 `updated_at`
+    列，`created_at` 到现在的时长本就是"这批导入已经跑了多久"的直接度量，"长时间
+    无进展"在这里等价于"跑得比该期次类型的正常耗时长太多还没完成"。
+    """
+    result = await session.execute(
+        text(
+            "SELECT id, site, period_type, report_date, status, created_at "
+            "FROM analysis.import_batch WHERE status = ANY(:statuses)"
+        ),
+        {"statuses": list(STATUS_ACTIVE)},
+    )
+    now = datetime.now(UTC)
+    stuck = []
+    for row in result.mappings():
+        threshold_minutes = day_timeout_minutes if row["period_type"] == "DAY" else week_timeout_minutes
+        age_minutes = (now - row["created_at"]).total_seconds() / 60
+        if age_minutes >= threshold_minutes:
+            stuck.append(dict(row))
+    return stuck
+
+
+async def find_new_terminal_batches(session: AsyncSession, *, since: datetime | None) -> list[dict]:
+    """`since` 之后新完成（`COMPLETED`/`FAILED`）的批次，`since=None` 时返回空列表
+    （调用方首次运行没有基准点，不该把历史上所有批次当作"新"一次性通知一遍）。
+    """
+    if since is None:
+        return []
+    result = await session.execute(
+        text(
+            "SELECT id, site, period_type, report_date, status, error_message, "
+            "processing_seconds, completed_at "
+            "FROM analysis.import_batch "
+            "WHERE status = ANY(:statuses) AND completed_at > :since "
+            "ORDER BY completed_at"
+        ),
+        {"statuses": list(STATUS_TERMINAL), "since": since},
+    )
+    return [dict(row) for row in result.mappings()]
+
+
+async def record_baseline(session: AsyncSession, batch: dict) -> None:
+    """成功批次的耗时观测值，只记录不驱动自动阈值学习（design.md D3）。"""
+    await session.execute(
+        text(
+            "INSERT INTO ops.ops_import_baseline (period_type, batch_id, duration_seconds) "
+            "VALUES (:period_type, :batch_id, :duration_seconds)"
+        ),
+        {
+            "period_type": batch["period_type"],
+            "batch_id": batch["id"],
+            "duration_seconds": batch["processing_seconds"],
+        },
+    )

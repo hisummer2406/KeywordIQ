@@ -85,5 +85,49 @@ class TestFeishuWebhookUrlVerification(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class TestRunManualBackup(unittest.IsolatedAsyncioTestCase):
+    """`_run_manual_backup` 是后台任务体，不经 HTTP 层——单独测，覆盖成功/失败两条路径
+    各自正确落 `ops_task` 并发出对应的结果消息。
+    """
+
+    async def test_success_marks_succeeded_and_sends_result(self):
+        mark_succeeded = AsyncMock()
+        mark_failed = AsyncMock()
+        send_text = AsyncMock()
+
+        with patch("ops_bot.main.crud.create_task", new=AsyncMock(return_value="t-1")), patch(
+            "ops_bot.main.crud.mark_task_succeeded", mark_succeeded
+        ), patch("ops_bot.main.crud.mark_task_failed", mark_failed), patch(
+            "ops_bot.main.backup.run_backup", new=AsyncMock(return_value="备份成功：xxx")
+        ), patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.main._feishu_client.send_text", send_text
+        ):
+            factory.return_value.__aenter__.return_value = AsyncMock()
+            await main._run_manual_backup("ou_owner")
+
+        mark_succeeded.assert_awaited_once()
+        mark_failed.assert_not_awaited()
+        self.assertIn("✅", send_text.call_args.args[1])
+
+    async def test_failure_marks_failed_and_sends_error(self):
+        mark_succeeded = AsyncMock()
+        mark_failed = AsyncMock()
+        send_text = AsyncMock()
+
+        with patch("ops_bot.main.crud.create_task", new=AsyncMock(return_value="t-1")), patch(
+            "ops_bot.main.crud.mark_task_succeeded", mark_succeeded
+        ), patch("ops_bot.main.crud.mark_task_failed", mark_failed), patch(
+            "ops_bot.main.backup.run_backup", new=AsyncMock(side_effect=RuntimeError("boom"))
+        ), patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.main._feishu_client.send_text", send_text
+        ):
+            factory.return_value.__aenter__.return_value = AsyncMock()
+            await main._run_manual_backup("ou_owner")
+
+        mark_failed.assert_awaited_once()
+        mark_succeeded.assert_not_awaited()
+        self.assertIn("❌", send_text.call_args.args[1])
+
+
 if __name__ == "__main__":
     unittest.main()

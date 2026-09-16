@@ -113,22 +113,47 @@
 
 ## 4. 巡检检查器与告警（`ops-monitoring-alerting`）
 
-- [ ] 4.1 `checks/`：quick 分组（容器存活、心跳落盘）、full 分组（连接池水位、导入卡死、
-      日志错误率）、15min 分组（磁盘，复用 `monitoring.py` 现有阈值）。
-- [ ] 4.2 告警去重与升级：`OpsAlertState` 读写、静默期判定、连续 3 周期升级"强提醒"、
-      恢复通知不受静默期限制。
-- [ ] 4.3 维护窗口：重启/发布执行开始时为 `service-down`/`db-conn` 两个 key 打开
-      `maintenance_until`，巡检据此降级告警等级，窗口过后恢复正常判定。
-- [ ] 4.4 导入完成/失败通知：读取 `import_batch` 状态变化（复用现有轮询/查询接口，
-      不新增对业务表的写操作）。
-- [ ] 4.5 导入基线记录：每次导入 `COMPLETED` 时写一行 `OpsImportBaseline`；日报/周报
-      各自独立超时阈值判定卡死。
-- [ ] 4.6 每日 09:00 巡检摘要：内容拼装 + 幂等判定（当天是否已发送过，查
-      `OpsTask kind=DAILY_SUMMARY` 当日记录）。
-- [ ] 4.7 状态与有界脱敏日志查询指令：复用 `add-request-diagnostics-logging` 已建的
-      日志基础，按 request_id/时间窗口查询，条数与范围有界。
-- [ ] 4.8 测试：告警去重/升级/恢复的单元测试；维护窗口降级逻辑测试；09:00 摘要幂等
-      测试（模拟重启场景）；导入卡死判定测试（含"无基线不断言卡死"场景）。
+- [x] 4.1 `checks/`：`heartbeat.py`（quick，已在第 3 组建）、`service.py`（app 健康
+      +连接池水位，full）、`import_status.py`（导入卡死检测，full）、`logs.py`
+      （近 5 分钟错误/5xx 计数，full）、`resources.py`（磁盘，15min，阈值
+      70%/80%）、`alembic_drift.py`（daily）。**未做**"容器存活"这项原计划里的
+      检查——host 级服务改用更直接的"打 `/health` 端点"而非 `docker inspect`，
+      两者目的相同（服务是否活着），`/health` 同时探活了双数据库引擎，信息量
+      更大，不需要额外再查一次容器状态。
+- [x] 4.2 告警去重与升级：`ops_bot/alerts.py` 的 `evaluate()` 状态机，`OpsAlertState`
+      读写、静默期判定、连续 3 周期升级"强提醒"、恢复通知不受静默期限制，均已实现
+      并有状态转移单元测试覆盖每条分支。
+- [x] 4.3（部分）维护窗口机制：`alerts.open_maintenance_window()` 已实现且巡检据此
+      降级告警等级（单元测试覆盖）。**尚未被任何调用方触发**——"重启/发布执行开始时
+      打开窗口"要等第 6 组把重启/发布执行路径接进来才有调用点，机制本身先就位。
+      另外：**用的告警键是 `service-down`，没有单独的 `db-conn` 键**——`/health`
+      本身双引擎都探，`service-down` 已经覆盖"数据库连不上导致服务不健康"这个
+      场景，两个键会是同一件事的两种说法。
+- [x] 4.4 导入完成/失败通知：`ops_bot/jobs.py` 的 `import_notify` 任务，用
+      `crud.last_succeeded_at(session, "IMPORT_NOTIFY")` 作为"上次检查到哪"的
+      水位线（复用 3.6 已有的"距上次成功"机制，不新增专门的状态列）。
+- [x] 4.5 导入基线记录：`import_status.record_baseline()`，在 `import_notify` 任务里
+      对 `COMPLETED` 批次调用，日报/周报各自独立超时阈值在 `import_status.
+      find_stuck_batches()` 里按 `period_type` 分别取值判定卡死。
+- [x] 4.6 每日 09:00 巡检摘要：`ops_bot/daily_summary.py` + `scheduler.daily_at(9, 0)`
+      的日历语义判据（见 3.6 的 `should_run` 扩展），幂等性由 `should_run` 本身保证
+      （"今天是否已成功过"直接查 `ops_task`，不需要另外判断"当天是否已发送"）。
+- [x] 4.7 状态/任务/日志查询指令：`ops_bot/commands.py`，飞书消息文本
+      "状态"/"任务"/"日志 <request_id>" 三个指令，接入 `main.py` 的 webhook 消息
+      处理（替换掉此前占位的"已收到，功能开发中"）。日志查询复用本组新建的
+      `checks/logs.py`（不是 `add-request-diagnostics-logging` 的现成查询接口——
+      那次变更只补了日志内容与耗时字段，没有建对外查询 API，"复用"准确说是复用
+      它定的日志格式去解析文件，不是复用一个已有接口）。
+- [x] 4.8 测试：`test_ops_bot_alerts_unit.py`（去重/升级/恢复/维护窗口降级，7 个场景）、
+      `test_ops_bot_import_status_unit.py`（含日报/周报阈值分别生效、无基准点不误判）、
+      `test_ops_bot_logs_unit.py`（含 INFO 级 5xx 计入、ERROR 级不重复计数）、
+      `test_ops_bot_service_check_unit.py`、`test_ops_bot_alembic_drift_unit.py`、
+      `test_ops_bot_daily_summary_unit.py`、`test_ops_bot_commands_unit.py`
+      （commands 测试过程中抓到一个真实 bug：`"日志 "` 尾随空格被 `.strip()` 削掉后
+      `startswith("日志 ")` 失配，指令被误判成"不认识"——已改成"指令头+剩余参数"
+      两段式解析并修复）。**未覆盖**"09:00 摘要幂等——模拟重启场景"这条端到端
+      集成测试（`daily_at` 的日历语义已有单元测试，但"服务真重启一次仍不重发"这个
+      跨进程场景需要真实 DB + 真实调度循环，留给 local-db 阶段）。
 - [ ] 4.9 `[生产/飞书实机]` 阿里云云监控·站点监控配置：业务 `/health` 与
       `/ops/health` 两个拨测目标，通知对象选飞书机器人；实测触发一次告警，核对飞书群
       实际收到的消息格式与内容。
@@ -138,16 +163,30 @@
 
 ## 5. 备份（`ops-backup`）
 
-- [ ] 5.1 `ops_bot` 内封装调用 `scripts/backup_selfhosted_pg.py`（复用现有脚本，不重写
-      备份逻辑），记录 `OpsBackupRecord`（含失败阶段：DUMP/COPY_OUT/UPLOAD）。
-- [ ] 5.2 定时触发（daily 分组，"距上次成功"判据）+ 飞书手动触发指令，两者共用同一份
-      执行与记录逻辑。
-- [ ] 5.3 备份超期检查（24h warn / 48h crit）接入 full 分组告警。
-- [ ] 5.4 保留期清理：备份成功后清理超过 `OPS_BACKUP_RETENTION_DAYS` 的旧 OSS 对象，
-      清理动作写入同一条审计记录。
-- [ ] 5.5 查询最近备份指令（时间/大小/产物标识/状态）。
-- [ ] 5.6 测试：备份各阶段失败分别正确记录失败阶段（mock 各阶段异常）；保留期清理只
-      删超期对象的单元测试；查询指令返回格式测试。
+- [x] 5.1 `ops_bot/backup.py` 封装调用 `scripts/backup_selfhosted_pg.py`（`executor.
+      backup_now()`，子进程调用不重写备份逻辑），解析该脚本已有的进度打印
+      （`_parse_result`）反推 `OpsBackupRecord` 需要的产物标识/大小/失败阶段
+      （DUMP/COPY_OUT/UPLOAD）——**没有改动共享脚本本身**，代价是脚本文案变了这里
+      的正则要跟着改，已用脚本当前真实文案样例写测试兜底这条风险。
+- [x] 5.2 定时触发（daily 分组，`scheduler.daily_at(3, 0)`）+ 飞书手动触发指令
+      （`ops_bot/main.py` 里"备份"/"backup" 两个词直接触发，**不经确认卡片**——
+      design.md D5 只要求重启/发布走确认卡片，备份未被点名，且备份本身可重复、
+      不影响正在提供服务的应用，风险量级与前两者不同，判定为不需要）。触发后
+      立即回"已受理"，实际执行放 `asyncio` 后台任务（`_run_manual_backup`），完成
+      后单独发一条结果消息，与定时触发共用同一个 `backup.run_backup()`。
+- [x] 5.3 备份超期检查（24h warn / 48h crit）：`ops_bot/jobs.py` 的
+      `backup_overdue_check`，full 分组，接入 `alerts.evaluate`。
+- [x] 5.4 保留期清理：`backup.cleanup_old_backups()`，`run_backup()` 成功后自动调用，
+      清理摘要写进本次 `ops_task.output`（可追溯"清理了哪些"）。
+- [x] 5.5 查询最近备份指令：`ops_bot/commands.py` 的"备份记录"，返回时间/产物标识/
+      大小（`crud.latest_succeeded_backup`）。
+- [x] 5.6 测试：`test_ops_bot_backup_unit.py`（`_parse_result` 用脚本四种真实文案
+      样例覆盖成功/DUMP失败/COPY_OUT失败/UPLOAD失败；`run_backup` 失败时必须先落
+      记录再抛异常）、`test_ops_bot_commands_unit.py`（"备份记录"指令两种结果）、
+      `test_ops_bot_webhook_unit.py::TestRunManualBackup`（手动触发成功/失败两条
+      路径分别正确落 `ops_task`）。**未覆盖**"保留期清理只删超期对象"——
+      `cleanup_old_backups` 直接调用真实 `oss2` API，没有打桩测试，只能靠 5.8 的
+      生产实测验证。
 - [ ] 5.7 `[生产/飞书实机]` 部署前核实生产是否已有独立 crontab 在跑
       `backup_selfhosted_pg.py`（`crontab -l`），若有则先禁用旧任务再启用本系统内置
       调度，避免双跑；在 runbook 中写明这一步骤。
