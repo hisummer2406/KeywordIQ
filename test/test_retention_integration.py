@@ -21,8 +21,9 @@ from datetime import date
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
-from app.table.analysis import partitioning
+from app.table.analysis import analysis_crud, partitioning, retention_service
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -248,3 +249,148 @@ def test_retention_service_covers_dropped_table(conn):
     守的是"注册表是唯一事实来源"这条——有人新增分区表却漏了保留清理时，这条会红。
     """
     assert "fact_dropped" in partitioning.PARTITIONED_TABLES
+
+
+# --------------------------------------------------------------------------
+# issue #100：分区移出后必须同步清理 site_data_stats/category_stats/brand_stats
+# 的残留行，否则日期选择器与无筛选总数继续相信一个物理上已经不存在的日期。
+# --------------------------------------------------------------------------
+
+
+def _seed_site_data_stats(conn, site: str, period: str, d: date, row_count=1, dropped_count=0) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO analysis.site_data_stats(site,period_type,report_date,row_count,dropped_count) "
+            "VALUES (:s,:p,:d,:rc,:dc)"
+        ),
+        {"s": site, "p": period, "d": d, "rc": row_count, "dc": dropped_count},
+    )
+
+
+def _seed_category_stats(conn, site: str, period: str, d: date, category_id=1, cnt=1) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO analysis.category_stats(site,period_type,report_date,category_id,cnt) "
+            "VALUES (:s,:p,:d,:c,:n)"
+        ),
+        {"s": site, "p": period, "d": d, "c": category_id, "n": cnt},
+    )
+
+
+def _seed_brand_stats(conn, site: str, period: str, d: date, brand_id=1, cnt=1) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO analysis.brand_stats(site,period_type,report_date,brand_id,cnt) "
+            "VALUES (:s,:p,:d,:b,:n)"
+        ),
+        {"s": site, "p": period, "d": d, "b": brand_id, "n": cnt},
+    )
+
+
+def _stats_row_count(conn, table: str, site: str, period: str, d: date) -> int:
+    return conn.execute(
+        text(
+            f"SELECT count(*) FROM analysis.{table} "
+            "WHERE site = :s AND period_type = :p AND report_date = :d"
+        ),
+        {"s": site, "p": period, "d": d},
+    ).scalar()
+
+
+# 本文件其它测试固定用的 cutoff：2026-07-15 保留 3 个月 → 2026-05-01。
+_STALE_CUTOFF = partitioning.retention_cutoff(date(2026, 7, 15), 3)
+_STALE_DATE = date(2026, 4, 10)  # 早于 _STALE_CUTOFF
+_IN_WINDOW_DATE = date(2026, 6, 10)  # 晚于 _STALE_CUTOFF
+
+
+def test_purge_stale_stats_removes_expired_rows_keeps_in_window(conn):
+    """三张统计表里超期的行被清理，窗口内的行不受影响。"""
+    for seed in (_seed_site_data_stats, _seed_category_stats, _seed_brand_stats):
+        seed(conn, "US", "DAY", _STALE_DATE)
+        seed(conn, "US", "DAY", _IN_WINDOW_DATE)
+
+    purged = retention_service.purge_stale_stats(conn, _STALE_CUTOFF, dry_run=False)
+
+    assert purged == {"site_data_stats": 1, "category_stats": 1, "brand_stats": 1}
+    for table in ("site_data_stats", "category_stats", "brand_stats"):
+        assert _stats_row_count(conn, table, "US", "DAY", _STALE_DATE) == 0
+        assert _stats_row_count(conn, table, "US", "DAY", _IN_WINDOW_DATE) == 1
+
+
+def test_purge_stale_stats_removes_historical_residue_without_matching_partition(conn):
+    """历史残留场景：对应的事实分区早已被移出（本变更之前的清理逻辑漏了这一步），
+    本次清理也没有任何分区需要移出——残留的统计行仍然必须被清掉，不能因为"这次没有
+    DROP 任何分区"而被跳过（design.md 决策 2）。
+
+    这里刻意不建 `fact_daily` 分区，只插入统计行，模拟"分区已不存在、统计行还在"。
+    """
+    _seed_site_data_stats(conn, "US", "DAY", _STALE_DATE)
+
+    purged = retention_service.purge_stale_stats(conn, _STALE_CUTOFF, dry_run=False)
+
+    assert purged["site_data_stats"] == 1
+    assert _stats_row_count(conn, "site_data_stats", "US", "DAY", _STALE_DATE) == 0
+
+
+def test_purge_stale_stats_dry_run_does_not_delete(conn):
+    """dry-run 只统计，不写入。"""
+    _seed_site_data_stats(conn, "US", "DAY", _STALE_DATE)
+
+    purged = retention_service.purge_stale_stats(conn, _STALE_CUTOFF, dry_run=True)
+
+    assert purged["site_data_stats"] == 1
+    assert _stats_row_count(conn, "site_data_stats", "US", "DAY", _STALE_DATE) == 1
+
+
+def test_purge_stale_stats_is_idempotent(conn):
+    """清理过一次之后，重复运行清理不到任何行，不报错。"""
+    _seed_site_data_stats(conn, "US", "DAY", _STALE_DATE)
+
+    first = retention_service.purge_stale_stats(conn, _STALE_CUTOFF, dry_run=False)
+    second = retention_service.purge_stale_stats(conn, _STALE_CUTOFF, dry_run=False)
+
+    assert first["site_data_stats"] == 1
+    assert second["site_data_stats"] == 0
+
+
+def test_run_retention_purges_stats_in_the_same_run_as_partition_drop(conn):
+    """`run_retention` 端到端复现 issue #100：写入一个超期月份的事实行 + 统计行，
+    跑一次真实（非 dry-run）保留清理后，日期选择器与无筛选总数都不再引用这个日期。
+
+    `run_retention` 内部会 `session.commit()`——直接把它绑到共享的 `conn` fixture 会
+    提交整个事务，冲掉夹具"结束即回滚、零残留"的前提（对 `keywordiq_test` 这个全局共享
+    库是真实风险）。用 ``Session(bind=conn, join_transaction_mode="create_savepoint")``
+    包一层：内部的 `commit()` 只释放 SAVEPOINT，外层事务照常在测试结束时被 `conn`
+    fixture 回滚，不会真正污染共享库（design.md 决策 5）。
+    """
+    partitioning.ensure_fact_partitions(conn, "fact_daily", "US", _STALE_DATE)
+    kid = conn.execute(
+        text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES ('US','issue100 repro') "
+             "RETURNING keyword_id")
+    ).scalar()
+    conn.execute(
+        text("INSERT INTO analysis.fact_daily(site,report_date,keyword_id,current_ranking) "
+             "VALUES ('US',:d,:k,5)"),
+        {"d": _STALE_DATE, "k": kid},
+    )
+    _seed_site_data_stats(conn, "US", "DAY", _STALE_DATE)
+    _seed_site_data_stats(conn, "US", "DAY", _IN_WINDOW_DATE)
+
+    session = Session(bind=conn, join_transaction_mode="create_savepoint")
+    result = retention_service.run_retention(
+        session, today=date(2026, 7, 15), retention_months=3, dry_run=False
+    )
+
+    assert "fact_daily_2026_04" in result.dropped["fact_daily"]
+    assert result.purged_stats["site_data_stats"] == 1
+
+    available = conn.execute(
+        analysis_crud.available_dates_stmt("US", "DAY")
+    ).scalars().all()
+    assert _STALE_DATE not in available
+    assert _IN_WINDOW_DATE in available
+
+    row_count = conn.execute(
+        analysis_crud.scope_row_count_stmt("US", "DAY", _STALE_DATE)
+    ).scalar_one_or_none()
+    assert row_count is None
