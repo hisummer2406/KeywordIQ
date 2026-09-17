@@ -42,10 +42,15 @@ from database import SessionFactory
 logger = logging.getLogger(__name__)
 
 # 导入串行锁的固定 key（任意常量，全局一致即可）。'KI' 的十六进制。
-_IMPORT_LOCK_KEY = 0x4B49
+#
+# **公开（不带下划线）是有意的**：`retention_service.run_retention` 也要持有同一把锁
+# 才能在移出分区前排除"正与一次导入交叠"这种情形——分区已经收到刚写入的事实行，但那次
+# 导入还没提交完 `site_data_stats`（issue #100 PR #101 复审 P1）。它不是 import_service
+# 内部实现细节，是导入与保留清理之间唯一的协调点，两侧都要能看到同一个符号。
+IMPORT_LOCK_KEY = 0x4B49
 
 # 飞书运维机器人（ops-bot）执行重启/发布时持有的咨询锁 key。'KO' 的十六进制——
-# 与 _IMPORT_LOCK_KEY 不同值，避免两把锁互相误判。ops_bot/executor 里定义了同一个
+# 与 IMPORT_LOCK_KEY 不同值，避免两把锁互相误判。ops_bot/executor 里定义了同一个
 # 常量值（两边各自定义、不共享 import，因为 ops_bot 不依赖业务 app.* 代码，见
 # openspec/changes/add-feishu-ops-bot/design.md D5「导入协调锁机制」）。
 _OPS_ACTION_LOCK_KEY = 0x4B4F
@@ -97,8 +102,11 @@ def _rebuild_filter_stats(session: Session, result: ImportResult) -> None:
 
 
 @contextmanager
-def _import_lock(session: Session) -> Iterator[bool]:
-    """在**专属连接**上持有导入串行锁；``yield`` 出是否拿到，退出时释放。
+def import_lock(session: Session) -> Iterator[bool]:
+    """在**专属连接**上持有导入／保留清理共用的串行锁；``yield`` 出是否拿到，退出时释放。
+
+    调用方不止导入自己：:func:`app.table.analysis.retention_service.run_retention`
+    也用它把移出分区这件事排除在"正与一次导入交叠"的窗口之外。
 
     锁必须有自己的连接，不能借 Session 的：咨询锁是会话（连接）级的，而 Session 每次
     ``commit()`` 都会把连接还给池子——池里只要有别的活动（健康检查、导出、另一次查询），
@@ -119,7 +127,7 @@ def _import_lock(session: Session) -> Iterator[bool]:
     try:
         got = bool(
             conn.execute(
-                text("SELECT pg_try_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY}
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY}
             ).scalar()
         )
         conn.commit()  # 不把连接留在 idle in transaction
@@ -128,7 +136,7 @@ def _import_lock(session: Session) -> Iterator[bool]:
         try:
             if got:
                 conn.execute(
-                    text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY}
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY}
                 )
                 conn.commit()
         finally:
@@ -140,11 +148,11 @@ def _ops_action_in_progress(session: Session) -> bool:
     """探测 ops-bot 的运维动作锁当前是否被占用（重启/发布正在执行）。
 
     用独立连接抢一次锁、立刻释放——不是要长期持有，只是想提前知道"此刻它是不是被
-    别人攥着"，与 :func:`_import_lock` 不复用连接的理由相同（咨询锁是连接级的，
+    别人攥着"，与 :func:`import_lock` 不复用连接的理由相同（咨询锁是连接级的，
     跨连接的抢锁/解锁会静默失败）。
 
     **这只是一次性探测，不是互斥边界**——探测到"没人占着"和真正把批次落成
-    `PROCESSING` 之间还要经过重建数据源、抢 `_import_lock` 等好几步，ops-bot
+    `PROCESSING` 之间还要经过重建数据源、抢 `import_lock` 等好几步，ops-bot
     可能在这段间隙里后发制人拿到锁并开始执行，与随后才真正开始的这次导入并发。
     这里只是为了在明知冲突时提前失败、省得白跑一趟；真正的互斥边界在
     :func:`_claim_processing_slot`——它与探测用的是同一把锁，但持锁横跨"检查 +
@@ -204,7 +212,7 @@ def _claim_processing_slot(session: Session, batch: ImportBatch) -> bool:
 def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) -> ImportBatch:
     """在**已持有串行锁**的前提下跑完一个批次，并把终态落到批次记录上。
 
-    锁的取与放都在调用方的 :func:`_import_lock` 里（它有自己的连接），本函数不碰那把锁；
+    锁的取与放都在调用方的 :func:`import_lock` 里（它有自己的连接），本函数不碰那把锁；
     但转入 PROCESSING 这一步要经 :func:`_claim_processing_slot` 过一遍运维动作锁
     （见该函数说明），这是导入与重启/发布真正的互斥边界。
 
@@ -322,7 +330,7 @@ def run_import(
             batch.status = STATUS_QUEUED
         session.commit()
 
-        with _import_lock(session) as got_lock:
+        with import_lock(session) as got_lock:
             if not got_lock:
                 _mark_not_started(session, batch)
                 raise ImportRejected("另一个导入正在进行，请稍后重试")
@@ -538,7 +546,7 @@ def drain_import_queue(
             return None
 
         # 运维动作（重启/发布）正在执行时不认领新批次——这只是提前失败的优化，省得
-        # 白跑一趟 _import_lock/source_factory；真正的互斥边界在 _execute_locked
+        # 白跑一趟 import_lock/source_factory；真正的互斥边界在 _execute_locked
         # 内部的 _claim_processing_slot（design.md D5「导入协调锁机制」，PR #99
         # Codex 复审 P1）。
         if _ops_action_in_progress(session):
@@ -546,7 +554,7 @@ def drain_import_queue(
             return None
 
         # 先查队列再抢锁：反过来会在队列为空时白拿一次锁。
-        with _import_lock(session) as got_lock:
+        with import_lock(session) as got_lock:
             if not got_lock:
                 return None
 
@@ -554,7 +562,7 @@ def drain_import_queue(
             try:
                 source = source_factory(batch.object_key)
             except Exception as exc:
-                # 源重建不出来（对象被删、配置变更……）。锁由 _import_lock 负责还，
+                # 源重建不出来（对象被删、配置变更……）。锁由 import_lock 负责还，
                 # 这里只负责把批次判死，别让它继续假装在排队。
                 logger.exception("排队批次的数据源重建失败 %s", batch.file_name)
                 batch.status = STATUS_FAILED

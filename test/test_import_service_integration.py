@@ -112,12 +112,12 @@ def lock_holder():
     """占住导入串行锁，模拟「已有导入在跑」。"""
     engine = create_engine(TEST_URL)
     holder = engine.connect()
-    from app.table.upload.import_service import _IMPORT_LOCK_KEY
-    holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY})
+    from app.table.upload.import_service import IMPORT_LOCK_KEY
+    holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY})
     holder.commit()
 
     def release():
-        holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY})
+        holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY})
         holder.commit()
 
     try:
@@ -182,7 +182,7 @@ def test_local_fallback_fails_fast_when_ops_action_holds_the_lock(
     factory, tmp_path, ops_action_lock_holder
 ):
     """本地退路没有 object_key，运维动作锁被占着时同样不能留在 QUEUED 假装排队——
-    与"另一个导入持有 _IMPORT_LOCK_KEY"时的既有纪律一致（见
+    与"另一个导入持有 IMPORT_LOCK_KEY"时的既有纪律一致（见
     test_rejected_local_fallback_fails_fast_instead_of_queueing_forever）。
     """
     from app.table.upload.import_service import run_import
@@ -284,12 +284,12 @@ def _lock_is_free() -> bool:
     engine = create_engine(TEST_URL)
     try:
         with engine.connect() as c:
-            from app.table.upload.import_service import _IMPORT_LOCK_KEY
+            from app.table.upload.import_service import IMPORT_LOCK_KEY
             got = c.execute(
-                text("SELECT pg_try_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY}
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY}
             ).scalar()
             if got:
-                c.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY})
+                c.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY})
             return bool(got)
     finally:
         engine.dispose()
@@ -307,13 +307,13 @@ def test_import_lock_survives_session_connection_churn():
     unlock 返回 False。后续导入还能跑，只是因为「同一条连接再抢自己持有的锁会成功」
     （可重入）——直到某次拿到别的连接为止。
     """
-    from app.table.upload.import_service import _import_lock
+    from app.table.upload.import_service import import_lock
     # 池子要放得下 4 条：锁一条（专属）、导入会话一条、制造漂移的两条
     engine = create_engine(TEST_URL, pool_size=4, max_overflow=0)
     sf = sessionmaker(bind=engine, expire_on_commit=False)
     session = sf()
     try:
-        with _import_lock(session) as got:
+        with import_lock(session) as got:
             assert got
             # 制造连接漂移：会话还回连接，别人先拿走，会话下次拿到的就是另一条
             session.execute(text("SELECT 1")); session.commit()

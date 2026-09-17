@@ -31,7 +31,7 @@ async def try_acquire():
     连接上重新"抢到"这把已经被自己持有的锁（同一连接上的会话级锁可重入），使这把
     锁形同虚设；真正 `unlock` 时也可能分到另一条连接，对错误的后端解锁而静默失败，
     让锁永久挂在原连接上直到它被关闭。这与 `app/table/upload/import_service.py`
-    的 `_import_lock` 是同一类缺陷，那里的文档字符串有实测复现记录
+    的 `import_lock` 是同一类缺陷，那里的文档字符串有实测复现记录
     （PR #99 复审第三轮 P1）。`ops_async_engine.connect()` 返回的是独立签出的连接，
     不会因为中途的 `commit()` 被交还。
     """
