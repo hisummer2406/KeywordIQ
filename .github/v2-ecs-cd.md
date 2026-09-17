@@ -47,10 +47,36 @@ www ALL=(root) NOPASSWD: \
 
 ```bash
 cd /var/www/keywordiq
-sudo ./deploy.sh --yes
+tmp_logrotate="$(mktemp)"
+sed "s#/path/to/keywordiq/logs/app.log#$(pwd)/logs/app.log#" \
+  etc/keywordiq-logrotate.conf > "$tmp_logrotate"
+sudo install -o root -g root -m 0644 "$tmp_logrotate" /etc/logrotate.d/keywordiq-v2
+sudo logrotate -d /etc/logrotate.d/keywordiq-v2
+rm -f "$tmp_logrotate"
+
+# 必须以 www 身份运行；不要加 sudo。
+./deploy.sh --yes
 ```
 
-这会同时完成首次的根权限文件操作；之后 Actions 只需要上述受限的 sudo 命令。
+`./deploy.sh` 之前的命令只安装 root 拥有的 logrotate 配置；最后一行以 `www` 构建前端，确保
+`frontend/node_modules` 和 `frontend/dist` 不会变成 root 所有。之后 Actions 只需要上述
+受限的 sudo 命令。
+
+## Nginx 配置
+
+仓库的 `etc/keywordiq-v2-nginx.conf` 与 V2 默认部署值配套：它为
+`key.liangtong.online` 提供 HTTPS、将 `/api/` 与 `/health` 反代至 8001，并从
+`/var/www/keywordiq-web` 托管 SPA。首次安装或核对时：
+
+```bash
+cd /var/www/keywordiq
+sudo install -o root -g root -m 0644 etc/keywordiq-v2-nginx.conf \
+  /etc/nginx/conf.d/key.liangtong.online.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+证书文件须已位于 `/etc/nginx/ssl/key.liangtong.online/fullchain.crt` 与
+`/etc/nginx/ssl/key.liangtong.online/privkey.key`，与已上线的 V2 站点一致。
 
 ## GitHub Secrets
 
