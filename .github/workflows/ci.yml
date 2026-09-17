@@ -43,6 +43,11 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/keywordiq_test
       DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/keywordiq_test
       DATABASE_SCHEMA: analysis
+      # ops_bot/database.py 在模块导入时就 create_engine()（SQLAlchemy 引擎本身是惰性的，
+      # 这里不会真的建连）——留空会在 collection 阶段直接抛 ArgumentError，炸掉全部
+      # test_ops_bot_*_unit.py（它们只 patch 会话工厂，不连真库，语法合法的 URL 即可）。
+      OPS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/keywordiq_test
+      OPS_DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@localhost:5432/keywordiq_test
       ENABLED_SITES: US,GB,DE
       DEFAULT_SITE: US
       # 解开集成测试的 skip gate（test/test_site_scoped_query_integration.py）
