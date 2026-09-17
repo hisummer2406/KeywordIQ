@@ -1,0 +1,71 @@
+name: Deploy
+
+# CD 部分：CI（ci.yml）绿灯之后，把代码部署到生产 ECS。
+#
+# 触发设计：
+#   - push tag（v*）：发布仪式——CI 绿了才打 tag，迁移的执行时机由人决定，
+#     呼应 deploy.sh 里对迁移做交互确认的设计意图。
+#   - workflow_dispatch：手动部署任意分支/commit（紧急回滚也走这里，填旧 tag 重跑）。
+#
+# 刻意不选 push main 即自动部署：deploy.sh --yes 无人值守执行迁移，
+# 自动化会把「这次改动该不该现在上生产」的决策权吞掉。若确实想要那种节奏，
+# 把下面 push 块改成 branches: [main] 即可。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要部署的分支 / tag / SHA'
+        required: true
+        default: 'main'
+
+# 部署互斥：两次部署交错执行迁移是数据事故。cancel-in-progress 必须为
+# false——把一个已经执行了半截迁移的部署取消掉，比排队等待更糟。
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署到 ECS
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    # 在 repo Settings → Environments 建好 production 环境并添加 required reviewers 后，
+    # 每次部署在此等待人工批准——这是无人值守迁移（--yes）的人工闸门；
+    # 没配置该环境时这里只作为标记直接通过，不影响首次使用。
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # dispatch 可传任意 ref，rev-parse 需要完整历史
+          fetch-depth: 0
+
+      - name: 解析待部署 commit
+        id: rev
+        run: |
+          REF="${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}"
+          SHA="$(git rev-parse "$REF")"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "部署 $REF → $SHA"
+
+      - name: SSH 部署
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # 服务器上跑完整链路：构建镜像 → 容器内迁移 → 前端构建 → 发布 → reload。
+          # 4C8G 通常 10 分钟内完成；30 分钟给首次冷启动（无 Docker 层缓存）留余量。
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            cd /opt/KeywordIQ
+            # 部署触发本次工作流的那个 commit，而非「main 此刻的样子」：
+            # 用 git pull，部署窗口期内新合入的 commit 会混进来——部署的就不是
+            # 通过 CI 的那个版本。checkout --force 丢弃对已跟踪文件的本地改动，
+            # 服务器上只允许存在仓库状态；.env/logs/uploads/pgdata 均未跟踪，不受影响。
+            git fetch origin
+            git checkout --force ${{ steps.rev.outputs.sha }}
+            ./deploy.sh --yes
