@@ -8,7 +8,7 @@ services:
     env_file: .env
     ports:
       # 只绑本地回环——host nginx 反代到这个地址，不对公网暴露裸 uvicorn。
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8001:8000"
     volumes:
       # logs/ 与 uploads/ 挂宿主机目录，容器重建不丢日志与（OSS 未启用时的）本地文件。
       - ./logs:/app/logs
