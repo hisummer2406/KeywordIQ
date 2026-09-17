@@ -218,11 +218,14 @@ autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异�
 把范围先收窄到单个关键词再扫描。五条要点：
 
 - **五态分类，且不信任 `site_data_stats` 在保留下界之前的行。** `retention_service`
-  只 `DROP` 事实表/`fact_dropped`/`fact_growth` 的月度分区，**从不清理 `site_data_stats`
-  的对应行**——这是既有代码一个尚未触发问题的缺口，本变更不修。判定顺序因此把
-  `report_date < retention_cutoff` 放在最前面、且**不查** `site_data_stats`：否则一个
-  分区早被 `DROP`、统计行却仍残留的月份会被误判成「已导入但未收录」，让用户以为那份
-  数据还在，只是没收这个词。其余四态：在榜（`RANKED`）/ 掉榜（沿用既有 `fact_dropped`
+  现在会在同一次清理里，把 `site_data_stats`/`category_stats`/`brand_stats` 中报告
+  日期早于保留下界的残留行一并清掉（issue #100，不再是「从不清理」）；但判定顺序仍然
+  把 `report_date < retention_cutoff` 放在最前面、且**不查** `site_data_stats`——保留
+  清理是按调度运行的，日历翻页到保留下界之后、下一次清理真正执行之前，天然存在一段
+  分区还在但下界已经前移的间隔（这段数据仍是真实可查的，不属于残留），而这条判定顺序
+  同时防住了另一种情况：万一某次清理漏跑、统计表短暂残留，也不会被误判成「已导入但
+  未收录」，让用户以为那份数据还在、只是没收这个词。这是双重保险，不因为清理本身已经
+  修好就删掉。其余四态：在榜（`RANKED`）/ 掉榜（沿用既有 `fact_dropped`
   口径，`DROPPED`）/ 报表已导入但未收录（`NO_DATA`）/ 报表未导入（`NOT_IMPORTED`）。
 - **周视图的期次步长是 7 天，不是自然周边界。** 复用 `app/table/upload/importer.py`
   的 `_PERIOD_CONFIG["WEEK"]`「上一期偏移」——`previous_ranking`/`ranking_change` 已经
@@ -549,6 +552,14 @@ ABA 事实表定的。
 在 `app/table/analysis/retention_service.py`，运维入口是可定时触发的 `scripts/prune_retention.py`
 （cron / 容器定时任务在低峰调用，务必先 `--dry-run` 核对、可 `--export-dir` 留档）。
 **注意**：超过三个月的历史数据不再可在线查询（相对早期"12 个月满窗"是行为收窄）。
+
+**分区移出必须同时清理 `site_data_stats`/`category_stats`/`brand_stats` 的对应残留
+行**（issue #100）。这三张表是日期选择器、无筛选总数、类目/品牌下拉唯一的数据来源；
+只 `DROP` 分区不清理它们，查询侧会继续相信一个物理上已经不存在的日期还能查——复现是
+`search` 对一个已被移出的日期返回 `success=true, total>0, data=[]`。清理**无条件
+执行**，不依赖"这次是否真的 DROP 了分区"：否则本变更上线前已经产生的历史残留（分区
+早被移出、统计行还在）永远等不到清理的机会。`scripts/prune_retention.py` 的早退判断
+因此也要同时看这两件事，不能因为这次没有分区要移出就连残留统计一起跳过。
 
 **扩容触发条件**（数据从上线起约 6600 万行/月、16 GB/月增长）：磁盘使用率超过 70%，
 或缓存命中率（`blks_hit / (blks_hit + blks_read)`）持续低于 95%。在三个月保留窗口下满窗
