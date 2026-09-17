@@ -42,7 +42,12 @@ from database import SessionFactory
 logger = logging.getLogger(__name__)
 
 # 导入串行锁的固定 key（任意常量，全局一致即可）。'KI' 的十六进制。
-_IMPORT_LOCK_KEY = 0x4B49
+#
+# **公开（不带下划线）是有意的**：`retention_service.run_retention` 也要持有同一把锁
+# 才能在移出分区前排除"正与一次导入交叠"这种情形——分区已经收到刚写入的事实行，但那次
+# 导入还没提交完 `site_data_stats`（issue #100 PR #101 复审 P1）。它不是 import_service
+# 内部实现细节，是导入与保留清理之间唯一的协调点，两侧都要能看到同一个符号。
+IMPORT_LOCK_KEY = 0x4B49
 
 
 class ImportRejected(ConflictError):
@@ -91,8 +96,11 @@ def _rebuild_filter_stats(session: Session, result: ImportResult) -> None:
 
 
 @contextmanager
-def _import_lock(session: Session) -> Iterator[bool]:
-    """在**专属连接**上持有导入串行锁；``yield`` 出是否拿到，退出时释放。
+def import_lock(session: Session) -> Iterator[bool]:
+    """在**专属连接**上持有导入／保留清理共用的串行锁；``yield`` 出是否拿到，退出时释放。
+
+    调用方不止导入自己：:func:`app.table.analysis.retention_service.run_retention`
+    也用它把移出分区这件事排除在"正与一次导入交叠"的窗口之外。
 
     锁必须有自己的连接，不能借 Session 的：咨询锁是会话（连接）级的，而 Session 每次
     ``commit()`` 都会把连接还给池子——池里只要有别的活动（健康检查、导出、另一次查询），
@@ -113,7 +121,7 @@ def _import_lock(session: Session) -> Iterator[bool]:
     try:
         got = bool(
             conn.execute(
-                text("SELECT pg_try_advisory_lock(:k)"), {"k": _IMPORT_LOCK_KEY}
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY}
             ).scalar()
         )
         conn.commit()  # 不把连接留在 idle in transaction
@@ -122,7 +130,7 @@ def _import_lock(session: Session) -> Iterator[bool]:
         try:
             if got:
                 conn.execute(
-                    text("SELECT pg_advisory_unlock(:k)"), {"k": _IMPORT_LOCK_KEY}
+                    text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY}
                 )
                 conn.commit()
         finally:
@@ -133,7 +141,7 @@ def _import_lock(session: Session) -> Iterator[bool]:
 def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) -> ImportBatch:
     """在**已持有串行锁**的前提下跑完一个批次，并把终态落到批次记录上。
 
-    锁的取与放都在调用方的 :func:`_import_lock` 里（它有自己的连接），本函数不碰锁。
+    锁的取与放都在调用方的 :func:`import_lock` 里（它有自己的连接），本函数不碰锁。
 
     调用方是两条：首次提交（:func:`run_import`）与排队后被接手（:func:`drain_import_queue`）。
     两条必须走同一段代码——导入后的统计回写（``site_data_stats`` 与筛选统计）若只在其中
@@ -238,7 +246,7 @@ def run_import(
             batch.status = STATUS_QUEUED
         session.commit()
 
-        with _import_lock(session) as got_lock:
+        with import_lock(session) as got_lock:
             if not got_lock:
                 _mark_not_started(session, batch)
                 raise ImportRejected("另一个导入正在进行，请稍后重试")
@@ -454,7 +462,7 @@ def drain_import_queue(
             return None
 
         # 先查队列再抢锁：反过来会在队列为空时白拿一次锁。
-        with _import_lock(session) as got_lock:
+        with import_lock(session) as got_lock:
             if not got_lock:
                 return None
 
@@ -462,7 +470,7 @@ def drain_import_queue(
             try:
                 source = source_factory(batch.object_key)
             except Exception as exc:
-                # 源重建不出来（对象被删、配置变更……）。锁由 _import_lock 负责还，
+                # 源重建不出来（对象被删、配置变更……）。锁由 import_lock 负责还，
                 # 这里只负责把批次判死，别让它继续假装在排队。
                 logger.exception("排队批次的数据源重建失败 %s", batch.file_name)
                 batch.status = STATUS_FAILED

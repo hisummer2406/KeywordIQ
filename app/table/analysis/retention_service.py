@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.table.analysis import partitioning
+from app.table.upload import import_service
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,9 @@ class RetentionResult:
     exported: dict[str, list[str]] = field(default_factory=dict)
     # 表名 -> 被清理（或将被清理）的预存统计残留行数。
     purged_stats: dict[str, int] = field(default_factory=dict)
+    # True：本次运行没有拿到与导入共用的咨询锁，什么都没做（不移出分区、不清理统计、
+    # 不提交），下次调度会重试。见 run_retention 文档。
+    lock_skipped: bool = False
 
     @property
     def total_dropped(self) -> int:
@@ -91,9 +95,17 @@ def purge_stale_stats(session: Session, cutoff: date, *, dry_run: bool) -> dict[
 
     三张表都没有 ORM 模型（``category_stats``/``brand_stats`` 是 ``filter_stats.py``
     直接管理的普通表），统一走 ``text()`` 原生 SQL，不为 ``site_data_stats`` 单独引入
-    ORM ``delete()`` 语句——保持三张表清理逻辑同一种写法。主键前缀
-    ``(site, period_type, report_date[, id])`` 让这是一次范围扫描，代价与残留月份数
-    同阶、不随数据总量增长。
+    ORM ``delete()`` 语句——保持三张表清理逻辑同一种写法。
+
+    **只按 ``report_date`` 过滤，不带 ``site``/``period_type`` 等值条件**，因此不能靠
+    三张表主键 ``(site, period_type, report_date[, id])`` 的前缀走范围扫描——主键把
+    `report_date` 排在第三位，缺等值条件时用不上它。`site_data_stats` 行数小（每
+    (站点,周期,日期) 一行），全表扫可忽略；`category_stats`/`brand_stats` 按
+    (站点,周期,日期,id) 分片，品牌基数约 15.97 万/站/天（见 `filter_stats.py`），三个
+    月窗口叠起来是千万级行——没有专门索引的话，这一步的代价随**整张表**行数同阶，不是
+    随残留月份数。迁移 ``47df76b2f424`` 给这两张表各补了一个 ``report_date`` 单列索引，
+    专为这条清理路径存在；删掉那个索引会让这条注释里的复杂度分析重新变假，且不会有
+    任何测试或报错提示这一点（PR #101 复审 P2）。
     """
     schema = settings.DATABASE_SCHEMA
     purged: dict[str, int] = {}
@@ -131,6 +143,17 @@ def run_retention(
 
     统计清理（:func:`purge_stale_stats`）在每次调用都会执行，不管这次分区遍历有没有
     实际 DROP 什么——本变更上线前的历史残留同样靠这一步清掉，见 design.md 决策 2。
+
+    **非 dry-run 时与导入共用同一把咨询锁**（:func:`app.table.upload.import_service.import_lock`）。
+    没有这把锁，移出分区与一次正在进行的导入之间存在一个真实的交叠窗口：导入的事实写入
+    与 ``site_data_stats`` 回写是两次**独立提交**（见 ``import_service._execute_locked``），
+    如果保留清理恰好在这两次提交之间跑完"移出分区 + 清理统计 + 提交"，会先把导入刚写完
+    事实行的分区 DROP 掉（此时清理不到任何统计残留，因为导入还没提交那一步），随后导入
+    照常提交一条全新的 ``site_data_stats`` 行——事实已经不存在，统计却说有——正是本变更
+    要消灭的 ``total>0, data=[]`` 状态，只是换了个触发路径（PR #101 复审 P1）。拿不到锁
+    （另一个导入正在进行）就什么都不做、直接返回，``result.lock_skipped=True``，不重试、
+    不阻塞——保留清理本来就是按调度周期性触发，下一轮自然会再试。dry-run 不需要这把锁：
+    它只读、不提交，不存在与导入交叠后写坏数据的可能。
     """
     today = today or date.today()
     months = retention_months if retention_months is not None else settings.HOT_WINDOW_MONTHS
@@ -138,36 +161,49 @@ def run_retention(
 
     result = RetentionResult(cutoff=cutoff, retention_months=months, dry_run=dry_run)
 
-    if export_dir is not None and not dry_run:
-        os.makedirs(export_dir, exist_ok=True)
+    def _enumerate_and_mutate() -> None:
+        if export_dir is not None and not dry_run:
+            os.makedirs(export_dir, exist_ok=True)
 
-    for table_name in partitioning.PARTITIONED_TABLES:
-        expired = partitioning.select_expired_partitions(
-            partitioning.list_month_partitions(session, table_name), cutoff
-        )
-        result.dropped[table_name] = [p.name for p in expired]
+        for table_name in partitioning.PARTITIONED_TABLES:
+            expired = partitioning.select_expired_partitions(
+                partitioning.list_month_partitions(session, table_name), cutoff
+            )
+            result.dropped[table_name] = [p.name for p in expired]
 
-        if dry_run:
-            continue
+            if dry_run:
+                continue
 
-        if export_dir is not None:
-            paths: list[str] = []
+            if export_dir is not None:
+                paths: list[str] = []
+                for part in expired:
+                    dest = os.path.join(export_dir, f"{part.name}.csv")
+                    export_partition_to_csv(session, part.name, dest)
+                    paths.append(dest)
+                result.exported[table_name] = paths
+
             for part in expired:
-                dest = os.path.join(export_dir, f"{part.name}.csv")
-                export_partition_to_csv(session, part.name, dest)
-                paths.append(dest)
-            result.exported[table_name] = paths
+                partitioning.drop_month_partition(session, table_name, part.name)
 
-        for part in expired:
-            partitioning.drop_month_partition(session, table_name, part.name)
-
-    result.purged_stats = purge_stale_stats(session, cutoff, dry_run=dry_run)
+        result.purged_stats = purge_stale_stats(session, cutoff, dry_run=dry_run)
 
     if dry_run:
+        _enumerate_and_mutate()
         # 只读枚举，不落任何变更。
         session.rollback()
     else:
-        session.commit()
+        with import_service.import_lock(session) as got_lock:
+            if not got_lock:
+                logger.warning(
+                    "保留清理跳过本次运行：未拿到与导入共用的咨询锁（另一个导入正在进行），"
+                    "不移出任何分区、不清理任何统计，下次调度会重试。cutoff=%s", cutoff,
+                )
+                result.lock_skipped = True
+                session.rollback()
+                return result
+
+            _enumerate_and_mutate()
+            session.commit()
 
     logger.info(
         "保留清理完成: cutoff=%s, 保留月数=%s, dry_run=%s, 移出分区数=%s, 清理残留统计行数=%s",
