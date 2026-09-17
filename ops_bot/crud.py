@@ -129,6 +129,28 @@ async def last_succeeded_at(session: AsyncSession, kind: str) -> datetime | None
     return result.scalar_one_or_none()
 
 
+async def last_succeeded_task_created_at(session: AsyncSession, kind: str) -> datetime | None:
+    """某类任务最近一次成功运行的**创建时间**（不是完成时间）；从未成功过则 `None`。
+
+    专供 `import_notify` 当"新完成批次"扫描的高水位线，不是给调度判"该不该跑"用
+    （那仍然是 `last_succeeded_at`/`finished_at`，两者不要混用）。区别在于：
+    `created_at` 在 `job.run()` 内部真正查询执行**之前**就已经落库（`scheduler._run_once`
+    先 `create_task` 再 `await job.run()`），而 `finished_at` 是查询与发送通知都跑完
+    之后才落的。若用 `finished_at` 当下一轮的 `since`，一个恰好在"本轮查询已经执行、
+    但本轮任务尚未标记完成"这段窗口内转为终态的批次，会永远既不出现在本轮结果里
+    （查询时它还没完成），也不出现在下一轮结果里（它的 `completed_at` 早于下一轮的
+    `since`）——通知与耗时基线都被永久漏记，且没有任何报错（PR #99 复审第二轮 P2）。
+    用 `created_at` 当水位线就不会有这段窗口：它必然早于本轮查询的执行时刻。
+    """
+    result = await session.execute(
+        select(OpsTask.created_at)
+        .where(OpsTask.kind == kind, OpsTask.status == TASK_SUCCEEDED)
+        .order_by(OpsTask.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_unresolved_alerts(session: AsyncSession) -> list[OpsAlertState]:
     result = await session.execute(
         select(OpsAlertState)

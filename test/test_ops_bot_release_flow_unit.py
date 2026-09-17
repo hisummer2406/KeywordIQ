@@ -26,6 +26,12 @@ async def _lock_ctx(got: bool):
     yield got
 
 
+def _ci_ok():
+    from ops_bot.release.ci import CICheckResult
+
+    return CICheckResult(passing=True, details={})
+
+
 def _task(**overrides) -> OpsTask:
     defaults = {
         "id": "t-1",
@@ -341,6 +347,10 @@ class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=CICheckResult(passing=True, details={})),
         ), patch(
             "ops_bot.release.flow.git_ref.is_ancestor_of_branch", return_value=True
+        ), patch(
+            "ops_bot.release.flow.git_ref.rollback_needs_review", return_value=False
+        ), patch(
+            "ops_bot.release.flow.git_ref.migrations_changed", return_value=True
         ), patch("ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(True)), patch(
             "ops_bot.release.flow._open_maintenance", new=AsyncMock()
         ), patch("ops_bot.release.flow.executor.deploy", side_effect=fake_deploy):
@@ -351,6 +361,107 @@ class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["plan"].target_sha, "a" * 40)
         self.assertTrue(captured["plan"].with_migration)
         self.assertIn("✅", reply)
+
+    async def test_deploy_reverifies_migration_boundary_before_executing(self):
+        """确认后、真正执行前，持锁期间重新核实迁移/回滚边界——不能信任确认时刻
+        算出的 `with_migration`。两张发布卡片可以在同一个 checkout 上先后生成，
+        若确认时那次先执行完并推进了 HEAD，这张卡片手上的 `with_migration` 就是
+        过期值，必须重算并与确认值比对，不一致就中止（PR #99 复审第二轮 P1）。
+        """
+        with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
+        ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
+            "ops_bot.release.flow.ci.check", new=AsyncMock(return_value=_ci_ok())
+        ), patch(
+            "ops_bot.release.flow.git_ref.is_ancestor_of_branch", return_value=True
+        ), patch(
+            "ops_bot.release.flow.git_ref.rollback_needs_review", return_value=False
+        ), patch(
+            # 确认时算出 with_migration=True，执行时重算变成 False——checkout 已经前进过。
+            "ops_bot.release.flow.git_ref.migrations_changed", return_value=False
+        ), patch("ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(True)), patch(
+            "ops_bot.release.flow._open_maintenance", new=AsyncMock()
+        ), patch("ops_bot.release.flow.executor.deploy") as mock_deploy:
+            reply = await flow._execute_confirmed(
+                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": True}, "ou_owner", self._now()
+            )
+
+        mock_deploy.assert_not_called()
+        self.assertIn("迁移状态与确认时不一致", reply)
+
+    async def test_deploy_rollback_needs_review_at_execute_time_aborts(self):
+        """确认之后、执行之前，另一个带迁移的发布先落地——此时这张卡片的目标
+        相对新 HEAD 已经是需要人工评估的回滚，必须在执行前拦下，不能带着确认
+        时"不是回滚"的旧判断继续跑。
+        """
+        with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
+        ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
+            "ops_bot.release.flow.ci.check", new=AsyncMock(return_value=_ci_ok())
+        ), patch(
+            "ops_bot.release.flow.git_ref.is_ancestor_of_branch", return_value=True
+        ), patch(
+            "ops_bot.release.flow.git_ref.rollback_needs_review", return_value=True
+        ), patch("ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(True)), patch(
+            "ops_bot.release.flow._open_maintenance", new=AsyncMock()
+        ), patch("ops_bot.release.flow.executor.deploy") as mock_deploy:
+            reply = await flow._execute_confirmed(
+                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": False}, "ou_owner", self._now()
+            )
+
+        mock_deploy.assert_not_called()
+        self.assertIn("落后于当前数据库结构", reply)
+
+    async def test_deploy_rollback_boundary_unknown_at_execute_time_aborts(self):
+        """`rollback_needs_review` 探测失败（git 不可用/超时）时是无法核实，不是
+        "安全放行"——与确认阶段的同一条纪律。"""
+        with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
+        ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
+            "ops_bot.release.flow.ci.check", new=AsyncMock(return_value=_ci_ok())
+        ), patch(
+            "ops_bot.release.flow.git_ref.is_ancestor_of_branch", return_value=True
+        ), patch(
+            "ops_bot.release.flow.git_ref.rollback_needs_review", return_value=None
+        ), patch("ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(True)), patch(
+            "ops_bot.release.flow._open_maintenance", new=AsyncMock()
+        ), patch("ops_bot.release.flow.executor.deploy") as mock_deploy:
+            reply = await flow._execute_confirmed(
+                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": False}, "ou_owner", self._now()
+            )
+
+        mock_deploy.assert_not_called()
+        self.assertIn("无法核实回滚边界", reply)
+
+    async def test_deploy_migration_probe_unknown_at_execute_time_aborts(self):
+        """`migrations_changed` 探测失败同理不能当作"没有迁移"放行。"""
+        with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.release.flow.import_status.any_active", new=AsyncMock(return_value=False)
+        ), patch("ops_bot.release.flow.crud.mark_task_running", new=AsyncMock()), patch(
+            "ops_bot.release.flow.crud.mark_task_failed", new=AsyncMock()
+        ), patch("ops_bot.release.flow.crud.write_audit_log", new=AsyncMock()), patch(
+            "ops_bot.release.flow.ci.check", new=AsyncMock(return_value=_ci_ok())
+        ), patch(
+            "ops_bot.release.flow.git_ref.is_ancestor_of_branch", return_value=True
+        ), patch(
+            "ops_bot.release.flow.git_ref.rollback_needs_review", return_value=False
+        ), patch(
+            "ops_bot.release.flow.git_ref.migrations_changed", return_value=None
+        ), patch("ops_bot.release.flow.lock.try_acquire", lambda: _lock_ctx(True)), patch(
+            "ops_bot.release.flow._open_maintenance", new=AsyncMock()
+        ), patch("ops_bot.release.flow.executor.deploy") as mock_deploy:
+            reply = await flow._execute_confirmed(
+                "t-1", "DEPLOY", {"target_sha": "a" * 40, "with_migration": False}, "ou_owner", self._now()
+            )
+
+        mock_deploy.assert_not_called()
+        self.assertIn("无法核实是否包含数据库迁移", reply)
 
 
 if __name__ == "__main__":

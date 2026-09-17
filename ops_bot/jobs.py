@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from config import settings
@@ -101,7 +102,11 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
 
     async def import_notify() -> str:
         async with OpsAsyncSessionFactory() as session:
-            last = await crud.last_succeeded_at(session, "IMPORT_NOTIFY")
+            # 用 created_at（本轮任务查询前就已落库）当高水位线，不用 finished_at
+            # （查询与发送通知都跑完才落库）——否则本轮查询执行到本轮任务标记完成
+            # 之间转为终态的批次会被永久漏记（crud.last_succeeded_task_created_at
+            # 的文档字符串，PR #99 复审第二轮 P2）。
+            last = await crud.last_succeeded_task_created_at(session, "IMPORT_NOTIFY")
             new_batches = await import_status.find_new_terminal_batches(session, since=last)
             failed_sends = 0
             for batch in new_batches:
@@ -186,12 +191,25 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
         return await backup.run_backup(retention_days=settings.OPS_BACKUP_RETENTION_DAYS)
 
     async def alembic_drift_check() -> str:
-        in_sync = alembic_drift.is_in_sync()
+        # is_in_sync() 内部跑两个各 60 秒超时的 `docker compose run` 子进程，直接
+        # 同步调用会占住事件循环——探测卡住时 /ops/health、飞书回调、心跳调度全部
+        # 无法响应，最长可达两分钟。与 backup/git_ref 的既有约定一致，丢进线程池
+        # （PR #99 复审第二轮 P2）。
+        in_sync = await asyncio.to_thread(alembic_drift.is_in_sync)
+        # `in_sync is None` 是探测本身失败（容器起不来、超时），不是"已同步"——
+        # `in_sync is False` 会让探测失败被判定为不告警，一次真正的漂移探测失败
+        # 因此被静默放过，与 alembic_drift.is_in_sync() 文档字符串明确的契约相反
+        # （PR #99 复审第二轮 P2，与上面 pool_check 同一条纪律）。
+        is_alerting = in_sync is None or in_sync is False
         async with OpsAsyncSessionFactory() as session:
             await alerts.evaluate(
                 session, feishu_client, chat_id,
-                alert_key="alembic-drift", level="crit", is_alerting=in_sync is False,
-                message="生产库 alembic 版本与代码不一致（current != heads）",
+                alert_key="alembic-drift", level="crit", is_alerting=is_alerting,
+                message=(
+                    "生产库 alembic 版本与代码不一致（current != heads）"
+                    if in_sync is False
+                    else "alembic 漂移探测失败（未知状态，按异常处理）"
+                ),
                 silence_minutes=settings.OPS_ALERT_SILENCE_MINUTES,
             )
             await session.commit()
