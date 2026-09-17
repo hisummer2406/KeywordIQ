@@ -48,12 +48,20 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
 
     async def pool_check() -> str:
         ratio = await service.pool_water_level()
-        is_alerting = ratio is not None and ratio >= _POOL_WATER_WARN_RATIO
+        # `ratio is None` 是探测失败（见 pool_water_level 的文档约定），不是"水位为
+        # 0"——当健康、不能被判为 False 静默放过；否则 /health/pool 不可达、格式
+        # 错误这类未知状态会让 alerts.evaluate 对一个已经在告警的水位误报"已恢复"，
+        # 或对一次新的探测失败干脆不报（PR #99 Codex 复审 P2）。
+        is_alerting = ratio is None or ratio >= _POOL_WATER_WARN_RATIO
         async with OpsAsyncSessionFactory() as session:
             await alerts.evaluate(
                 session, feishu_client, chat_id,
                 alert_key="pool-water-high", level="warn", is_alerting=is_alerting,
-                message=f"连接池水位过高：{ratio:.0%}" if ratio is not None else "连接池水位探测失败",
+                message=(
+                    f"连接池水位过高：{ratio:.0%}"
+                    if ratio is not None
+                    else "连接池水位探测失败（未知状态，按异常处理）"
+                ),
                 silence_minutes=settings.OPS_ALERT_SILENCE_MINUTES,
             )
             await session.commit()

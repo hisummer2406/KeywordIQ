@@ -56,13 +56,29 @@ V2_TABLES = frozenset(
     }
 )
 
+# 飞书运维机器人（ops-bot）的表，单独成一份清单而不是并进 V2_TABLES：它们活在
+# 独立的 `OpsBase`/`ops` schema 下（design.md D1「最小权限的取舍」），与业务
+# `Base`/`analysis` schema 是两套物理隔离的东西，混进同一份清单会让"这张表属于
+# 哪个 metadata"这件事只能靠表名猜。`include_object` 同时放行两份清单，
+# `alembic/env.py` 的 `target_metadata` 相应是两份 metadata 的列表。
+OPS_TABLES = frozenset(
+    {
+        "ops_task",
+        "ops_audit_log",
+        "ops_dedup_key",
+        "ops_alert_state",
+        "ops_backup_record",
+        "ops_import_baseline",
+    }
+)
+
 
 def include_object(object_, name, type_, reflected, compare_to):
-    """只放行 V2 的对象，把 V1 的遗留表挡在迁移之外。"""
+    """只放行 V2 与 ops-bot 的对象，把 V1 的遗留表挡在迁移之外。"""
     if type_ == "table":
-        return name in V2_TABLES
+        return name in V2_TABLES or name in OPS_TABLES
     # 索引等从属对象跟随其所属表。
     parent = getattr(object_, "table", None)
     if parent is not None:
-        return parent.name in V2_TABLES
+        return parent.name in V2_TABLES or parent.name in OPS_TABLES
     return True

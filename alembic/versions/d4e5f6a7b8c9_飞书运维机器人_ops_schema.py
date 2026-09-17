@@ -170,7 +170,7 @@ def upgrade() -> None:
     op.create_table(
         "ops_alert_state",
         sa.Column("alert_key", sa.String(length=64), nullable=False),
-        sa.Column("level", sa.String(length=8), nullable=False, server_default="warn"),
+        sa.Column("level", sa.String(length=8), nullable=False, server_default="warn", comment="warn/crit"),
         sa.Column("last_fired_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("consecutive_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),

@@ -128,6 +128,75 @@ def lock_holder():
         engine.dispose()
 
 
+@pytest.fixture()
+def ops_action_lock_holder():
+    """占住运维动作锁，模拟 ops-bot 正在执行重启/发布（PR #99 Codex 复审 P1 回归）。"""
+    engine = create_engine(TEST_URL)
+    holder = engine.connect()
+    from app.table.upload.import_service import _OPS_ACTION_LOCK_KEY
+    holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _OPS_ACTION_LOCK_KEY})
+    holder.commit()
+
+    def release():
+        holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _OPS_ACTION_LOCK_KEY})
+        holder.commit()
+
+    try:
+        yield release
+    finally:
+        release()
+        holder.close()
+        engine.dispose()
+
+
+def test_import_does_not_start_processing_while_ops_action_holds_the_lock(
+    factory, tmp_path, ops_action_lock_holder
+):
+    """运维动作锁被占着时，导入不能转入 PROCESSING——这是导入与重启/发布真正的
+    互斥边界（`_claim_processing_slot`），不是"探测到空闲就直接写"那个有竞态窗口
+    的旧实现（PR #99 Codex 复审 P1：探测后立即放锁，导入侧与 ops-bot 侧可能并发
+    改写状态）。有 object_key 的批次转入 QUEUED 等待重试，不能假装导入正在跑。
+    """
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+    path = _write_csv(tmp_path, "US_Day.csv", [_row(1, "a")])
+    batch = run_import(
+        site="US", period="DAY", report_date=date(2026, 7, 15),
+        source=LocalFileSource(path), original_filename="US_Day.csv",
+        object_key="imports/US/DAY/2026-07-15/abc_US_Day.csv",
+        session_factory=factory,
+    )
+    assert batch.status == "QUEUED"
+    with factory() as s:
+        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily")).scalar() == 0
+
+    ops_action_lock_holder()  # 运维动作结束，锁释放
+
+    from app.table.upload.import_service import drain_import_queue
+    drained = drain_import_queue(source_factory=lambda k: LocalFileSource(path), session_factory=factory)
+    assert drained is not None
+    assert drained.status == "COMPLETED"
+
+
+def test_local_fallback_fails_fast_when_ops_action_holds_the_lock(
+    factory, tmp_path, ops_action_lock_holder
+):
+    """本地退路没有 object_key，运维动作锁被占着时同样不能留在 QUEUED 假装排队——
+    与"另一个导入持有 _IMPORT_LOCK_KEY"时的既有纪律一致（见
+    test_rejected_local_fallback_fails_fast_instead_of_queueing_forever）。
+    """
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+    path = _write_csv(tmp_path, "US_Day.csv", [_row(1, "a")])
+    batch = run_import(
+        site="US", period="DAY", report_date=date(2026, 7, 15),
+        source=LocalFileSource(path), original_filename="US_Day.csv",
+        session_factory=factory,
+    )
+    assert batch.status == "FAILED"
+    assert "重新上传" in batch.error_message
+
+
 def test_second_concurrent_import_is_queued(factory, tmp_path, lock_holder):
     """持有锁时，可重排的批次（有 object_key）留在 QUEUED 等 drain 接手。"""
     from app.table.upload.import_service import ImportRejected, run_import

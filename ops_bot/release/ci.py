@@ -14,7 +14,17 @@ import httpx
 
 from config import settings
 
-REQUIRED_CHECK_NAMES = ("backend", "frontend", "extension")
+# GitHub 的 check-runs API 按 job 的 `name:` 显示名索引，不是 job id——
+# `.github/workflows/ci.yml` 里 job id 是 `backend`/`frontend`/`extension`，
+# 但各自的 `name:` 是中文展示名。用 job id 在这里查询永远查不到，
+# `check()` 会把全部三项都判成"未找到"，导致 CI 全绿时发布仍然被拒
+# （PR #99 Codex 复审 P1）。这三个字符串必须与 ci.yml 对应 job 的 `name:`
+# 逐字一致，改工作流的 job 名要同步改这里。
+REQUIRED_CHECK_NAMES = (
+    "后端（pytest + alembic）",
+    "前端（lint + tsc + test + build）",
+    "竞对采集插件（typecheck + test + build）",
+)
 _TIMEOUT = 10.0
 
 

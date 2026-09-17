@@ -220,8 +220,23 @@ async def _handle_card_action(event: dict) -> Response:
     if not (task_id and confirm_token and decision):
         return Response(status_code=200)
 
-    reply = await release_flow.handle_confirm_callback(task_id, confirm_token, decision)
-    await _reply(reply)
+    outcome = await release_flow.handle_confirm_callback(task_id, confirm_token, decision)
+    if outcome.run is not None:
+        # 真正的重启/发布可能跑到 executor 的 1800 秒超时——不能在这个回调请求
+        # 协程里等它跑完，否则会同时超过飞书的重试窗口与 nginx 反代超时，飞书
+        # 只看到超时重试而收不到任何响应（PR #99 Codex 复审 P1）。先受理、
+        # 后台执行、完成后再单独发一条结果消息，与手动备份走的是同一个协议
+        # （design.md「飞书回调及时应答，长任务后台执行」）。
+        run = outcome.run
+
+        async def _run_and_reply() -> None:
+            result = await run()
+            await _reply(result)
+
+        _spawn_background(_run_and_reply())
+        await _reply("已受理，执行中…")
+    else:
+        await _reply(outcome.immediate_reply)
     return Response(status_code=200)
 
 

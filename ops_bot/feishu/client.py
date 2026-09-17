@@ -8,6 +8,7 @@ accessToken 那段——没有锁，并发到达的请求会各自换取一次�
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import httpx
@@ -69,13 +70,11 @@ class FeishuClient:
         await self._post_json(
             f"{API_BASE}/im/v1/messages?receive_id_type=chat_id",
             headers={"Authorization": f"Bearer {token}"},
-            json={"receive_id": chat_id, "msg_type": "text", "content": f'{{"text":{text!r}}}'},
+            json={"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text})},
         )
 
     async def send_card(self, chat_id: str, card: dict) -> str:
         """向指定会话发一张互动卡片，返回消息 id（供后续 `update_card` 原地刷新用）。"""
-        import json
-
         token = await self.tenant_access_token()
         data = await self._post_json(
             f"{API_BASE}/im/v1/messages?receive_id_type=chat_id",
@@ -89,8 +88,6 @@ class FeishuClient:
 
     async def update_card(self, message_id: str, card: dict) -> None:
         """原地更新已发送的卡片（用于"受理→执行中→完成"的状态刷新，避免刷屏）。"""
-        import json
-
         token = await self.tenant_access_token()
         await self._patch_json(
             f"{API_BASE}/im/v1/messages/{message_id}",

@@ -144,5 +144,43 @@ class TestFeishuClientTenantToken(unittest.TestCase):
             asyncio.run(client.tenant_access_token())
 
 
+class TestFeishuClientSendText(unittest.TestCase):
+    """`send_text` 的 `content` 字段必须是合法 JSON 字符串（PR #99 Codex 复审 P1：
+    旧实现用 Python `repr()` 拼字符串，产出单引号包裹的值，飞书侧会整条拒收）。
+    """
+
+    def _client(self, handler):
+        transport = httpx.MockTransport(handler)
+        return FeishuClient(
+            app_id="id", app_secret="secret", http_client=httpx.AsyncClient(transport=transport)
+        )
+
+    def _send_and_capture_content(self, text: str) -> str:
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "tenant_access_token" in request.url.path:
+                return httpx.Response(200, json={"code": 0, "tenant_access_token": "t", "expire": 7200})
+            body = json.loads(request.content)
+            captured["content"] = body["content"]
+            return httpx.Response(200, json={"code": 0, "data": {}})
+
+        client = self._client(handler)
+        asyncio.run(client.send_text("oc_1", text))
+        return captured["content"]
+
+    def test_plain_text_content_is_valid_json(self):
+        content = self._send_and_capture_content("hello")
+        self.assertEqual(json.loads(content), {"text": "hello"})
+
+    def test_text_with_quotes_and_newlines_round_trips(self):
+        """曾用 `repr()` 拼接：既产出单引号（不是合法 JSON），又不会对内嵌双引号/
+        换行做 JSON 转义——任何带特殊字符的告警文本都会整条被飞书拒收。
+        """
+        text = 'line1\nline2 with "quotes" and \\backslash'
+        content = self._send_and_capture_content(text)
+        self.assertEqual(json.loads(content), {"text": text})
+
+
 if __name__ == "__main__":
     unittest.main()

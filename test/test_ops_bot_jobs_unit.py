@@ -90,5 +90,49 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output, "1 条新完成/失败通知")
 
 
+class TestPoolCheck(unittest.IsolatedAsyncioTestCase):
+    """`pool_water_level()` 探测失败返回 `None`，不代表"水位为 0"——见该函数
+    的文档约定。`is_alerting` 必须把它当成异常，不能当成健康（PR #99 Codex
+    复审 P2：旧实现 `ratio is not None and ...` 会让探测失败被判定为不告警）。
+    """
+
+    def _jobs(self):
+        client = FeishuClient("id", "secret")
+        return build_jobs(client, "oc_ops")
+
+    async def test_probe_failure_is_treated_as_alerting_not_healthy(self):
+        job = _find_job(self._jobs(), "POOL_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.service.pool_water_level", new=AsyncMock(return_value=None)
+        ), patch("ops_bot.jobs.alerts.evaluate", new=AsyncMock()) as mock_evaluate:
+            output = await job.run()
+
+        self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], True)
+        self.assertEqual(output, "unknown")
+
+    async def test_high_water_ratio_is_alerting(self):
+        job = _find_job(self._jobs(), "POOL_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.service.pool_water_level", new=AsyncMock(return_value=0.95)
+        ), patch("ops_bot.jobs.alerts.evaluate", new=AsyncMock()) as mock_evaluate:
+            output = await job.run()
+
+        self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], True)
+        self.assertEqual(output, "95%")
+
+    async def test_low_water_ratio_is_not_alerting(self):
+        job = _find_job(self._jobs(), "POOL_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.service.pool_water_level", new=AsyncMock(return_value=0.1)
+        ), patch("ops_bot.jobs.alerts.evaluate", new=AsyncMock()) as mock_evaluate:
+            output = await job.run()
+
+        self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], False)
+        self.assertEqual(output, "10%")
+
+
 if __name__ == "__main__":
     unittest.main()
