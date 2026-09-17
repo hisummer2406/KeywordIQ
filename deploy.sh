@@ -3,7 +3,7 @@
 #
 # 部署形态：应用 + 自建 PostgreSQL 由 Docker Compose 管理（见 docker-compose.yml），
 # host nginx 托管前端 SPA 产物并反代 /api 到应用容器（127.0.0.1:8001），配置见
-# etc/keywordiq-nginx.conf。曾经历过两次形态变化：docker-compose 路线于 9c0a31d 退役
+# etc/keywordiq-v2-nginx.conf。曾经历过两次形态变化：docker-compose 路线于 9c0a31d 退役
 # （理由：简化部署），host nginx + systemd 裸 uvicorn 路线又于
 # dockerize-selfhosted-infra 变更退役（理由：自建 PostgreSQL 与同机部署需要容器编排
 # 提供的重启监督/生命周期管理，两次的驱动因素并不相同）。

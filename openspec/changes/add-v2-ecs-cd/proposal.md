@@ -6,6 +6,7 @@ V2 已独立部署在 ECS，但发布仍依赖登录服务器逐条执行命令�
 ## What Changes
 
 - 将 `deploy.sh` 默认目标改为 V2 的 8001、独立前端目录与独立 logrotate 配置。
+- 提供与 V2 默认值一致的独立 Nginx 站点模板。
 - 新增只可手动触发的 GitHub Actions 工作流，核验目标 SHA 的全部 CI 后，经 SSH 在 ECS
   上调用 `deploy.sh --yes`。
 - 记录 ECS 与 GitHub Secrets 的一次性引导步骤。

@@ -25,6 +25,7 @@ V1 的端口、域名、静态文件或 logrotate 配置。
   目标 SHA 时失败，不使用 `reset --hard`。
 - ECS 上实际构建、迁移、前端发布和健康检查都复用 `deploy.sh --yes`，避免平行发布逻辑。
 - SSH 使用专用 Ed25519 密钥和固定 known-hosts，禁止密码和交互式主机密钥确认。
+- Nginx 使用独立的 V2 站点模板，明确绑定域名、TLS 证书路径、8001 和独立 SPA 目录。
 
 ## Risks / Trade-offs
 
