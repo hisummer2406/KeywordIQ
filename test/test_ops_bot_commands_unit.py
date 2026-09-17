@@ -20,12 +20,42 @@ class TestDispatch(unittest.IsolatedAsyncioTestCase):
             "ops_bot.commands.service.is_app_healthy", new=AsyncMock(return_value=True)
         ), patch("ops_bot.commands.resources.disk_usage_percent", return_value=33.0), patch(
             "ops_bot.commands.backup.latest_backup_age_hours", new=AsyncMock(return_value=1.5)
+        ), patch(
+            "ops_bot.commands.git_ref.current_sha", return_value="a" * 40
+        ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.commands.crud.list_unresolved_alerts", new=AsyncMock(return_value=[])
         ):
+            factory.return_value.__aenter__.return_value = AsyncMock()
             reply = await commands.dispatch("状态")
 
         self.assertIn("✅ 正常", reply)
         self.assertIn("33.0%", reply)
         self.assertIn("1.5 小时前", reply)
+        self.assertIn("a" * 40, reply)
+        self.assertIn("未解决告警：无", reply)
+
+    async def test_status_command_lists_unresolved_alerts(self):
+        """`ops-monitoring-alerting` spec 的「查询系统状态」场景要求一屏摘要包含
+        当前部署提交与未解决告警——漏了这两项时，连接池已经饱和或有导入卡死，
+        这条指令仍会显得"一切正常"（PR #99 复审第四轮 P2）。
+        """
+        from ops_bot.model import OpsAlertState
+
+        alert = OpsAlertState(alert_key="pool-water-high", level="warn")
+        with patch(
+            "ops_bot.commands.service.is_app_healthy", new=AsyncMock(return_value=True)
+        ), patch("ops_bot.commands.resources.disk_usage_percent", return_value=33.0), patch(
+            "ops_bot.commands.backup.latest_backup_age_hours", new=AsyncMock(return_value=1.5)
+        ), patch(
+            "ops_bot.commands.git_ref.current_sha", return_value="b" * 40
+        ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.commands.crud.list_unresolved_alerts", new=AsyncMock(return_value=[alert])
+        ):
+            factory.return_value.__aenter__.return_value = AsyncMock()
+            reply = await commands.dispatch("状态")
+
+        self.assertIn("pool-water-high", reply)
+        self.assertIn("warn", reply)
 
     async def test_task_command_lists_recent(self):
         task = OpsTask(id="t1", kind="BACKUP", status="SUCCEEDED", created_at=datetime.now(UTC))
@@ -67,12 +97,12 @@ class TestDispatch(unittest.IsolatedAsyncioTestCase):
 
     async def test_latest_backup_command_never_backed_up(self):
         with patch(
-            "ops_bot.commands.crud.latest_succeeded_backup", new=AsyncMock(return_value=None)
+            "ops_bot.commands.crud.latest_backup_attempt", new=AsyncMock(return_value=None)
         ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory:
             factory.return_value.__aenter__.return_value = AsyncMock()
             reply = await commands.dispatch("备份记录")
 
-        self.assertIn("从未成功备份过", reply)
+        self.assertIn("从未备份过", reply)
 
     async def test_latest_backup_command_shows_object_key_and_size(self):
         from ops_bot.model import OpsBackupRecord
@@ -84,13 +114,35 @@ class TestDispatch(unittest.IsolatedAsyncioTestCase):
             finished_at=datetime(2026, 9, 16, 3, 5, tzinfo=UTC),
         )
         with patch(
-            "ops_bot.commands.crud.latest_succeeded_backup", new=AsyncMock(return_value=record)
+            "ops_bot.commands.crud.latest_backup_attempt", new=AsyncMock(return_value=record)
         ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory:
             factory.return_value.__aenter__.return_value = AsyncMock()
             reply = await commands.dispatch("备份记录")
 
         self.assertIn("20260916T030000Z.custom", reply)
         self.assertIn("512.0 MB", reply)
+
+    async def test_latest_backup_command_reports_recent_failure_not_older_success(self):
+        """最新一次尝试失败、更早一次成功时，「备份记录」必须报告最新的失败，不能
+        静默展示那份更早的成功记录——否则操作者会以为备份健康（PR #99 复审第四轮 P2）。
+        """
+        from ops_bot.model import OpsBackupRecord
+
+        failed_record = OpsBackupRecord(
+            object_key=None,
+            size_bytes=None,
+            status="FAILED",
+            failed_stage="UPLOAD",
+            finished_at=datetime(2026, 9, 17, 3, 5, tzinfo=UTC),
+        )
+        with patch(
+            "ops_bot.commands.crud.latest_backup_attempt", new=AsyncMock(return_value=failed_record)
+        ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory:
+            factory.return_value.__aenter__.return_value = AsyncMock()
+            reply = await commands.dispatch("备份记录")
+
+        self.assertIn("失败", reply)
+        self.assertIn("UPLOAD", reply)
 
 
 if __name__ == "__main__":

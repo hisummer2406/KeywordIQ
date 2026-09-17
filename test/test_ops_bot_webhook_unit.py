@@ -207,7 +207,7 @@ class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
 
                 # 请求协程本身立刻回执"受理中"，不等待执行完成。
                 mock_handle.assert_awaited_once_with("t-1", "tok-1", "confirm")
-                mock_reply.assert_awaited_once_with("已受理，执行中…")
+                mock_reply.assert_awaited_once_with("已受理，任务 #t-1 执行中…")
                 self.assertEqual(response.status_code, 200)
                 mock_spawn.assert_called_once()
 
@@ -295,6 +295,24 @@ class TestBuildAndSendDeployPlan(unittest.IsolatedAsyncioTestCase):
 
         mock_build_plan.assert_awaited_once_with("a" * 40, "ou_owner")
         mock_send.assert_awaited_once_with(None, "CI 未全部通过：backend: FAILED")
+
+    async def test_exception_during_build_still_replies_instead_of_hanging_silently(self):
+        """`build_deploy_plan` 抛出未预期异常（运维库暂时不可用等）时必须回一条终态
+        消息——这个协程是后台 fire-and-forget 任务，异常不会被任何地方转发，用户
+        此前已经收到"正在核实…"，不兜底会让用户永远停在这句话上（PR #99 复审
+        第四轮 P2）。
+        """
+        with patch(
+            "ops_bot.main.release_flow.build_deploy_plan",
+            new=AsyncMock(side_effect=RuntimeError("db unavailable")),
+        ), patch("ops_bot.main._send_plan_or_reason", new=AsyncMock()) as mock_send, patch(
+            "ops_bot.main._reply", new=AsyncMock()
+        ) as mock_reply:
+            await main._build_and_send_deploy_plan("a" * 40, "ou_owner")
+
+        mock_send.assert_not_awaited()
+        mock_reply.assert_awaited_once()
+        self.assertIn("异常", mock_reply.call_args.args[0])
 
 
 class TestReconcileOrphanedTasksOnStartup(unittest.IsolatedAsyncioTestCase):

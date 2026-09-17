@@ -10,6 +10,15 @@
 前置：`v2` 分支已部署（`docker-compose.yml` 管理的 `app`/`db` 正常运行），
 `uv sync` 已跑过。
 
+**在运行下面的步骤 1 之前，先把 `.env` 里 `OPS_DATABASE_URL`/`OPS_DATABASE_URL_ASYNC`/
+`OPS_DB_ROLE_PASSWORD` 三项（见第 3 节）填成你自己的真实密码，三处密码需一致。**
+迁移会用 `OPS_DB_ROLE_PASSWORD` 当场 `(re)set` `ops_bot_role` 的数据库密码（见迁移
+文件 `d4e5f6a7b8c9` 的说明）；先跑迁移、之后才改这三项，只会改掉 `.env` 里的值，
+角色在数据库里的真实密码仍停在迁移执行那一刻读到的旧值（未配置时的兜底值
+`change-me-in-production`），启动服务后 ops-bot 用新密码连接会认证失败，且日志里
+看不出这是密码没对齐的问题。走完第 6 步起服务前若已经改过这三项，重新跑一次
+`docker compose run --rm app alembic upgrade head` 即可让角色密码追上 `.env`。
+
 ```bash
 # 1. 迁移：新建 ops schema、ops_bot_role 角色、六张状态表（在 app 容器内跑，
 #    与业务迁移同一条流水线）
@@ -31,7 +40,7 @@ sudo usermod -aG docker opsbot   # RESTART_APP/DEPLOY 要跑 docker compose
 # 5. 装 nginx 配置（etc/keywordiq-nginx.conf 已含 /ops/ 反代段，按现有部署方式生效）
 sudo nginx -t && sudo systemctl reload nginx
 
-# 6. 填好 .env 的「飞书运维机器人」一节（见第 2/3 节），然后起服务
+# 6. 填好 .env 剩余的「飞书运维机器人」变量（第 2/3 节，数据库三项已在步骤 1 前填好），然后起服务
 sudo systemctl enable --now keywordiq-ops-bot
 sudo systemctl status keywordiq-ops-bot
 ```

@@ -94,10 +94,13 @@ class TestDeploy(unittest.TestCase):
         deploy_call = mock_run.call_args_list[-1].args[0]
         self.assertEqual(deploy_call, ["./deploy.sh", "--yes", "--skip-migrate"])
 
-    def test_restores_previous_checkout_when_deploy_sh_fails(self):
-        """docker compose build 等失败时，工作树必须回退到发布前的版本——否则下一次
-        重试会把这个还没真正生效的新 SHA 当成"已部署版本"算出错误的迁移边界
-        （PR #99 复审第三轮 P1）。
+    def test_does_not_restore_checkout_when_deploy_sh_fails(self):
+        """`deploy.sh` 失败（例如 `docker compose build` 阶段）时不能自动回退 checkout：
+        `deploy.sh` 可能已经跑完迁移、切了容器，只是最后的健康检查没过才非零退出——
+        执行器分不清 `DEPLOY_SH` 失败具体发生在哪个子阶段，无条件回退会让 HEAD 倒回
+        旧版本、而容器与 schema 实际已经是新版本，把"当前实际部署到哪个版本"这条
+        本该可信的事实来源污染成假的（PR #99 复审第四轮 P1；此前第三轮曾反过来
+        无条件回退，同样是错的）。
         """
         with patch(
             "ops_bot.executor.subprocess.run",
@@ -106,15 +109,14 @@ class TestDeploy(unittest.TestCase):
                 _completed(),  # git fetch
                 _completed(),  # git checkout target
                 _completed(returncode=1, stderr="build failed"),  # deploy.sh 失败
-                _completed(),  # 回退 checkout
             ],
         ) as mock_run:
             result = deploy(DeployPlan(target_sha="a" * 40, with_migration=True))
 
         self.assertFalse(result.success)
         self.assertEqual(result.failed_stage, "DEPLOY_SH")
-        self.assertEqual(mock_run.call_args_list[-1].args[0], ["git", "checkout", "b" * 40])
-        self.assertIn("回退到发布前的版本", result.output)
+        self.assertEqual(mock_run.call_count, 4, "记录 checkout + fetch + checkout + deploy.sh，不应再多一次回退调用")
+        self.assertIn("未自动回退", result.output)
 
     def test_skips_restore_when_previous_sha_unknown(self):
         """记录发布前 checkout 本身失败时，不能拿 `None` 当 SHA 去尝试回退。"""

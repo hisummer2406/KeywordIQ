@@ -110,14 +110,23 @@ def deploy(plan: DeployPlan) -> ExecutionResult:
     （design.md D5）。`deploy.sh` 内部的 `read -r -p` 交互确认因此必须被
     `--yes` 跳过，否则会在一个没有 TTY 的子进程里永久挂起。
 
-    **失败时回退工作树到发布前的 checkout。** `GIT_CHECKOUT` 这一步已经把仓库切到
-    `target_sha`；若随后的 `DEPLOY_SH`（`docker compose build` 等）失败，容器与数据库
-    schema 仍停在旧版本，工作树却已经在新 SHA 上——下一次重试时
-    `ops_bot.release.git_ref.migrations_changed`/`rollback_needs_review` 都以"当前
-    HEAD"为基准计算，会把这个还没真正生效的新 SHA 误当成"已部署版本"，算出错误的
-    迁移边界（例如把本该执行的迁移误判成"无迁移"而漏跑）。不回退就是让工作树的
-    checkout 悄悄替代了"实际已部署到哪个版本"这件事的事实来源（PR #99 复审
-    第三轮 P1）。
+    **只在确定生产状态还没变时才回退工作树。** `GIT_FETCH`/`GIT_CHECKOUT` 失败发生在
+    `deploy.sh` 被调用之前，此时容器与数据库都还没动，回退到发布前的 checkout 是安全的：
+    否则下一次重试会把这个还没真正生效的新 SHA 误当成"已部署版本"，让
+    `ops_bot.release.git_ref.migrations_changed`/`rollback_needs_review` 算出错误的
+    迁移边界（PR #99 复审第三轮 P1）。
+
+    **`DEPLOY_SH` 失败时禁止自动回退。** `deploy.sh` 内部先跑迁移、切前端产物、
+    `docker compose up -d` 切容器，最后才做健康检查——它可能在**已经改动生产状态之后**
+    才因为健康检查失败而以非零退出（`deploy.sh` 最后一段）。执行器只知道
+    "`DEPLOY_SH` 这一步失败了"，无法区分失败发生在这一整段脚本的哪个子阶段，因此不能
+    像对待 `GIT_CHECKOUT` 失败那样默认"生产状态没变"。若这里仍然无条件回退 checkout，
+    容器与 schema 已经是新版本、但 HEAD 却回到了旧版本，本该由 HEAD 承担的
+    "当前实际部署到哪个版本"这个事实来源就会被这次回退悄悄污染成假的旧版本
+    ——比 PR #99 第三轮要修的"不回退"问题更隐蔽，因为它把回退动作本身变成了新的
+    错误来源（PR #99 复审第四轮 P1）。这种情况下工作树保持在 `target_sha`，
+    连带真实反映"这次发布可能已经部分生效，需要人工核实"，而不是给出一个看似
+    干净、实则不可信的"已回退"假象。
     """
     previous_sha = _capture_current_sha()
 
@@ -133,6 +142,13 @@ def deploy(plan: DeployPlan) -> ExecutionResult:
     result = _run_steps(steps, _DEPLOY_TIMEOUT_SECONDS)
     if result.success or previous_sha is None:
         return result
+
+    if result.failed_stage == "DEPLOY_SH":
+        note = (
+            "\n（未自动回退 checkout：deploy.sh 可能已经改动了生产状态，"
+            "工作树保留在目标 SHA 以如实反映这一点，请人工核实容器与数据库的实际版本）"
+        )
+        return ExecutionResult(False, _truncate(result.output + note), result.failed_stage)
 
     restore = subprocess.run(
         ["git", "checkout", previous_sha], cwd=".", capture_output=True, text=True,
