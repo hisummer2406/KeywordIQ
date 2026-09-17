@@ -85,6 +85,20 @@
   autogenerate 静默忽略、不报错。
 - **列注释参与 autogenerate 比对**，模型注释与库不一致会产生常驻假差异，掩盖真差异
   （曾盖住 `user_center` 时间戳丢时区）。
+- **保留清理（`retention_service.run_retention`）同步清理
+  `site_data_stats`/`category_stats`/`brand_stats` 中超期的残留行，且无条件执行（不
+  依赖本次是否真的 DROP 了分区）。** `category_stats`/`brand_stats` 只按
+  `report_date` 过滤、不带 `site`/`period_type` 等值条件，靠迁移
+  `47df76b2f424` 专门补的 `report_date` 单列索引才不退化成全表扫描——这两张表按
+  (站点,周期,日期,id) 分片、单站点单日品牌基数约 16 万行，删掉这个索引会让扫描代价
+  变成随整表行数（千万级）同阶，不是随残留月份数（issue #100 PR #101 复审 P2）。
+- **保留清理的写入路径（非 dry-run）必须持有与导入共用的咨询锁**
+  （`import_service.import_lock`/`IMPORT_LOCK_KEY`）。导入的事实写入与
+  `site_data_stats` 回写是两次独立提交，没有这把锁，保留清理可能恰好在两次提交之间
+  跑完"移出分区+清理统计+提交"，先 DROP 掉刚写完事实行的分区，再被导入的后续提交
+  写入一条全新统计行——事实已经不存在，统计却说有，是 `total>0, data=[]` 的另一条
+  触发路径（issue #100 PR #101 复审 P1）。拿不到锁应直接跳过本次运行（`lock_skipped`），
+  不阻塞、不重试，交给下一轮调度。
 
 ### 查询与分页
 
@@ -97,7 +111,7 @@
 ### 排名趋势详情
 
 - **单关键词历史查询走 `idx_fact_dropped_keyword_history`（`site, period_type, keyword_id, anchor_date`），不得走 `fact_dropped` 主键。** 主键把 `anchor_date` 排在 `keyword_id` 之前，range 查询下 `anchor_date` 是范围而非等值，`keyword_id` 退化成扫描内 filter，代价随该站点/视图窗口内的掉榜行数增长，不随目标关键词的历史行数增长。
-- **判定"报表已导入但未收录"前必须先排除 `report_date < retention_cutoff`，且不信任 `site_data_stats` 在保留下界之前的行。** 保留清理只 `DROP` 事实表/`fact_dropped`/`fact_growth` 的月度分区，不清理 `site_data_stats` 对应行；判定顺序反了会把早已被清理的月份误判成"这份数据还在，只是没收这个词"。
+- **判定"报表已导入但未收录"前必须先排除 `report_date < retention_cutoff`，且不信任 `site_data_stats` 在保留下界之前的行。** 保留清理现在会同步清理 `site_data_stats`/`category_stats`/`brand_stats` 中报告日期早于保留下界的残留行（issue #100），但判定顺序仍不查 `site_data_stats`——这是双重保险，防的是清理调度尚未执行、或统计短暂残留的间隔；判定顺序反了会把早已被清理的月份误判成"这份数据还在，只是没收这个词"。
 - **来源锚点 `on` 必须是打开详情那一刻来源页面正在看的期次，不是"今天"**；切换日/周视图复用同一个 `on`，由后端统一解析映射（取 `<= on` 的最新一期，取不到退化为全局最新一期），不在前端重算。
 - **权限接受 `analysis:view` 或 `keyword:view` 任一，仅限"端点跨域共用且不携带任何域私有数据"这种情形。** 读取用户私有数据的筛选（如 `competitor_new`）不得套用这个放宽，仍需按需叠加校验。
 

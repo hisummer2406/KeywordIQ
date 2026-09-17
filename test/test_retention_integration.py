@@ -24,6 +24,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.table.analysis import analysis_crud, partitioning, retention_service
+from app.table.upload import import_service
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -353,44 +354,100 @@ def test_purge_stale_stats_is_idempotent(conn):
     assert second["site_data_stats"] == 0
 
 
-def test_run_retention_purges_stats_in_the_same_run_as_partition_drop(conn):
+def test_run_retention_skips_and_mutates_nothing_when_import_holds_the_lock():
+    """非 dry-run 时拿不到导入共用的咨询锁（另一个导入正在进行）就什么都不做。
+
+    这是 PR #101 复审 P1 的回归：不持有这把锁的话，保留清理可能恰好在一次导入的
+    "事实提交" 与 "`site_data_stats` 提交" 两次独立提交之间跑完整段"移出分区 + 清理
+    统计 + 提交"——先把刚写完事实行的分区 DROP 掉（此时清理不到任何统计残留，因为
+    导入还没提交那一步），随后导入照常提交一条全新的统计行，事实已经不存在、统计却
+    说有，`total>0, data=[]` 的老问题换了个触发路径原样复现。
+
+    锁失败路径 `run_retention` 不写入任何东西，所以这里可以放心用一个真实
+    （非 SAVEPOINT）的 `Engine` 绑定会话——不会有任何提交，测试结束不需要清理。
+    """
+    engine = create_engine(TEST_URL)
+    holder = engine.connect()
+    holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": import_service.IMPORT_LOCK_KEY})
+    holder.commit()
+    session = Session(bind=engine)
+    try:
+        result = retention_service.run_retention(
+            session, today=date(2026, 7, 15), retention_months=3, dry_run=False
+        )
+
+        assert result.lock_skipped is True
+        assert result.dropped == {}
+        assert result.purged_stats == {}
+    finally:
+        session.close()
+        holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": import_service.IMPORT_LOCK_KEY})
+        holder.commit()
+        holder.close()
+        engine.dispose()
+
+
+def test_run_retention_purges_stats_in_the_same_run_as_partition_drop():
     """`run_retention` 端到端复现 issue #100：写入一个超期月份的事实行 + 统计行，
     跑一次真实（非 dry-run）保留清理后，日期选择器与无筛选总数都不再引用这个日期。
 
-    `run_retention` 内部会 `session.commit()`——直接把它绑到共享的 `conn` fixture 会
-    提交整个事务，冲掉夹具"结束即回滚、零残留"的前提（对 `keywordiq_test` 这个全局共享
-    库是真实风险）。用 ``Session(bind=conn, join_transaction_mode="create_savepoint")``
-    包一层：内部的 `commit()` 只释放 SAVEPOINT，外层事务照常在测试结束时被 `conn`
-    fixture 回滚，不会真正污染共享库（design.md 决策 5）。
+    非 dry-run 现在会持有与导入共用的咨询锁（见上一条测试），而那把锁要求
+    ``session.get_bind()`` 是一个真正的 ``Engine``（`import_lock` 要在它上面开一条
+    **独立**的连接，不能借用 session 自己的）——`Session(bind=conn,
+    join_transaction_mode="create_savepoint")` 绑的是 `Connection`，没有 `.connect()`，
+    过不了这一步。所以这里改用真实的 `Engine` 绑定会话，`run_retention` 内部的
+    `commit()` 是真提交，不能靠外层事务回滚兜底。
+
+    退路是显式清理：分区被移出的那部分（分区、事实行、超期的 `site_data_stats`）正是
+    `run_retention` 自己的职责，跑完就已经不在了，不需要额外清理；只有它**不会**碰的
+    两样——`dim_keyword` 维度行、窗口内的 `site_data_stats`（用来证明不受影响的对照
+    组）——在 `finally` 里手工删掉，避免残留进共享的 `keywordiq_test`。
     """
-    partitioning.ensure_fact_partitions(conn, "fact_daily", "US", _STALE_DATE)
-    kid = conn.execute(
-        text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES ('US','issue100 repro') "
-             "RETURNING keyword_id")
-    ).scalar()
-    conn.execute(
-        text("INSERT INTO analysis.fact_daily(site,report_date,keyword_id,current_ranking) "
-             "VALUES ('US',:d,:k,5)"),
-        {"d": _STALE_DATE, "k": kid},
-    )
-    _seed_site_data_stats(conn, "US", "DAY", _STALE_DATE)
-    _seed_site_data_stats(conn, "US", "DAY", _IN_WINDOW_DATE)
+    engine = create_engine(TEST_URL)
+    session = Session(bind=engine)
+    kid = None
+    try:
+        partitioning.ensure_fact_partitions(session, "fact_daily", "US", _STALE_DATE)
+        kid = session.execute(
+            text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES "
+                 "('US','issue100 e2e repro') RETURNING keyword_id")
+        ).scalar()
+        session.execute(
+            text("INSERT INTO analysis.fact_daily(site,report_date,keyword_id,current_ranking) "
+                 "VALUES ('US',:d,:k,5)"),
+            {"d": _STALE_DATE, "k": kid},
+        )
+        _seed_site_data_stats(session, "US", "DAY", _STALE_DATE)
+        _seed_site_data_stats(session, "US", "DAY", _IN_WINDOW_DATE)
+        session.commit()
 
-    session = Session(bind=conn, join_transaction_mode="create_savepoint")
-    result = retention_service.run_retention(
-        session, today=date(2026, 7, 15), retention_months=3, dry_run=False
-    )
+        result = retention_service.run_retention(
+            session, today=date(2026, 7, 15), retention_months=3, dry_run=False
+        )
 
-    assert "fact_daily_2026_04" in result.dropped["fact_daily"]
-    assert result.purged_stats["site_data_stats"] == 1
+        assert result.lock_skipped is False
+        assert "fact_daily_2026_04" in result.dropped["fact_daily"]
+        assert result.purged_stats["site_data_stats"] == 1
 
-    available = conn.execute(
-        analysis_crud.available_dates_stmt("US", "DAY")
-    ).scalars().all()
-    assert _STALE_DATE not in available
-    assert _IN_WINDOW_DATE in available
+        available = session.execute(
+            analysis_crud.available_dates_stmt("US", "DAY")
+        ).scalars().all()
+        assert _STALE_DATE not in available
+        assert _IN_WINDOW_DATE in available
 
-    row_count = conn.execute(
-        analysis_crud.scope_row_count_stmt("US", "DAY", _STALE_DATE)
-    ).scalar_one_or_none()
-    assert row_count is None
+        row_count = session.execute(
+            analysis_crud.scope_row_count_stmt("US", "DAY", _STALE_DATE)
+        ).scalar_one_or_none()
+        assert row_count is None
+    finally:
+        # run_retention 自己已经清掉了超期分区/事实行/超期统计；这里只清它不管的两样。
+        session.execute(
+            text("DELETE FROM analysis.site_data_stats WHERE site='US' AND period_type='DAY' "
+                 "AND report_date=:d"),
+            {"d": _IN_WINDOW_DATE},
+        )
+        if kid is not None:
+            session.execute(text("DELETE FROM analysis.dim_keyword WHERE keyword_id=:k"), {"k": kid})
+        session.commit()
+        session.close()
+        engine.dispose()

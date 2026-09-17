@@ -51,6 +51,33 @@
       `site_data_stats`——既有代码一个尚未触发问题的缺口，本变更不修"改为指向
       本变更已修复，同时保留 `trend_service` 原有防御性判断作为双重保险的说明。
 - [x] 5.2 `ruff check .` 全量通过；定向 + 全量 pytest（含 `TEST_DATABASE_URL`）通过。
-- [ ] 5.3 提交、开 PR（`--base v2`），链接 issue #100，附复现前后对比与测试结果。
+- [x] 5.3 提交、开 PR #101（`--base v2`），链接 issue #100，附复现前后对比与测试结果。
+
+## 6. PR #101 Codex 复审修复
+
+- [x] 6.1 **P1（导入交叠）**：保留清理非 dry-run 路径现在持有与导入共用的咨询锁
+      （`import_service.import_lock`/`IMPORT_LOCK_KEY`，原为私有的
+      `_import_lock`/`_IMPORT_LOCK_KEY`，改名为公开——两个模块间唯一的协调点）。
+      拿不到锁直接跳过、`result.lock_skipped=True`，不阻塞不重试。新增回归
+      `test_run_retention_skips_and_mutates_nothing_when_import_holds_the_lock`。
+      design.md 决策 6。
+- [x] 6.2 **P2（缺索引）**：新迁移 `47df76b2f424` 给 `category_stats`/`brand_stats`
+      各补一个 `report_date` 单列索引——`purge_stale_stats` 只按 `report_date` 过滤，
+      两表主键 `(site, period_type, report_date, id)` 用不上这个前缀。已用 `EXPLAIN`
+      核对走 `Index Only Scan`；已在本地 dev 库跑过升级/降级/再升级的可回滚性验证。
+      `purge_stale_stats` 文档字符串里"代价与残留月份数同阶、不随数据总量增长"这句
+      对这两表原来是错的，已改正并说明依赖这个新索引。design.md 决策 7。
+- [x] 6.3 **P1（AGENTS.md 过期）**：`AGENTS.md`「排名趋势详情」一节的
+      "保留清理只 DROP 分区、不清理 site_data_stats" 已改为指向本变更；「分区与迁移」
+      一节新增两条审核视角，覆盖 6.1/6.2 两处新约束，供未来审核对照。
+- [x] 6.4 因 6.1 需要 `run_retention` 的真实（非 dry-run）路径持锁，原
+      `test_run_retention_purges_stats_in_the_same_run_as_partition_drop` 的
+      SAVEPOINT 技巧失效（`import_lock` 要求 `session.get_bind()` 是真正的
+      `Engine`，SAVEPOINT 会话绑的是 `Connection`，没有 `.connect()`）。改为真实
+      `Engine` 绑定会话 + `finally` 手工清理 `run_retention` 自己不会碰的两行
+      （`dim_keyword`、窗口内对照组 `site_data_stats`）；测试后已核对
+      `keywordiq_test` 无残留、无泄漏的咨询锁。design.md 决策 5 已同步更新。
+- [x] 6.5 重跑全量 `pytest test/`（含 `TEST_DATABASE_URL`）：1006 passed, 2 skipped
+      （较修复前 +1，为新增的锁跳过回归）；`ruff check .` 全量通过。
 
 Refs #100
