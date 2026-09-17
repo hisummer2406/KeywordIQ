@@ -57,9 +57,16 @@ async def any_active(session: AsyncSession) -> bool:
     return result.first() is not None
 
 
-async def find_new_terminal_batches(session: AsyncSession, *, since: datetime | None) -> list[dict]:
-    """`since` 之后新完成（`COMPLETED`/`FAILED`）的批次，`since=None` 时返回空列表
-    （调用方首次运行没有基准点，不该把历史上所有批次当作"新"一次性通知一遍）。
+async def find_new_terminal_batches(
+    session: AsyncSession, *, since: datetime | None, until: datetime
+) -> list[dict]:
+    """`(since, until]` 区间内新完成（`COMPLETED`/`FAILED`）的批次，`since=None` 时
+    返回空列表（调用方首次运行没有基准点，不该把历史上所有批次当作"新"一次性通知一遍）。
+
+    `until` 必须是调用方发起本次查询**之前**捕获的时刻（下一轮的水位线正是这个值）。
+    没有这道上界时，本次查询会把 `until` 捕获之后、查询实际执行之前才完成的批次也
+    一并扫入——那批次这一轮通知过，水位线推进到 `until` 之后，下一轮 `since=until`
+    仍然 `completed_at > since` 为真，会被再通知一遍（PR #99 复审第四轮 P1）。
     """
     if since is None:
         return []
@@ -68,20 +75,27 @@ async def find_new_terminal_batches(session: AsyncSession, *, since: datetime | 
             "SELECT id, site, period_type, report_date, status, error_message, "
             "processing_seconds, completed_at "
             "FROM analysis.import_batch "
-            "WHERE status = ANY(:statuses) AND completed_at > :since "
+            "WHERE status = ANY(:statuses) AND completed_at > :since AND completed_at <= :until "
             "ORDER BY completed_at"
         ),
-        {"statuses": list(STATUS_TERMINAL), "since": since},
+        {"statuses": list(STATUS_TERMINAL), "since": since, "until": until},
     )
     return [dict(row) for row in result.mappings()]
 
 
 async def record_baseline(session: AsyncSession, batch: dict) -> None:
-    """成功批次的耗时观测值，只记录不驱动自动阈值学习（design.md D3）。"""
+    """成功批次的耗时观测值，只记录不驱动自动阈值学习（design.md D3）。
+
+    `ON CONFLICT (batch_id) DO NOTHING`：部分批次通知失败时水位线不推进
+    （见 `jobs.import_notify`），下一轮会把包括已成功记录过基线的批次在内的整个
+    区间重新扫一遍——同一 `batch_id` 落两次是这条重试语义下的正常情形，不是异常，
+    应静默丢弃第二次而不是抛唯一约束错误中断整轮通知（PR #99 复审第四轮 P1）。
+    """
     await session.execute(
         text(
             "INSERT INTO ops.ops_import_baseline (period_type, batch_id, duration_seconds) "
-            "VALUES (:period_type, :batch_id, :duration_seconds)"
+            "VALUES (:period_type, :batch_id, :duration_seconds) "
+            "ON CONFLICT (batch_id) DO NOTHING"
         ),
         {
             "period_type": batch["period_type"],

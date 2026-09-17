@@ -55,7 +55,7 @@ class TestFindNewTerminalBatches(unittest.IsolatedAsyncioTestCase):
         """首次运行没有基准点，不该把历史上所有批次一次性当作"新"通知一遍。"""
         session = _session_with_rows([{"id": 1}])
 
-        result = await find_new_terminal_batches(session, since=None)
+        result = await find_new_terminal_batches(session, since=None, until=datetime.now(UTC))
 
         self.assertEqual(result, [])
         session.execute.assert_not_called()
@@ -65,9 +65,25 @@ class TestFindNewTerminalBatches(unittest.IsolatedAsyncioTestCase):
             [{"id": 1, "period_type": "DAY", "status": "COMPLETED", "processing_seconds": 120}]
         )
 
-        result = await find_new_terminal_batches(session, since=datetime.now(UTC) - timedelta(hours=1))
+        result = await find_new_terminal_batches(
+            session, since=datetime.now(UTC) - timedelta(hours=1), until=datetime.now(UTC)
+        )
 
         self.assertEqual(len(result), 1)
+
+    async def test_query_bounds_by_until_not_open_ended(self):
+        """查询必须带上界，否则 `until` 捕获之后、查询执行之前完成的批次会在
+        下一轮（`since=本轮 until`）被重复扫入、重复通知（PR #99 复审第四轮 P1）。
+        """
+        session = _session_with_rows([])
+        since = datetime.now(UTC) - timedelta(hours=1)
+        until = datetime.now(UTC)
+
+        await find_new_terminal_batches(session, since=since, until=until)
+
+        sql_text, params = session.execute.call_args.args
+        self.assertIn("completed_at <= :until", str(sql_text))
+        self.assertEqual(params["until"], until)
 
 
 class TestRecordBaseline(unittest.IsolatedAsyncioTestCase):
@@ -82,6 +98,19 @@ class TestRecordBaseline(unittest.IsolatedAsyncioTestCase):
         params = session.execute.call_args.args[1]
         self.assertEqual(params["batch_id"], 42)
         self.assertEqual(params["duration_seconds"], 300)
+
+    async def test_insert_is_idempotent_on_conflict(self):
+        """同一 `batch_id` 因水位线未推进被重新扫入时必须静默跳过，不能抛唯一约束
+        错误中断整轮通知（PR #99 复审第四轮 P1）。
+        """
+        session = AsyncMock()
+
+        await record_baseline(
+            session, {"period_type": "DAY", "id": 42, "processing_seconds": 300}
+        )
+
+        sql_text = session.execute.call_args.args[0]
+        self.assertIn("ON CONFLICT (batch_id) DO NOTHING", str(sql_text))
 
 
 if __name__ == "__main__":

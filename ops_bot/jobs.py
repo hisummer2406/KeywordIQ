@@ -108,7 +108,7 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
             # 间隙里完成的批次会被本轮与下一轮各命中一次、通知两遍
             # （crud.last_import_notify_watermark 的文档字符串，PR #99 复审第三轮 P2）。
             cutoff = datetime.now(UTC)
-            new_batches = await import_status.find_new_terminal_batches(session, since=last)
+            new_batches = await import_status.find_new_terminal_batches(session, since=last, until=cutoff)
             failed_sends = 0
             for batch in new_batches:
                 if batch["status"] == "COMPLETED":

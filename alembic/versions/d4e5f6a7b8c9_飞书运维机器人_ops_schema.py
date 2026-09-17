@@ -207,6 +207,7 @@ def upgrade() -> None:
         sa.Column("duration_seconds", sa.Integer(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("batch_id", name="uq_ops_import_baseline_batch_id"),
         schema=OPS_SCHEMA,
         comment="导入耗时基线观测值：只记录，不驱动自动阈值学习。",
     )
