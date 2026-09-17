@@ -2,24 +2,48 @@ name: Deploy
 
 # CD 部分：CI（ci.yml）绿灯之后，把代码部署到生产 ECS。
 #
-# 触发设计：
-#   - push tag（v*）：发布仪式——CI 绿了才打 tag，迁移的执行时机由人决定，
-#     呼应 deploy.sh 里对迁移做交互确认的设计意图。
-#   - workflow_dispatch：手动部署任意分支/commit（紧急回滚也走这里，填旧 tag 重跑）。
+# 触发设计（issue #103）：
+#   - 只有 workflow_dispatch，没有 push tag 触发。仓库里现存的 tag 是历史遗留，
+#     团队没有真实的打 tag 发布习惯；更关键的是 push 触发不要求工作流文件先
+#     存在于默认分支——对着任意分支上的任意 commit 打个 tag 就能让它跑起来，
+#     这条路径绕开了下面「来源必须是 main」的前提，必须去掉。
+#   - 刻意不选 push main 即自动部署：deploy.sh --yes 无人值守执行迁移，
+#     自动化会把「这次改动该不该现在上生产」的决策权吞掉。
 #
-# 刻意不选 push main 即自动部署：deploy.sh --yes 无人值守执行迁移，
-# 自动化会把「这次改动该不该现在上生产」的决策权吞掉。若确实想要那种节奏，
-# 把下面 push 块改成 branches: [main] 即可。
+# 部署目标限制为「main 分支自己的 HEAD」，不接受任意 ref/SHA/tag：
+#   - 部署脚本在服务器上会重新 checkout 到解析出的 SHA，这一步的血统检查
+#     只在 GitHub Actions 里做一次；漏了它，填一个 v2 上的 commit 就能让生产
+#     服务器 checkout 到还在开发中的 V2 代码、并对着 V1 生产库跑 V2 的迁移。
+#   - 因此本工作流做两层限制，缺一不可：
+#     1) 触发来源必须是 refs/heads/main（防的是「谁能拿到 production 凭证」）
+#     2) inputs.ref 只接受字面量 main（防的是「即使来源合法，目标也不能乱填」）
+#   - 不提供「部署 main 历史上某个更早 commit」的回滚能力——那需要先确认
+#     该 commit 对应的部署脚本契约与数据库迁移兼容性，属于另一个问题，
+#     这里不顺带做。
+#
+# validate → production 审批 → deploy 三段分离：
+#   - validate job 不引用 production environment、不持有部署凭证，用最小权限
+#     （contents: read）跑完来源与目标校验；校验失败直接 fail，不产生任何
+#     服务器端副作用。
+#   - 只有校验通过，deploy job 才会因为 environment: production 等待人工批准
+#     （前提是该 environment 已配置 required reviewers——见 issue #103，
+#     私有仓库能不能开这个功能取决于 GitHub 套餐，需要在仓库设置里单独确认）。
+#   - 部署所需的 DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY 目前不配置在
+#     任何层级——没有这三个 secrets，SSH 步骤天然跑不起来，这就是当前阶段
+#     「部署入口保持关闭」的实现方式，不需要额外的功能开关。真正要启用时，
+#     把这三个配置为 production environment 的 secrets（不是 repository/
+#     organization 级别），本身就是那个决定的落地动作。
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       ref:
-        description: '要部署的分支 / tag / SHA'
+        description: '要部署的目标（当前只接受字面量 main）'
         required: true
         default: 'main'
+
+permissions:
+  contents: read
 
 # 部署互斥：两次部署交错执行迁移是数据事故。cancel-in-progress 必须为
 # false——把一个已经执行了半截迁移的部署取消掉，比排队等待更糟。
@@ -28,30 +52,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: 校验触发来源与部署目标
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: 拒绝非 main 来源
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::此工作流只能从 main 分支触发（当前来源：${{ github.ref }}）。" >&2
+          exit 1
+
+      - name: 拒绝非法的部署目标
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        if: env.INPUT_REF != 'main'
+        run: |
+          echo "::error::inputs.ref 目前只接受字面量 main（收到：${INPUT_REF}）。不支持部署其他分支/tag/SHA，也不提供历史版本回滚。" >&2
+          exit 1
+
+      - name: 拉取 main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: 解析并校验部署目标 SHA
+        id: resolve
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::解析出的提交号格式不合法：${SHA}" >&2
+            exit 1
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 本次部署目标"
+            echo "main HEAD: \`${SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     name: 部署到 ECS
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    # 在 repo Settings → Environments 建好 production 环境并添加 required reviewers 后，
-    # 每次部署在此等待人工批准——这是无人值守迁移（--yes）的人工闸门；
-    # 没配置该环境时这里只作为标记直接通过，不影响首次使用。
+    # 在 repo Settings → Environments 建好 production 环境并配置 required
+    # reviewers 后，每次运行到这里都要等人工批准——这是无人值守迁移（--yes）
+    # 的人工闸门。私有仓库能否开 required reviewers 取决于 GitHub 套餐，
+    # 未核实前不要假定它已经生效（见 issue #103）。
     environment: production
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # dispatch 可传任意 ref，rev-parse 需要完整历史
-          fetch-depth: 0
-
-      - name: 解析待部署 commit
-        id: rev
-        run: |
-          REF="${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}"
-          SHA="$(git rev-parse "$REF")"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "部署 $REF → $SHA"
-
       - name: SSH 部署
         uses: appleboy/ssh-action@v1.2.2
+        env:
+          # 走 env 传参而不是直接把值拼进 script 文本，避免表达式插值变成
+          # 可执行的 shell 片段（GitHub 官方点名的注入反模式）。这里的 SHA
+          # 已经在 validate job 里校验过格式，双重保险不嫌多。
+          TARGET_SHA: ${{ needs.validate.outputs.sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -59,13 +119,15 @@ jobs:
           # 服务器上跑完整链路：构建镜像 → 容器内迁移 → 前端构建 → 发布 → reload。
           # 4C8G 通常 10 分钟内完成；30 分钟给首次冷启动（无 Docker 层缓存）留余量。
           command_timeout: 30m
+          envs: TARGET_SHA
           script: |
             set -euo pipefail
             cd /opt/KeywordIQ
-            # 部署触发本次工作流的那个 commit，而非「main 此刻的样子」：
-            # 用 git pull，部署窗口期内新合入的 commit 会混进来——部署的就不是
-            # 通过 CI 的那个版本。checkout --force 丢弃对已跟踪文件的本地改动，
-            # 服务器上只允许存在仓库状态；.env/logs/uploads/pgdata 均未跟踪，不受影响。
+            # 用 git fetch + checkout 到固定 SHA，而非 git pull：部署窗口期内
+            # 新合入的 commit 不应该混进来——部署的必须是 validate job 锁定
+            # 的那个版本。checkout --force 丢弃对已跟踪文件的本地改动，
+            # 服务器上只允许存在仓库状态；.env/logs/uploads/pgdata 均未跟踪，
+            # 不受影响。
             git fetch origin
-            git checkout --force ${{ steps.rev.outputs.sha }}
+            git checkout --force "$TARGET_SHA"
             ./deploy.sh --yes
