@@ -1,0 +1,46 @@
+# /etc/systemd/system/keywordiq-ops-bot.service
+#
+# ops-bot（飞书运维机器人）以 host 级 systemd 服务运行，不是 docker-compose 服务
+# ——design.md D1 记录了这条修订的理由：受限执行器要执行的
+# `docker compose restart app` / `systemctl reload nginx` / `./deploy.sh` 都是
+# 天然的宿主机操作，容器化会陷入 Docker-outside-of-Docker 的路径映射难题。
+#
+# 前置条件：
+#   1. 用同一份仓库的 uv 环境（`uv sync` 已跑过），WorkingDirectory 指向仓库根。
+#   2. `docker-compose.yml` 的 `db` 服务已新增 `127.0.0.1:5432:5432` 映射
+#      （本服务通过 OPS_DATABASE_URL* 直连宿主机的这个端口，不经 compose 内部网络）。
+#   3. 运行账号需在 `docker` 组（供 RESTART_APP/DEPLOY 调用 `docker compose`），
+#      且已配置针对 `deploy.sh` 内部 `sudo` 调用（nginx/logrotate/rsync 到系统目录）
+#      的 NOPASSWD sudoers 白名单——具体条目见部署 runbook，属于服务器一次性配置，
+#      不在本仓库版本控制范围内。
+#   4. .env 已按 .env.example 的「飞书运维机器人」一节配好。
+#
+# 安装：
+#   sudo cp etc/keywordiq-ops-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now keywordiq-ops-bot
+
+[Unit]
+Description=KeywordIQ ops-bot（飞书运维机器人）
+After=network-online.target docker.service
+Wants=network-online.target
+# 不写 Requires=keywordiq（app 的容器化部署不产生一个可 Requires 的 systemd 单元），
+# 两者的存活保障刻意独立——design.md D1："容器的 restart: unless-stopped 与本服务的
+# systemd 存活保障是两套独立的机制，互不依赖"。
+
+[Service]
+Type=simple
+User=opsbot
+Group=opsbot
+SupplementaryGroups=docker
+WorkingDirectory=/opt/keywordiq
+ExecStart=/opt/keywordiq/.venv/bin/python -m ops_bot.main
+Restart=on-failure
+RestartSec=5
+# 短窗口内反复崩溃直接停止重试，避免把一个配置错误的服务变成日志刷屏源——
+# 与业务 app 的 etc/keywordiq.service（已随容器化退役）曾经的做法一致。
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

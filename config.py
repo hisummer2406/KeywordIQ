@@ -498,6 +498,54 @@ class Settings(BaseSettings):
             raise ValueError("GROWTH_MIN_DAILY_RATE 必须在 [0, 1) 内（0.10 表示 10%）")
         return value
 
+    # ---- 飞书运维机器人（ops-bot，见 openspec/changes/add-feishu-ops-bot）----
+    #
+    # ops-bot 是与 app 完全独立的进程/容器，这些配置只被它读取——app 进程不使用它们，
+    # 因此这里只声明字段与最小的数值合法性校验，不做"启用时必填"这类强校验（那类校验
+    # 放 ops_bot 自己的启动路径，不能让 app 因为运维机器人没配好而起不来）。
+    OPS_DATABASE_URL: str = ""        # ops_bot_role 的连接串（同步），见迁移里的角色授权
+    OPS_DATABASE_URL_ASYNC: str = ""  # ops_bot_role 的连接串（异步）
+    # 注：ops_bot_role 的密码 OPS_DB_ROLE_PASSWORD **不进 Settings**——它只有一个读取方
+    # （建角色的那条迁移），与 PG_MAX_CONNECTIONS/POSTGRES_DB 同一条既有约定（"只服务单一
+    # 用途的部署期变量不必路由进 pydantic Settings"），迁移里直接读 os.environ。
+
+    FEISHU_APP_ID: str = ""
+    FEISHU_APP_SECRET: str = ""              # 只在服务端持有，绝不出现在日志或响应体里
+    FEISHU_VERIFICATION_TOKEN: str = ""       # 校验事件订阅回调确实来自飞书
+    FEISHU_ENCRYPT_KEY: str = ""              # 事件订阅启用加密时使用，可留空
+    FEISHU_OWNER_OPEN_ID: str = ""            # 唯一授权操作人，见 ops-bot-platform 鉴权
+    FEISHU_OPS_CHAT_ID: str = ""              # 通知与交互入口的运维群
+
+    # 巡检/告警/备份阈值——初始默认值按"先观测后设阈"的保守估计给出（design.md D3），
+    # 部署后须按 ops_import_baseline 记录的真实导入耗时校准。
+    OPS_ALERT_SILENCE_MINUTES: int = 30
+    OPS_IMPORT_DAY_TIMEOUT_MINUTES: int = 60
+    OPS_IMPORT_WEEK_TIMEOUT_MINUTES: int = 240
+    OPS_ERROR_RATE_THRESHOLD: int = 20        # 近 5 分钟 ERROR/5xx 计数阈值
+    OPS_BACKUP_RETENTION_DAYS: int = 30
+
+    # 重启/发布确认流程（design.md D5）。GH_TOKEN 最小权限 checks:read+contents:read，
+    # 发布前核实目标 SHA 的必需 CI 是否全部成功；不配置时发布路径直接拒绝（不放行）。
+    GH_TOKEN: str = ""
+    GH_REPO: str = "hisummer2406/KeywordIQ"   # owner/repo，查 CI 状态用
+    OPS_CONFIRM_TTL_MINUTES: int = 10         # 重启/发布确认卡片的有效期
+    OPS_MAINTENANCE_WINDOW_MINUTES: int = 5   # 发布/重启执行期间的维护窗口
+
+    @field_validator(
+        "OPS_ALERT_SILENCE_MINUTES",
+        "OPS_IMPORT_DAY_TIMEOUT_MINUTES",
+        "OPS_IMPORT_WEEK_TIMEOUT_MINUTES",
+        "OPS_ERROR_RATE_THRESHOLD",
+        "OPS_BACKUP_RETENTION_DAYS",
+        "OPS_CONFIRM_TTL_MINUTES",
+        "OPS_MAINTENANCE_WINDOW_MINUTES",
+    )
+    @classmethod
+    def _validate_ops_bot_thresholds(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("ops-bot 的阈值/时长类配置至少为 1（配成 0 或负数会让对应判据失效）")
+        return value
+
     model_config = ConfigDict(env_file=".env", extra="ignore")
 
 

@@ -43,8 +43,9 @@ CONFIG_PY = REPO / "config.py"
 ENV_EXAMPLE = REPO / ".env.example"
 CLAUDE_MD = REPO / "CLAUDE.md"
 
-# 扫描范围：应用代码 + 顶层模块 + 运维脚本。迁移文件由 alembic 生成，不适用这些规则。
-SCAN_ROOTS = ("app", "scripts")
+# 扫描范围：应用代码 + 顶层模块 + 运维脚本 + ops-bot（独立服务，见
+# openspec/changes/add-feishu-ops-bot）。迁移文件由 alembic 生成，不适用这些规则。
+SCAN_ROOTS = ("app", "scripts", "ops_bot")
 SCAN_TOP_LEVEL = ("config.py", "database.py", "main.py", "monitoring.py")
 
 
