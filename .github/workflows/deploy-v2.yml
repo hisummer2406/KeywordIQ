@@ -1,0 +1,101 @@
+name: Deploy V2 to ECS
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-v2-ecs
+  cancel-in-progress: false
+
+permissions:
+  checks: read
+  contents: read
+
+jobs:
+  deploy:
+    # 工作流页面可选择任意分支；只允许 V2 分支触发，避免误把 main/V1 发到此 ECS 目录。
+    if: github.ref == 'refs/heads/v2'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 核验目标 SHA 的必需 CI 检查
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          checks="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100")"
+
+          for required in '后端（pytest + alembic）' '前端（lint + tsc + test + build）' '竞对采集插件（typecheck + test + build）'; do
+            matching="$(jq --arg name "$required" '[.check_runs[] | select(.name == $name)]' <<<"$checks")"
+            jq -e 'length > 0 and all(.[]; .status == "completed" and .conclusion == "success")' \
+              <<<"$matching" >/dev/null \
+              || { echo "必需 CI 未全部成功：$required"; exit 1; }
+          done
+
+      - name: 配置 SSH 连接
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ECS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ECS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: 部署已验证的 V2 SHA
+        env:
+          ECS_SSH_HOST: ${{ secrets.ECS_SSH_HOST }}
+          ECS_SSH_PORT: ${{ secrets.ECS_SSH_PORT }}
+          ECS_SSH_USER: ${{ secrets.ECS_SSH_USER }}
+        run: |
+          set -euo pipefail
+          test -n "$ECS_SSH_HOST"
+          test -n "$ECS_SSH_PORT"
+          test -n "$ECS_SSH_USER"
+
+          ssh -p "$ECS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            "${ECS_SSH_USER}@${ECS_SSH_HOST}" \
+            "DEPLOY_REF='${GITHUB_REF}' DEPLOY_SHA='${GITHUB_SHA}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          test "$DEPLOY_REF" = 'refs/heads/v2' || {
+            echo "拒绝非 v2 分支：$DEPLOY_REF" >&2
+            exit 1
+          }
+
+          cd /var/www/keywordiq
+          git diff --quiet && git diff --cached --quiet || {
+            echo 'ECS 工作树存在已跟踪的本地修改，拒绝覆盖。请先人工处理。' >&2
+            exit 1
+          }
+
+          git fetch --quiet origin v2
+          git cat-file -e "${DEPLOY_SHA}^{commit}"
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/v2 || {
+            echo '目标 SHA 不在 origin/v2 历史中，拒绝部署。' >&2
+            exit 1
+          }
+          git switch v2
+          git merge --ff-only "$DEPLOY_SHA"
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA" || {
+            echo 'ECS 当前提交不等于已核验 SHA，拒绝继续。' >&2
+            exit 1
+          }
+
+          sudo -n /usr/sbin/nginx -t >/dev/null || {
+            echo 'www 尚未配置部署所需的免密 sudo，参照 .github/v2-ecs-cd.md 完成一次性引导。' >&2
+            exit 1
+          }
+          ./deploy.sh --yes
+          curl --fail --silent --show-error \
+            --resolve key.liangtong.online:443:127.0.0.1 \
+            https://key.liangtong.online/health >/dev/null
+          REMOTE
