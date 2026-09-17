@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -158,5 +159,6 @@ class OpsImportBaseline(OpsBase):
 
     __table_args__ = (
         Index("idx_ops_import_baseline_period", "period_type", "recorded_at"),
+        UniqueConstraint("batch_id", name="uq_ops_import_baseline_batch_id"),
         {"comment": "导入耗时基线观测值：只记录，不驱动自动阈值学习。"},
     )
