@@ -2,8 +2,8 @@
 # deploy.sh - KeywordIQ 部署脚本
 #
 # 部署形态：应用 + 自建 PostgreSQL 由 Docker Compose 管理（见 docker-compose.yml），
-# host nginx 托管前端 SPA 产物并反代 /api 到应用容器（127.0.0.1:8000），配置见
-# etc/keywordiq-nginx.conf。曾经历过两次形态变化：docker-compose 路线于 9c0a31d 退役
+# host nginx 托管前端 SPA 产物并反代 /api 到应用容器（127.0.0.1:8001），配置见
+# etc/keywordiq-v2-nginx.conf。曾经历过两次形态变化：docker-compose 路线于 9c0a31d 退役
 # （理由：简化部署），host nginx + systemd 裸 uvicorn 路线又于
 # dockerize-selfhosted-infra 变更退役（理由：自建 PostgreSQL 与同机部署需要容器编排
 # 提供的重启监督/生命周期管理，两次的驱动因素并不相同）。
@@ -24,8 +24,8 @@
 #   ./deploy.sh --yes            # 不交互确认迁移（供 CI / 无人值守）
 #
 # 可用环境变量覆盖：
-#   WEB_ROOT      SPA 产物发布目录（默认 /var/www/keywordiq，须与 nginx root 一致）
-#   SERVICE_NAME  旧路线（host nginx + systemd 裸 uvicorn）遗留的服务名（默认 keywordiq），
+#   WEB_ROOT      SPA 产物发布目录（默认 /var/www/keywordiq-web，须与 nginx root 一致）
+#   SERVICE_NAME  旧路线（host nginx + systemd 裸 uvicorn）遗留的服务名（默认 keywordiq-v2），
 #                 仅用于本次切容器化时清理该 unit——旧路线本身支持这个覆盖，若操作者
 #                 当初把它改成了非默认名字，硬编码 keywordiq.service 找不到那个 unit，
 #                 它会继续占着 127.0.0.1:8000（Codex 审核 PR #84 第十三轮）
@@ -37,8 +37,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-WEB_ROOT="${WEB_ROOT:-/var/www/keywordiq}"
-SERVICE_NAME="${SERVICE_NAME:-keywordiq}"
+WEB_ROOT="${WEB_ROOT:-/var/www/keywordiq-web}"
+SERVICE_NAME="${SERVICE_NAME:-keywordiq-v2}"
+APP_HEALTH_URL="${APP_HEALTH_URL:-http://127.0.0.1:8001/health}"
+LOGROTATE_CONF_DST="${LOGROTATE_CONF_DST:-/etc/logrotate.d/keywordiq-v2}"
 
 SKIP_FRONTEND=0
 SKIP_MIGRATE=0
@@ -166,11 +168,10 @@ fi
 # 为本次部署的真实绝对路径并安装，每次部署自动做，不再指望人工记得这一步。
 info "6/7 安装/更新 logrotate 配置..."
 LOGROTATE_CONF_SRC="etc/keywordiq-logrotate.conf"
-LOGROTATE_CONF_DST="/etc/logrotate.d/keywordiq"
 REAL_LOG_PATH="$(pwd)/logs/app.log"
 tmp_logrotate="$(mktemp)"
 sed "s#/path/to/keywordiq/logs/app.log#${REAL_LOG_PATH}#" "$LOGROTATE_CONF_SRC" > "$tmp_logrotate"
-if as_root cmp -s "$tmp_logrotate" "$LOGROTATE_CONF_DST" 2>/dev/null; then
+if cmp -s "$tmp_logrotate" "$LOGROTATE_CONF_DST" 2>/dev/null; then
     echo "  logrotate 配置未变化，跳过安装"
 else
     as_root cp "$tmp_logrotate" "$LOGROTATE_CONF_DST"
@@ -225,7 +226,7 @@ echo "  容器已切换到新镜像（restart: unless-stopped，之后崩溃/宿
 # ---------- 健康检查 ----------
 info "健康检查..."
 for i in $(seq 1 15); do
-    if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+    if curl -fsS "$APP_HEALTH_URL" >/dev/null 2>&1; then
         info "✅ 部署完成，后端健康检查通过"
         exit 0
     fi
