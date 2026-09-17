@@ -8,24 +8,21 @@ PostgreSQL 容器，但物理上是不同的数据库角色——复用业务引
 
 池配置刻意不进 `config.Settings`：ops-bot 的负载是巡检轮询 + 少量飞书回调，
 量级与业务查询路径完全不是一回事，硬做成配置项只会制造第二套需要维护的旋钮。
+
+**`OpsBase` 定义在 `ops_bot/db_base.py`，本模块只 re-export。** 本模块在模块级
+`create_engine()`——Alembic 与模型注册只需要 metadata，不该被迫先建立运行时连接，
+理由见 `db_base.py` 顶部注释。运行时代码仍可以照旧 `from ops_bot.database import
+OpsBase`，只是它自己不再是定义处。
 """
 
 from __future__ import annotations
 
-from sqlalchemy import MetaData, create_engine
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from config import settings
-
-OPS_SCHEMA = "ops"
-
-
-class OpsBase(DeclarativeBase):
-    """ops schema 专用的模型基类，与业务 `database.Base`（`analysis` schema）分开。"""
-
-    metadata = MetaData(schema=OPS_SCHEMA)
-
+from ops_bot.db_base import OPS_SCHEMA, OpsBase  # noqa: F401
 
 ops_engine = create_engine(
     settings.OPS_DATABASE_URL,

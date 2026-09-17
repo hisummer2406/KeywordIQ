@@ -51,7 +51,7 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         job = _find_job(self._jobs(), "IMPORT_NOTIFY")
 
         with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
-            "ops_bot.jobs.crud.last_succeeded_at", new=AsyncMock(return_value=None)
+            "ops_bot.jobs.crud.last_succeeded_task_created_at", new=AsyncMock(return_value=None)
         ), patch(
             "ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=batches)
         ), patch("ops_bot.jobs.import_status.record_baseline", record_baseline), patch(
@@ -81,13 +81,37 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         job = _find_job(self._jobs(), "IMPORT_NOTIFY")
 
         with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
-            "ops_bot.jobs.crud.last_succeeded_at", new=AsyncMock(return_value=None)
+            "ops_bot.jobs.crud.last_succeeded_task_created_at", new=AsyncMock(return_value=None)
         ), patch(
             "ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=batches)
         ), patch("ops_bot.jobs.FeishuClient.send_text", new=AsyncMock(return_value=None)):
             output = await job.run()
 
         self.assertEqual(output, "1 条新完成/失败通知")
+
+    async def test_uses_task_created_at_as_watermark_not_finished_at(self):
+        """高水位线必须来自 `last_succeeded_task_created_at`（任务创建时间），
+        不是 `last_succeeded_at`（任务完成时间）——后者会漏记"本轮查询已执行、
+        本轮任务尚未标记完成"这段窗口内转终态的批次（PR #99 复审第二轮 P2）。
+        """
+
+        @asynccontextmanager
+        async def _session_ctx():
+            yield AsyncMock()
+
+        job = _find_job(self._jobs(), "IMPORT_NOTIFY")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
+            "ops_bot.jobs.crud.last_succeeded_task_created_at", new=AsyncMock(return_value=None)
+        ) as mock_watermark, patch(
+            "ops_bot.jobs.crud.last_succeeded_at", new=AsyncMock()
+        ) as mock_stale_watermark, patch(
+            "ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=[])
+        ):
+            await job.run()
+
+        mock_watermark.assert_awaited_once()
+        mock_stale_watermark.assert_not_awaited()
 
 
 class TestPoolCheck(unittest.IsolatedAsyncioTestCase):
@@ -132,6 +156,64 @@ class TestPoolCheck(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], False)
         self.assertEqual(output, "10%")
+
+
+class TestAlembicDriftCheck(unittest.IsolatedAsyncioTestCase):
+    """`alembic_drift.is_in_sync()` 探测失败返回 `None`，与该函数文档字符串同一条
+    纪律：`None` 是"无法核实"，不是"已同步"，必须按异常处理，不能被判定为不告警
+    （PR #99 复审第二轮 P2）。"""
+
+    def _jobs(self):
+        client = FeishuClient("id", "secret")
+        return build_jobs(client, "oc_ops")
+
+    async def test_probe_failure_is_treated_as_alerting_not_synced(self):
+        job = _find_job(self._jobs(), "ALEMBIC_DRIFT_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.alembic_drift.is_in_sync", return_value=None
+        ), patch("ops_bot.jobs.alerts.evaluate", new=AsyncMock()) as mock_evaluate:
+            output = await job.run()
+
+        self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], True)
+        self.assertEqual(output, "探测失败")
+
+    async def test_drift_detected_is_alerting(self):
+        job = _find_job(self._jobs(), "ALEMBIC_DRIFT_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.alembic_drift.is_in_sync", return_value=False
+        ), patch("ops_bot.jobs.alerts.evaluate", new=AsyncMock()) as mock_evaluate:
+            output = await job.run()
+
+        self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], True)
+        self.assertEqual(output, "漂移")
+
+    async def test_in_sync_is_not_alerting(self):
+        job = _find_job(self._jobs(), "ALEMBIC_DRIFT_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.alembic_drift.is_in_sync", return_value=True
+        ), patch("ops_bot.jobs.alerts.evaluate", new=AsyncMock()) as mock_evaluate:
+            output = await job.run()
+
+        self.assertEqual(mock_evaluate.call_args.kwargs["is_alerting"], False)
+        self.assertEqual(output, "同步")
+
+    async def test_probe_runs_off_the_event_loop(self):
+        """两个各 60 秒超时的 `docker compose run` 子进程必须丢进线程池，不能直接
+        同步跑在事件循环上——否则探测卡住时 `/ops/health`、飞书回调都会连带
+        无响应（PR #99 复审第二轮 P2）。"""
+        job = _find_job(self._jobs(), "ALEMBIC_DRIFT_CHECK")
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.jobs.alerts.evaluate", new=AsyncMock()
+        ), patch("ops_bot.jobs.asyncio.to_thread", new=AsyncMock(return_value=True)) as mock_to_thread, patch(
+            "ops_bot.jobs.alembic_drift.is_in_sync"
+        ) as mock_is_in_sync:
+            await job.run()
+
+        mock_to_thread.assert_awaited_once_with(mock_is_in_sync)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,11 @@
 """ops-bot 的任务/审计/去重/告警/备份/基线模型，`ops` schema 下的六张普通表。
 
-**不与业务 `analysis` schema 混用**，也不共用业务 `database.Base`（见 `ops_bot/database.py`
+**不与业务 `analysis` schema 混用**，也不共用业务 `database.Base`（见 `ops_bot/db_base.py`
 的 `OpsBase`）——这六张表的生命周期、写入方与权限边界都只属于 ops-bot 自己。
+
+**`OpsBase` 从 `ops_bot.db_base` 导入，不从 `ops_bot.database` 导入。** 后者会在模块级
+建立运行时数据库引擎，而 Alembic 迁移导入本模块时未必已配置好 `OPS_DATABASE_URL*`
+（见 `db_base.py` 顶部注释，PR #99 复审第二轮 P1）。
 
 状态枚举与业务 `import_batch` 同一条纪律：普通 `varchar`，取值由应用层保证，增删状态值
 不需要一次 `ALTER TYPE`。
@@ -23,7 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ops_bot.database import OpsBase
+from ops_bot.db_base import OpsBase
 
 # ---- OpsTask.status ----
 TASK_PENDING = "PENDING"

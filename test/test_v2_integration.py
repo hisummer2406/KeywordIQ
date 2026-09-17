@@ -200,7 +200,7 @@ def test_models_match_migrated_schema(conn):
     # （PR #99 Codex 复审 P2）——这里跟着一并核对，否则这条回归测试本身
     # 就成了一个只覆盖一半 target_metadata 的假绿。
     from ops_bot import model as ops_model  # noqa: F401
-    from ops_bot.database import OpsBase
+    from ops_bot.db_base import OpsBase
 
     # 库落后于 head 时差异必然存在，但那说明的是「测试库该迁移了」，不是模型有问题。
     cfg = alembic.config.Config(os.path.join(REPO, "alembic.ini"))

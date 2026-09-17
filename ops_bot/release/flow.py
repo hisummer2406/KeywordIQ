@@ -228,6 +228,30 @@ async def _execute_confirmed(
             if await _import_active_or_unknown(session):
                 return await _finish(False, "执行前重新核实：导入进行中", "PRECHECK_IMPORT")
 
+        if kind == "DEPLOY":
+            # 同一条道理适用于迁移/回滚边界，不只是导入状态：两张发布卡片可以在
+            # 同一个 checkout 上先后生成（互斥锁只保证不并发执行，不保证不先后
+            # 执行），先确认的那张若带迁移先执行完，这张卡片的 `payload["with_migration"]`
+            # 就是基于执行前旧 checkout 算出的过期值——带着它直接跑会让
+            # `executor.deploy` 传出错误的 `--skip-migrate`/`--migrate`，用旧代码
+            # 部署到已经前进的 schema 上而不触发本该拦它的回滚复核（PR #99
+            # 复审第二轮 P1）。持锁期间按当前 HEAD 重新算一遍，任何一项与确认时
+            # 不一致就中止，要求重新发起——不能静默改用新值替确认过的人做决定。
+            needs_review = await asyncio.to_thread(git_ref.rollback_needs_review, target_sha)
+            if needs_review is None:
+                return await _finish(False, "执行前重新核实：无法核实回滚边界", "PRECHECK_MIGRATION")
+            if needs_review:
+                return await _finish(
+                    False, "执行前重新核实：目标版本已落后于当前数据库结构，需人工评估", "PRECHECK_MIGRATION"
+                )
+            fresh_with_migration = await asyncio.to_thread(git_ref.migrations_changed, target_sha)
+            if fresh_with_migration is None:
+                return await _finish(False, "执行前重新核实：无法核实是否包含数据库迁移", "PRECHECK_MIGRATION")
+            if fresh_with_migration != payload["with_migration"]:
+                return await _finish(
+                    False, "执行前重新核实：迁移状态与确认时不一致，请重新发起", "PRECHECK_MIGRATION"
+                )
+
         await _open_maintenance()
 
         if kind == "RESTART_APP":
