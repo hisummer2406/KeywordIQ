@@ -53,8 +53,21 @@ _HEARTBEAT_INTERVAL_SECONDS = 60
 _HEARTBEAT_STALE_AFTER_SECONDS = 90
 
 
+async def _reconcile_orphaned_tasks_on_startup() -> None:
+    """接受新任务前先回收上一次进程遗留的 RUNNING/CONFIRMED 任务（见
+    `crud.reconcile_orphaned_tasks` 文档字符串，PR #99 复审第三轮 P2）。"""
+    async with OpsAsyncSessionFactory() as session:
+        reconciled = await crud.reconcile_orphaned_tasks(
+            session, output="ops-bot 重启，执行结果未知，请人工核实"
+        )
+        await session.commit()
+    if reconciled:
+        logger.warning("启动时回收 %d 条遗留的 RUNNING/CONFIRMED 任务，已标记为失败待人工核实", reconciled)
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
+    await _reconcile_orphaned_tasks_on_startup()
     tasks = scheduler.start(jobs.build_jobs(_feishu_client, settings.FEISHU_OPS_CHAT_ID))
     try:
         yield
@@ -178,8 +191,13 @@ async def feishu_webhook(request: Request) -> Response:
             if not target_sha:
                 await _reply("用法：发布 <完整 40 位 commit SHA>")
                 return Response(status_code=200)
-            plan, reason = await release_flow.build_deploy_plan(target_sha, open_id)
-            await _send_plan_or_reason(plan, reason)
+            # `build_deploy_plan` 内部要跑 `git fetch`（60 秒超时）、一次 GitHub API
+            # 请求与好几个 git 子进程——同步等它跑完可能让这次 webhook 请求超过飞书
+            # 的重试窗口；事件已经在上面完成去重，一次超时重试只会被判"已处理"直接
+            # 丢弃，用户什么回应都收不到（PR #99 复审第三轮 P2）。先受理、后台构建，
+            # 与手动备份、卡片确认执行走同一个"及时应答、后台执行"协议。
+            _spawn_background(_build_and_send_deploy_plan(target_sha, open_id))
+            await _reply("已受理发布请求，正在核实 CI/SHA/迁移边界…")
             return Response(status_code=200)
 
         # 其余只读指令分发（状态/任务/日志查询）。
@@ -238,6 +256,11 @@ async def _handle_card_action(event: dict) -> Response:
     else:
         await _reply(outcome.immediate_reply)
     return Response(status_code=200)
+
+
+async def _build_and_send_deploy_plan(target_sha: str, open_id: str | None) -> None:
+    plan, reason = await release_flow.build_deploy_plan(target_sha, open_id)
+    await _send_plan_or_reason(plan, reason)
 
 
 async def _send_plan_or_reason(plan, reason: str | None) -> None:

@@ -227,7 +227,20 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """回滚不影响 analysis schema 下任何数据；ops schema 整体随六张表一起丢弃。"""
+    """回滚不影响 analysis schema 下任何数据；ops schema 整体随六张表一起丢弃。
+
+    **必须先 `REVOKE` upgrade() 里 `ALTER DEFAULT PRIVILEGES` 建立的默认权限条目，
+    再 `DROP ROLE`**：`ALTER DEFAULT PRIVILEGES` 落的是"迁移执行角色→ops_bot_role"
+    这条默认授权依赖，`DROP SCHEMA ... CASCADE` 只清理 schema 内的对象与
+    普通 GRANT，不清理这类默认权限条目；带着它执行 `DROP ROLE` 会被 PostgreSQL
+    以"角色仍被依赖"拒绝，回滚在最后一步失败（PR #99 复审第三轮 P2）。
+    """
+    op.execute(
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{OPS_SCHEMA}" REVOKE ALL PRIVILEGES ON TABLES FROM {OPS_ROLE}'
+    )
+    op.execute(
+        f'ALTER DEFAULT PRIVILEGES IN SCHEMA "{OPS_SCHEMA}" REVOKE ALL PRIVILEGES ON SEQUENCES FROM {OPS_ROLE}'
+    )
     op.execute(f'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "{OPS_SCHEMA}" FROM {OPS_ROLE}')
     op.drop_index("idx_ops_import_baseline_period", table_name="ops_import_baseline", schema=OPS_SCHEMA)
     op.drop_table("ops_import_baseline", schema=OPS_SCHEMA)

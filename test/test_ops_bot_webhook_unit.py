@@ -232,6 +232,101 @@ class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class TestDeployDispatch(unittest.TestCase):
+    """`发布 <sha>` 指令必须立刻回执、把 `build_deploy_plan`（内含 `git fetch`/CI 查询/
+    好几个 git 子进程）移交后台执行，不能同步等它跑完（PR #99 复审第三轮 P2）。
+    """
+
+    def test_acks_immediately_and_defers_plan_building_to_background(self):
+        target_sha = "a" * 40
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_VERIFICATION_TOKEN = "tok"
+            mock_settings.FEISHU_ENCRYPT_KEY = ""
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+
+            with patch(
+                "ops_bot.main.crud.try_claim_dedup_key", new=AsyncMock(return_value=True)
+            ), patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+                "ops_bot.main.release_flow.build_deploy_plan"
+            ) as mock_build_plan, patch(
+                "ops_bot.main._reply", new=AsyncMock()
+            ) as mock_reply, patch("ops_bot.main._spawn_background") as mock_spawn:
+                factory.return_value.__aenter__.return_value = AsyncMock()
+
+                response = _client().post(
+                    "/ops/feishu/webhook",
+                    content=json.dumps(
+                        {
+                            "token": "tok",
+                            "header": {"event_id": "evt-1"},
+                            "event": {
+                                "sender": {"sender_id": {"open_id": "ou_owner"}},
+                                "message": {
+                                    "chat_id": "oc_ops",
+                                    "content": json.dumps({"text": f"发布 {target_sha}"}),
+                                },
+                            },
+                        }
+                    ),
+                )
+
+        self.assertEqual(response.status_code, 200)
+        # 请求协程本身立刻回执"受理中"，不等 build_deploy_plan 跑完。
+        mock_reply.assert_awaited_once_with("已受理发布请求，正在核实 CI/SHA/迁移边界…")
+        mock_build_plan.assert_not_called()
+        mock_spawn.assert_called_once()
+        # 移交后台的协程本身不在这个测试里跑（那是 TestBuildAndSendDeployPlan 的
+        # 职责），关掉它只是避免"coroutine was never awaited"的噪音警告。
+        mock_spawn.call_args.args[0].close()
+
+
+class TestBuildAndSendDeployPlan(unittest.IsolatedAsyncioTestCase):
+    async def test_builds_plan_and_sends_result(self):
+        """手动跑一遍被移交给后台的协程，验证它最终确实调用了 `build_deploy_plan`
+        并把结果发出去——这一步不在请求协程里发生，正是 `TestDeployDispatch`
+        那个修复要保证的。
+        """
+        with patch(
+            "ops_bot.main.release_flow.build_deploy_plan",
+            new=AsyncMock(return_value=(None, "CI 未全部通过：backend: FAILED")),
+        ) as mock_build_plan, patch("ops_bot.main._send_plan_or_reason", new=AsyncMock()) as mock_send:
+            await main._build_and_send_deploy_plan("a" * 40, "ou_owner")
+
+        mock_build_plan.assert_awaited_once_with("a" * 40, "ou_owner")
+        mock_send.assert_awaited_once_with(None, "CI 未全部通过：backend: FAILED")
+
+
+class TestReconcileOrphanedTasksOnStartup(unittest.IsolatedAsyncioTestCase):
+    """接受新任务前必须先回收上一次进程遗留的 RUNNING/CONFIRMED 任务，否则
+    `任务` 指令会把它们永远显示成"进行中"（PR #99 复审第三轮 P2）。
+    """
+
+    async def test_calls_reconcile_and_logs_when_something_was_recovered(self):
+        with patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.main.crud.reconcile_orphaned_tasks", new=AsyncMock(return_value=2)
+        ) as mock_reconcile, patch("ops_bot.main.logger") as mock_logger:
+            session = AsyncMock()
+            factory.return_value.__aenter__.return_value = session
+
+            await main._reconcile_orphaned_tasks_on_startup()
+
+        mock_reconcile.assert_awaited_once()
+        self.assertEqual(mock_reconcile.call_args.args[0], session)
+        session.commit.assert_awaited_once()
+        mock_logger.warning.assert_called_once()
+
+    async def test_no_warning_when_nothing_to_recover(self):
+        with patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.main.crud.reconcile_orphaned_tasks", new=AsyncMock(return_value=0)
+        ), patch("ops_bot.main.logger") as mock_logger:
+            factory.return_value.__aenter__.return_value = AsyncMock()
+
+            await main._reconcile_orphaned_tasks_on_startup()
+
+        mock_logger.warning.assert_not_called()
+
+
 class TestDispatchExceptionFallback(unittest.TestCase):
     """`ops` schema 与业务 schema 同处一个自建 PG 实例，指令分发链路里任何一步
     数据库查询失败都可能抛出未预期异常——这条兜底必须把它接住，否则事件已经被

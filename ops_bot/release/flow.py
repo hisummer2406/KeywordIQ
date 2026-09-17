@@ -149,8 +149,13 @@ async def handle_confirm_callback(task_id: str, confirm_token: str, decision: st
             return ConfirmOutcome("已过期，请重新发起")
 
         if decision != "confirm":
-            await crud.mark_task_failed(session, task_id, output="用户取消")
+            cancelled = await crud.try_cancel_task(session, task_id, output="用户取消")
             await session.commit()
+            if not cancelled:
+                # 与确认按钮之间存在竞态窗口（双击、飞书重放、或确认已抢先落地并已经
+                # 把执行 closure 交给后台跑）——乐观锁兜底，不能无条件覆盖任务状态
+                # （PR #99 复审第三轮 P1，见 crud.try_cancel_task 文档字符串）。
+                return ConfirmOutcome("该任务已处理或已过期")
             return ConfirmOutcome("已取消")
 
         confirmed = await crud.try_confirm_task(session, task_id)

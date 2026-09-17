@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import Session
 
 from app.table.upload.import_service import _OPS_ACTION_LOCK_KEY, _ops_action_in_progress
@@ -48,10 +48,14 @@ def _ops_role_async_url() -> str | None:
 
 
 @pytest.fixture()
-async def ops_session_factory():
-    """指向 `TEST_URL` 的 `ops_bot_role` 会话工厂，替身顶替 `try_acquire()` 内部
-    真实用的 `OPS_DATABASE_URL_ASYNC`——迁移未跑到位（角色/schema 不存在）时按
-    既有惯例优雅跳过。
+async def ops_engine():
+    """指向 `TEST_URL` 的 `ops_bot_role` 引擎，替身顶替 `try_acquire()` 内部真实用的
+    `OPS_DATABASE_URL_ASYNC`——迁移未跑到位（角色/schema 不存在）时按既有惯例优雅
+    跳过。
+
+    **是引擎不是会话工厂**：`try_acquire()` 用 `ops_async_engine.connect()` 签出
+    专属连接持锁到动作结束，不能用 `AsyncSession`（`session.commit()` 会把连接还给
+    池子，导致锁在池子里被静默转移或解锁到错误的连接上，PR #99 复审第三轮 P1）。
     """
     engine = create_async_engine(_ops_role_async_url())
     try:
@@ -61,8 +65,7 @@ async def ops_session_factory():
         await engine.dispose()
         pytest.skip("测试库尚未迁移到 ops schema（先运行 alembic upgrade head）")
 
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False)
-    yield factory
+    yield engine
     await engine.dispose()
 
 
@@ -75,9 +78,9 @@ def business_session():
     engine.dispose()
 
 
-async def test_ops_bot_lock_visible_to_import_side(ops_session_factory, business_session):
+async def test_ops_bot_lock_visible_to_import_side(ops_engine, business_session):
     """ops-bot 持有运维动作锁时，导入侧的探测函数必须看到"进行中"。"""
-    with patch("ops_bot.release.lock.OpsAsyncSessionFactory", ops_session_factory):
+    with patch("ops_bot.release.lock.ops_async_engine", ops_engine):
         async with try_acquire() as got:
             assert got is True
 
@@ -86,9 +89,9 @@ async def test_ops_bot_lock_visible_to_import_side(ops_session_factory, business
     assert in_progress is True
 
 
-async def test_lock_released_after_context_exit(ops_session_factory, business_session):
+async def test_lock_released_after_context_exit(ops_engine, business_session):
     """退出 `try_acquire()` 上下文后锁必须真正释放，不留孤儿锁。"""
-    with patch("ops_bot.release.lock.OpsAsyncSessionFactory", ops_session_factory):
+    with patch("ops_bot.release.lock.ops_async_engine", ops_engine):
         async with try_acquire() as got:
             assert got is True
 

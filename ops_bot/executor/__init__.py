@@ -89,6 +89,19 @@ class DeployPlan:
     allowed_branch: str = "v2"
 
 
+def _capture_current_sha() -> str | None:
+    """发布前记下当前 checkout，供失败时回退（见 `deploy()` 说明）。探测失败返回
+    `None`——调用方据此跳过回退，不能把它当某个具体 SHA 处理。
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=".", capture_output=True, text=True, timeout=10, check=True
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return None
+    return proc.stdout.strip() or None
+
+
 def deploy(plan: DeployPlan) -> ExecutionResult:
     """检出确切 SHA 后调用 `deploy.sh`，不重写部署逻辑。
 
@@ -96,7 +109,18 @@ def deploy(plan: DeployPlan) -> ExecutionResult:
     这个决定在飞书确认卡片阶段就已经展示给用户，执行器只是照办，不再重新判断
     （design.md D5）。`deploy.sh` 内部的 `read -r -p` 交互确认因此必须被
     `--yes` 跳过，否则会在一个没有 TTY 的子进程里永久挂起。
+
+    **失败时回退工作树到发布前的 checkout。** `GIT_CHECKOUT` 这一步已经把仓库切到
+    `target_sha`；若随后的 `DEPLOY_SH`（`docker compose build` 等）失败，容器与数据库
+    schema 仍停在旧版本，工作树却已经在新 SHA 上——下一次重试时
+    `ops_bot.release.git_ref.migrations_changed`/`rollback_needs_review` 都以"当前
+    HEAD"为基准计算，会把这个还没真正生效的新 SHA 误当成"已部署版本"，算出错误的
+    迁移边界（例如把本该执行的迁移误判成"无迁移"而漏跑）。不回退就是让工作树的
+    checkout 悄悄替代了"实际已部署到哪个版本"这件事的事实来源（PR #99 复审
+    第三轮 P1）。
     """
+    previous_sha = _capture_current_sha()
+
     steps: list[tuple[list[str], str]] = [
         (["git", "fetch", "origin", plan.allowed_branch], "GIT_FETCH"),
         (["git", "checkout", plan.target_sha], "GIT_CHECKOUT"),
@@ -105,4 +129,14 @@ def deploy(plan: DeployPlan) -> ExecutionResult:
     if not plan.with_migration:
         deploy_cmd.append("--skip-migrate")
     steps.append((deploy_cmd, "DEPLOY_SH"))
-    return _run_steps(steps, _DEPLOY_TIMEOUT_SECONDS)
+
+    result = _run_steps(steps, _DEPLOY_TIMEOUT_SECONDS)
+    if result.success or previous_sha is None:
+        return result
+
+    restore = subprocess.run(
+        ["git", "checkout", previous_sha], cwd=".", capture_output=True, text=True,
+        timeout=_DEFAULT_TIMEOUT_SECONDS, check=False,
+    )
+    note = f"\n$ git checkout {previous_sha}（回退到发布前的版本）\n{restore.stdout}{restore.stderr}"
+    return ExecutionResult(False, _truncate(result.output + note), result.failed_stage)
