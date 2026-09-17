@@ -7,9 +7,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from ops_bot import backup, crud
 from ops_bot.checks import logs, resources, service
 from ops_bot.database import OpsAsyncSessionFactory
+from ops_bot.release import git_ref
 
 _LOG_PATH = "logs/app.log"
 
@@ -18,7 +21,7 @@ _HELP_TEXT = (
     "「状态」查看服务/资源/备份摘要\n"
     "「任务」查看最近运维任务\n"
     "「日志 <request_id>」按请求编号查日志\n"
-    "「备份记录」查看最近一次成功备份的详情\n"
+    "「备份记录」查看最近一次备份的详情（含失败）\n"
     "「备份」立即触发一次手动备份"
 )
 
@@ -48,9 +51,18 @@ async def dispatch(text: str) -> str:
 
 
 async def _status() -> str:
+    # `ops-monitoring-alerting` spec 的「查询系统状态」场景要求这一屏覆盖服务健康、
+    # 资源水位、最近备份、当前部署提交与未解决告警——此前只有前三项，池水位饱和、
+    # 有导入卡死或存在未解决告警时这条指令仍会显得"一切正常"（PR #99 复审第四轮 P2）。
     healthy = await service.is_app_healthy()
     disk_percent = resources.disk_usage_percent()
     backup_age_hours = await backup.latest_backup_age_hours()
+    # git_ref.current_sha 内部是同步 subprocess 调用，与 alembic_drift_check 同一条
+    # 纪律丢进线程池，不直接占用事件循环。
+    deployed_sha = await asyncio.to_thread(git_ref.current_sha)
+
+    async with OpsAsyncSessionFactory() as session:
+        unresolved = await crud.list_unresolved_alerts(session)
 
     lines = [
         f"服务：{'✅ 正常' if healthy else '❌ 不可用'}",
@@ -60,6 +72,12 @@ async def _status() -> str:
         lines.append("备份：⚠️ 从未成功过")
     else:
         lines.append(f"备份：距上次成功 {backup_age_hours:.1f} 小时前")
+    lines.append(f"当前部署提交：{deployed_sha or '未知（探测失败）'}")
+    if unresolved:
+        alerts_text = "、".join(f"{a.alert_key}({a.level})" for a in unresolved)
+        lines.append(f"未解决告警：{alerts_text}")
+    else:
+        lines.append("未解决告警：无")
     return "\n".join(lines)
 
 
@@ -73,10 +91,16 @@ async def _recent_tasks() -> str:
 
 
 async def _latest_backup() -> str:
+    # 查最近一次尝试而非最近一次成功——否则最新一次刚好失败时，这里会静默展示
+    # 一份更早的成功记录，操作者据此以为备份健康，实际最近一次已经失败
+    # （PR #99 复审第四轮 P2，见 crud.latest_backup_attempt 的文档字符串）。
     async with OpsAsyncSessionFactory() as session:
-        record = await crud.latest_succeeded_backup(session)
+        record = await crud.latest_backup_attempt(session)
     if record is None:
-        return "从未成功备份过"
+        return "从未备份过"
+
+    if record.status != "SUCCEEDED":
+        return f"❌ 最近一次备份失败（{record.finished_at:%Y-%m-%d %H:%M}，阶段：{record.failed_stage}）"
 
     lines = [f"时间：{record.finished_at:%Y-%m-%d %H:%M}", f"产物：{record.object_key}"]
     if record.size_bytes:

@@ -329,6 +329,21 @@ async def latest_succeeded_backup(session: AsyncSession) -> OpsBackupRecord | No
     return result.scalar_one_or_none()
 
 
+async def latest_backup_attempt(session: AsyncSession) -> OpsBackupRecord | None:
+    """不限状态的最近一次备份尝试，供「备份记录」指令回答"最近一次到底发生了什么"。
+
+    与 `latest_succeeded_backup` 刻意区分用途：后者只服务"距上次成功已过多久"这个
+    超期判定（`backup.latest_backup_age_hours`），若最新一次失败、更早一次成功，
+    仍应据实报告"还没超期"——超期阈值本就是相对最后一次成功而言。这里若也用
+    只看成功的查询，会让操作者看到一份过时的健康快照、误以为最近的失败没有发生
+    （PR #99 复审第四轮 P2）。
+    """
+    result = await session.execute(
+        select(OpsBackupRecord).order_by(OpsBackupRecord.finished_at.desc()).limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def recent_tasks(session: AsyncSession, limit: int = 10) -> list[OpsTask]:
     """最近的运维任务记录，按创建时间倒序——供飞书"任务查询"指令使用。
 

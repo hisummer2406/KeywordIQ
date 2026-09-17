@@ -252,14 +252,29 @@ async def _handle_card_action(event: dict) -> Response:
             await _reply(result)
 
         _spawn_background(_run_and_reply())
-        await _reply("已受理，执行中…")
+        # design.md「飞书回调及时应答，长任务后台执行」的协议是"先返回任务编号，
+        # 再更新卡片或主动发送最终结果"——task_id 此刻已知（来自卡片按钮 value），
+        # 不带上它会让并发的多个重启/发布确认在这句回执里长得一模一样，操作者
+        # 无法把这句回执、`任务` 指令的列表与稍后到达的最终结果关联到同一次操作
+        # （PR #99 复审第四轮 P2）。
+        await _reply(f"已受理，任务 #{task_id} 执行中…")
     else:
         await _reply(outcome.immediate_reply)
     return Response(status_code=200)
 
 
 async def _build_and_send_deploy_plan(target_sha: str, open_id: str | None) -> None:
-    plan, reason = await release_flow.build_deploy_plan(target_sha, open_id)
+    # 用户此时已经收到"正在核实…"的即时应答；这个协程是后台 fire-and-forget 任务
+    # （_spawn_background 不转发异常），构建计划过程中任何未预期的异常
+    # （运维库暂时不可用、GitHub 响应格式异常等）都必须在这里兜住并回一条终态消息，
+    # 否则用户会永远停在"正在核实…"、既收不到确认卡片也收不到失败原因
+    # （PR #99 复审第四轮 P2）。
+    try:
+        plan, reason = await release_flow.build_deploy_plan(target_sha, open_id)
+    except Exception:
+        logger.exception("构建发布计划失败：target_sha=%s", target_sha)
+        await _reply(f"❌ 核实发布计划时发生异常，详见应用日志（target_sha={target_sha}）")
+        return
     await _send_plan_or_reason(plan, reason)
 
 
