@@ -49,6 +49,12 @@ logger = logging.getLogger(__name__)
 # 内部实现细节，是导入与保留清理之间唯一的协调点，两侧都要能看到同一个符号。
 IMPORT_LOCK_KEY = 0x4B49
 
+# 飞书运维机器人（ops-bot）执行重启/发布时持有的咨询锁 key。'KO' 的十六进制——
+# 与 IMPORT_LOCK_KEY 不同值，避免两把锁互相误判。ops_bot/executor 里定义了同一个
+# 常量值（两边各自定义、不共享 import，因为 ops_bot 不依赖业务 app.* 代码，见
+# openspec/changes/add-feishu-ops-bot/design.md D5「导入协调锁机制」）。
+_OPS_ACTION_LOCK_KEY = 0x4B4F
+
 
 class ImportRejected(ConflictError):
     """导入被拒（另一个导入正在进行）→ 409。
@@ -138,20 +144,98 @@ def import_lock(session: Session) -> Iterator[bool]:
             conn.close()
 
 
+def _ops_action_in_progress(session: Session) -> bool:
+    """探测 ops-bot 的运维动作锁当前是否被占用（重启/发布正在执行）。
+
+    用独立连接抢一次锁、立刻释放——不是要长期持有，只是想提前知道"此刻它是不是被
+    别人攥着"，与 :func:`import_lock` 不复用连接的理由相同（咨询锁是连接级的，
+    跨连接的抢锁/解锁会静默失败）。
+
+    **这只是一次性探测，不是互斥边界**——探测到"没人占着"和真正把批次落成
+    `PROCESSING` 之间还要经过重建数据源、抢 `import_lock` 等好几步，ops-bot
+    可能在这段间隙里后发制人拿到锁并开始执行，与随后才真正开始的这次导入并发。
+    这里只是为了在明知冲突时提前失败、省得白跑一趟；真正的互斥边界在
+    :func:`_claim_processing_slot`——它与探测用的是同一把锁，但持锁横跨"检查 +
+    落定 PROCESSING"整个写入，不会留出上述间隙（design.md D5，PR #99 Codex 复审 P1）。
+    """
+    conn = session.get_bind().connect()
+    try:
+        got = bool(
+            conn.execute(
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": _OPS_ACTION_LOCK_KEY}
+            ).scalar()
+        )
+        conn.commit()
+        if got:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _OPS_ACTION_LOCK_KEY})
+            conn.commit()
+        return not got
+    finally:
+        conn.close()
+
+
+def _claim_processing_slot(session: Session, batch: ImportBatch) -> bool:
+    """持有运维动作锁横跨"批次转 PROCESSING 并提交"这一步，返回是否成功转场。
+
+    与 :func:`_ops_action_in_progress` 的关键区别：那个函数探测后立即放锁，在
+    "探测到空闲"与"真正写入 PROCESSING"之间留了一个窗口，ops-bot 可能在这个窗口
+    里抢到锁、判定"当前无导入在跑"，随后与这里才真正开始的导入并发执行（PR #99
+    Codex 复审 P1）。这里改为持锁横跨那次写入：ops-bot 若在这期间尝试抢锁会直接
+    失败，只能等这次转场完成、锁释放后再抢——此时它对 `import_batch` 的查询已经
+    能如实看到这条 PROCESSING 记录并中止。
+
+    只在这一步持锁，不是整个导入期间：一旦 PROCESSING 落定，后续互斥就转交给
+    `import_batch` 表本身，不再需要占着这把锁（占整个导入期间反而会让重启/发布
+    在锁上无谓等待到导入结束，而不是立刻从批次状态判断"该让路"）。
+    """
+    conn = session.get_bind().connect()
+    try:
+        got = bool(
+            conn.execute(
+                text("SELECT pg_try_advisory_lock(:k)"), {"k": _OPS_ACTION_LOCK_KEY}
+            ).scalar()
+        )
+        conn.commit()
+        if not got:
+            return False
+        try:
+            batch.status = STATUS_PROCESSING
+            session.commit()
+        finally:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _OPS_ACTION_LOCK_KEY})
+            conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) -> ImportBatch:
     """在**已持有串行锁**的前提下跑完一个批次，并把终态落到批次记录上。
 
-    锁的取与放都在调用方的 :func:`import_lock` 里（它有自己的连接），本函数不碰锁。
+    锁的取与放都在调用方的 :func:`import_lock` 里（它有自己的连接），本函数不碰那把锁；
+    但转入 PROCESSING 这一步要经 :func:`_claim_processing_slot` 过一遍运维动作锁
+    （见该函数说明），这是导入与重启/发布真正的互斥边界。
 
     调用方是两条：首次提交（:func:`run_import`）与排队后被接手（:func:`drain_import_queue`）。
     两条必须走同一段代码——导入后的统计回写（``site_data_stats`` 与筛选统计）若只在其中
-    一条上做，被 drain 接手的那一期数据会写进事实表却在界面上完全看不见。
+    一条上做，被 drain 接手的那一期数据会写进事实表却在界面上完全看不见；同理运维动作锁
+    的转场检查也必须在两条路径共用的这一处做，只在 `drain_import_queue` 里做会漏掉
+    `run_import`（首次直接提交）这条路径。
     """
     started = time.monotonic()
-    try:
-        batch.status = STATUS_PROCESSING
+    if not _claim_processing_slot(session, batch):
+        logger.info("运维动作（重启/发布）正在进行，批次转入排队等待接手: %s", batch.file_name)
+        if batch.object_key:
+            batch.status = STATUS_QUEUED
+        else:
+            # 本地退路没有 object_key，批次记录里没有任何能重建数据源的东西，
+            # 留在 QUEUED 就是撒谎——与 _mark_not_started 同一条纪律。
+            batch.status = STATUS_FAILED
+            batch.error_message = "运维动作（重启/发布）执行期间无法认领导入，请重新上传"
         session.commit()
+        return batch
 
+    try:
         # 事实导入（三段式）在一个事务里完成。
         result = import_report(
             session, site=batch.site, period=batch.period_type,
@@ -459,6 +543,14 @@ def drain_import_queue(
             .limit(1)
         ).scalars().first()
         if batch is None:
+            return None
+
+        # 运维动作（重启/发布）正在执行时不认领新批次——这只是提前失败的优化，省得
+        # 白跑一趟 import_lock/source_factory；真正的互斥边界在 _execute_locked
+        # 内部的 _claim_processing_slot（design.md D5「导入协调锁机制」，PR #99
+        # Codex 复审 P1）。
+        if _ops_action_in_progress(session):
+            logger.info("运维动作（重启/发布）进行中，本轮跳过认领排队批次 %s", batch.file_name)
             return None
 
         # 先查队列再抢锁：反过来会在队列为空时白拿一次锁。

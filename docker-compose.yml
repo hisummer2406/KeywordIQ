@@ -20,7 +20,12 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    # 不写 ports——只在 compose 内部网络对 app/netdata 可达，不监听宿主机端口。
+    ports:
+      # 只绑本地回环，与 app 的 127.0.0.1:8000 同一条纪律——不对公网暴露。
+      # 存在的理由：ops-bot（飞书运维机器人）是 host 级 systemd 服务，不在 compose
+      # 内部网络里，需要这个端口才能连上 db（见
+      # openspec/changes/add-feishu-ops-bot/design.md D1「代价与缓解」）。
+      - "127.0.0.1:5432:5432"
     volumes:
       # bind mount 而非具名卷：备份脚本、磁盘用量监控、灾难恢复都要能直接摸到文件，
       # 不必先 `docker volume inspect` 找路径。见 design.md 决策 3。
