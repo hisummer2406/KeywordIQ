@@ -42,7 +42,7 @@ from config import settings
 
 # revision identifiers, used by Alembic.
 revision: str = "d4e5f6a7b8c9"
-down_revision: str | None = "71e646b2d200"
+down_revision: str | None = "47df76b2f424"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
