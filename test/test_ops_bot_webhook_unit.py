@@ -154,14 +154,49 @@ class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
         mock_handle.assert_not_called()
         self.assertEqual(response.status_code, 200)
 
-    async def test_authorized_dispatches_to_release_flow(self):
+    async def test_immediate_reply_when_no_execution_needed(self):
+        """快速失败路径（已取消/已过期/已处理……）：直接回复，不碰后台任务。"""
+        from ops_bot.release.flow import ConfirmOutcome
+
+        outcome = ConfirmOutcome("已取消", None)
         with patch("ops_bot.main.settings") as mock_settings:
             mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
             mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
             with patch(
                 "ops_bot.main.release_flow.handle_confirm_callback",
-                new=AsyncMock(return_value="✅ 重启应用成功"),
-            ) as mock_handle, patch("ops_bot.main._reply", new=AsyncMock()) as mock_reply:
+                new=AsyncMock(return_value=outcome),
+            ) as mock_handle, patch("ops_bot.main._reply", new=AsyncMock()) as mock_reply, patch(
+                "ops_bot.main._spawn_background"
+            ) as mock_spawn:
+                response = await main._handle_card_action(
+                    {
+                        "open_id": "ou_owner",
+                        "open_chat_id": "oc_ops",
+                        "action": {"value": {"task_id": "t-1", "confirm_token": "tok-1", "decision": "cancel"}},
+                    }
+                )
+
+        mock_handle.assert_awaited_once_with("t-1", "tok-1", "cancel")
+        mock_reply.assert_awaited_once_with("已取消")
+        mock_spawn.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+
+    async def test_confirmed_action_acks_immediately_and_runs_in_background(self):
+        """执行必须移交给后台任务，回调请求本身立刻回执——不能等重启/发布跑完才
+        返回，否则会同时超过飞书重试窗口与 nginx 反代超时（PR #99 Codex 复审 P1）。
+        """
+        from ops_bot.release.flow import ConfirmOutcome
+
+        outcome = ConfirmOutcome(None, AsyncMock(return_value="✅ 重启应用成功"))
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+            with patch(
+                "ops_bot.main.release_flow.handle_confirm_callback",
+                new=AsyncMock(return_value=outcome),
+            ) as mock_handle, patch("ops_bot.main._reply", new=AsyncMock()) as mock_reply, patch(
+                "ops_bot.main._spawn_background"
+            ) as mock_spawn:
                 response = await main._handle_card_action(
                     {
                         "open_id": "ou_owner",
@@ -170,9 +205,19 @@ class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
                     }
                 )
 
-        mock_handle.assert_awaited_once_with("t-1", "tok-1", "confirm")
-        mock_reply.assert_awaited_once()
-        self.assertEqual(response.status_code, 200)
+                # 请求协程本身立刻回执"受理中"，不等待执行完成。
+                mock_handle.assert_awaited_once_with("t-1", "tok-1", "confirm")
+                mock_reply.assert_awaited_once_with("已受理，执行中…")
+                self.assertEqual(response.status_code, 200)
+                mock_spawn.assert_called_once()
+
+                # 手动跑一遍被移交给后台的协程，验证它最终把 run() 的结果发出去——
+                # 这一步不在请求协程里发生，正是这个修复要保证的。
+                background_coro = mock_spawn.call_args.args[0]
+                mock_reply.reset_mock()
+                await background_coro
+
+        mock_reply.assert_awaited_once_with("✅ 重启应用成功")
 
     async def test_missing_value_fields_ignored(self):
         with patch("ops_bot.main.settings") as mock_settings:

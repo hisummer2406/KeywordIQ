@@ -195,6 +195,13 @@ def test_models_match_migrated_schema(conn):
     from database import Base
     from migration_scope import include_object
 
+    # 同理，飞书运维机器人（ops-bot）的模型独立成一套 OpsBase/ops schema
+    # （design.md D1），但同样接进 alembic/env.py 的 autogenerate 比对
+    # （PR #99 Codex 复审 P2）——这里跟着一并核对，否则这条回归测试本身
+    # 就成了一个只覆盖一半 target_metadata 的假绿。
+    from ops_bot import model as ops_model  # noqa: F401
+    from ops_bot.database import OpsBase
+
     # 库落后于 head 时差异必然存在，但那说明的是「测试库该迁移了」，不是模型有问题。
     cfg = alembic.config.Config(os.path.join(REPO, "alembic.ini"))
     head = ScriptDirectory.from_config(cfg).get_current_head()
@@ -213,7 +220,10 @@ def test_models_match_migrated_schema(conn):
             "version_table_schema": "analysis",
         },
     )
-    diffs = compare_metadata(ctx, Base.metadata)
+    # 与 alembic/env.py 的 target_metadata 同构：一次调用传两份 metadata 的列表，
+    # 不能分两次各传一份——那样第一次调用里 include_object 已经放行了 ops 表，
+    # 但比对目标（单份 Base.metadata）里没有它们，会产出一堆假的 remove_table。
+    diffs = compare_metadata(ctx, [Base.metadata, OpsBase.metadata])
     assert diffs == [], (
         "模型与库不一致，autogenerate 会生成这些操作：\n"
         + "\n".join(f"  - {d}" for d in diffs)

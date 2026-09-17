@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -32,6 +33,24 @@ _MAINTENANCE_ALERT_KEYS = ("service-down",)
 class ConfirmPlan:
     task_id: str
     card: dict
+
+
+@dataclass
+class ConfirmOutcome:
+    """`handle_confirm_callback` 的结果。
+
+    `immediate_reply` 非 `None` 时是终态（校验失败/已取消/已过期/并发丢锁），
+    调用方直接把这段文本回给用户即可，`run` 为 `None`。
+
+    `immediate_reply` 为 `None` 时说明已经通过校验、任务状态已经落为
+    `CONFIRMED`，真正的执行打包在 `run` 里——**调用方必须把它丢到后台跑，
+    不能在处理这次卡片回调的协程里直接 `await` 它**：执行可能跑到 executor
+    的 1800 秒超时，同步等完会让这次回调既超过飞书的重试窗口、也超过 nginx
+    反代超时，飞书只会看到超时重试而收不到任何响应（PR #99 Codex 复审 P1）。
+    """
+
+    immediate_reply: str | None
+    run: Callable[[], Awaitable[str]] | None = None
 
 
 async def _import_active_or_unknown(session) -> bool:
@@ -113,34 +132,42 @@ async def build_deploy_plan(
     return ConfirmPlan(task_id, card), None
 
 
-async def handle_confirm_callback(task_id: str, confirm_token: str, decision: str) -> str:
-    """处理卡片按钮回调，返回要发给用户的结果文本。"""
+async def handle_confirm_callback(task_id: str, confirm_token: str, decision: str) -> ConfirmOutcome:
+    """处理卡片按钮回调。校验与状态转移都是快速的数据库操作，同步做完；真正的
+    执行（可能耗时到分钟级）不在这里 await，打包进返回值的 `run` 交给调用方
+    在后台跑（见 :class:`ConfirmOutcome`）。
+    """
     async with OpsAsyncSessionFactory() as session:
         task = await crud.get_task(session, task_id)
         if task is None or task.confirm_token != confirm_token:
-            return "该确认已失效，请重新发起"
+            return ConfirmOutcome("该确认已失效，请重新发起")
         if task.status != TASK_PENDING_CONFIRM:
-            return "该任务已处理或已过期"
+            return ConfirmOutcome("该任务已处理或已过期")
         if task.confirm_expires_at is not None and datetime.now(UTC) > task.confirm_expires_at:
             await crud.mark_task_expired(session, task_id)
             await session.commit()
-            return "已过期，请重新发起"
+            return ConfirmOutcome("已过期，请重新发起")
 
         if decision != "confirm":
             await crud.mark_task_failed(session, task_id, output="用户取消")
             await session.commit()
-            return "已取消"
+            return ConfirmOutcome("已取消")
 
         confirmed = await crud.try_confirm_task(session, task_id)
         await session.commit()
         if not confirmed:
             # 与上面的状态检查之间存在竞态窗口（双击、飞书重放）——乐观锁兜底。
-            return "该任务已处理或已过期"
+            return ConfirmOutcome("该任务已处理或已过期")
 
         kind, payload = task.kind, dict(task.payload)
         actor_open_id = task.requested_by_open_id
 
-    return await _execute_confirmed(task_id, kind, payload, actor_open_id, datetime.now(UTC))
+    confirmed_at = datetime.now(UTC)
+
+    async def run() -> str:
+        return await _execute_confirmed(task_id, kind, payload, actor_open_id, confirmed_at)
+
+    return ConfirmOutcome(None, run)
 
 
 async def _execute_confirmed(
@@ -186,11 +213,20 @@ async def _execute_confirmed(
 
     async with lock.try_acquire() as got_lock:
         if not got_lock:
-            # 抢不到这把锁只有一种成因：另一个重启/发布正握着它——导入侧对同一个
-            # key 只做"探测后立即释放"（app/table/upload/import_service.py 的
-            # _ops_action_in_progress），从不长期持有，不会是这里抢不到锁的原因。
-            # 这是 design.md D5"重启/发布互斥"落地的地方，不是导入协调那一层。
+            # 抢不到这把锁有两种成因：另一个重启/发布正握着它，或者导入侧正在
+            # `_claim_processing_slot`（app/table/upload/import_service.py）里把
+            # 一个批次转场为 PROCESSING——那一步现在也短暂持有同一把锁，不再是
+            # "探测后立即释放"。两种情况都应中止，等锁释放后重新发起即可；抢不到
+            # 时无法区分是谁持有，消息按更常见的重启/发布互斥场景措辞。
             return await _finish(False, "另一个重启/发布任务正在执行中，已中止", "MUTEX")
+
+        # 持锁期间复核一次导入状态——上面那次检查（第 174 行附近）与这里之间存在
+        # 窗口：导入可能已经在这期间认领了一个批次。只有在持锁期间做的这次复核
+        # 才是真正的互斥边界，之前那次只是快速失败的优化，不能单独作为互斥保证
+        # （design.md D5，PR #99 Codex 复审 P1）。
+        async with OpsAsyncSessionFactory() as session:
+            if await _import_active_or_unknown(session):
+                return await _finish(False, "执行前重新核实：导入进行中", "PRECHECK_IMPORT")
 
         await _open_maintenance()
 

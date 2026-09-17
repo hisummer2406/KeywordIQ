@@ -151,31 +151,40 @@ class TestBuildDeployPlan(unittest.IsolatedAsyncioTestCase):
 
 
 class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
+    """校验/状态转移与真正执行拆开了（`ConfirmOutcome`）：`immediate_reply` 非空的
+    分支覆盖全部快速失败路径；唯一"通过校验"的路径（`test_confirmed_proceeds_to_execute`）
+    校验的是 `run` 没有被 `handle_confirm_callback` 自己 await 掉，调用方必须自己
+    调用它才会真正触发 `_execute_confirmed`（PR #99 Codex 复审 P1）。
+    """
+
     async def test_unknown_task_rejected(self):
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=None)
         ):
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
 
-        self.assertIn("已失效", reply)
+        self.assertIsNone(outcome.run)
+        self.assertIn("已失效", outcome.immediate_reply)
 
     async def test_wrong_token_rejected(self):
         task = _task(confirm_token="different")
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
         ):
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
 
-        self.assertIn("已失效", reply)
+        self.assertIsNone(outcome.run)
+        self.assertIn("已失效", outcome.immediate_reply)
 
     async def test_already_confirmed_task_rejected(self):
         task = _task(status="CONFIRMED")
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
         ):
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
 
-        self.assertIn("已处理或已过期", reply)
+        self.assertIsNone(outcome.run)
+        self.assertIn("已处理或已过期", outcome.immediate_reply)
 
     async def test_expired_task_marked_and_rejected(self):
         task = _task(confirm_expires_at=datetime.now(UTC) - timedelta(minutes=1))
@@ -183,10 +192,11 @@ class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
         ), patch("ops_bot.release.flow.crud.mark_task_expired", mark_expired):
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
 
         mark_expired.assert_awaited_once()
-        self.assertIn("已过期", reply)
+        self.assertIsNone(outcome.run)
+        self.assertIn("已过期", outcome.immediate_reply)
 
     async def test_cancel_marks_failed(self):
         task = _task()
@@ -194,10 +204,11 @@ class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
         ), patch("ops_bot.release.flow.crud.mark_task_failed", mark_failed):
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "cancel")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "cancel")
 
         mark_failed.assert_awaited_once()
-        self.assertIn("已取消", reply)
+        self.assertIsNone(outcome.run)
+        self.assertIn("已取消", outcome.immediate_reply)
 
     async def test_concurrent_confirm_loses_race(self):
         """乐观锁：try_confirm_task 返回 False 时不能继续执行（双击/重放兜底）。"""
@@ -207,19 +218,29 @@ class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
         ), patch("ops_bot.release.flow.crud.try_confirm_task", new=AsyncMock(return_value=False)), patch(
             "ops_bot.release.flow._execute_confirmed"
         ) as mock_execute:
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
 
         mock_execute.assert_not_called()
-        self.assertIn("已处理或已过期", reply)
+        self.assertIsNone(outcome.run)
+        self.assertIn("已处理或已过期", outcome.immediate_reply)
 
-    async def test_confirmed_proceeds_to_execute(self):
+    async def test_confirmed_returns_deferred_run_without_executing(self):
+        """校验通过后不能在 `handle_confirm_callback` 内部就把执行跑掉——
+        `_execute_confirmed` 只应该在调用方主动调用 `outcome.run()` 时才触发。
+        """
         task = _task()
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
         ), patch("ops_bot.release.flow.crud.try_confirm_task", new=AsyncMock(return_value=True)), patch(
             "ops_bot.release.flow._execute_confirmed", new=AsyncMock(return_value="✅ 重启应用成功")
         ) as mock_execute:
-            reply = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "confirm")
+
+            self.assertIsNone(outcome.immediate_reply)
+            self.assertIsNotNone(outcome.run)
+            mock_execute.assert_not_called()  # 还没调用 run()，不该已经执行了
+
+            result = await outcome.run()
 
         # confirmed_at 是调用瞬间生成的 datetime，不做精确匹配，只核对前三个
         # 位置参数（task_id/kind/payload）与传了 actor_open_id。
@@ -228,7 +249,7 @@ class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_args[1], "RESTART_APP")
         self.assertEqual(call_args[2], {})
         self.assertEqual(call_args[3], "ou_owner")
-        self.assertIn("成功", reply)
+        self.assertIn("成功", result)
 
 
 class TestExecuteConfirmed(unittest.IsolatedAsyncioTestCase):
