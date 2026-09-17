@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠️ IMPORT_QUEUE_POLL_SECONDS=0，排队批次不会自动接手")
 
-    logger.info("🎉 应用启动完成，准备接收请求")
+    logger.info("🎉 应用启动完成，准备接收请求（版本: %s）", settings.VERSION)
 
     yield
 
