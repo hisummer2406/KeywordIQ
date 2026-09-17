@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from ops_bot.feishu.client import FeishuAPIError, FeishuClient
@@ -51,7 +52,7 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         job = _find_job(self._jobs(), "IMPORT_NOTIFY")
 
         with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
-            "ops_bot.jobs.crud.last_succeeded_task_created_at", new=AsyncMock(return_value=None)
+            "ops_bot.jobs.crud.last_import_notify_watermark", new=AsyncMock(return_value=None)
         ), patch(
             "ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=batches)
         ), patch("ops_bot.jobs.import_status.record_baseline", record_baseline), patch(
@@ -65,6 +66,62 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record_baseline.await_count, 2)
         self.assertEqual(len(commit_calls), 1)
         self.assertIn("1 条发送失败", output)
+        # 有发送失败就不能把水位线推进到本轮——维持在上一轮的 None，编码成空
+        # 标记（PR #99 复审第三轮 P2）。
+        self.assertTrue(output.endswith("\nwatermark="))
+
+    async def test_send_failure_does_not_advance_watermark(self):
+        """有任一条发送失败时，水位线必须原样保留上一轮的值，不能推进到本轮
+        cutoff——否则下一轮查询会把发送失败的那条永久排除在外
+        （PR #99 复审第三轮 P2）。
+        """
+        batches = [
+            {
+                "id": 1, "site": "US", "period_type": "DAY", "report_date": "2026-09-16",
+                "status": "COMPLETED", "processing_seconds": 120, "error_message": "",
+            },
+        ]
+
+        @asynccontextmanager
+        async def _session_ctx():
+            yield AsyncMock()
+
+        job = _find_job(self._jobs(), "IMPORT_NOTIFY")
+        previous_watermark = datetime(2026, 9, 16, 3, 0, tzinfo=UTC)
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
+            "ops_bot.jobs.crud.last_import_notify_watermark",
+            new=AsyncMock(return_value=previous_watermark),
+        ), patch(
+            "ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=batches)
+        ), patch("ops_bot.jobs.import_status.record_baseline", new=AsyncMock()), patch(
+            "ops_bot.jobs.FeishuClient.send_text", new=AsyncMock(side_effect=FeishuAPIError("boom"))
+        ):
+            output = await job.run()
+
+        self.assertIn(f"watermark={previous_watermark.isoformat()}", output)
+
+    async def test_success_advances_watermark_to_fresh_cutoff(self):
+        """全部发送成功时，水位线必须推进到本轮查询前捕获的 cutoff——不是任务的
+        `created_at`（PR #99 复审第三轮 P2，取代此前锁定 `created_at` 的用例）。
+        """
+
+        @asynccontextmanager
+        async def _session_ctx():
+            yield AsyncMock()
+
+        job = _find_job(self._jobs(), "IMPORT_NOTIFY")
+        before = datetime.now(UTC)
+
+        with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
+            "ops_bot.jobs.crud.last_import_notify_watermark", new=AsyncMock(return_value=None)
+        ), patch("ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=[])):
+            output = await job.run()
+
+        after = datetime.now(UTC)
+        marker_line = next(line for line in output.splitlines() if line.startswith("watermark="))
+        watermark = datetime.fromisoformat(marker_line.removeprefix("watermark="))
+        self.assertTrue(before <= watermark <= after)
 
     async def test_no_failures_reports_plain_count(self):
         batches = [
@@ -81,18 +138,19 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         job = _find_job(self._jobs(), "IMPORT_NOTIFY")
 
         with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
-            "ops_bot.jobs.crud.last_succeeded_task_created_at", new=AsyncMock(return_value=None)
+            "ops_bot.jobs.crud.last_import_notify_watermark", new=AsyncMock(return_value=None)
         ), patch(
             "ops_bot.jobs.import_status.find_new_terminal_batches", new=AsyncMock(return_value=batches)
         ), patch("ops_bot.jobs.FeishuClient.send_text", new=AsyncMock(return_value=None)):
             output = await job.run()
 
-        self.assertEqual(output, "1 条新完成/失败通知")
+        self.assertTrue(output.startswith("1 条新完成/失败通知\nwatermark="))
 
-    async def test_uses_task_created_at_as_watermark_not_finished_at(self):
-        """高水位线必须来自 `last_succeeded_task_created_at`（任务创建时间），
-        不是 `last_succeeded_at`（任务完成时间）——后者会漏记"本轮查询已执行、
-        本轮任务尚未标记完成"这段窗口内转终态的批次（PR #99 复审第二轮 P2）。
+    async def test_uses_import_notify_watermark_not_finished_at(self):
+        """高水位线必须来自 `last_import_notify_watermark`，不是 `last_succeeded_at`
+        （任务完成时间）——后者会漏记"本轮查询已执行、本轮任务尚未标记完成"这段
+        窗口内转终态的批次（PR #99 复审第二轮 P2，机制在第三轮进一步修正，
+        见 crud.last_import_notify_watermark 文档字符串）。
         """
 
         @asynccontextmanager
@@ -102,7 +160,7 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         job = _find_job(self._jobs(), "IMPORT_NOTIFY")
 
         with patch("ops_bot.jobs.OpsAsyncSessionFactory", _session_ctx), patch(
-            "ops_bot.jobs.crud.last_succeeded_task_created_at", new=AsyncMock(return_value=None)
+            "ops_bot.jobs.crud.last_import_notify_watermark", new=AsyncMock(return_value=None)
         ) as mock_watermark, patch(
             "ops_bot.jobs.crud.last_succeeded_at", new=AsyncMock()
         ) as mock_stale_watermark, patch(

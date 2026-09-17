@@ -46,6 +46,103 @@ class TestFirstFire(unittest.IsolatedAsyncioTestCase):
         send.assert_awaited_once()
 
 
+class TestDeliveryFailureDoesNotAdvanceState(unittest.IsolatedAsyncioTestCase):
+    """飞书发送失败时不能把这次触发/恢复落库——落库意味着"已经通知过"，会让下一轮
+    进入静默期或彻底停止重试，一次真实的持续异常/持续恢复因此被延误
+    （PR #99 复审第三轮 P2）。
+    """
+
+    async def test_first_fire_send_failure_does_not_upsert(self):
+        upsert = AsyncMock()
+        send = AsyncMock(return_value=False)
+
+        with patch("ops_bot.crud.get_alert_state", new=AsyncMock(return_value=None)), patch(
+            "ops_bot.crud.upsert_alert_fired", upsert
+        ), patch("ops_bot.alerts._send", send):
+            await alerts.evaluate(
+                session=None,
+                feishu_client=None,
+                chat_id="oc_1",
+                alert_key="disk-80",
+                level="crit",
+                is_alerting=True,
+                message="磁盘 85%",
+                silence_minutes=30,
+            )
+
+        send.assert_awaited_once()
+        upsert.assert_not_awaited()
+
+    async def test_already_firing_send_failure_bumps_count_but_not_last_fired_at(self):
+        old = datetime.now(UTC) - timedelta(minutes=31)
+        state = _state(last_fired_at=old, consecutive_count=1)
+        upsert = AsyncMock()
+        bump = AsyncMock()
+        send = AsyncMock(return_value=False)
+
+        with patch("ops_bot.crud.get_alert_state", new=AsyncMock(return_value=state)), patch(
+            "ops_bot.crud.upsert_alert_fired", upsert
+        ), patch("ops_bot.crud.bump_alert_consecutive_count", bump), patch(
+            "ops_bot.alerts._send", send
+        ):
+            await alerts.evaluate(
+                session=None,
+                feishu_client=None,
+                chat_id="oc_1",
+                alert_key="disk-80",
+                level="crit",
+                is_alerting=True,
+                message="磁盘 85%",
+                silence_minutes=30,
+            )
+
+        send.assert_awaited_once()
+        upsert.assert_not_awaited()
+        bump.assert_awaited_once_with(None, "disk-80", 2)
+
+    async def test_recovery_send_failure_does_not_mark_resolved(self):
+        state = _state(last_fired_at=datetime.now(UTC), consecutive_count=2, resolved_at=None)
+        resolve = AsyncMock()
+        send = AsyncMock(return_value=False)
+
+        with patch("ops_bot.crud.get_alert_state", new=AsyncMock(return_value=state)), patch(
+            "ops_bot.crud.mark_alert_resolved", resolve
+        ), patch("ops_bot.alerts._send", send):
+            await alerts.evaluate(
+                session=None,
+                feishu_client=None,
+                chat_id="oc_1",
+                alert_key="disk-80",
+                level="crit",
+                is_alerting=False,
+                message="磁盘正常",
+                silence_minutes=30,
+            )
+
+        send.assert_awaited_once()
+        resolve.assert_not_awaited()
+
+
+class TestSendReturnsDeliveryOutcome(unittest.IsolatedAsyncioTestCase):
+    """`_send` 本体（不打桩）必须如实返回发送是否成功——这是上面几组测试打桩
+    `return_value` 的前提，也是 `evaluate` 能据此决定要不要落库的基础。
+    """
+
+    async def test_returns_true_on_success(self):
+        client = AsyncMock()
+        client.send_text = AsyncMock(return_value=None)
+
+        self.assertTrue(await alerts._send(client, "oc_1", "hello"))
+
+    async def test_returns_false_on_feishu_api_error(self):
+        from ops_bot.feishu.client import FeishuAPIError
+
+        client = AsyncMock()
+        client.send_text = AsyncMock(side_effect=FeishuAPIError("boom"))
+
+        self.assertFalse(await alerts._send(client, "oc_1", "hello"))
+
+
 class TestSilenceSuppression(unittest.IsolatedAsyncioTestCase):
     async def test_within_silence_window_only_bumps_count_no_send(self):
         recent = datetime.now(UTC) - timedelta(minutes=5)

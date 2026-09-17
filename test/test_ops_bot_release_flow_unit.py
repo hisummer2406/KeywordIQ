@@ -206,15 +206,33 @@ class TestHandleConfirmCallback(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancel_marks_failed(self):
         task = _task()
-        mark_failed = AsyncMock()
+        try_cancel = AsyncMock(return_value=True)
         with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
             "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
-        ), patch("ops_bot.release.flow.crud.mark_task_failed", mark_failed):
+        ), patch("ops_bot.release.flow.crud.try_cancel_task", try_cancel):
             outcome = await flow.handle_confirm_callback("t-1", "tok-1", "cancel")
 
-        mark_failed.assert_awaited_once()
+        try_cancel.assert_awaited_once()
         self.assertIsNone(outcome.run)
         self.assertIn("已取消", outcome.immediate_reply)
+
+    async def test_concurrent_cancel_loses_race(self):
+        """乐观锁：确认已经抢先落地时，取消不能覆盖任务状态（PR #99 复审第三轮 P1）。
+
+        `try_cancel_task` 内部按 `WHERE status = PENDING_CONFIRM` 过滤，若确认回调
+        已经把状态改成 `CONFIRMED` 并已经把执行 closure 交给后台跑，这次取消的
+        UPDATE 影响 0 行、返回 `False`——不能像旧的无条件 `mark_task_failed` 那样
+        照样把状态覆盖成"用户取消"，那会让任务记录与实际正在后台执行的重启/发布
+        互相矛盾。
+        """
+        task = _task()
+        with patch("ops_bot.release.flow.OpsAsyncSessionFactory", _fake_session_ctx), patch(
+            "ops_bot.release.flow.crud.get_task", new=AsyncMock(return_value=task)
+        ), patch("ops_bot.release.flow.crud.try_cancel_task", new=AsyncMock(return_value=False)):
+            outcome = await flow.handle_confirm_callback("t-1", "tok-1", "cancel")
+
+        self.assertIsNone(outcome.run)
+        self.assertIn("已处理或已过期", outcome.immediate_reply)
 
     async def test_concurrent_confirm_loses_race(self):
         """乐观锁：try_confirm_task 返回 False 时不能继续执行（双击/重放兜底）。"""

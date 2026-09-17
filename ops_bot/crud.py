@@ -102,6 +102,26 @@ async def try_confirm_task(session: AsyncSession, task_id: str) -> bool:
     return result.rowcount > 0
 
 
+async def try_cancel_task(session: AsyncSession, task_id: str, output: str = "") -> bool:
+    """乐观锁：只有仍处于 `PENDING_CONFIRM` 时才能转 `FAILED`（用户取消），与
+    :func:`try_confirm_task` 同一条纪律。
+
+    **不能用无条件的 `mark_task_failed`**：确认与取消两个按钮的回调各自在独立的
+    session 里先读一次任务状态再决定怎么处理，中间没有互斥——若确认的回调先一步
+    把状态改成 `CONFIRMED`（且已经把执行 closure 交给调用方在后台跑），取消的回调
+    仍可能读到旧的 `PENDING_CONFIRM` 快照并对同一行发出无条件 UPDATE，把一个
+    实际正在执行重启/发布的任务覆盖标记成"用户取消"，与后台真正在跑的执行结果
+    互相踩踏（PR #99 复审第三轮 P1）。加上 `WHERE status = PENDING_CONFIRM` 之后，
+    确认已经抢先落地的情况下这次 UPDATE 影响 0 行，调用方据此判"已处理"。
+    """
+    result = await session.execute(
+        update(OpsTask)
+        .where(OpsTask.id == task_id, OpsTask.status == TASK_PENDING_CONFIRM)
+        .values(status=TASK_FAILED, output=output, finished_at=func.now())
+    )
+    return result.rowcount > 0
+
+
 async def mark_task_expired(session: AsyncSession, task_id: str) -> None:
     await session.execute(
         update(OpsTask)
@@ -112,6 +132,27 @@ async def mark_task_expired(session: AsyncSession, task_id: str) -> None:
 
 async def mark_task_running(session: AsyncSession, task_id: str) -> None:
     await session.execute(update(OpsTask).where(OpsTask.id == task_id).values(status=TASK_RUNNING))
+
+
+async def reconcile_orphaned_tasks(session: AsyncSession, output: str) -> int:
+    """服务启动时把上一次运行遗留的 `RUNNING`/`CONFIRMED` 任务标记为失败，返回处理条数。
+
+    进程被杀（宿主机重启、systemd 重启）时，正在执行的备份/重启/发布任务的后台
+    协程随进程一起消失，但 `ops_task` 行仍停在 `RUNNING`（或已确认但还没来得及转
+    `RUNNING` 的 `CONFIRMED`）——不会自然完结，`任务` 指令会把它永远显示成"进行中"，
+    而它早已没有任何协程在跑（PR #99 复审第三轮 P2）。必须在接受新任务前显式标记为
+    一个不会被误读成"仍在进行"的终态。
+
+    单进程部署（`ops-bot` 是一个 systemd 服务，不是集群）下这个操作是安全的：
+    任一时刻只可能有一个进程在跑，启动时看到的 `RUNNING`/`CONFIRMED` 行必然属于
+    上一次已经不存在的进程实例，不会误伤当前正在执行的任务。
+    """
+    result = await session.execute(
+        update(OpsTask)
+        .where(OpsTask.status.in_((TASK_RUNNING, TASK_CONFIRMED)))
+        .values(status=TASK_FAILED, output=output, finished_at=func.now())
+    )
+    return result.rowcount
 
 
 async def last_succeeded_at(session: AsyncSession, kind: str) -> datetime | None:
@@ -129,26 +170,50 @@ async def last_succeeded_at(session: AsyncSession, kind: str) -> datetime | None
     return result.scalar_one_or_none()
 
 
-async def last_succeeded_task_created_at(session: AsyncSession, kind: str) -> datetime | None:
-    """某类任务最近一次成功运行的**创建时间**（不是完成时间）；从未成功过则 `None`。
+_NOTIFY_WATERMARK_LINE_PREFIX = "watermark="
 
-    专供 `import_notify` 当"新完成批次"扫描的高水位线，不是给调度判"该不该跑"用
-    （那仍然是 `last_succeeded_at`/`finished_at`，两者不要混用）。区别在于：
-    `created_at` 在 `job.run()` 内部真正查询执行**之前**就已经落库（`scheduler._run_once`
-    先 `create_task` 再 `await job.run()`），而 `finished_at` 是查询与发送通知都跑完
-    之后才落的。若用 `finished_at` 当下一轮的 `since`，一个恰好在"本轮查询已经执行、
-    但本轮任务尚未标记完成"这段窗口内转为终态的批次，会永远既不出现在本轮结果里
-    （查询时它还没完成），也不出现在下一轮结果里（它的 `completed_at` 早于下一轮的
-    `since`）——通知与耗时基线都被永久漏记，且没有任何报错（PR #99 复审第二轮 P2）。
-    用 `created_at` 当水位线就不会有这段窗口：它必然早于本轮查询的执行时刻。
+
+def encode_import_notify_output(summary: str, watermark: datetime | None) -> str:
+    """把 `import_notify` 本轮的扫描水位线编进任务 `output`，供
+    :func:`last_import_notify_watermark` 读回。见该函数文档字符串。
+    """
+    marker = watermark.isoformat() if watermark is not None else ""
+    return f"{summary}\n{_NOTIFY_WATERMARK_LINE_PREFIX}{marker}"
+
+
+async def last_import_notify_watermark(session: AsyncSession, kind: str) -> datetime | None:
+    """`import_notify` 上一次成功运行时记下的扫描水位线——编码在该任务的 `output`
+    里，**不是** `created_at`/`finished_at`。
+
+    这两者都曾被当过水位线，都不对：`finished_at`（查询与发送通知都跑完之后才
+    落库）会漏记"本轮查询已执行、本轮任务尚未标记完成"这段窗口内转为终态的批次
+    （PR #99 复审第二轮 P2）。改用 `created_at`（`scheduler._run_once` 在
+    `job.run()` 真正发出查询**之前**就已落库）能堵上那个窗口，但它本身也不是
+    "本轮实际扫描到哪个完成时刻"的准确代理：`create_task` 落库与 `job.run()`
+    内部真正发出查询之间还有一段间隙，凡是在这段间隙里完成的批次，其
+    `completed_at` 会同时大于本轮与上一轮的 `created_at`——本轮命中一次（大于
+    上一轮 `created_at`），下一轮又命中一次（大于本轮 `created_at`），被通知
+    两遍（PR #99 复审第三轮 P2，"新鲜证据"部分）。
+
+    水位线因此必须是查询发出前捕获的真实时间戳，且只在本轮全部通知都发送成功时
+    才推进——任一条发送失败就维持在上一轮的水位线不变：宁可下一轮对已经发送
+    成功的其余批次重复通知一次，也不让发送失败的那一条永久漏记（同一 issue，
+    与 `jobs.import_notify` 的实现互相印证）。
     """
     result = await session.execute(
-        select(OpsTask.created_at)
+        select(OpsTask.output)
         .where(OpsTask.kind == kind, OpsTask.status == TASK_SUCCEEDED)
-        .order_by(OpsTask.created_at.desc())
+        .order_by(OpsTask.finished_at.desc())
         .limit(1)
     )
-    return result.scalar_one_or_none()
+    output = result.scalar_one_or_none()
+    if not output:
+        return None
+    for line in output.splitlines():
+        if line.startswith(_NOTIFY_WATERMARK_LINE_PREFIX):
+            value = line[len(_NOTIFY_WATERMARK_LINE_PREFIX) :]
+            return datetime.fromisoformat(value) if value else None
+    return None
 
 
 async def list_unresolved_alerts(session: AsyncSession) -> list[OpsAlertState]:

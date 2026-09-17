@@ -86,3 +86,69 @@ async def test_replayed_event_id_returns_false(ops_session):
 
     assert first is True
     assert second is False
+
+
+async def test_try_cancel_task_succeeds_when_pending_confirm(ops_session):
+    from ops_bot.crud import try_cancel_task
+    from ops_bot.model import TASK_PENDING_CONFIRM, OpsTask
+
+    task_id = str(uuid.uuid4())
+    ops_session.add(OpsTask(id=task_id, kind="RESTART_APP", status=TASK_PENDING_CONFIRM))
+    await ops_session.commit()
+
+    cancelled = await try_cancel_task(ops_session, task_id, output="用户取消")
+    await ops_session.commit()
+
+    assert cancelled is True
+    task = await ops_session.get(OpsTask, task_id)
+    assert task.status == "FAILED"
+    assert task.output == "用户取消"
+
+
+async def test_try_cancel_task_loses_race_after_confirm(ops_session):
+    """确认已经抢先落地（状态已是 CONFIRMED）时，取消必须是空操作，不能覆盖状态
+    （PR #99 复审第三轮 P1）。
+    """
+    from ops_bot.crud import try_cancel_task
+    from ops_bot.model import TASK_CONFIRMED, OpsTask
+
+    task_id = str(uuid.uuid4())
+    ops_session.add(OpsTask(id=task_id, kind="DEPLOY", status=TASK_CONFIRMED))
+    await ops_session.commit()
+
+    cancelled = await try_cancel_task(ops_session, task_id, output="用户取消")
+    await ops_session.commit()
+
+    assert cancelled is False
+    task = await ops_session.get(OpsTask, task_id)
+    assert task.status == TASK_CONFIRMED
+
+
+async def test_reconcile_orphaned_tasks_marks_running_and_confirmed_failed(ops_session):
+    """启动回收只处理 RUNNING/CONFIRMED，PENDING_CONFIRM 不受影响
+    （PR #99 复审第三轮 P2）。
+    """
+    from ops_bot.crud import reconcile_orphaned_tasks
+    from ops_bot.model import TASK_CONFIRMED, TASK_PENDING_CONFIRM, TASK_RUNNING, OpsTask
+
+    running_id, confirmed_id, pending_id = (str(uuid.uuid4()) for _ in range(3))
+    ops_session.add_all(
+        [
+            OpsTask(id=running_id, kind="BACKUP", status=TASK_RUNNING),
+            OpsTask(id=confirmed_id, kind="DEPLOY", status=TASK_CONFIRMED),
+            OpsTask(id=pending_id, kind="RESTART_APP", status=TASK_PENDING_CONFIRM),
+        ]
+    )
+    await ops_session.commit()
+
+    # 不断言绝对 count：`ops_task` 表被同一次 pytest 运行里的其他用例共用，不做
+    # 每用例清理（同构本文件其余用例），断言只认自己刚插入的三行的最终状态。
+    await reconcile_orphaned_tasks(ops_session, output="ops-bot 重启，执行结果未知，请人工核实")
+    await ops_session.commit()
+
+    running = await ops_session.get(OpsTask, running_id)
+    confirmed = await ops_session.get(OpsTask, confirmed_id)
+    pending = await ops_session.get(OpsTask, pending_id)
+    assert running.status == "FAILED"
+    assert confirmed.status == "FAILED"
+    assert pending.status == TASK_PENDING_CONFIRM

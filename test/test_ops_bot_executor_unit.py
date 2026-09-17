@@ -63,16 +63,22 @@ class TestBackupNow(unittest.TestCase):
 
 class TestDeploy(unittest.TestCase):
     def test_stops_at_first_failing_step(self):
-        """git checkout 失败时不应该继续跑 deploy.sh。"""
+        """git checkout 失败时不应该继续跑 deploy.sh，但应尝试回退到发布前的 checkout。"""
         with patch(
             "ops_bot.executor.subprocess.run",
-            side_effect=[_completed(), _completed(returncode=1, stderr="unknown revision")],
+            side_effect=[
+                _completed(stdout="b" * 40 + "\n"),  # 记录发布前的 checkout
+                _completed(),  # git fetch
+                _completed(returncode=1, stderr="unknown revision"),  # git checkout 失败
+                _completed(),  # 回退 checkout
+            ],
         ) as mock_run:
             result = deploy(DeployPlan(target_sha="a" * 40, with_migration=False))
 
         self.assertFalse(result.success)
         self.assertEqual(result.failed_stage, "GIT_CHECKOUT")
-        self.assertEqual(mock_run.call_count, 2)
+        self.assertEqual(mock_run.call_count, 4)
+        self.assertEqual(mock_run.call_args_list[-1].args[0], ["git", "checkout", "b" * 40])
 
     def test_with_migration_true_passes_no_skip_flag(self):
         with patch("ops_bot.executor.subprocess.run", return_value=_completed()) as mock_run:
@@ -87,6 +93,51 @@ class TestDeploy(unittest.TestCase):
 
         deploy_call = mock_run.call_args_list[-1].args[0]
         self.assertEqual(deploy_call, ["./deploy.sh", "--yes", "--skip-migrate"])
+
+    def test_restores_previous_checkout_when_deploy_sh_fails(self):
+        """docker compose build 等失败时，工作树必须回退到发布前的版本——否则下一次
+        重试会把这个还没真正生效的新 SHA 当成"已部署版本"算出错误的迁移边界
+        （PR #99 复审第三轮 P1）。
+        """
+        with patch(
+            "ops_bot.executor.subprocess.run",
+            side_effect=[
+                _completed(stdout="b" * 40 + "\n"),  # 记录发布前的 checkout
+                _completed(),  # git fetch
+                _completed(),  # git checkout target
+                _completed(returncode=1, stderr="build failed"),  # deploy.sh 失败
+                _completed(),  # 回退 checkout
+            ],
+        ) as mock_run:
+            result = deploy(DeployPlan(target_sha="a" * 40, with_migration=True))
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failed_stage, "DEPLOY_SH")
+        self.assertEqual(mock_run.call_args_list[-1].args[0], ["git", "checkout", "b" * 40])
+        self.assertIn("回退到发布前的版本", result.output)
+
+    def test_skips_restore_when_previous_sha_unknown(self):
+        """记录发布前 checkout 本身失败时，不能拿 `None` 当 SHA 去尝试回退。"""
+        with patch(
+            "ops_bot.executor.subprocess.run",
+            side_effect=[
+                subprocess.CalledProcessError(1, ["git", "rev-parse", "HEAD"]),  # 记录失败
+                _completed(),  # git fetch
+                _completed(returncode=1, stderr="boom"),  # git checkout 失败
+            ],
+        ) as mock_run:
+            result = deploy(DeployPlan(target_sha="a" * 40, with_migration=False))
+
+        self.assertFalse(result.success)
+        self.assertEqual(mock_run.call_count, 3)
+
+    def test_does_not_restore_on_success(self):
+        with patch("ops_bot.executor.subprocess.run", return_value=_completed()) as mock_run:
+            result = deploy(DeployPlan(target_sha="a" * 40, with_migration=True))
+
+        self.assertTrue(result.success)
+        # 记录发布前 checkout（1）+ git fetch（2）+ git checkout（3）+ deploy.sh（4）
+        self.assertEqual(mock_run.call_count, 4)
 
 
 if __name__ == "__main__":

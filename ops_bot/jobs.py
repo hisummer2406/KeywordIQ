@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 
 from config import settings
 from ops_bot import alerts, backup, crud, daily_summary
@@ -102,11 +103,11 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
 
     async def import_notify() -> str:
         async with OpsAsyncSessionFactory() as session:
-            # 用 created_at（本轮任务查询前就已落库）当高水位线，不用 finished_at
-            # （查询与发送通知都跑完才落库）——否则本轮查询执行到本轮任务标记完成
-            # 之间转为终态的批次会被永久漏记（crud.last_succeeded_task_created_at
-            # 的文档字符串，PR #99 复审第二轮 P2）。
-            last = await crud.last_succeeded_task_created_at(session, "IMPORT_NOTIFY")
+            last = await crud.last_import_notify_watermark(session, "IMPORT_NOTIFY")
+            # 查询发出前捕获，而不是借用调度器落库的任务 created_at——两者之间那段
+            # 间隙里完成的批次会被本轮与下一轮各命中一次、通知两遍
+            # （crud.last_import_notify_watermark 的文档字符串，PR #99 复审第三轮 P2）。
+            cutoff = datetime.now(UTC)
             new_batches = await import_status.find_new_terminal_batches(session, since=last)
             failed_sends = 0
             for batch in new_batches:
@@ -134,7 +135,11 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
         summary = f"{len(new_batches)} 条新完成/失败通知"
         if failed_sends:
             summary += f"（其中 {failed_sends} 条发送失败，详见应用日志）"
-        return summary
+        # 只有全部发送成功才把水位线推进到本轮 cutoff；有失败就原样保留上一轮的
+        # 水位线，下一轮会连同已经发送成功的批次一起重新扫描一遍——这里选择
+        # "可能重复通知"而不是"可能永久漏记"（PR #99 复审第三轮 P2）。
+        watermark = cutoff if failed_sends == 0 else last
+        return crud.encode_import_notify_output(summary, watermark)
 
     async def backup_safe_record_baseline(session, batch: dict) -> None:
         # processing_seconds 可能因老数据缺失（列默认 0，语义上"未记录"与"0 秒完成"
