@@ -1,5 +1,8 @@
 """保留清理入口：只保留最近若干自然月的事实数据，移出更早的月度分区。
 
+同一次运行还会清理 `site_data_stats`/`category_stats`/`brand_stats` 中的残留统计行
+（不依赖这次是否真的移出了分区——历史残留同样会被处理，见 issue #100）。
+
 这是可定时触发的运维入口，不在 FastAPI 事件循环内运行（DDL 会持锁）。由 cron / 容器
 定时任务在低峰调用即可。清理幂等——补跑不会重复移出，也不会误伤窗口内数据。
 
@@ -78,9 +81,17 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("%s 将移出 %s 个分区: %s", table_name, len(names), ", ".join(names))
         else:
             logger.info("%s 无超期分区", table_name)
+    for table_name, count in preview.purged_stats.items():
+        if count:
+            logger.info("%s 将清理 %s 行残留统计", table_name, count)
+        else:
+            logger.info("%s 无残留统计", table_name)
 
-    if preview.total_dropped == 0:
-        logger.info("没有需要移出的分区，结束")
+    # 两者都为 0 才是真的无事可做。残留统计的清理不依赖"本次是否移出了分区"——
+    # 存量残留（本变更上线前已经产生的）可能单独存在，不能因为这次没有分区要移出
+    # 就连它也一起跳过（design.md 决策 2/4）。
+    if preview.total_dropped == 0 and preview.total_purged_stats == 0:
+        logger.info("没有需要移出的分区，也没有残留统计需要清理，结束")
         return 0
 
     if args.dry_run:
@@ -88,7 +99,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if not args.yes:
-        answer = input(f"确认移出上述 {preview.total_dropped} 个分区？此操作不可回滚。[y/N] ")
+        answer = input(
+            f"确认移出上述 {preview.total_dropped} 个分区、"
+            f"清理 {preview.total_purged_stats} 行残留统计？此操作不可回滚。[y/N] "
+        )
         if answer.strip().lower() != "y":
             logger.info("已取消")
             return 1
@@ -101,7 +115,10 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=False,
         )
 
-    logger.info("完成，共移出 %s 个分区", result.total_dropped)
+    logger.info(
+        "完成，共移出 %s 个分区，清理 %s 行残留统计",
+        result.total_dropped, result.total_purged_stats,
+    )
     if result.exported:
         for _table_name, paths in result.exported.items():
             for path in paths:
