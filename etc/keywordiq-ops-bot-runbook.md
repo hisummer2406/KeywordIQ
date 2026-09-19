@@ -7,8 +7,9 @@
 
 ## 1. 安装配置步骤
 
-前置：`v2` 分支已部署（`docker-compose.yml` 管理的 `app`/`db` 正常运行），
-`uv sync` 已跑过。
+前置：`v2` 分支已部署在 `/var/www/keywordiq`（`docker-compose.yml` 管理的
+`app`/`db` 正常运行）。机器人运行在宿主机，因此还需要宿主机安装 `uv`，并在仓库根执行
+`uv sync --no-dev` 创建 `.venv`。
 
 **在运行下面的步骤 1 之前，先把 `.env` 里 `OPS_DATABASE_URL`/`OPS_DATABASE_URL_ASYNC`/
 `OPS_DB_ROLE_PASSWORD` 三项（见第 3 节）填成你自己的真实密码，三处密码需一致。**
@@ -29,15 +30,15 @@ docker compose run --rm app alembic upgrade head
 #    重新 up 一次生效）
 docker compose up -d db
 
-# 3. 装 systemd 单元
+# 3. 为 host 级机器人准备依赖；V2 已有 www 账号、docker 组和受限 sudo 规则，无需新建 opsbot 用户
+uv sync --no-dev
+
+# 4. 安装 systemd 单元
 sudo cp etc/keywordiq-ops-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
-# 4. 建运行账号（示例；实际用户名/组按你的服务器策略调整）与工作目录权限
-sudo useradd --system --home /opt/keywordiq --no-create-home opsbot
-sudo usermod -aG docker opsbot   # RESTART_APP/DEPLOY 要跑 docker compose
-
-# 5. 装 nginx 配置（etc/keywordiq-nginx.conf 已含 /ops/ 反代段，按现有部署方式生效）
+# 5. 安装 V2 Nginx 配置（含 /ops/ 反代到 127.0.0.1:8101）
+sudo cp etc/keywordiq-v2-nginx.conf /etc/nginx/conf.d/key.liangtong.online.conf
 sudo nginx -t && sudo systemctl reload nginx
 
 # 6. 填好 .env 剩余的「飞书运维机器人」变量（第 2/3 节，数据库三项已在步骤 1 前填好），然后起服务
