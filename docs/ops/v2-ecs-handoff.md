@@ -22,16 +22,16 @@
 - 已合并的 PR #108（commit `75a90c4`）为 V2 增加 `/ops/` Nginx 反代到 `127.0.0.1:8101`，并把 `keywordiq-ops-bot.service` 对齐到 `/var/www/keywordiq` 和 `www` 用户。
 - 该 commit 的 V2 CI 已成功：<https://github.com/hisummer2406/KeywordIQ/actions/runs/35440430922>。
 - 首次部署尝试在 CI 尚未完成时被部署门禁拒绝，ECS 没有改动；随后在 CI 成功后重新部署并已成功完成：<https://github.com/hisummer2406/KeywordIQ/actions/runs/35441609054>。
-- 发布成功后，在 ECS 依次执行运行手册 `etc/keywordiq-ops-bot-runbook.md`：准备宿主机 `uv` 环境、配置 ops-bot 数据库与飞书变量、安装 systemd unit 与 V2 Nginx 配置，最后验证 `https://key.liangtong.online/ops/health`。
-- 飞书事件订阅方式选“事件发送到服务器”；回调地址是 `https://key.liangtong.online/ops/feishu/webhook`。在该健康检查可用前不要保存飞书的回调验证。
+- 2026-09-20 已在 ECS 完成：ops-bot 的 host 级安装（迁移、`uv` 环境、systemd unit、Nginx `/ops/` 反代，生效文件是 `/etc/nginx/conf.d/key.liangtong.online_80.conf`），`/ops/health` 返回 `ok`；飞书事件订阅已保存（启用了加密）；`scripts/check_feishu_ops.py` 四项全部通过。
+- **单人运维，不建群**：`FEISHU_OPS_CHAT_ID` 是与机器人的单聊 `chat_id`。取法与踩坑见运行手册第 2 节步骤 7（务必用应用身份取，否则之后发消息全部 `230002`）。
+- 事件订阅方式是“事件发送到服务器”；回调地址 `https://key.liangtong.online/ops/feishu/webhook`。
 - 飞书权限可在“权限管理 → 批量导入/导出权限”导入；精确 JSON 以当前接入对话或 `ops_bot/feishu/client.py` 的实际调用为准。不要把 App Secret 写进仓库。
 
 ## 未完成项与接手顺序
 
-1. 在 ECS 完成 `keywordiq-ops-bot` 的 host 级安装与 `/ops/health` 验证。
-2. 在飞书填事件订阅、Verification Token 与可选 Encrypt Key；密钥只写 ECS `.env`。
-3. 运行 `scripts/check_feishu_ops.py`，再把机器人加入指定运维群并设置唯一授权人的 `open_id` 与群 `chat_id`。
-4. 在群内依次演练 `状态`、`备份`，最后演练带确认卡片的 `重启`；发布操作必须使用完整 40 位 SHA。
+1. 在与机器人的单聊里依次演练 `状态`、`备份`，最后演练带确认卡片的 `重启`；发布操作必须使用完整 40 位 SHA。卡片按钮回调是未经真实客户端验证的部分，`重启` 演练时留意。
+2. 数据库**从未成功备份过**（每轮巡检都会告警）：先演练 `备份`，再按运行手册第 6 节核对定时备份任务是否已装。
+3. 按运行手册第 5 节配置阿里云云监控的 `/health` 与 `/ops/health` 拨测。
 
 ## 交接纪律
 

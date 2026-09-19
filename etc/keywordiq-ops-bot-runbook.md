@@ -17,8 +17,16 @@
 文件 `d4e5f6a7b8c9` 的说明）；先跑迁移、之后才改这三项，只会改掉 `.env` 里的值，
 角色在数据库里的真实密码仍停在迁移执行那一刻读到的旧值（未配置时的兜底值
 `change-me-in-production`），启动服务后 ops-bot 用新密码连接会认证失败，且日志里
-看不出这是密码没对齐的问题。走完第 6 步起服务前若已经改过这三项，重新跑一次
-`docker compose run --rm app alembic upgrade head` 即可让角色密码追上 `.env`。
+看不出这是密码没对齐的问题（journal 里是 `password authentication failed for user
+"ops_bot_role"`）。**库已经在 head 时再跑 `alembic upgrade head` 是空操作，不会重设
+密码**，对齐要直接改角色（密码经 psql 变量传入，含单引号也安全）：
+
+```bash
+PW=$(grep -E '^OPS_DB_ROLE_PASSWORD=' .env | cut -d= -f2- | tr -d "\"'")
+echo "ALTER ROLE ops_bot_role WITH PASSWORD :'pw'" \
+  | docker compose exec -T db psql -U postgres -d postgres -v pw="$PW"
+sudo systemctl restart keywordiq-ops-bot
+```
 
 ```bash
 # 1. 迁移：新建 ops schema、ops_bot_role 角色、六张状态表（在 app 容器内跑，
@@ -38,13 +46,24 @@ sudo cp etc/keywordiq-ops-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # 5. 安装 V2 Nginx 配置（含 /ops/ 反代到 127.0.0.1:8101）
-sudo cp etc/keywordiq-v2-nginx.conf /etc/nginx/conf.d/key.liangtong.online.conf
+#    目标文件名以机器上实际生效的为准：先 `sudo nginx -T | grep -n "server_name key\."`
+#    找到它。V2 ECS 上是 /etc/nginx/conf.d/key.liangtong.online_80.conf，直接
+#    cp 到仓库里假设的另一个文件名会得到两份重复的 upstream/server_name。
+#    覆盖前先 diff：仓库版本写死了证书路径。
+sudo cp etc/keywordiq-v2-nginx.conf /etc/nginx/conf.d/key.liangtong.online_80.conf
 sudo nginx -t && sudo systemctl reload nginx
 
 # 6. 填好 .env 剩余的「飞书运维机器人」变量（第 2/3 节，数据库三项已在步骤 1 前填好），然后起服务
 sudo systemctl enable --now keywordiq-ops-bot
 sudo systemctl status keywordiq-ops-bot
 ```
+
+**服务起不来、`status=127`**：`uv` 不在 systemd 的 `PATH` 里。unit 已同时列了
+`/var/www/.local/bin` 与 `/home/www/.local/bin`；`uv` 装在别处就用
+`sudo systemctl edit keywordiq-ops-bot` 加 drop-in 覆盖 `Environment=PATH=...`。
+**宿主机手动跑脚本用 `.venv/bin/python scripts/xxx.py`，不要 `uv run`**：不带
+`--no-sync` 的 `uv run` 会重新检查环境，`.venv` 的小版本与 `.python-version` 不符时会
+退回到系统 `/usr/bin/python3`（Alibaba Cloud Linux 3 上是 3.6.8）并报错。
 
 **`deploy.sh` 内部会用到的 `sudo` 命令**（`RELOAD_NGINX`/`DEPLOY` 执行时以
 `opsbot` 账号触发）需要配置 NOPASSWD sudoers，覆盖 `deploy.sh` 里 `as_root()`
@@ -69,9 +88,18 @@ opsbot ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /bin/systemctl reload nginx, \
 4. 「消息卡片」页：把卡片回调地址也配成同一个 URL（飞书经典卡片回传交互，与事件
    订阅共用一个入口）——**这一条是本变更依据官方文档实现、未经真实客户端验证的
    部分**，配置后务必按第 7 节演练一次确认真的收得到回调。
-5. 把机器人拉进你的运维群，记录群的 `chat_id`。
-6. 拿到你本人的飞书 `open_id`（`ou_` 前缀）——可以让机器人临时打印收到的事件来看
-   （或用飞书开放平台的接口调试工具查）。
+5. 把机器人拉进你的运维群，记录群的 `chat_id`。**只有一个人运维时不必建群**：
+   `FEISHU_OPS_CHAT_ID` 填你与机器人的**单聊** `chat_id`（`oc_` 前缀）即可，白名单
+   仍是 `open_id` 与 `chat_id` 同时匹配。
+6. 拿到你本人的飞书 `open_id`（`ou_` 前缀）。
+7. 单聊的 `chat_id`：开放平台「API 调试台」→ 发送消息，`receive_id_type=open_id`、
+   `receive_id` 填上一步的值，**Token 必须选应用身份（`tenant_access_token`）**，返回体
+   `data.sender.sender_type` 应为 `app`，其 `data.chat_id` 即是。选成用户身份会得到
+   「你给自己发消息」的会话，机器人不在里面，之后发送一律 `230002`。
+   不要用抓包取：启用了 `FEISHU_ENCRYPT_KEY` 后请求体是密文。
+   授权被拒时 journal 里有一行 `飞书事件来自非授权用户/会话，拒绝处理：open_id=…
+   chat_id=…`，发一条消息即可直接读到这两个值（也是 `FEISHU_OWNER_OPEN_ID` 与
+   `FEISHU_OPS_CHAT_ID` 还没配对时排查的第一站）。
 
 ## 3. 部署材料清单（写进 `.env`，不进仓库）
 
@@ -146,6 +174,9 @@ opsbot ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /bin/systemctl reload nginx, \
 | 机器人不回复任何消息 | `systemctl status keywordiq-ops-bot`；`journalctl -u keywordiq-ops-bot -n 100` |
 | 扫码/事件订阅配置后飞书后台显示"验证失败" | 确认 `/ops/feishu/webhook` 能被公网访问（`curl https://<域名>/ops/health`），nginx 反代是否生效 |
 | 卡片按钮点击没反应 | 这是未经真实客户端验证的部分（见第 2 节步骤 4）；先确认卡片回调地址配置正确，再查 `journalctl` 里 `_handle_card_action` 相关日志 |
+| 自检/告警报 `230002 Bot/User can NOT be out of the chat` | `FEISHU_OPS_CHAT_ID` 指向的会话里没有机器人——多半是用用户身份调试取到的 `chat_id`，按第 2 节步骤 7 重取 |
+| 告警报 `230001 invalid receive_id` | `FEISHU_OPS_CHAT_ID` 为空或格式不对（须 `oc_` 前缀，不是 `ou_`） |
+| 发消息机器人没回复、journal 里无任何报错 | 白名单没配对：看 `拒绝处理：open_id=… chat_id=…` 那行，与 `.env` 逐字符比对 |
 | `/ops/health` 返回 `db_unreachable` | 自建 PG 容器是否在跑（`docker compose ps db`）；`OPS_DATABASE_URL_ASYNC` 是否正确指向 `127.0.0.1:5432` |
 | 重启/发布一直提示"导入进行中" | `docker compose exec db psql -U postgres -d $POSTGRES_DB -c "SELECT id,status FROM analysis.import_batch WHERE status IN ('PROCESSING','UPLOADING')"`，确认是否真的有导入在跑 |
 | 发布一直提示"CI 未全部通过" | 用 `任务` 指令或直接查 GitHub 该 SHA 的 Checks 页面，确认 `backend`/`frontend`/`extension` 三个 job 状态 |
