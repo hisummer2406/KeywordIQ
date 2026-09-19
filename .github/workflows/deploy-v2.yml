@@ -15,7 +15,7 @@ jobs:
   deploy:
     # 工作流页面可选择任意分支；只允许 V2 分支触发，避免误把 main/V1 发到此 ECS 目录。
     if: github.ref == 'refs/heads/v2'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: 核验目标 SHA 的必需 CI 检查
