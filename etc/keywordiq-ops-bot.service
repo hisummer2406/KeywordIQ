@@ -31,7 +31,10 @@ User=www
 Group=www
 SupplementaryGroups=docker
 WorkingDirectory=/var/www/keywordiq
-Environment=PATH=/home/www/.local/bin:/usr/local/bin:/usr/bin:/bin
+# uv 由 www 账号装在 ~/.local/bin；systemd 不读登录 shell 的 PATH，而 www 的家目录
+# 因机器而异（V2 ECS 上是 /var/www，不是 /home/www）。两处都列，找不到 uv 时进程会以
+# 127 退出、日志只有一行 "env: 'uv': No such file or directory"。
+Environment=PATH=/var/www/.local/bin:/home/www/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env uv run --no-sync python -m ops_bot.main
 Restart=on-failure
 RestartSec=5

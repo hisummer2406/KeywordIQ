@@ -97,6 +97,34 @@ class TestFeishuWebhookUrlVerification(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
 
 
+class TestFeishuWebhookAuthorization(unittest.TestCase):
+    def test_unconfigured_whitelist_rejects_silently_but_logs_ids(self):
+        """白名单没配（或配错）时对方收不到任何回复，日志是唯一线索：必须带上 open_id/chat_id。"""
+        event = {
+            "header": {"token": "tok"},  # 无 event_id：跳过去重，不碰数据库
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_someone"}},
+                "message": {"chat_id": "oc_somechat", "content": json.dumps({"text": "状态"})},
+            },
+        }
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_VERIFICATION_TOKEN = "tok"
+            mock_settings.FEISHU_ENCRYPT_KEY = ""
+            mock_settings.FEISHU_OWNER_OPEN_ID = ""
+            mock_settings.FEISHU_OPS_CHAT_ID = ""
+            with (
+                patch("ops_bot.main.commands.dispatch", new=AsyncMock()) as dispatch,
+                self.assertLogs("ops_bot.main", level="WARNING") as logs,
+            ):
+                response = _client().post("/ops/feishu/webhook", content=json.dumps(event))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"")
+        dispatch.assert_not_awaited()
+        self.assertIn("ou_someone", logs.output[0])
+        self.assertIn("oc_somechat", logs.output[0])
+
+
 class TestRunManualBackup(unittest.IsolatedAsyncioTestCase):
     """`_run_manual_backup` 是后台任务体，不经 HTTP 层——单独测，覆盖成功/失败两条路径
     各自正确落 `ops_task` 并发出对应的结果消息。
@@ -153,6 +181,19 @@ class TestHandleCardAction(unittest.IsolatedAsyncioTestCase):
 
         mock_handle.assert_not_called()
         self.assertEqual(response.status_code, 200)
+
+    async def test_unauthorized_rejection_logs_ids_at_warning(self):
+        """INFO 到不了 journal，拒绝必须是 WARNING 且带上 ID，否则首次部署没法取到这两个值。"""
+        with patch("ops_bot.main.settings") as mock_settings:
+            mock_settings.FEISHU_OWNER_OPEN_ID = "ou_owner"
+            mock_settings.FEISHU_OPS_CHAT_ID = "oc_ops"
+            with self.assertLogs("ops_bot.main", level="WARNING") as logs:
+                await main._handle_card_action(
+                    {"open_id": "ou_evil", "open_chat_id": "oc_other", "action": {"value": {}}}
+                )
+
+        self.assertIn("ou_evil", logs.output[0])
+        self.assertIn("oc_other", logs.output[0])
 
     async def test_immediate_reply_when_no_execution_needed(self):
         """快速失败路径（已取消/已过期/已处理……）：直接回复，不碰后台任务。"""
