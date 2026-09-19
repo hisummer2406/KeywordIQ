@@ -161,3 +161,8 @@
 只有当某条约定确实只对某一种运行环境成立时，才在本文件加一条差异说明。
 （「Code Review Rules」一节属后者：它是 Codex 审核运行时的专属配置，随 CLAUDE.md
 对应条目同步维护。）
+
+## 当前部署交接
+
+执行或修改 V2 ECS、OSS、飞书运维机器人相关工作前，先阅读
+[`docs/ops/v2-ecs-handoff.md`](./docs/ops/v2-ecs-handoff.md)。该文件记录当前环境状态与接手顺序；密钥不记录在仓库。
