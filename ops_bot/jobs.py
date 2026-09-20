@@ -28,6 +28,11 @@ _POOL_WATER_WARN_RATIO = 0.9
 
 _LOG_PATH = "logs/app.log"
 
+# 已从 `build_jobs` 移除的巡检所用的告警键。移除一项巡检不会自动关掉它遗留的未解决
+# 记录（没有人再调用 `alerts.evaluate`），启动时由 `main` 静默置为已解决，见
+# `crud.retire_alert_keys`。**移除巡检时把它的告警键加进来**。
+RETIRED_ALERT_KEYS = ("backup-overdue",)
+
 # ops_task/ops_audit_log/ops_dedup_key 的保留期（design.md D3「任务/审计保留」）。
 # 数据量远小于业务事实表，不需要分区，daily 分组里直接 DELETE。
 _TASK_RETENTION_DAYS = 90

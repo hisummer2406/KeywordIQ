@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text, update
@@ -265,6 +266,25 @@ async def mark_alert_resolved(session: AsyncSession, alert_key: str) -> None:
         ),
         {"key": alert_key},
     )
+
+
+async def retire_alert_keys(session: AsyncSession, alert_keys: Iterable[str]) -> int:
+    """把已退役巡检的告警记录静默置为已解决，返回处理条数；不发任何通知。
+
+    删掉一项巡检后，它遗留的 `resolved_at IS NULL` 记录再也没有人调用
+    `alerts.evaluate` 去关闭，`状态` 与每日摘要会把它当作"未解决告警"一直显示。
+    这里直接落库而不走 `alerts.evaluate`：那条路径会发一条"已恢复"，而这类告警并不是
+    恢复了，是不再监控了。幂等——只碰仍未解决的行，重复调用返回 0。
+    """
+    keys = list(alert_keys)
+    if not keys:
+        return 0
+    result = await session.execute(
+        update(OpsAlertState)
+        .where(OpsAlertState.alert_key.in_(keys), OpsAlertState.resolved_at.is_(None))
+        .values(resolved_at=func.now(), consecutive_count=0)
+    )
+    return result.rowcount
 
 
 async def set_alert_maintenance_until(session: AsyncSession, alert_key: str, until: datetime) -> None:
