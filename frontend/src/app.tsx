@@ -6,6 +6,9 @@ import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { clearToken, getToken, isStaleAuthResponse } from '@/utils/token';
 import logoIcon from '@/assets/logo-icon.png';
 import RightContent from '@/components/RightContent';
+// 仅为副作用：beforeinstallprompt 每次加载只触发一次，必须在应用最早期就开始监听，
+// 等菜单组件挂载再订阅就收不到了（见 utils/pwaInstall.ts 头部）。
+import '@/utils/pwaInstall';
 
 const LOGIN_PATH = '/login';
 
