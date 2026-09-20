@@ -74,11 +74,17 @@ describe('权限', () => {
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });
 
-  it('风险核查没有 access，只要求已登录', () => {
-    // 两个子屏没有后端端点，罩着它们的权限点对它们不生效，就是「勾了也不生效」的复选框。
-    // 接上数据源、有了真实端点再加——那时是加法，不会留下失效的历史勾选。
+  it('产品档案、风险核查、定价核算是占位屏，挂 canViewUnreleased（仅超管）', () => {
+    // 没有后端端点，所以挂的是占位屏守卫而不是权限点——权限矩阵里没有对应项，
+    // 就不会有「勾了也不生效」的复选框。有了真实端点再按数据域加权限点。
+    for (const name of ['产品档案', '风险核查', '定价核算']) {
+      const node = topLevel.find((r) => r.name === name)!;
+      expect(node.access).toBe('canViewUnreleased');
+    }
+  });
+
+  it('风险核查的子屏继承父级，不再各挂一个', () => {
     const node = topLevel.find((r) => r.name === '风险核查')!;
-    expect(node.access).toBeUndefined();
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });
 });
