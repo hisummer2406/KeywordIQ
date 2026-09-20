@@ -29,11 +29,11 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     // 能看到——即便某个用户的角色码是 admin，只要 is_super 为假就看不到，与其余按角色
     // 矩阵授予的权限点不同档次（add-opportunity-center-nav/design.md 决策 1）。
     canViewOpportunity: has('opportunity:view'),
-    //「风险核查」（审核待办 / 外观专利 / 商标查询 / 风险案例，原名"侵权查询"）**故意没有权限工厂项**，
-    // 路由直接用 isLogin。它们没有后端端点，罩着它们的权限点对它们不生效，就成了
-    // 「勾了也不生效」的复选框（`user:manage` 正是这样被删掉的）。接上数据源、有了
-    // 真实端点再加——那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有权限项」
-    // 的整齐而补一个。
+    // 「产品档案」「风险核查」「定价核算」：占位屏，没有后端端点，只有 is_super 能看到，
+    // 免得运营/分析师点进一个写着「尚未接入」的空屏。判据是 is_super，**不是权限点**：
+    // 权限矩阵里没有对应的一项，因此不存在「勾了也不生效」的复选框（`user:manage` 的教训）。
+    // 有了真实端点再按数据域各开权限点、把这里的守卫换掉——那时是加法。
+    canViewUnreleased: isSuper,
     // 只认 is_super，不认 admin 角色码——把角色码也算进来，等于让「谁能管用户」
     // 变成一件改角色配置就能改变的事，而这正是收紧要排除的
     canManageUsers: isSuper,
