@@ -65,9 +65,27 @@ async def _reconcile_orphaned_tasks_on_startup() -> None:
         logger.warning("启动时回收 %d 条遗留的 RUNNING/CONFIRMED 任务，已标记为失败待人工核实", reconciled)
 
 
+async def _retire_alert_keys_on_startup() -> None:
+    """静默关闭已退役巡检遗留的未解决告警（见 `crud.retire_alert_keys`）。
+
+    只是清理展示用的残留记录，失败不该让机器人起不来——最坏是旧告警继续挂在
+    `状态` 里，下次启动再试。
+    """
+    try:
+        async with OpsAsyncSessionFactory() as session:
+            retired = await crud.retire_alert_keys(session, jobs.RETIRED_ALERT_KEYS)
+            await session.commit()
+    except Exception:
+        logger.exception("启动时清理已退役告警记录失败，将在下次启动重试")
+        return
+    if retired:
+        logger.info("启动时关闭了 %d 条已退役巡检遗留的未解决告警", retired)
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     await _reconcile_orphaned_tasks_on_startup()
+    await _retire_alert_keys_on_startup()
     tasks = scheduler.start(jobs.build_jobs(_feishu_client, settings.FEISHU_OPS_CHAT_ID))
     try:
         yield

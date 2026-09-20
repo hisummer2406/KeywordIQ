@@ -386,6 +386,35 @@ class TestReconcileOrphanedTasksOnStartup(unittest.IsolatedAsyncioTestCase):
         mock_logger.warning.assert_not_called()
 
 
+class TestRetireAlertKeysOnStartup(unittest.IsolatedAsyncioTestCase):
+    """已退役巡检遗留的未解决告警要在启动时自动关闭，不能靠人工 SQL；但这只是清理
+    展示用的残留记录，失败不能让机器人起不来。"""
+
+    async def test_retires_the_configured_keys_and_commits(self):
+        with patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.main.crud.retire_alert_keys", new=AsyncMock(return_value=1)
+        ) as mock_retire:
+            session = AsyncMock()
+            factory.return_value.__aenter__.return_value = session
+
+            await main._retire_alert_keys_on_startup()
+
+        mock_retire.assert_awaited_once()
+        self.assertEqual(mock_retire.call_args.args[0], session)
+        self.assertIn("backup-overdue", mock_retire.call_args.args[1])
+        session.commit.assert_awaited_once()
+
+    async def test_failure_is_logged_and_does_not_raise(self):
+        with patch("ops_bot.main.OpsAsyncSessionFactory") as factory, patch(
+            "ops_bot.main.crud.retire_alert_keys", new=AsyncMock(side_effect=RuntimeError("db down"))
+        ), patch("ops_bot.main.logger") as mock_logger:
+            factory.return_value.__aenter__.return_value = AsyncMock()
+
+            await main._retire_alert_keys_on_startup()  # 不抛
+
+        mock_logger.exception.assert_called_once()
+
+
 class TestDispatchExceptionFallback(unittest.TestCase):
     """`ops` schema 与业务 schema 同处一个自建 PG 实例，指令分发链路里任何一步
     数据库查询失败都可能抛出未预期异常——这条兜底必须把它接住，否则事件已经被
