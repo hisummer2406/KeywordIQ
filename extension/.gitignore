@@ -4,6 +4,9 @@
 # 构建产物
 /dist
 
+# 分发包
+/release
+
 # 杂项
 *.log
 .DS_Store
