@@ -3,14 +3,14 @@
 - [x] 1.1 `scripts/make_pwa_icons.py` 由 `src/assets/logo-icon.png` 合成 192 / 512 / maskable-512 / apple-180 到 `frontend/public/`（脚本与产物入库；需换素材时 `uv run --with pillow python scripts/make_pwa_icons.py`）
 - [x] 1.2 `public/manifest.webmanifest`：`id` `name` `short_name` `start_url` `scope` `display` `theme_color` `background_color` `icons`，start_url/scope/图标用相对路径
 - [x] 1.3 `.umirc.ts` 用 `links`/`metas` 引入 manifest、apple-touch-icon、theme-color（href 以 `/` 开头）
-- [x] 1.4 `src/manifest.test.ts`：字段断言、图标像素尺寸、`<link>` 写法、仓库无 Service Worker（**已写，尚未执行**）
+- [x] 1.4 `src/manifest.test.ts`：字段断言、图标像素尺寸、`<link>` 写法、仓库无 Service Worker（已执行通过：前端全量 52 文件 / 542 用例）
 
 ## 2. 安装入口
 
 - [x] 2.1 `src/utils/pwaInstall.ts`：模块加载时监听 `beforeinstallprompt`/`appinstalled`；`resolveInstallMode`、`isStandalone`、`isSafariWithAddToDock`（≥17）为纯函数
 - [x] 2.2 `app.tsx` 顶部副作用 import，保证监听早于组件挂载
 - [x] 2.3 `components/RightContent` 头像下拉「安装海眸系统」：`prompt` 调浏览器确认（用过即作废）、`safari-guide` 弹「添加到程序坞」指引、其余不显示
-- [x] 2.4 `pwaInstall.test.ts` 与 `RightContent` 入口显隐用例（**已写，尚未执行**）
+- [x] 2.4 `pwaInstall.test.ts` 与 `RightContent` 入口显隐用例（已执行通过：前端全量 52 文件 / 542 用例）
 
 ## 3. 部署
 
@@ -20,7 +20,7 @@
 ## 4. 失败反馈核实
 
 - [x] 4.1 核实结论：分析查询屏有两处缺口——首次查询失败时显示「搜索结果：0」+ 空表格；后续查询失败时表格留着旧条件的行、「有未生效改动」不亮。词库、导入历史等其余屏本轮**未逐屏核实**，验收时真机断网走一遍
-- [x] 4.2 补最小缺口：`useAnalysisQuery.requestFailed`（只认最新发出的请求、下次成功即清、不进会话快照），失败期间不显示条数、显示常驻失败提示；`onRequestError` 空回调避免 ProTable 二次抛错；`requestFailure.test.tsx` 回归（**已写，尚未执行**）。不新增全局横幅与轮询；`errorHandler` 文案未改
+- [x] 4.2 补最小缺口：`useAnalysisQuery.requestFailed`（只认最新发出的请求、下次成功即清、不进会话快照），失败期间不显示条数、显示常驻失败提示；`onRequestError` 空回调避免 ProTable 二次抛错；`requestFailure.test.tsx` 回归（已执行通过：前端全量 52 文件 / 542 用例）。不新增全局横幅与轮询；`errorHandler` 文案未改
 
 ## 5. 人工验证（需真机，本仓库无法自动化）
 
