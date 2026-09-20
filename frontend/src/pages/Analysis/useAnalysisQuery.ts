@@ -403,9 +403,11 @@ export function useAnalysisQuery(options: {
     // 标记在**拿到成功响应之后**才清——请求失败时保持置位，重试仍会带上重算，
     // 否则一次失败会让这组条件永远拿不到总数。
     const wantTotal = needsTotalRef.current;
-    let res: Awaited<ReturnType<typeof searchAnalysis>>;
+    // try 覆盖到函数末尾，不只是 `searchAnalysis` 这一句：ProTable 在 `onRequestError` 存在时
+    // 会吞掉 request 里抛出的**一切**异常（不只是网络失败），响应处理段里的 bug 若落在 try
+    // 之外，就是「界面显示旧条数 + 旧行 + 没有任何输出」的静默失败。
     try {
-      res = await searchAnalysis({
+      const res = await searchAnalysis({
         ...body,
         orderBy: appliedSortRef.current.field,
         orderDir: appliedSortRef.current.dir,
@@ -413,38 +415,38 @@ export function useAnalysisQuery(options: {
         perPage: params.pageSize,
         include_total: wantTotal,
       });
+      if (wantTotal) needsTotalRef.current = false;
+      // total 为 null 表示"本次没算"，沿用缓存；0 是真的没有命中行，必须照收
+      const total = res.total ?? totalRef.current;
+      const rows = res.data ?? [];
+      // 这次 await 期间已经有更晚的调用发出（seq 被推进），说明这次响应对应的作用域
+      // 已经过期：ProTable 不会真的取消旧请求（见上方 requestSeqRef 的注释），继续把
+      // loadedSite/View/Date、总数缓存与会话快照写成这份旧数据，会让它们与表格当下
+      // 实际展示的（更新请求的）行对不上。仍然把这次查到的行还给 ProTable 自己的
+      // 那次调用——它是否采纳属于 ProTable 内部的呈现逻辑，不是这里要接管的范围。
+      if (seq !== requestSeqRef.current) {
+        return { data: rows, total, success: res.success !== false };
+      }
+      totalRef.current = total;
+      setResultTotal(total);
+      setRequestFailed(false);
+      setPendingRebuild(res.pending_rebuild === true);
+      // 详情抽屉跟着这批行实际所属的站点/视图/日期走，见上方 loadedSite 的注释；
+      // 三者取自响应本身，不是发请求时的闭包值。
+      setLoadedSite(res.site);
+      setLoadedView(res.view);
+      setLoadedDate(res.date);
+      // 把「这次请求是什么 + 拿回了什么」一并落进快照，供下次挂载短路
+      persist({ lastRequest: key, rows, total, needsTotal: needsTotalRef.current });
+      markDataReady();
+      return { data: rows, total, success: res.success !== false };
     } catch (e) {
-      // 提示由全局 errorHandler 负责（这个调用没有 skipErrorHandler）；这里只记一笔结局，
-      // 好让界面不再把这份表格当成当前条件的结果。**只认最新发出的那次**：更早发出的
-      // 旧请求晚失败，不该把已经成功的新结果标成失败。异常照常抛回给 ProTable，行为不变。
+      // 网络/服务端失败的提示由全局 errorHandler 负责（这个调用没有 skipErrorHandler）；
+      // 这里只记一笔结局，好让界面不再把这份表格当成当前条件的结果。**只认最新发出的那次**：
+      // 更早发出的旧请求晚失败，不该把已经成功的新结果标成失败。异常照常抛回给 ProTable。
       if (seq === requestSeqRef.current) setRequestFailed(true);
       throw e;
     }
-    if (wantTotal) needsTotalRef.current = false;
-    // total 为 null 表示"本次没算"，沿用缓存；0 是真的没有命中行，必须照收
-    const total = res.total ?? totalRef.current;
-    const rows = res.data ?? [];
-    // 这次 await 期间已经有更晚的调用发出（seq 被推进），说明这次响应对应的作用域
-    // 已经过期：ProTable 不会真的取消旧请求（见上方 requestSeqRef 的注释），继续把
-    // loadedSite/View/Date、总数缓存与会话快照写成这份旧数据，会让它们与表格当下
-    // 实际展示的（更新请求的）行对不上。仍然把这次查到的行还给 ProTable 自己的
-    // 那次调用——它是否采纳属于 ProTable 内部的呈现逻辑，不是这里要接管的范围。
-    if (seq !== requestSeqRef.current) {
-      return { data: rows, total, success: res.success !== false };
-    }
-    totalRef.current = total;
-    setResultTotal(total);
-    setRequestFailed(false);
-    setPendingRebuild(res.pending_rebuild === true);
-    // 详情抽屉跟着这批行实际所属的站点/视图/日期走，见上方 loadedSite 的注释；
-    // 三者取自响应本身，不是发请求时的闭包值。
-    setLoadedSite(res.site);
-    setLoadedView(res.view);
-    setLoadedDate(res.date);
-    // 把「这次请求是什么 + 拿回了什么」一并落进快照，供下次挂载短路
-    persist({ lastRequest: key, rows, total, needsTotal: needsTotalRef.current });
-    markDataReady();
-    return { data: rows, total, success: res.success !== false };
   };
 
   return {

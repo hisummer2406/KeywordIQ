@@ -507,8 +507,10 @@ export default function AnalysisPage() {
         }
         request={(params) => query.runRequest(params)}
         // 失败已由全局 errorHandler 提示、由 `requestFailed` 常驻呈现。不传这个回调的话，
-        // ProTable 会把同一个异常再抛一次（未处理的 rejection）——没有新信息，只多一条噪音。
-        onRequestError={() => {}}
+        // ProTable 会把同一个异常再抛一次（未处理的 rejection）。
+        // 但**不能留空**：ProTable 在这里吞掉的是 request 里的一切异常，包括响应处理段的
+        // 代码缺陷，那类异常没有 toast，留空就是零输出。记一笔 console.error 保住栈。
+        onRequestError={(e) => console.error('[Analysis] 查询请求异常', e)}
         toolBarRender={() => [
           <Select
             key="sort-field"
