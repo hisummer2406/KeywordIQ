@@ -23,6 +23,12 @@ pnpm run typecheck   # tsc --noEmit
 pnpm run test        # vitest
 ```
 
+## 分发
+
+给运营的分发方式是 zip + 加载已解压：`pnpm run pack` 产出 `release/keywordiq-competitor-collector-v<版本>.zip`，
+安装与使用说明见 [`docs/extension-install.md`](../docs/extension-install.md)。`manifest.json` 的 `key`
+字段固定了扩展 ID，运营挪动解压目录后设置与 host 权限不会丢。
+
 ## 加载到 Chrome（开发者模式）
 
 1. `pnpm run build`
@@ -91,7 +97,7 @@ pnpm run test        # vitest
   `src/parse-storefront.ts` 里写的选择器不一致，需要对着真实页面调整，
   见 design.md 决策 4
 - `ship_to_region`（配送地区码）本次未采集，见 design.md Open Questions
-- 只做"被动采集"，不做后台自动巡检（P3b）；不上架 Chrome Web Store
+- 只做"被动采集"，不做后台自动巡检（P3b）；不上架 Chrome Web Store（改用 zip 分发，见上文「分发」）
 - **单个卖家的商品数超过单次上报上限时，插件无法完整采集这家店**（PR #68 三次
   复审 P1，见 design.md 决策 7）：撞上限后插件会**硬性阻止**继续采集和提交
   （"采集本页"/"提交上报"一起锁死），已采集的部分不会被提交——不是"建议先提交
