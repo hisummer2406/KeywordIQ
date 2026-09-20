@@ -97,4 +97,19 @@ describe('分析查询屏 · 请求失败', () => {
 
     expect(await screen.findByText(FAILURE_NOTICE)).toBeInTheDocument();
   });
+
+  it('响应处理段抛错（请求本身成功）同样呈现失败并留下日志，不静默吞掉', async () => {
+    // ProTable 在 onRequestError 存在时吞掉 request 里的一切异常。这里让响应形状不对
+    // （`res.total` 读 undefined 抛 TypeError），模拟处理段的代码缺陷：没有 toast，
+    // 若 try 只包住 searchAnalysis，界面会停在「搜索结果：0」且控制台零输出。
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    searchAnalysis.mockResolvedValue(undefined);
+
+    await renderSettled(false);
+
+    expect(await screen.findByText(FAILURE_NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText(/搜索结果：/)).not.toBeInTheDocument();
+    expect(logged).toHaveBeenCalledWith('[Analysis] 查询请求异常', expect.any(TypeError));
+    logged.mockRestore();
+  });
 });
