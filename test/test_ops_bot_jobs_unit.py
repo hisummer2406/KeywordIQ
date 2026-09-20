@@ -183,6 +183,13 @@ class TestNoBackupJobs(unittest.TestCase):
         self.assertNotIn("BACKUP_OVERDUE_CHECK", kinds)
 
 
+class TestRetiredAlertKeys(unittest.TestCase):
+    def test_backup_overdue_is_retired(self):
+        from ops_bot.jobs import RETIRED_ALERT_KEYS
+
+        self.assertIn("backup-overdue", RETIRED_ALERT_KEYS)
+
+
 class TestPoolCheck(unittest.IsolatedAsyncioTestCase):
     """`pool_water_level()` 探测失败返回 `None`，不代表"水位为 0"——见该函数
     的文档约定。`is_alerting` 必须把它当成异常，不能当成健康（PR #99 Codex
