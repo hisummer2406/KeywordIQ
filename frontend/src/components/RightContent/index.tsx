@@ -91,7 +91,7 @@ export default function RightContent({ currentUser, onLogout }: RightContentProp
           {
             key: 'install-app',
             icon: <DownloadOutlined />,
-            label: '安装海眸系统',
+            label: '安装桌面端',
             onClick: () => {
               if (installMode === 'safari-guide') showSafariGuide();
               else void install();
