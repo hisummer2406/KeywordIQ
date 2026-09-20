@@ -152,3 +152,39 @@ async def test_reconcile_orphaned_tasks_marks_running_and_confirmed_failed(ops_s
     assert running.status == "FAILED"
     assert confirmed.status == "FAILED"
     assert pending.status == TASK_PENDING_CONFIRM
+
+
+async def test_retire_alert_keys_resolves_only_unresolved_listed_keys(ops_session):
+    """只关闭清单内且仍未解决的记录：清单外的告警不受影响，已解决的不被改写，
+    重复调用是幂等的（返回 0）。"""
+    from ops_bot.crud import retire_alert_keys
+    from ops_bot.model import OpsAlertState
+
+    suffix = uuid.uuid4().hex[:8]
+    retired_key, resolved_key, other_key = (f"{p}-{suffix}" for p in ("retired", "resolved", "other"))
+    await ops_session.execute(
+        text(
+            "INSERT INTO ops.ops_alert_state (alert_key, level, last_fired_at, consecutive_count, resolved_at) "
+            "VALUES (:r, 'warn', now(), 5, NULL), (:d, 'warn', now(), 0, now() - interval '1 day'), "
+            "(:o, 'crit', now(), 3, NULL)"
+        ),
+        {"r": retired_key, "d": resolved_key, "o": other_key},
+    )
+    await ops_session.commit()
+    before_resolved = (await ops_session.get(OpsAlertState, resolved_key)).resolved_at
+
+    count = await retire_alert_keys(ops_session, [retired_key, resolved_key])
+    await ops_session.commit()
+    ops_session.expire_all()
+
+    assert count == 1
+    retired = await ops_session.get(OpsAlertState, retired_key)
+    assert retired.resolved_at is not None
+    assert retired.consecutive_count == 0
+    assert (await ops_session.get(OpsAlertState, resolved_key)).resolved_at == before_resolved
+    other = await ops_session.get(OpsAlertState, other_key)
+    assert other.resolved_at is None
+    assert other.consecutive_count == 3
+
+    assert await retire_alert_keys(ops_session, [retired_key, resolved_key]) == 0
+    assert await retire_alert_keys(ops_session, []) == 0
