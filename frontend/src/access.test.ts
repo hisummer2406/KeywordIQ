@@ -22,6 +22,7 @@ describe('access 权限派生', () => {
     expect(a.canExport).toBe(false); // 看得到 ≠ 导得出
     expect(a.canUpload).toBe(false);
     expect(a.canManageUsers).toBe(false);
+    expect(a.canViewUnreleased).toBe(false);
   });
 
   it('analysis:export 单独控制导出', () => {
@@ -34,5 +35,11 @@ describe('access 权限派生', () => {
     expect(a.canExport).toBe(true);
     expect(a.canUpload).toBe(true);
     expect(a.canManageUsers).toBe(true);
+    expect(a.canViewUnreleased).toBe(true);
+  });
+
+  it('占位屏只认 is_super：拥有全部权限点的普通账号也看不到', () => {
+    const all = ['analysis:view', 'analysis:export', 'upload:import', 'keyword:view', 'competitor:view'];
+    expect(build(all).canViewUnreleased).toBe(false);
   });
 });

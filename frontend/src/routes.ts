@@ -100,29 +100,29 @@ export const routes = [
   },
   {
     // 跨来源产品档案的独立入口；业务尚未接入，保持全宽。
+    // 仅超管可见（canViewUnreleased），见 access.ts。
     name: '产品档案',
     path: '/products',
     component: './Products',
     icon: 'ProfileOutlined',
+    access: 'canViewUnreleased',
   },
   {
     // 名字取**使用场景**（卖家嘴里说的是「查侵权」）而非数据域（「知识产权」）。
     // 原名「侵权查询」，issue #76 改名「风险核查」——为承接未来商标/专利之外的其他
     // 风险信号（如竞对监控的合规风险）留出更宽的名字，路由不变。
     //
-    // **仍然故意没有 access**，只要求已登录（外层 ProLayout 已保证）。四个子屏没有
-    // 后端端点，罩着它们的权限点对它们不生效，就是「勾了也不生效」的复选框
-    // （`user:manage` 正是这样被删掉的）。issue #76 的表格把"仅超管可见"列为一个可选项
-    // （"可保持"），但本仓库已有的先例（本条注释与被删除的 `user:manage`）明确反对给
-    // 没有端点的屏挂权限点——那不是一个真实的授权需求。接上数据源、有了真实端点再加
-    // 权限点，那时是加法，不会留下失效的历史勾选。别为了「每个菜单都有 access」的
-    // 整齐而补一个。
+    // **只有超管可见**（`canViewUnreleased`，见 access.ts）。四个子屏没有后端端点，
+    // 因此挂的是「占位屏守卫」而不是权限点——给没有端点的屏开权限点，就是「勾了也不生效」
+    // 的复选框（`user:manage` 正是这样被删掉的）。access 挂在父级，子项继承。接上数据源、
+    // 有了真实端点再按数据域加权限点，那时是加法，不会留下失效的历史勾选。
     //
     // 进顶栏是自觉的取舍：产品最空的一块因此成了最显眼的一块，换来的是「这块在做」这个
-    // 路线图信号可见。四个屏自己把「数据源尚未接入」写在脸上，不发请求。
+    // 路线图信号可见（对超管）。四个屏自己把「数据源尚未接入」写在脸上，不发请求。
     name: '风险核查',
     path: '/ip',
     icon: 'SafetyCertificate',
+    access: 'canViewUnreleased',
     routes: [
       { path: '/ip', redirect: '/ip/review' },
       { name: '审核待办', path: '/ip/review', component: './IP/Review' },
@@ -143,10 +143,12 @@ export const routes = [
   },
   {
     // 计算、记录和费用配置用页内 Tab，渠道比较保留全宽。
+    // 仅超管可见（canViewUnreleased），见 access.ts。
     name: '定价核算',
     path: '/pricing',
     component: './Pricing',
     icon: 'CalculatorOutlined',
+    access: 'canViewUnreleased',
   },
   // 旧「工具箱」地址不落空。只给有真实数据的两屏留重定向——没有人会去书签一个写着
   // 「数据源尚未接入」的屏，逐条保留只会让这份路由表越来越长。
