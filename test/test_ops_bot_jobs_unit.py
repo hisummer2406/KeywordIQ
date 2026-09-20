@@ -172,6 +172,17 @@ class TestImportNotify(unittest.IsolatedAsyncioTestCase):
         mock_stale_watermark.assert_not_awaited()
 
 
+class TestNoBackupJobs(unittest.TestCase):
+    """不做定时备份：不注册备份任务，也不注册「备份逾期」告警——后者在从未备份过时
+    每一轮巡检都会告警（手动的「备份」指令仍在，见 commands / main）。"""
+
+    def test_no_backup_or_backup_overdue_job_registered(self):
+        kinds = {job.kind for job in build_jobs(FeishuClient("id", "secret"), "oc_ops")}
+
+        self.assertNotIn("BACKUP", kinds)
+        self.assertNotIn("BACKUP_OVERDUE_CHECK", kinds)
+
+
 class TestPoolCheck(unittest.IsolatedAsyncioTestCase):
     """`pool_water_level()` 探测失败返回 `None`，不代表"水位为 0"——见该函数
     的文档约定。`is_alerting` 必须把它当成异常，不能当成健康（PR #99 Codex

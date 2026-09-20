@@ -523,6 +523,9 @@ class Settings(BaseSettings):
     OPS_IMPORT_WEEK_TIMEOUT_MINUTES: int = 240
     OPS_ERROR_RATE_THRESHOLD: int = 20        # 近 5 分钟 ERROR/5xx 计数阈值
     OPS_BACKUP_RETENTION_DAYS: int = 30
+    # ops-bot 探测业务 app 的本机地址（`/health`、`/health/pool`）。V2 的 app 容器映射在
+    # 127.0.0.1:8001；8000 是同机的 V1，不要改回去。
+    OPS_APP_BASE_URL: str = "http://127.0.0.1:8001"
 
     # 重启/发布确认流程（design.md D5）。GH_TOKEN 最小权限 checks:read+contents:read，
     # 发布前核实目标 SHA 的必需 CI 是否全部成功；不配置时发布路径直接拒绝（不放行）。
