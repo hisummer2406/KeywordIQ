@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxCDsuV7hOSyoXeCGEYkP7aNknWHQLt+1mIuYFmI8hi5RCjX+VYeWSzn/H3swBMXt1FWOZgIjbBsklrVSxvhW7nEJBc6XKAQfewJDJ5QCdQh1ZEglQqI8xMBF+AMyOxWb1QoWCaDp43Mm8RI1zJLuzgrr9FuKlJBqVrpfndQoQ+o75bgOdBNEhMPMy6rjtbHavJg7oIFtJdJpXa+6qsJe/oqNj07ixme+CO7WI0URdMD9Nx2fFQsICcl/vhXykX4pmK2mmeHpmF3+hnI25HoI5XOpXj1CpToUrdWIGCQWUrqCfTDaODgQSqxDsctNLdYajF5E10/3AMn+JIHKZ7rPrwIDAQAB",
   "name": "KeywordIQ 竞对采集（被动）",
   "version": "0.1.0",
   "description": "在 Amazon 卖家全品列表页手动采集 ASIN 并上报给 KeywordIQ（issue #56 P3a）",
