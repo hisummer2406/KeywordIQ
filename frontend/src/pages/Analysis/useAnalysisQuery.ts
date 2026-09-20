@@ -63,6 +63,12 @@ export interface AnalysisQueryState {
   setSavedApplied: (next: boolean) => void;
   /** 已经查过一次。结果条数的显隐与「有未生效改动」提示的前置。 */
   hasQueried: boolean;
+  /**
+   * 最近一次（最新发出的）查询失败了，尚未有成功的查询把它盖掉。
+   * 此时表格里要么是空的、要么还是**上一组条件**的行，都不是当前生效条件的结果，
+   * 界面必须明示，且不得显示结果条数。
+   */
+  requestFailed: boolean;
   /** 草稿与生效不一致。**没查过就恒为假**，见下面的说明。 */
   dirty: boolean;
   /** 生效条件带了筛选 ⇒ 掉榜段被短路为空，界面须明示。 */
@@ -165,6 +171,20 @@ export function useAnalysisQuery(options: {
    * 正是那批还在屏上的行。
    */
   const hasQueried = appliedSig !== '';
+
+  /**
+   * 最近一次查询是否失败（issue #92：断网/服务不可达时不得把失败显示成空数据）。
+   *
+   * 为什么需要它：`hasQueried` 在 `apply()` 里、请求发出**之前**就变真了，而失败的请求
+   * 不写任何结果状态。于是首次查询就失败时，界面是「搜索结果：0」+ 空表格——读起来是
+   * 「这个条件没有命中」，实际是「没查成」；后续查询失败时则是表格仍留着上一组条件的行、
+   * 而「有未生效改动」不亮（草稿 === 生效），等于在说这就是新条件的结果。toast 几秒就消失，
+   * 撑不住这两种误读，所以要一个常驻的状态。
+   *
+   * **不进会话快照**：它描述的是一次请求的结局，请求随组件一起没了；缓存它会让用户切回来
+   * 看到一个已经没有意义的失败提示（与 `exporting` 同理）。
+   */
+  const [requestFailed, setRequestFailed] = useState(false);
 
   const draftBody = useMemo(() => toSearchBody(scope, filters), [scope, filters]);
   const draftSig = useMemo(() => JSON.stringify(draftBody), [draftBody]);
@@ -369,6 +389,7 @@ export function useAnalysisQuery(options: {
       // 这段全程没有 await，天然是本次调用里最先落地的一段——但仍要核对 seq：更早
       // 发出、此刻仍在网络往返中的旧调用可能在它之后才 resolve，不能被旧调用倒灌覆盖。
       if (seq === requestSeqRef.current) {
+        setRequestFailed(false);
         setLoadedSite(body.site);
         setLoadedView(body.view);
         setLoadedDate(body.date ?? null);
@@ -382,14 +403,23 @@ export function useAnalysisQuery(options: {
     // 标记在**拿到成功响应之后**才清——请求失败时保持置位，重试仍会带上重算，
     // 否则一次失败会让这组条件永远拿不到总数。
     const wantTotal = needsTotalRef.current;
-    const res = await searchAnalysis({
-      ...body,
-      orderBy: appliedSortRef.current.field,
-      orderDir: appliedSortRef.current.dir,
-      page: params.current,
-      perPage: params.pageSize,
-      include_total: wantTotal,
-    });
+    let res: Awaited<ReturnType<typeof searchAnalysis>>;
+    try {
+      res = await searchAnalysis({
+        ...body,
+        orderBy: appliedSortRef.current.field,
+        orderDir: appliedSortRef.current.dir,
+        page: params.current,
+        perPage: params.pageSize,
+        include_total: wantTotal,
+      });
+    } catch (e) {
+      // 提示由全局 errorHandler 负责（这个调用没有 skipErrorHandler）；这里只记一笔结局，
+      // 好让界面不再把这份表格当成当前条件的结果。**只认最新发出的那次**：更早发出的
+      // 旧请求晚失败，不该把已经成功的新结果标成失败。异常照常抛回给 ProTable，行为不变。
+      if (seq === requestSeqRef.current) setRequestFailed(true);
+      throw e;
+    }
     if (wantTotal) needsTotalRef.current = false;
     // total 为 null 表示"本次没算"，沿用缓存；0 是真的没有命中行，必须照收
     const total = res.total ?? totalRef.current;
@@ -404,6 +434,7 @@ export function useAnalysisQuery(options: {
     }
     totalRef.current = total;
     setResultTotal(total);
+    setRequestFailed(false);
     setPendingRebuild(res.pending_rebuild === true);
     // 详情抽屉跟着这批行实际所属的站点/视图/日期走，见上方 loadedSite 的注释；
     // 三者取自响应本身，不是发请求时的闭包值。
@@ -434,6 +465,7 @@ export function useAnalysisQuery(options: {
     savedApplied,
     setSavedApplied,
     hasQueried,
+    requestFailed,
     dirty,
     appliedHidesDropped,
     draftBody,
