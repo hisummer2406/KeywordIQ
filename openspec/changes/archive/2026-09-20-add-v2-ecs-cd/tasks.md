@@ -13,4 +13,4 @@
 ## 3. 运维交接
 
 - [x] 3.1 记录 ECS 一次性权限引导、SSH 密钥和 GitHub Secrets 配置。
-- [ ] 3.2 在 GitHub 配置 Secrets 后手动运行一次工作流并记录结果。
+- [x] 3.2 在 GitHub 配置 Secrets 后手动运行一次工作流并记录结果。
