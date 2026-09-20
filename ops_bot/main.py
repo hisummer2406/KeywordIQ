@@ -153,7 +153,14 @@ async def feishu_webhook(request: Request) -> Response:
         owner_open_id=settings.FEISHU_OWNER_OPEN_ID,
         ops_chat_id=settings.FEISHU_OPS_CHAT_ID,
     ):
-        logger.info("飞书事件来自非授权用户/会话，拒绝处理")
+        # WARNING 而非 INFO：本进程没有配置应用日志级别，INFO 到不了 journal，于是
+        # 「白名单没配对」与「事件根本没送到」在日志里长得一样，只能靠抓包排查。
+        # open_id/chat_id 不是密钥，写进日志正是首次部署取这两个值最省事的办法。
+        logger.warning(
+            "飞书事件来自非授权用户/会话，拒绝处理：open_id=%s chat_id=%s",
+            sender.get("open_id"),
+            message.get("chat_id"),
+        )
         return Response(status_code=200)
 
     logger.info("收到已授权的飞书事件，event_id=%s", event_id)
@@ -225,7 +232,7 @@ async def _handle_card_action(event: dict) -> Response:
         owner_open_id=settings.FEISHU_OWNER_OPEN_ID,
         ops_chat_id=settings.FEISHU_OPS_CHAT_ID,
     ):
-        logger.info("卡片回调来自非授权用户/会话，拒绝处理")
+        logger.warning("卡片回调来自非授权用户/会话，拒绝处理：open_id=%s chat_id=%s", open_id, chat_id)
         return Response(status_code=200)
 
     try:
