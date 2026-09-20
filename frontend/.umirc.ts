@@ -42,6 +42,17 @@ export default defineConfig({
     },
   },
 
+  // 可安装为网站应用（issue #92）：manifest 与图标放在 public/，Umi 原样拷进 dist 根。
+  // **href 必须以 / 开头**：入口页会在任意深链接（/analysis、/ip/review）下被加载，写成
+  // 相对路径会解析成 /analysis/manifest.webmanifest，被 nginx 的 SPA 兜底当成 index.html
+  // 返回——Manifest 静默解析失败，浏览器只是不提供安装，没有任何报错。
+  // 这里**不新增 Service Worker**：本产品必须联网，安装只是入口，见 openspec installable-web-app。
+  links: [
+    { rel: 'manifest', href: '/manifest.webmanifest' },
+    { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
+  ],
+  metas: [{ name: 'theme-color', content: '#ffffff' }],
+
   // 生产用哈希文件名，配合 nginx 长缓存
   hash: true,
   history: { type: 'browser' },

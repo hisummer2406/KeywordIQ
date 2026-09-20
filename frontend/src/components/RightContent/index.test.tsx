@@ -1,9 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { Modal } from 'antd';
 
-const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+const { push, installState } = vi.hoisted(() => ({
+  push: vi.fn(),
+  // 安装入口的状态由 hook 决定；判定逻辑在 utils/pwaInstall.test.ts 里测，这里只测入口的呈现
+  installState: { mode: 'hidden' as 'hidden' | 'prompt' | 'safari-guide', install: vi.fn() },
+}));
 vi.mock('@umijs/max', () => ({ history: { push } }));
+vi.mock('@/hooks/useInstallEntry', () => ({
+  useInstallEntry: () => ({ mode: installState.mode, install: installState.install }),
+}));
 
 import RightContent from '@/components/RightContent';
 
@@ -35,7 +43,13 @@ async function openMenu(currentUser: API.CurrentUser) {
  * access 守卫和端点依赖；这里只保证不给用户一个点了必然 403 的入口。
  */
 describe('顶栏账号区', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installState.mode = 'hidden';
+  });
+
+  // Safari 指引用的是静态 Modal.info，挂在测试渲染树之外，cleanup 不会替它收拾
+  afterEach(() => Modal.destroyAll());
 
   it('超级账号能看到用户管理入口，点击后跳转 /user', async () => {
     await openMenu(user({ is_super: true, role: 'admin', role_name: '超级管理员' }));
@@ -108,5 +122,44 @@ describe('顶栏账号区', () => {
       await userEvent.click(screen.getByText('退出登录'));
     });
     expect(onLogout).toHaveBeenCalled();
+  });
+
+  /**
+   * 安装为网站应用的入口（issue #92）。显隐的判据（独立窗口、Safari 版本等）在
+   * pwaInstall.test.ts 里测；这里守的是「入口据 hook 给出的状态呈现」以及点击后各走各的路。
+   */
+  describe('安装入口', () => {
+    it('hidden：不出现——独立窗口与不支持的环境不显示无效入口', async () => {
+      installState.mode = 'hidden';
+      await openMenu(user());
+      expect(screen.queryByText('安装海眸系统')).toBeNull();
+    });
+
+    it('prompt：点击调用浏览器的安装确认，且不弹指引', async () => {
+      installState.mode = 'prompt';
+      await openMenu(user());
+      await act(async () => {
+        await userEvent.click(screen.getByText('安装海眸系统'));
+      });
+      expect(installState.install).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/添加到程序坞…/)).toBeNull();
+    });
+
+    it('safari-guide：点击给出「添加到程序坞」指引，不调用安装事件', async () => {
+      installState.mode = 'safari-guide';
+      await openMenu(user());
+      await act(async () => {
+        await userEvent.click(screen.getByText('安装海眸系统'));
+      });
+      expect(await screen.findByText(/文件 → 添加到程序坞…/)).toBeInTheDocument();
+      expect(installState.install).not.toHaveBeenCalled();
+    });
+
+    it('与用户管理并存时都在，退出登录仍在最后', async () => {
+      installState.mode = 'prompt';
+      await openMenu(user({ is_super: true, role: 'admin', role_name: '超级管理员' }));
+      const labels = screen.getAllByRole('menuitem').map((el) => el.textContent);
+      expect(labels).toEqual(['用户管理', '安装海眸系统', '退出登录']);
+    });
   });
 });

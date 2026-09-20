@@ -474,11 +474,23 @@ export default function AnalysisPage() {
               没查过就不显示条数。显示「搜索结果：0」会被读成「这个条件查出来是 0 行」，
               而实际是「还没查」——两者在界面上必须能分开。
             */}
-            {query.hasQueried && (
-              <Typography.Text type="secondary">
-                搜索结果：
-                <Typography.Text strong>{query.resultTotal.toLocaleString()}</Typography.Text>
+            {/*
+              查询失败时不显示条数，改为常驻的失败提示（issue #92）。此刻表格要么是空的、
+              要么还是上一组条件的行，都不是当前条件的结果：显示「搜索结果：0」会把「没查成」
+              读成「没命中」，留着旧条数则是拿旧数据冒充新数据。toast 几秒就没了，撑不住这个
+              误读。重试不需要专门的入口——重新点「立即查询」/「开始筛选」就是重试。
+            */}
+            {query.requestFailed ? (
+              <Typography.Text type="danger">
+                查询失败，下表数据未更新，请检查网络后重新查询
               </Typography.Text>
+            ) : (
+              query.hasQueried && (
+                <Typography.Text type="secondary">
+                  搜索结果：
+                  <Typography.Text strong>{query.resultTotal.toLocaleString()}</Typography.Text>
+                </Typography.Text>
+              )
             )}
             {/*
               筛选一生效，掉榜行必然全部消失——筛选以锚定日那一行为准，而掉榜行在那一天
@@ -494,6 +506,9 @@ export default function AnalysisPage() {
           </Space>
         }
         request={(params) => query.runRequest(params)}
+        // 失败已由全局 errorHandler 提示、由 `requestFailed` 常驻呈现。不传这个回调的话，
+        // ProTable 会把同一个异常再抛一次（未处理的 rejection）——没有新信息，只多一条噪音。
+        onRequestError={() => {}}
         toolBarRender={() => [
           <Select
             key="sort-field"

@@ -10,10 +10,11 @@
  * 角色中文名取自后端 `role_name`（与 role 表同源），前端不维护 code → 名称的映射：
  * 那份映射会随角色增删静默漂移。
  */
-import { LogoutOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { DownloadOutlined, LogoutOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { history } from '@umijs/max';
-import { Avatar, Dropdown, Space, Tag, Typography } from 'antd';
+import { Avatar, Dropdown, Modal, Space, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
+import { useInstallEntry } from '@/hooks/useInstallEntry';
 
 /**
  * 白色顶栏的账号区：头像保留品牌蓝提示，角色保留为低对比边框标签。
@@ -32,7 +33,24 @@ export interface RightContentProps {
   onLogout: () => void;
 }
 
+/** Mac Safari 没有程序化安装入口，只能告诉用户菜单在哪（≥ Safari 17 才会走到这里）。 */
+function showSafariGuide() {
+  Modal.info({
+    title: '添加到程序坞',
+    content: (
+      <>
+        <p>在 Safari 菜单栏选择「文件 → 添加到程序坞…」，确认名称后点击「添加」。</p>
+        <p>之后即可从程序坞直接打开海眸系统，使用时仍需联网。</p>
+      </>
+    ),
+    okText: '知道了',
+  });
+}
+
 export default function RightContent({ currentUser, onLogout }: RightContentProps) {
+  // hook 必须在下面的提前 return 之前：条件调用会让 hooks 顺序在登录前后不一致
+  const { mode: installMode, install } = useInstallEntry();
+
   if (!currentUser) return null;
 
   const roleLabel = currentUser.role_name || currentUser.role || '未分配角色';
@@ -63,10 +81,27 @@ export default function RightContent({ currentUser, onLogout }: RightContentProp
             label: '用户管理',
             onClick: () => history.push('/user'),
           },
-          // 与退出登录之间隔一道：一个是日常跳转，一个是会话终止，挨着容易点错
-          { type: 'divider' as const },
         ]
       : []),
+    // 安装为网站应用（issue #92）：只在**可操作**时出现——浏览器给了安装事件，或是能用
+    // 「添加到程序坞」的 Mac Safari；独立窗口内与不支持的环境一律不显示（见 pwaInstall）。
+    // 点击才触发浏览器的安装确认，安装始终由用户决定。
+    ...(installMode !== 'hidden'
+      ? [
+          {
+            key: 'install-app',
+            icon: <DownloadOutlined />,
+            label: '安装海眸系统',
+            onClick: () => {
+              if (installMode === 'safari-guide') showSafariGuide();
+              else void install();
+            },
+          },
+        ]
+      : []),
+    // 与退出登录之间隔一道：一个是日常跳转，一个是会话终止，挨着容易点错。
+    // 上面的动作是条件出现的，分隔线跟着「上面有没有东西」走，不然普通账号会顶着一条孤零零的线。
+    ...(currentUser.is_super || installMode !== 'hidden' ? [{ type: 'divider' as const }] : []),
     {
       key: 'logout',
       icon: <LogoutOutlined />,
