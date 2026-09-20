@@ -132,14 +132,14 @@ describe('顶栏账号区', () => {
     it('hidden：不出现——独立窗口与不支持的环境不显示无效入口', async () => {
       installState.mode = 'hidden';
       await openMenu(user());
-      expect(screen.queryByText('安装海眸系统')).toBeNull();
+      expect(screen.queryByText('安装桌面端')).toBeNull();
     });
 
     it('prompt：点击调用浏览器的安装确认，且不弹指引', async () => {
       installState.mode = 'prompt';
       await openMenu(user());
       await act(async () => {
-        await userEvent.click(screen.getByText('安装海眸系统'));
+        await userEvent.click(screen.getByText('安装桌面端'));
       });
       expect(installState.install).toHaveBeenCalledTimes(1);
       expect(screen.queryByText(/添加到程序坞…/)).toBeNull();
@@ -149,7 +149,7 @@ describe('顶栏账号区', () => {
       installState.mode = 'safari-guide';
       await openMenu(user());
       await act(async () => {
-        await userEvent.click(screen.getByText('安装海眸系统'));
+        await userEvent.click(screen.getByText('安装桌面端'));
       });
       expect(await screen.findByText(/文件 → 添加到程序坞…/)).toBeInTheDocument();
       expect(installState.install).not.toHaveBeenCalled();
@@ -159,7 +159,7 @@ describe('顶栏账号区', () => {
       installState.mode = 'prompt';
       await openMenu(user({ is_super: true, role: 'admin', role_name: '超级管理员' }));
       const labels = screen.getAllByRole('menuitem').map((el) => el.textContent);
-      expect(labels).toEqual(['用户管理', '安装海眸系统', '退出登录']);
+      expect(labels).toEqual(['用户管理', '安装桌面端', '退出登录']);
     });
   });
 });
