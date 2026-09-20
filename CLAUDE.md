@@ -30,6 +30,11 @@ uv add --dev <package>    # dev-only
 
 # Production deployment (Docker Compose: app + self-hosted PostgreSQL + Netdata；
 # host nginx 只托管前端 SPA 产物并反代 /api，不再直接管理裸 uvicorn 进程)
+#
+# 常规发布入口是 GitHub Actions 的「Deploy V2 to ECS」：只在 v2 分支上手动触发，核验该
+# SHA 在 origin/v2 历史上、且三项 CI（后端/前端/插件）全部成功后 SSH 到 ECS，fast-forward 到该 SHA 并执行
+# `./deploy.sh --yes`，最后用 /health 探活。合并进 v2 不会自动发布。一次性引导与 secrets
+# 见 .github/v2-ecs-cd.md。下面这组是 ECS 上 deploy.sh 本身的用法（V2 应用监听 127.0.0.1:8001）。
 ./deploy.sh                            # Full release: build image → migrate (in container) → build SPA → publish → reload nginx
 ./deploy.sh --skip-migrate             # Frontend-only release
 docker compose up -d                   # 拉起/切换容器（restart: unless-stopped，崩溃与宿主机重启由 Docker 自动拉起）
@@ -41,8 +46,9 @@ docker compose logs app --tail 100 -f  # Monitor app logs（不再是 tail logs/
 # Connection: sync (psycopg2) + async (asyncpg) engines both configured
 
 # Database migrations (Alembic)——本地开发直连数据库时用这组；
-# 生产的自建 db 服务不对宿主机暴露端口，生产迁移走 `docker compose run --rm app alembic ...`
-# （deploy.sh 已封装），下面这组裸命令在生产环境够不到 db。
+# 生产的自建 db 只绑宿主机回环 127.0.0.1:5432（给 host 级 ops-bot 用，不对公网暴露），而
+# 生产 `.env` 里的 DATABASE_URL 指向容器网络里的 `db`，宿主机解析不了——生产迁移走
+# `docker compose run --rm app alembic ...`（deploy.sh 已封装），下面这组裸命令只在本地用。
 uv run alembic upgrade head          # 应用迁移
 uv run alembic downgrade -1          # 回滚一步
 uv run alembic upgrade head --sql    # 只生成 SQL，不连库（离线预览）
@@ -51,10 +57,12 @@ uv run alembic revision --autogenerate -m "说明"  # 从模型差异生成
 uv run alembic current               # 当前版本
 ```
 
-## V2 数据模型（建设中）
+## V2 数据模型
 
-V1 已完成使命并退役，V2 是完整重建。当前进度：数据模型（地基）已落地，导入、查询、
-界面、归档四个层次的重写尚未开始。规划文档见 `openspec/changes/add-multi-site-data-model/`。
+V1 已完成使命并退役，V2 是完整重建。数据模型、导入、查询、界面均已落地，V2 已在阿里云
+ECS 上线（2026-09-19，域名 `key.liangtong.online`，环境与接手状态见文末「当前部署交接」）。
+旧稿里的「归档」层现在是按月保留清理（见「数据保留」），**数据库没有自动备份**
+（2026-09-20 决定，见「Production Environment」）。
 
 **V2 的表**（星型模型，全部在 `analysis` schema 下）：
 
@@ -317,14 +325,39 @@ MUST NOT 展示编造的 0 值或结论。
 命中，这不是缺陷。方向 C（品牌级联查，卖家 → 品牌名 → `top1/2/3_brand_id`）因拿不到
 「卖家 → 品牌名」这层映射，移出 P2 范围。
 
-**插件的三处限制，改动前先读 `extension/README.md` 与对应变更的 design.md**（`openspec/
-changes/add-competitor-browser-collector/`）：鉴权是**手动粘贴 token 的占位方案**，正式
-方案（读网页会话 / 独立 Personal Access Token / 插件内登录）尚未拍板；DOM 选择器
-（`extension/src/parse-storefront.ts`）**未经真实登录会话验证**，本仓库拿不到真实 Amazon
-账号，只能靠人工在真机核实，见该变更 tasks.md 第 8 节；插件的网络请求依赖后端当前
-`allow_origins=["*"]` 的宽松 CORS 配置才能不声明 `host_permissions` 就跑通——**收紧这个
-CORS 之前，必须先给插件的来源开白名单**，否则表现是插件请求全部"网络异常"，而真正原因
-是 CORS 被收紧，两者在插件界面上长得一模一样。
+**插件的两处限制与一处已澄清的误解，改动前先读 `extension/README.md` 与对应变更的
+design.md**（`openspec/changes/archive/2026-09-03-add-competitor-browser-collector/`）：
+
+- **令牌是从已登录网页里同步来的 24 小时 JWT，全权限**（`session-sync.ts` 读网页
+  `localStorage` 的 `keywordiq_token`，不再手动粘贴，见 `sync-extension-token-from-web`
+  变更）。同步只解决"不用手动粘贴"，不解决"权限过大、无法单独收回插件"——那要后端签发
+  独立的可吊销令牌，是另一个变更。
+- **DOM 选择器（`extension/src/parse-storefront.ts`）本仓库无法自动化验证**，只能人工在真机
+  核实。维护者已于 2026-09-20 分发前确认在真机上验证过；逐站点的覆盖范围与
+  `tasks.md` 第 8 节的勾选**没有留档**，Amazon 页面改版后要重新核。
+- **插件的跨域请求不依赖后端 CORS。** service worker 的 `fetch` 由 `optional_host_permissions`
+  （用户保存 API 地址时按需弹权限框申请）放行，与服务端是否回 `Access-Control-Allow-Origin`
+  无关（`host-permission.ts` 头部注释，MV3 权限模型）。这里曾写过"依赖 `allow_origins=["*"]`、
+  收紧 CORS 前必须先给插件开白名单"，是对权限模型的误判，已删除。收紧 CORS **不会**让插件
+  失效；插件"网络异常"要先查 host 权限是否授予（换 API 地址要重新授权）。
+
+**采集是「多页本地合并、一次上报」，不是逐页上报。** 逐页上报会让第一页单独落定该卖家的基线，
+之后采到的存量商品因此被服务端判成「新发现」（PR #68 复审 P1，与上文「基线 = 第一次上报」同源）；
+这条约束在插件侧靠 `capture-accumulator.ts` 保证，改采集流程时不要破坏它。
+
+**分发方式是 zip + 加载已解压，不上 Chrome Web Store。** `pnpm run pack`（`extension/
+scripts/pack.mjs`）构建并产出 `extension/release/keywordiq-competitor-collector-v<版本>.zip`
+（不含 sourcemap，`release/` 与 `dist/` 都被 gitignore）。三条约束：
+
+- **版本号有两处，必须一致**：`manifest.json` 与 `package.json`。打包脚本与
+  `test/manifest.test.ts` 都会拦；两者不一致时发出去的包版本号会撒谎。
+- **`manifest.json` 的 `key` 字段固定扩展 ID**（`deeognacliaabdllgfhofccnfipmmidl`）。没有它，
+  未打包扩展的 ID 由**解压路径**决定，运营挪一下文件夹，设置与 host 权限就整体丢失。`key`
+  是公钥，可入库；**对应私钥在维护者本机（`~/.keywordiq/`），不入库**，只有将来上商店想沿用
+  同一 ID 时才需要，丢了不影响已安装的插件。
+- **升级靠覆盖解压 + 在 `chrome://extensions` 点重新加载**，没有自动更新。给运营看的安装、
+  三项设置与常见提示写在 `docs/extension-install.md`（`docs/` 整体被 gitignore，这份是
+  `git add -f` 强制加进库的；已被跟踪，后续修改正常提交即可，新增 docs 下的文件才要 `-f`）。
 
 **两层数据模型，分层的判据是「这条数据属于谁」**：
 
@@ -588,6 +621,7 @@ app/
 │                      # + 批次历史与重导（import_batch_crud / import_history_service）
 └── user/              # 用户与角色管理 (model, crud, api)
 
+ops_bot/               # 飞书运维机器人：独立于 app/ 的 host 级 systemd 服务（见 Production Environment）
 main.py                # FastAPI app entry, lifespan management, health check
 config.py              # Pydantic settings (env-based config)
 database.py            # SQLAlchemy 2.0 sync + async engines, session factories
@@ -652,7 +686,10 @@ ali-oss 要读每片的 ETag 才能 `CompleteMultipartUpload`，缺它的表现�
 一步失败，极易误判成网络问题。
 
 **上线前必改**（开发环境放宽处，清单与理由见 `.env.example` 的 OSS 段）：CORS 来源从 `*`
-收窄到实际域名、`OSS_ENDPOINT` 换内网地址、生产用独立 bucket 与独立 RAM 子账号。
+收窄到实际域名、`OSS_ENDPOINT` 换内网地址、生产用独立 bucket 与独立 RAM 子账号。V2 生产
+已就位的是独立 bucket（`keywordiq-release`，杭州）与服务端内网 Endpoint，并已用
+`scripts/check_oss.py` 全链路验证；**CORS 来源是否已收窄、是否用了独立 RAM 子账号，交接文档
+没有记录**，下次动 OSS 配置时要逐项核对，别当成已完成。
 
 **导入串行**：`pg_try_advisory_lock` 保证同一时刻只有一个导入在跑（2C4G 上两个 GB 级导入并发会争抢
 WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
@@ -1128,15 +1165,62 @@ PG_WORK_MEM=16MB
 
 应用与数据库不再是两台独立机器——`dockerize-selfhosted-infra` 变更之前是阿里云 RDS
 PostgreSQL 15.0（2C4G，独立机器），出于省去 RDS 托管溢价的考虑改为自建、同机部署。
-详见 `openspec/changes/dockerize-selfhosted-infra/design.md`。
+详见 `openspec/changes/archive/2026-09-15-dockerize-selfhosted-infra/design.md`。
+
+**V2 上线拓扑（2026-09-19）**——细节与实时状态以 `docs/ops/v2-ecs-handoff.md` 为准，这里只
+留写代码时会撞上的几条：
+
+- **V1 与 V2 同机、完全隔离。** V1 仍是裸部署（域名 `amazon.liangtong.online`、后端 8000），
+  **不得修改或停止**；V2 域名 `key.liangtong.online`，应用容器只绑 `127.0.0.1:8001`
+  （容器内 8000，宿主机 8000 是 V1 的）。部署脚本、健康检查、logrotate、nginx 配置里凡是
+  端口/域名/目录，V2 都有自己的默认值（`deploy.sh`、`.github/v2-ecs-cd.md`），照抄 V1 的
+  会打到别人身上。
+- **V2 的容器与数据都有独立命名**：Compose 项目 `keywordiq-v2`，数据库 `keywordiq_v2`，
+  数据目录 `/var/lib/keywordiq-v2-pgdata`（bind mount），部署目录 `/var/www/keywordiq`，
+  运行用户 `www`，前端产物 `/var/www/keywordiq-web`。生效的 nginx 配置是
+  `/etc/nginx/conf.d/key.liangtong.online_80.conf`，仓库里的 `etc/keywordiq-v2-nginx.conf`
+  是它的模板（写死了证书路径，覆盖前先 diff）。
+- **数据库没有自动备份**（2026-09-20 决定）。机器人不再每日备份，也没有「备份逾期」告警；
+  手动的飞书 `备份` 指令与 `scripts/backup_selfhosted_pg.py` 保留。生产库恢复只能按脚本
+  docstring 手动执行，不经飞书。写方案时别默认"出事能从备份恢复"。
+- **合并进 `v2` ≠ 上线。** 发布是手动触发的「Deploy V2 to ECS」，且必须等该 merge commit 的
+  三项 CI 都出结果——CI 尚未产生 check-runs 就触发会被门禁拒绝（ECS 不会被改动）。
+
+**飞书运维机器人（`ops_bot/`）是与业务 `app` 完全独立的 host 级 systemd 服务**
+（`keywordiq-ops-bot`，以 `www` 运行，监听 `127.0.0.1:8101`，nginx 把 `/ops/` 反代过去）。
+操作手册是 `etc/keywordiq-ops-bot-runbook.md`，设计取舍在
+`openspec/changes/archive/2026-09-17-add-feishu-ops-bot/design.md`，这里只记约束：
+
+- **它崩溃、重启不影响业务 `app`，反之亦然**；`app/` 不 import 它，它也不依赖 `app.*`。
+  唯一的耦合是**咨询锁 key 两边各自定义同一个值**：`import_service._OPS_ACTION_LOCK_KEY`
+  与 `ops_bot/executor` 里的 `0x4B4F`（重启/发布与导入互斥靠它）。改一边不改另一边，
+  互斥静默失效、也不报错。
+- **数据库侧最小权限**：连接用独立角色 `ops_bot_role`，状态表在独立的 `ops` schema
+  （`OpsBase`），与业务 `Base`/`analysis` 物理隔离。**新增 ops 表要登记进
+  `migration_scope.OPS_TABLES`**（不是 `V2_TABLES`），否则 autogenerate 静默忽略。
+  为了让 host 级进程连得上，compose 的 `db` 才发布了 `127.0.0.1:5432`——只绑回环，别改成
+  `0.0.0.0`。它自己有一组连接池（同步 2+2、异步 4+4，最多 12 条，见 `ops_bot/database.py`）。
+- **只做预定义动作，且危险动作必须人工确认。** 文本指令：`状态` / `任务` / `日志 <request_id>`
+  / `备份记录` / `备份`；`重启` 与 `发布 <完整 40 位 SHA>` 走确认卡片，未确认不执行。
+  发布只接受 `origin/v2` 历史上、三项必需 CI 全部成功的完整 SHA，导入进行中一律拒绝。
+  **生产库恢复不作为飞书指令开放。** 卡片按钮回调是未经真实客户端验证的部分。
+- **单人运维，不建群**：`FEISHU_OPS_CHAT_ID` 是与机器人的单聊 `chat_id`，须用**应用身份**
+  取，否则之后发消息全部 `230002`。事件订阅是「发送到服务器」，回调地址
+  `https://key.liangtong.online/ops/feishu/webhook`。用 `scripts/check_feishu_ops.py` 自检。
+- **外部存活探测是阿里云云监控拨测 `/health` 与 `/ops/health`**——交接文档里这一项
+  **尚未配置**，在那之前机器人自己挂了没人知道。
 
 **Capacity implications for code changes:**
 - `PG_MAX_CONNECTIONS`（起点 120）是全局上限的硬顶；全局上限是**两个引擎各自的池相加**
   再乘 workers：`(DB_POOL_SIZE + DB_MAX_OVERFLOW + DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers`
   （`start.sh`/Dockerfile 固定 4 workers，当前取值算下来是 84）。改任一组前先核对这个算式
+- ops-bot 是 `PG_MAX_CONNECTIONS` 的**第三个占用方**（前两个是应用的同步与异步池）：最多再占 12 条（同步 2+2、异步
+  4+4），合计 84 + 12 = 96，离 120 的余量只剩 24（还要给 psql/alembic/运维脚本）。
+  上调任何一组池之前把它算进去
 - **应用与数据库现在共享同一组 4 vCPU / 8 GiB**（此前数据库在独立的 RDS 机器上，不与
-  应用争抢）：nginx、4 个 uvicorn worker、导入任务、自建 PostgreSQL 进程本身、以及
-  Netdata 监控容器全部挤在这台机器上；导入已由咨询锁串行化，勿再引入并行分片而不实测
+  应用争抢）：nginx、4 个 uvicorn worker、导入任务、自建 PostgreSQL 进程本身、Netdata
+  监控容器、ops-bot，**以及同机的 V1 服务**全部挤在这台机器上；导入已由咨询锁串行化，
+  勿再引入并行分片而不实测
 - 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame。
   自建 PostgreSQL 的 `shared_buffers`/`effective_cache_size`/`work_mem`（`.env` 的
   `PG_*` 系列）同样要在这 8 GiB 里核算，不能只顾应用侧内存
@@ -1259,7 +1343,9 @@ V1 已完成使命并退役，V2 是完整重建（见上文「V2 数据模型�
 需要手动 `gh issue close`。
 
 **V2 不逐个发布**：各变更合进 `v2` 后不单独上线，整体做完再一次性发布。列剩余工作时不要
-夹带发布步骤。
+夹带发布步骤。V2 环境与手动触发的发布工作流已经存在（见「Production Environment」），所以
+这条现在的含义是**「不主动发起发布」**，不是「发不了」——是否发布由用户决定，需要时由用户
+触发 `Deploy V2 to ECS`。
 
 ## 并行会话：一个变更一个 worktree
 
@@ -1347,6 +1433,7 @@ ruff 根本看不见它。`git commit -a` 与 `git commit -- <路径>` 提交的
 |---|---|---|
 | `app/` `scripts/` `test/` `alembic/` 及顶层 `.py` | `ruff check .` + `pytest test/ -q` | ~5s |
 | `frontend/` | `pnpm lint` + `pnpm tsc` + `pnpm test` | ~30s（其中 vitest 占 ~28s） |
+| `extension/` | `pnpm run typecheck` + `pnpm run test`（在 `extension/` 下） | ~5s |
 | 只有文档 / `openspec/` | 放行 | — |
 
 **这些检查并发跑**（`run_checks`），墙钟是最慢那条而不是各条之和：前后端都改时实测

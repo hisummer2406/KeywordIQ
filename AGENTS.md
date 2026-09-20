@@ -1,7 +1,7 @@
 # AGENTS.md
 
 **本仓库的开发约定全部写在 [`CLAUDE.md`](./CLAUDE.md) 里，那才是你要读的文件。**
-它不是 Claude 专用的，名字只是历史沿革——约 1000 行，涵盖数据模型、各功能域的约定、
+它不是 Claude 专用的，名字只是历史沿革——约 1500 行，涵盖数据模型、各功能域的约定、
 以及每条决策「不这么做会怎样」。这里的陷阱绝大多数**错了不会报错**：测试全绿、日志干净、
 界面看起来正常，只有数据是错的。动手前先读它。
 
@@ -27,6 +27,7 @@
 |---|---|
 | `app/` `scripts/` `test/` `alembic/` 或顶层 `.py` | `uv run ruff check . && uv run pytest test/ -q` |
 | `frontend/` | `cd frontend && pnpm lint && pnpm tsc && pnpm test` |
+| `extension/` | `cd extension && pnpm run typecheck && pnpm run test` |
 | 只有文档 / `openspec/` | 不用跑 |
 
 那一节里的其余内容（跑什么、为什么、基线棘轮怎么用）对你同样成立，照读。
@@ -152,6 +153,37 @@
   `exportAnalysis`（裸 fetch，绕过全局 errorHandler）都各自独立发生这段逻辑，缺一处
   都会在网络延迟下把刚取得的新会话删掉；`await res.json()` 这类比对之后的异步间隙
   必须再判一次，只判一次不够。
+
+### 部署与运维
+
+- **V2 只经 `Deploy V2 to ECS` 工作流发布**（`.github/workflows/deploy-v2.yml`，手动触发）。
+  三道门不得放宽或绕开：只允许 `refs/heads/v2`；该 SHA 的三项必需 CI（后端/前端/插件）必须
+  全部 `completed` 且 `success`；SHA 必须在 `origin/v2` 历史上。工作流、脚本、文档里
+  不得出现 SSH 私钥、`.env`、AccessKey、飞书 App Secret 等任何密钥。
+- **V1 与 V2 同机隔离，V1 不得被碰。** V1 是裸部署（`amazon.liangtong.online`、8000）；V2 应用
+  只绑 `127.0.0.1:8001`（域名 `key.liangtong.online`，Compose 项目 `keywordiq-v2`）。部署
+  脚本、健康检查、nginx、logrotate 里出现 8000 或 V1 域名/目录，多半是照抄 V1 的错误。
+  `docker-compose.yml` 里所有 `ports` 只能绑 `127.0.0.1`，不得对公网暴露。
+- **数据库没有自动备份**（2026-09-20 决定）。方案与文档不得默认"出事可从备份恢复"，也不得
+  把 ops-bot 的定时备份/「备份逾期」告警加回去而不经用户决定。
+- **ops-bot（`ops_bot/`）与业务 `app` 相互独立。** `重启`/`发布` 必须走确认卡片、只做预定义
+  动作，生产库恢复不得作为飞书指令开放；发布只接受完整 40 位 SHA 且 CI 全过，导入进行中
+  一律拒绝。`import_service._OPS_ACTION_LOCK_KEY` 与 `ops_bot/executor` 的锁 key 是两边各自
+  定义的同一个值，只改一边会让重启/发布与导入的互斥静默失效。ops 表登记进
+  `migration_scope.OPS_TABLES`，不是 `V2_TABLES`。
+- **连接池算式要把 ops-bot 算进去**：业务 84 + ops-bot 最多 12 = 96，对 `PG_MAX_CONNECTIONS`
+  （120）的余量只剩 24。上调任一组池之前先重算。
+
+### 浏览器插件（`extension/`）
+
+- **`manifest.json` 与 `package.json` 的版本必须一致，且 manifest 必须保留 `key` 字段**——
+  前者是打包脚本与 `test/manifest.test.ts` 拦的；后者固定扩展 ID，删掉它运营挪动解压目录
+  后设置与 host 权限整体丢失，且不报错。私钥不得入库。
+- **插件的跨域请求靠 `optional_host_permissions` 放行，不依赖后端 CORS。** 不得因"要收紧
+  CORS"而给插件开白名单，也不得在 manifest 里写死某个 `host_permissions`（API 地址是运营在
+  设置页填的，按需弹权限框申请）。
+- **一次上报必须是多页合并后的一次请求**，不得改成逐页上报——第一页会单独落定该卖家的基线，
+  其后的存量商品被误判成「新发现」（与「竞对 ASIN 上报」的基线约束同源）。
 
 ---
 
