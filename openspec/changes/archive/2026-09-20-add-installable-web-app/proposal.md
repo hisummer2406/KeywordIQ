@@ -7,7 +7,7 @@
 
 - 前端新增 `public/`：Web App Manifest 与图标（192 / 512 / maskable / 180 Apple），
   由 Umi 原样拷进 `dist/` 根，并在 HTML `<head>` 引用。
-- 用户菜单（右上角头像下拉）新增「安装海眸系统」入口：浏览器给出 `beforeinstallprompt`
+- 用户菜单（右上角头像下拉）新增「安装桌面端」入口：浏览器给出 `beforeinstallprompt`
   时由用户点击触发；Mac Safari 无程序化入口，给「添加到程序坞」操作指引；独立窗口内与
   不支持的环境不显示。
 - nginx 模板给 `index.html` 与 Manifest 加 `Cache-Control: no-cache`，并显式声明
