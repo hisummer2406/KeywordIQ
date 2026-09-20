@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime
 
 from config import settings
-from ops_bot import alerts, backup, crud, daily_summary
+from ops_bot import alerts, crud, daily_summary
 from ops_bot.checks import alembic_drift, heartbeat, import_status, logs, resources, service
 from ops_bot.database import OpsAsyncSessionFactory
 from ops_bot.feishu.client import FeishuAPIError, FeishuClient
@@ -25,8 +25,6 @@ _FULL_SECONDS = 300
 _FIFTEEN_MIN_SECONDS = 900
 
 _POOL_WATER_WARN_RATIO = 0.9
-_BACKUP_OVERDUE_WARN_HOURS = 24
-_BACKUP_OVERDUE_CRIT_HOURS = 48
 
 _LOG_PATH = "logs/app.log"
 
@@ -161,23 +159,6 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
             await session.commit()
         return f"{count} 条"
 
-    async def backup_overdue_check() -> str:
-        age_hours = await backup.latest_backup_age_hours()
-        is_alerting = age_hours is None or age_hours >= _BACKUP_OVERDUE_WARN_HOURS
-        level = "crit" if age_hours is not None and age_hours >= _BACKUP_OVERDUE_CRIT_HOURS else "warn"
-        message = (
-            "从未成功备份过" if age_hours is None
-            else f"距上次成功备份已 {age_hours:.1f} 小时"
-        )
-        async with OpsAsyncSessionFactory() as session:
-            await alerts.evaluate(
-                session, feishu_client, chat_id,
-                alert_key="backup-overdue", level=level, is_alerting=is_alerting,
-                message=message, silence_minutes=settings.OPS_ALERT_SILENCE_MINUTES,
-            )
-            await session.commit()
-        return message
-
     async def disk_check() -> str:
         percent = resources.disk_usage_percent()
         level = "crit" if percent >= resources.DISK_CRIT_PERCENT else "warn"
@@ -191,9 +172,6 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
             )
             await session.commit()
         return f"{percent:.1f}%"
-
-    async def backup_job() -> str:
-        return await backup.run_backup(retention_days=settings.OPS_BACKUP_RETENTION_DAYS)
 
     async def alembic_drift_check() -> str:
         # is_in_sync() 内部跑两个各 60 秒超时的 `docker compose run` 子进程，直接
@@ -238,9 +216,7 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
         ScheduledJob(kind="IMPORT_STUCK_CHECK", interval_seconds=_FULL_SECONDS, run=import_stuck_check),
         ScheduledJob(kind="IMPORT_NOTIFY", interval_seconds=_FULL_SECONDS, run=import_notify),
         ScheduledJob(kind="LOG_ERROR_RATE_CHECK", interval_seconds=_FULL_SECONDS, run=log_error_rate_check),
-        ScheduledJob(kind="BACKUP_OVERDUE_CHECK", interval_seconds=_FULL_SECONDS, run=backup_overdue_check),
         ScheduledJob(kind="DISK_CHECK", interval_seconds=_FIFTEEN_MIN_SECONDS, run=disk_check),
-        ScheduledJob(kind="BACKUP", interval_seconds=86400, run=backup_job, should_run=daily_at(3, 0)),
         ScheduledJob(
             kind="ALEMBIC_DRIFT_CHECK", interval_seconds=86400, run=alembic_drift_check,
             should_run=daily_at(3, 30),

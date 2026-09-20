@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from ops_bot import backup, crud
+from ops_bot import crud
 from ops_bot.checks import logs, resources, service
 from ops_bot.database import OpsAsyncSessionFactory
 from ops_bot.release import git_ref
@@ -56,7 +56,6 @@ async def _status() -> str:
     # 有导入卡死或存在未解决告警时这条指令仍会显得"一切正常"（PR #99 复审第四轮 P2）。
     healthy = await service.is_app_healthy()
     disk_percent = resources.disk_usage_percent()
-    backup_age_hours = await backup.latest_backup_age_hours()
     # git_ref.current_sha 内部是同步 subprocess 调用，与 alembic_drift_check 同一条
     # 纪律丢进线程池，不直接占用事件循环。
     deployed_sha = await asyncio.to_thread(git_ref.current_sha)
@@ -68,10 +67,6 @@ async def _status() -> str:
         f"服务：{'✅ 正常' if healthy else '❌ 不可用'}",
         f"磁盘：{disk_percent:.1f}%",
     ]
-    if backup_age_hours is None:
-        lines.append("备份：⚠️ 从未成功过")
-    else:
-        lines.append(f"备份：距上次成功 {backup_age_hours:.1f} 小时前")
     lines.append(f"当前部署提交：{deployed_sha or '未知（探测失败）'}")
     if unresolved:
         alerts_text = "、".join(f"{a.alert_key}({a.level})" for a in unresolved)

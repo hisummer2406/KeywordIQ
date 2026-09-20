@@ -19,8 +19,6 @@ class TestDispatch(unittest.IsolatedAsyncioTestCase):
         with patch(
             "ops_bot.commands.service.is_app_healthy", new=AsyncMock(return_value=True)
         ), patch("ops_bot.commands.resources.disk_usage_percent", return_value=33.0), patch(
-            "ops_bot.commands.backup.latest_backup_age_hours", new=AsyncMock(return_value=1.5)
-        ), patch(
             "ops_bot.commands.git_ref.current_sha", return_value="a" * 40
         ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory, patch(
             "ops_bot.commands.crud.list_unresolved_alerts", new=AsyncMock(return_value=[])
@@ -30,7 +28,7 @@ class TestDispatch(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("✅ 正常", reply)
         self.assertIn("33.0%", reply)
-        self.assertIn("1.5 小时前", reply)
+        self.assertNotIn("备份", reply)
         self.assertIn("a" * 40, reply)
         self.assertIn("未解决告警：无", reply)
 
@@ -45,8 +43,6 @@ class TestDispatch(unittest.IsolatedAsyncioTestCase):
         with patch(
             "ops_bot.commands.service.is_app_healthy", new=AsyncMock(return_value=True)
         ), patch("ops_bot.commands.resources.disk_usage_percent", return_value=33.0), patch(
-            "ops_bot.commands.backup.latest_backup_age_hours", new=AsyncMock(return_value=1.5)
-        ), patch(
             "ops_bot.commands.git_ref.current_sha", return_value="b" * 40
         ), patch("ops_bot.commands.OpsAsyncSessionFactory") as factory, patch(
             "ops_bot.commands.crud.list_unresolved_alerts", new=AsyncMock(return_value=[alert])

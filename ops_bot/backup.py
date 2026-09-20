@@ -107,12 +107,3 @@ def _cleanup_old_backups_sync(retention_days: int) -> str:
             deleted.append(obj.key)
 
     return f"清理了 {len(deleted)} 个超过 {retention_days} 天的旧备份：{deleted}" if deleted else "无需清理"
-
-
-async def latest_backup_age_hours() -> float | None:
-    """距上次成功备份的小时数；从未成功过则 `None`（调用方不应把 `None` 当成"刚备份过"）。"""
-    async with OpsAsyncSessionFactory() as session:
-        record = await crud.latest_succeeded_backup(session)
-    if record is None or record.finished_at is None:
-        return None
-    return (datetime.now(UTC) - record.finished_at).total_seconds() / 3600
