@@ -6,6 +6,7 @@ import unittest
 
 import httpx
 
+from config import settings
 from ops_bot.checks.service import is_app_healthy, pool_water_level
 
 # 先存一份未打桩的真实 AsyncClient——下面每个用例都会 `patch("httpx.AsyncClient", ...)`
@@ -75,6 +76,36 @@ class TestPoolWaterLevel(unittest.IsolatedAsyncioTestCase):
 
         with unittest.mock.patch("httpx.AsyncClient", lambda **kw: _client_with(handler)):
             self.assertIsNone(await pool_water_level())
+
+
+class TestProbeTarget(unittest.IsolatedAsyncioTestCase):
+    """探测对象必须是 V2 的 app（默认 8001）。8000 是同机的 V1：探到它不会报错，
+    只会让 `/health` 在 V2 挂掉时仍然 200、`/health/pool` 恒为 404（"探测失败"）。"""
+
+    async def test_default_base_url_is_v2_port(self):
+        self.assertEqual(settings.OPS_APP_BASE_URL, "http://127.0.0.1:8001")
+
+    async def test_health_and_pool_probe_the_configured_base_url(self):
+        import unittest.mock
+
+        seen: list[str] = []
+
+        def handler(request):
+            seen.append(str(request.url))
+            return httpx.Response(
+                200,
+                json={
+                    "sync_engine": {"pool_size": 2, "max_overflow": 3, "checked_out": 0},
+                    "async_engine": {"pool_size": 8, "max_overflow": 8, "checked_out": 0},
+                },
+            )
+
+        with unittest.mock.patch.object(settings, "OPS_APP_BASE_URL", "http://127.0.0.1:8001/"), \
+                unittest.mock.patch("httpx.AsyncClient", lambda **kw: _client_with(handler)):
+            await is_app_healthy()
+            await pool_water_level()
+
+        self.assertEqual(seen, ["http://127.0.0.1:8001/health", "http://127.0.0.1:8001/health/pool"])
 
 
 if __name__ == "__main__":
