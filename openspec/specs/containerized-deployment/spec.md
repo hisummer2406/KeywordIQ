@@ -85,17 +85,15 @@ TBD - created by archiving change dockerize-selfhosted-infra. Update Purpose aft
 - **WHEN** 从公网直接访问该 ECS 的公网 IP 与监控面板端口
 - **THEN** 无法访问到监控面板；面板只能通过内部网络、SSH 隧道或加了鉴权的反代路径访问
 
-### Requirement: 自建 PostgreSQL 有可运行的备份
-自建 PostgreSQL SHALL 有自动化备份机制，备份产物存储在应用所在机器之外，作为 RDS 原有
-自动备份能力消失后的等价替代。
+### Requirement: 自建 PostgreSQL 不提供自动化备份
+自建 PostgreSQL 部署 SHALL NOT 依赖自动化备份作为数据保护手段。数据目录位于宿主机
+bind mount，其可用性由宿主机与磁盘本身承担；部署与运维材料 MUST NOT 暗示存在自动备份或可承诺的恢复点目标。
 
-#### Scenario: 定时备份产出并上传到异地存储
-- **WHEN** 到达备份计划的执行时间点
-- **THEN** 系统执行一次 `pg_dump` 并将备份文件上传至独立于本机的存储位置（如阿里云 OSS
-  的专用前缀），不依赖本机磁盘作为唯一副本
+#### Scenario: 宿主机或数据盘丢失
+- **WHEN** 宿主机或数据盘发生不可恢复的损坏
+- **THEN** 自上一次手动备份（若有）之后的数据无法恢复；该后果是已被接受的取舍，不视为部署缺陷
 
-#### Scenario: 备份可用于恢复
-- **WHEN** 使用最近一次备份文件执行恢复
-- **THEN** 能够重建出与备份时刻一致的 `analysis` schema 数据，不依赖其他未被备份覆盖
-  的状态
+#### Scenario: 需要一份一次性副本
+- **WHEN** 运维人员在重大变更前希望留一份副本
+- **THEN** 可通过 ops-bot 的手动备份指令取得，副本存放在应用所在机器之外的独立存储
 

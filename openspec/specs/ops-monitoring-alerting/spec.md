@@ -4,12 +4,13 @@
 TBD - created by archiving change add-feishu-ops-bot. Update Purpose after archive.
 ## Requirements
 ### Requirement: 状态与任务查询
-飞书运维群 SHALL 能查询应用/数据库健康、容器状态、CPU/内存/磁盘、当前部署提交、最近备份
-结果、导入批次状态与运维任务记录；查询 MUST 仅对通过鉴权的会话与用户开放。
+飞书运维群 SHALL 能查询应用/数据库健康、容器状态、CPU/内存/磁盘、当前部署提交、导入批次
+状态与运维任务记录；备份记录通过独立的备份记录查询提供（见 `ops-backup`），不在状态摘要中
+出现；查询 MUST 仅对通过鉴权的会话与用户开放。
 
 #### Scenario: 查询系统状态
 - **WHEN** 授权用户发送状态查询指令
-- **THEN** 系统返回服务健康、资源水位、最近备份、当前部署提交与未解决告警的一屏摘要
+- **THEN** 系统返回服务健康、资源水位、当前部署提交与未解决告警的一屏摘要
 
 ### Requirement: 有界脱敏日志查询
 系统 SHALL 支持按 `request_id` 或时间窗口查询近期错误日志，返回条数与时间范围有界；
@@ -24,8 +25,8 @@ TBD - created by archiving change add-feishu-ops-bot. Update Purpose after archi
 - **THEN** 系统拒绝该查询并提示可用范围，而不是静默截断返回部分结果
 
 ### Requirement: 定时巡检与异常检测
-系统 SHALL 按预定义分组周期性巡检服务可用性、资源水位、数据库连接、备份新鲜度、导入
-批次进展；每类异常 MUST 有明确判据与静默/升级规则，不得刷屏。
+系统 SHALL 按预定义分组周期性巡检服务可用性、资源水位、数据库连接、导入批次进展；每类
+异常 MUST 有明确判据与静默/升级规则，不得刷屏。
 
 #### Scenario: 服务不可用触发首次告警
 - **WHEN** 巡检检测到服务连续异常达到判定阈值
@@ -67,8 +68,8 @@ TBD - created by archiving change add-feishu-ops-bot. Update Purpose after archi
 - **THEN** 系统发送包含失败原因摘要的通知
 
 ### Requirement: 每日巡检摘要
-系统 SHALL 在每日北京时间 09:00 发送巡检摘要，内容覆盖服务状态、资源水位、导入情况、
-备份情况与未解决告警；服务重启或重试 MUST NOT 导致同一天的摘要被重复发送。
+系统 SHALL 在每日北京时间 09:00 发送巡检摘要，内容覆盖服务状态、资源水位、导入情况与
+未解决告警；服务重启或重试 MUST NOT 导致同一天的摘要被重复发送。
 
 #### Scenario: 服务在 09:00 前后重启
 - **WHEN** `ops-bot` 在 08:58 或 09:03 因故重启
