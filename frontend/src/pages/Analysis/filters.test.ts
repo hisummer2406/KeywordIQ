@@ -141,12 +141,33 @@ describe('defaultFilters', () => {
     expect(toSearchBody(scope, defaultFilters()).is_new).toBe(true);
   });
 
-  it('除新词外其余维度默认都不筛', () => {
+  it('除新词与排除品牌词外其余维度默认都不筛', () => {
     const body = toSearchBody(scope, defaultFilters());
     const rest = Object.entries(body).filter(
-      ([k]) => !['site', 'view', 'date', 'is_new'].includes(k),
+      ([k]) => !['site', 'view', 'date', 'is_new', 'exclude_brand_in_keyword'].includes(k),
     );
     expect(rest.every(([, v]) => v === undefined)).toBe(true);
+  });
+
+  it('排除品牌词默认开启，但只在「只看新词」时随请求发出（issue #119）', () => {
+    expect(toSearchBody(scope, defaultFilters()).exclude_brand_in_keyword).toBe(true);
+    // 看全部 / 非新词：不替用户缩减榜单
+    for (const isNew of [undefined, false]) {
+      expect(
+        toSearchBody(scope, { ...defaultFilters(), isNew }).exclude_brand_in_keyword,
+      ).toBeUndefined();
+    }
+    // 用户关掉、旧快照缺字段（视同开启）、仅掉榜
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), excludeBrandWords: false }).exclude_brand_in_keyword,
+    ).toBeUndefined();
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), excludeBrandWords: undefined })
+        .exclude_brand_in_keyword,
+    ).toBe(true);
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), include: 'DROPPED' }).exclude_brand_in_keyword,
+    ).toBeUndefined();
   });
 });
 

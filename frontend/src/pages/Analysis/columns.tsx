@@ -76,20 +76,36 @@ const PLACEHOLDER = <span style={{ color: '#ccc' }}>—</span>;
 const HISTORY_LABEL_WIDTH = 52;
 
 /**
- * 排名变化率：变化量相对**上期**排名的百分比。
+ * 排名变化率。
  *
- * 在展示层算而不在库里存：它是 ranking_change 与 previous_ranking 的纯函数，存一份
- * 就多一处可能与那两个数对不上的地方（事实表只追加，改口径要重导）。
+ * - **周视图**：变化量相对**上期**（上一周）排名的百分比，列名「排名变化率」。
+ * - **日视图**：对比 **7 天前**的排名（issue #119），列名「7天变化率」。基期取接口 `history`
+ *   的第三位（日视图固定为 昨天 / 3 天前 / 7 天前），不是 `previous_ranking`——后者是昨天，
+ *   新词（昨天没出现）因此也能在 7 天前有过排名时算出变化。
  *
- * 上期排名为空或为零时给占位符——除以零会渲染出 Infinity / NaN，而用户会把它当成
- * 「变化极大」而不是「无从计算」。
+ * 在展示层算而不在库里存：它是已有字段的纯函数，存一份就多一处可能与那些数对不上的地方
+ * （事实表只追加，改口径要重导）。
+ *
+ * 基期为空或为零、当期排名为空时给占位符——除以零会渲染出 Infinity / NaN，用户会把它当成
+ * 「变化极大」而不是「无从计算」；也绝不用 0% 顶替，那会读成「没变化」。
  */
-function renderChangeRate(row: AnalysisRow) {
-  const { ranking_change: change, previous_ranking: prev } = row;
-  if (change === null || change === undefined || !prev) return PLACEHOLDER;
+function renderChangeRate(row: AnalysisRow, view: View) {
+  let change: number | null | undefined;
+  let base: number | null | undefined;
+  if (view === 'DAY') {
+    base = row.history?.[2];
+    change =
+      row.current_ranking === null || row.current_ranking === undefined || !base
+        ? null
+        : row.current_ranking - base;
+  } else {
+    change = row.ranking_change;
+    base = row.previous_ranking;
+  }
+  if (change === null || change === undefined || !base) return PLACEHOLDER;
   if (change === 0) return <span style={{ color: TREND_COLORS.flat }}>0%</span>;
   const up = change < 0;
-  const pct = Math.abs((change / prev) * 100);
+  const pct = Math.abs((change / base) * 100);
   return (
     <span style={{ color: up ? TREND_COLORS.up : TREND_COLORS.down }}>
       {up ? '↑' : '↓'} {pct.toFixed(1)}%
@@ -218,10 +234,10 @@ export function buildColumns(
       render: (_, r) => renderChange(r.ranking_change),
     },
     {
-      title: '排名变化率',
+      title: view === 'DAY' ? '7天变化率' : '排名变化率',
       dataIndex: 'ranking_change',
       width: 110,
-      render: (_, r) => renderChangeRate(r),
+      render: (_, r) => renderChangeRate(r, view),
     },
     // 单列三行：三个参照点同列纵排，读的是"这个词一路怎么变的"。缺期显示占位符而**不**
     // 隐藏该行——隐藏会让三个点错位，用户读到的「4 周前」其实是「12 周前」的值。

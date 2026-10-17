@@ -95,6 +95,8 @@ export interface SearchBody {
    * 被动采集证明不了商品何时上架。
    */
   competitor_new?: boolean;
+  /** 排除关键词文本含该词前三品牌名（整词、不分大小写）的词；筛选条件，掉榜行随之消失 */
+  exclude_brand_in_keyword?: boolean;
   /** 行集合维度，缺省 ALL。切到 DROPPED 时其余筛选在界面上必须置灰——它们会让掉榜段恒为空。 */
   include?: Include;
 }

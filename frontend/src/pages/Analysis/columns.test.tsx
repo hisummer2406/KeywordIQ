@@ -210,26 +210,60 @@ describe('历史排名列', () => {
 });
 
 describe('排名变化率列', () => {
-  it('由排名变化与上期排名在展示层算出', () => {
+  it('周视图：由排名变化与上期排名在展示层算出', () => {
     // 120 名 ← 100 名：变化 +20，相对上期 100 即 20%
-    const { getByText } = cell('DAY', '排名变化率', listedRow);
+    const { getByText } = cell('WEEK', '排名变化率', listedRow);
     expect(getByText(/20(\.0)?%/)).toBeTruthy();
   });
 
-  it('符号与「排名变化」列同向：负数=上升', () => {
+  it('周视图：符号与「排名变化」列同向，负数=上升', () => {
     const up = { ...listedRow, previous_ranking: 100, ranking_change: -20 };
-    const { container } = cell('DAY', '排名变化率', up);
-    const changeCell = cell('DAY', '排名变化', up);
-    // 两列用同一个渲染约定：上升同色同箭头
+    const { container } = cell('WEEK', '排名变化率', up);
+    const changeCell = cell('WEEK', '排名变化', up);
     expect(container.textContent).toContain('↑');
     expect(changeCell.container.textContent).toContain('↑');
   });
 
-  it('上期排名为空或为零时显示占位符，不显示 Infinity 或 NaN', () => {
+  it('周视图：上期排名为空或为零时显示占位符，不显示 Infinity 或 NaN', () => {
     for (const prev of [null, 0]) {
-      const { container } = cell('DAY', '排名变化率', { ...listedRow, previous_ranking: prev });
+      const { container } = cell('WEEK', '排名变化率', { ...listedRow, previous_ranking: prev });
       expect(container.textContent).toContain('—');
       expect(container.textContent).not.toMatch(/Infinity|NaN/);
+    }
+  });
+
+  it('日视图列名是「7天变化率」，周视图仍是「排名变化率」', () => {
+    expect(buildColumns('DAY').map((c) => c.title)).toContain('7天变化率');
+    expect(buildColumns('DAY').map((c) => c.title)).not.toContain('排名变化率');
+    expect(buildColumns('WEEK').map((c) => c.title)).toContain('排名变化率');
+  });
+
+  it('日视图：对比 7 天前排名（history 第三位），不是昨天', () => {
+    // 当期 120，7 天前 80（昨天 100）：变化 +40，相对 80 即 50% 下降
+    const down = cell('DAY', '7天变化率', listedRow);
+    expect(down.container.textContent).toContain('↓');
+    expect(down.getByText(/50(\.0)?%/)).toBeTruthy();
+
+    // 当期 60，7 天前 80：上升 25%
+    const up = cell('DAY', '7天变化率', { ...listedRow, current_ranking: 60 });
+    expect(up.container.textContent).toContain('↑');
+    expect(up.getByText(/25(\.0)?%/)).toBeTruthy();
+  });
+
+  it('日视图：新词（昨天没出现）只要 7 天前有排名也能算出', () => {
+    const row = { ...listedRow, is_new: true, previous_ranking: null, ranking_change: null };
+    expect(cell('DAY', '7天变化率', row).getByText(/50(\.0)?%/)).toBeTruthy();
+  });
+
+  it('日视图：基期缺失、为零或当期为空时显示占位符，不是 0% 也不是 Infinity', () => {
+    for (const patch of [
+      { history: [100, 90, null] },
+      { history: [100, 90, 0] },
+      { current_ranking: null },
+    ]) {
+      const { container } = cell('DAY', '7天变化率', { ...listedRow, ...patch });
+      expect(container.textContent).toContain('—');
+      expect(container.textContent).not.toMatch(/Infinity|NaN|0%/);
     }
   });
 });
@@ -237,7 +271,7 @@ describe('排名变化率列', () => {
 describe('升降色值来自共享 token', () => {
   // 同一语义在同一屏上用两组色值，会让用户把色差误读成含义差别
   const colored = (title: string, row: any) =>
-    cell('DAY', title, row).container.querySelector('span')!;
+    cell(title === '排名变化率' ? 'WEEK' : 'DAY', title, row).container.querySelector('span')!;
 
   it('上升取共享的绿', () => {
     for (const title of ['排名变化', '排名变化率']) {
@@ -317,7 +351,7 @@ describe('表头一律居中；内容按列宽是否随行变化决定对齐', (
 
   it('内容宽度固定的列居中', () => {
     const cols = buildColumns('DAY');
-    for (const title of ['排名', '搜索趋势', '排名变化', '排名变化率', '点击前三 ASIN', '操作']) {
+    for (const title of ['排名', '搜索趋势', '排名变化', '7天变化率', '点击前三 ASIN', '操作']) {
       expect(cols.find((c) => c.title === title)!.align).toBe('center');
     }
   });

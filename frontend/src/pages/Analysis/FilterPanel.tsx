@@ -34,6 +34,9 @@ export const LABEL_WIDTH = 88;
  */
 export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里展示的是前三名';
 
+const EXCLUDE_BRAND_HINT =
+  '排除关键词里带有该词自己前三品牌名（整词、不分大小写）的词。仅在「只看新词」时生效，默认开启；关闭后新词榜单会包含品牌词。';
+
 /**
  * 「竞对新发现」的口径提示。
  *
@@ -223,6 +226,14 @@ export default function FilterPanel({ value, onChange, canCompetitorNew }: Filte
             { label: '新词', value: 'true' },
             { label: '非新词', value: 'false' },
           ]}
+        />
+      </Row>
+      <Row label="排除品牌词" hint={EXCLUDE_BRAND_HINT}>
+        <Switch
+          aria-label="排除品牌词"
+          disabled={onlyDropped || value.isNew !== true}
+          checked={value.excludeBrandWords !== false}
+          onChange={(checked) => patch({ excludeBrandWords: checked })}
         />
       </Row>
       {canCompetitorNew ? (
