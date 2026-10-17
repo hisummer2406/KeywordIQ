@@ -17,6 +17,7 @@ import AddToLibraryModal from './AddToLibraryModal';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
 import ScopeBar from './ScopeBar';
+import './AnalysisTable.less';
 import { buildColumns, totalColumnWidth } from './columns';
 import { defaultFilters, sanitizeCompetitorNew, toSearchBody } from './filters';
 import { clearSavedMode, readSavedMode } from './savedMode';
@@ -24,6 +25,7 @@ import { useCachedState } from './useCachedState';
 import { useAnalysisQuery } from './useAnalysisQuery';
 import { useAnalysisScope } from './useAnalysisScope';
 import { useAnalysisSession } from './useAnalysisSession';
+import { useVisitedKeywords } from './visitedKeywords';
 
 /**
  * 分析查询屏：作用域 / 过滤 / 结果三段。
@@ -51,6 +53,26 @@ import { useAnalysisSession } from './useAnalysisSession';
  */
 const SELECTION_COLUMN_WIDTH = 48;
 
+/**
+ * 固定表头 / 分页条的偏移（与 `AnalysisTable.less` 保持一致）：顶栏 56px，其下 48px 的
+ * 分页条，表头贴在分页条下面。
+ */
+const STICKY_NAV_HEIGHT = 56;
+const STICKY_PAGER_HEIGHT = 48;
+
+/**
+ * 翻页后把表格第一行带回可见区域。只在表头已被滚出自然位置（用户在长表里往下看了）时才滚，
+ * 且只动纵向——横向滚动位置留给表格自己的滚动容器，翻页前后在看同一列。
+ */
+function scrollTableToTop() {
+  const table = document.querySelector('.analysis-table .ant-table');
+  if (!table) return;
+  const top = table.getBoundingClientRect().top;
+  const target = STICKY_NAV_HEIGHT + STICKY_PAGER_HEIGHT;
+  if (top >= target) return;
+  window.scrollTo({ top: window.scrollY + top - target });
+}
+
 export default function AnalysisPage() {
   const access = useAccess();
 
@@ -61,6 +83,10 @@ export default function AnalysisPage() {
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
   const [libraryModalOpen, setLibraryModalOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useCachedState('filterOpen', false);
+  // 用户翻页 / 改每页条数后，等新一页的行落进 DOM 再回顶。不在 onChange 里直接滚：
+  // 那一刻旧页的行还在，页面高度没变，滚过去之后新数据一到又会跳。会话复原的首次加载
+  // 不经过 onChange，因此不会触发——复原的滚动位置由 useAnalysisSession 负责。
+  const scrollAfterLoadRef = useRef(false);
 
   const session = useAnalysisSession();
   const { initialSnapshot, restored } = session;
@@ -247,9 +273,19 @@ export default function AnalysisPage() {
     () => (loadedSite && loadedView && loadedDate ? { site: loadedSite, view: loadedView, on: loadedDate } : undefined),
     [loadedSite, loadedView, loadedDate],
   );
+  // 关键词已访问标记（issue #125）：本浏览器长期保留，按用户、站点隔离。
+  const visited = useVisitedKeywords(userId);
   const columns = useMemo(
-    () => buildColumns(appliedView, appliedDomain, openTrend, appliedRef.current?.site, historyScope),
-    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend, historyScope],
+    () =>
+      buildColumns(
+        appliedView,
+        appliedDomain,
+        openTrend,
+        appliedRef.current?.site,
+        historyScope,
+        visited,
+      ),
+    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend, historyScope, visited],
   );
 
   return (
@@ -407,6 +443,14 @@ export default function AnalysisPage() {
 
       <ProTable<AnalysisRow>
         style={{ marginTop: 12 }}
+        className="analysis-table"
+        // 表头粘在顶栏与分页条之下；横向滚动由 rc-table 同步表头与表体。
+        sticky={{ offsetHeader: STICKY_NAV_HEIGHT + STICKY_PAGER_HEIGHT }}
+        onLoad={() => {
+          if (!scrollAfterLoadRef.current) return;
+          scrollAfterLoadRef.current = false;
+          requestAnimationFrame(scrollTableToTop);
+        }}
         actionRef={actionRef}
         rowKey="keyword_id"
         columns={columns}
@@ -439,6 +483,12 @@ export default function AnalysisPage() {
           defaultCurrent: initialSnapshot?.lastRequest?.page ?? 1,
           defaultPageSize: initialSnapshot?.lastRequest?.perPage ?? 50,
           showSizeChanger: true,
+          // 只保留这一套分页入口，放在表头上方右侧并随表头一起固定（见 AnalysisTable.less）
+          position: ['topRight'],
+          className: 'analysis-pager',
+          onChange: () => {
+            scrollAfterLoadRef.current = true;
+          },
         }}
         dateFormatter="string"
         options={false}

@@ -5,8 +5,9 @@
  * 的 `geo` 参数直接同构，不再建一张站点→地区映射表——多一份映射就多一处可能与
  * `site_registry` 分叉的地方，而 `GB`/`UK` 那类问题正是这么来的。
  *
- * 默认时间窗口取近 12 个月（`date=today 12-m`）：这条外链要辅助判断的正是季节性，
- * 窗口太短看不出来。V0 不提供自定义窗口——那是"内嵌趋势图"的范畴，依赖正式 API 授权。
+ * 时间窗口固定为近 7 天（`date=now 7-d`，issue #125）：这条外链用来看热点词的当下热度，
+ * 而不是季节性；要看更长窗口，用户在 Google Trends 页面上自行切换，本系统不提供窗口选择器。
+ * 窗口与报表期次无关——查看历史 ABA 报表时它同样是"此刻的最近 7 天"，入口的 title 里点明。
  *
  * 拿不到关键词或站点码时返回 `null`，由调用方降级为不渲染入口——原则同 `amazonSearchUrl`：
  * 宁可不给链接，也不要拼出一个查询不到任何东西的 URL。
@@ -16,6 +17,6 @@ export function googleTrendsUrl(keyword: string, siteCode?: string): string | nu
   const geo = siteCode?.trim().toUpperCase();
   if (!k || !geo) return null;
 
-  const params = new URLSearchParams({ q: k, geo, date: 'today 12-m' });
+  const params = new URLSearchParams({ q: k, geo, date: 'now 7-d' });
   return `https://trends.google.com/trends/explore?${params.toString()}`;
 }

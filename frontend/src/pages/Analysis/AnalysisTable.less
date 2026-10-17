@@ -1,0 +1,29 @@
+// 结果表格的固定表头与分页（issue #125）。
+// 数值与 index.tsx 的 STICKY_* 常量必须一致：顶栏 56px（pro-layout fixedHeader 的默认高度）
+// 之下是 48px 的分页条，表头再贴在分页条下面。
+
+.analysis-pager.ant-pagination {
+  position: sticky;
+  top: 56px;
+  z-index: 12; // 高于表头（sticky holder 为 3），低于顶栏
+  box-sizing: border-box;
+  height: 48px;
+  margin: 0 !important;
+  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  background: #fff;
+
+  // 页码 / 省略号等宽：翻页时数字位数变化（9→10→100）不让上一页、下一页按钮左右漂移。
+  // 右对齐 + 每格定宽，上一页 / 下一页的位置只取决于总页数是否 ≥7，而不是当前页码。
+  .ant-pagination-item,
+  .ant-pagination-jump-prev,
+  .ant-pagination-jump-next {
+    min-width: 40px;
+    text-align: center;
+  }
+  .ant-pagination-total-text {
+    margin-right: auto;
+  }
+}
