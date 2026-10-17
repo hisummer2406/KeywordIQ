@@ -274,7 +274,20 @@ export default function AnalysisPage() {
     [loadedSite, loadedView, loadedDate],
   );
   // 关键词已访问标记（issue #125）：本浏览器长期保留，按用户、站点隔离。
-  const visited = useVisitedKeywords(userId);
+  const visitedStore = useVisitedKeywords(userId);
+  // 访问记录的站点必须是**表格里这批行实际所属的站点**（`loadedSite`），不是 `appliedRef`：
+  // 换站点查询时 `apply()` 同步改了 appliedRef，而旧站点的行在响应落地前仍在屏上，
+  // 此时点击会把旧站点的词记到新站点名下，且这份历史是持久的、事后无从分辨。
+  // 列定义传入的 siteCode 因此被忽略，一律用 loadedSite。
+  const visited = useMemo(
+    () => ({
+      isVisited: (_site: string | undefined, keyword: string) =>
+        visitedStore.isVisited(loadedSite, keyword),
+      markVisited: (_site: string | undefined, keyword: string) =>
+        visitedStore.markVisited(loadedSite, keyword),
+    }),
+    [visitedStore, loadedSite],
+  );
   const columns = useMemo(
     () =>
       buildColumns(
