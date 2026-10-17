@@ -117,7 +117,7 @@ export function useAnalysisQuery(options: {
 
   const [filters, setFilters] = useCachedState('filters', () =>
     saved
-      ? sanitizeCompetitorNew({ ...saved.filters, q: '' }, canViewCompetitor)
+      ? sanitizeCompetitorNew({ ...saved.filters, q: '', qMode: 'ALL_TERMS' }, canViewCompetitor)
       : defaultFilters(),
   );
 
@@ -237,7 +237,7 @@ export function useAnalysisQuery(options: {
    * 并非与默认值无关的调用点，改默认值时这条路径跟着变。
    */
   const submitScope = () => {
-    const scopeOnly = toSearchBody(scope, { ...defaultFilters(), q: filters.q });
+    const scopeOnly = toSearchBody(scope, { ...defaultFilters(), q: filters.q, qMode: filters.qMode });
     const body: SearchBody = {
       ...(appliedRef.current ?? scopeOnly),
       site: scopeOnly.site,
@@ -278,7 +278,7 @@ export function useAnalysisQuery(options: {
    * 重置后界面上站点仍是保存过的那个，但存储里那条已经没了。
    */
   const resetFilters = () => {
-    setFilters((current) => ({ ...defaultFilters(), q: current.q }));
+    setFilters((current) => ({ ...defaultFilters(), q: current.q, qMode: current.qMode }));
     clearSavedMode(userId);
     setSavedApplied(false);
   };
@@ -322,10 +322,11 @@ export function useAnalysisQuery(options: {
       message.warning('有未生效的条件，请先点「开始筛选」，再保存你看到的这组');
       return;
     }
-    // q 不入库：检索词是一次性查找，不是「常看的模式」。解构剥掉它，`void` 是为了让
+    // q 与 qMode 不入库：检索词是一次性查找（模式只修饰检索词），不是「常看的模式」。解构剥掉它，`void` 是为了让
     // lint 看到这个变量确实被「用」了（本项目没开 ignoreRestSiblings）
-    const { q, ...savableFilters } = filters;
+    const { q, qMode, ...savableFilters } = filters;
     void q;
+    void qMode;
     const ok = writeSavedMode(userId, {
       site: applied.site,
       view: applied.view,

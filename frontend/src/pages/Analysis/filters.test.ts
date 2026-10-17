@@ -242,3 +242,31 @@ describe('行集合开关', () => {
   });
 
 });
+
+describe('关键词匹配方式 qMode', () => {
+  const scope = { site: 'US', view: 'DAY' as const, date: '2026-07-18' };
+
+  it('默认全部词；关键词输入时随请求带上 keyword_mode', () => {
+    expect(defaultFilters().qMode).toBe('ALL_TERMS');
+    const body = toSearchBody(scope, { ...defaultFilters(), q: 'faucet sink organizer' });
+    expect(body.keyword).toBe('faucet sink organizer');
+    expect(body.keyword_mode).toBe('ALL_TERMS');
+  });
+
+  it('选了连续词组就带 PHRASE；缺省（旧快照）视同全部词', () => {
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'rug', qMode: 'PHRASE' }).keyword_mode).toBe(
+      'PHRASE',
+    );
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'rug', qMode: undefined }).keyword_mode).toBe(
+      'ALL_TERMS',
+    );
+  });
+
+  it('ASIN、空输入、仅掉榜时不带 keyword_mode', () => {
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'B07Z82895W' }).keyword_mode).toBeUndefined();
+    expect(toSearchBody(scope, { ...defaultFilters(), q: '' }).keyword_mode).toBeUndefined();
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), q: 'rug', include: 'DROPPED' }).keyword_mode,
+    ).toBeUndefined();
+  });
+});

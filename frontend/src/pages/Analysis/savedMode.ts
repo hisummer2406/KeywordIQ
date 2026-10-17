@@ -42,7 +42,7 @@ export interface SavedMode {
    * 的模式」；存了会让用户每次登录都落在一个窄得只剩几行的结果里，而他早忘了当初搜的
    * 是什么。
    */
-  filters: Omit<FilterDraft, 'q'>;
+  filters: Omit<FilterDraft, 'q' | 'qMode'>;
   sort: { field: string; dir: 'asc' | 'desc' };
 }
 
