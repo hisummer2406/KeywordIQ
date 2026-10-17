@@ -258,6 +258,7 @@ def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
         "brands_count": len(req.brands) if req.brands else 0,
         "is_new": req.is_new,
         "competitor_new": req.competitor_new,
+        "exclude_brand_in_keyword": req.exclude_brand_in_keyword,
         "include": req.include,
     }
 
