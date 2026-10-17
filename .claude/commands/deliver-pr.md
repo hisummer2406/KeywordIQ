@@ -7,7 +7,8 @@ disable-model-invocation: true
 交付当前会话完成的改动。补充范围：$ARGUMENTS
 
 调用本 command 即授权完成本次范围内的检查、commit、push 和 PR 创建/更新；不必逐步重复确认。
-不要发布审核触发评论：`@codex review` 和后续 `@claude` 由用户手动发送。
+不要自行发布审核触发评论：`@codex review` 和后续 `@claude` 默认由用户发送。
+例外：用户在对话里明确说「让 codex 评审」之类的话时，按 CLAUDE.md「Claude Code 代发 `@codex review`」一节代发；调用本 command 本身不构成这个授权。
 
 ## 执行
 
@@ -36,6 +37,6 @@ disable-model-invocation: true
 
 ## 交付
 
-返回 PR 链接、提交 SHA、实现摘要、检查/CI 结果，以及需要用户手动发送的 `@codex review`。
+返回 PR 链接、提交 SHA、实现摘要、检查/CI 结果，以及需要用户发送的 `@codex review`（用户已明确要求代发的除外，见上）。
 到此停止，不自动发该评论、不等待下一轮审核、不合并、不部署、不关闭 Issue、
 不归档 OpenSpec、不删除分支或 worktree。
