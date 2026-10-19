@@ -244,6 +244,7 @@ export function useAnalysisQuery(options: {
       view: scopeOnly.view,
       date: scopeOnly.date,
       keyword: scopeOnly.keyword,
+      keyword_mode: scopeOnly.keyword_mode,
       asin: scopeOnly.asin,
     };
     apply(body);
@@ -257,6 +258,7 @@ export function useAnalysisQuery(options: {
       view: current.view,
       date: current.date,
       keyword: current.keyword,
+      keyword_mode: current.keyword_mode,
       asin: current.asin,
     };
     apply(body);
