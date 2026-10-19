@@ -188,8 +188,33 @@ describe('快捷档位', () => {
     expect(RANGE_PRESETS.ranking.find((p) => p.label === '10万以上')!.value).toEqual({
       min: 100000,
     });
-    expect(RANGE_PRESETS.change.find((p) => p.label === '上升')!.value).toEqual({ max: -1 });
-    expect(RANGE_PRESETS.change.find((p) => p.label === '持平')!.value).toEqual({ min: 0, max: 0 });
+    expect(RANGE_PRESETS.change.find((p) => p.label === '上升')!.value).toEqual({
+      min: -149999,
+      max: -1,
+    });
+    expect(RANGE_PRESETS.change.find((p) => p.label === '大幅上升')!.value).toEqual({
+      max: -150000,
+    });
+  });
+
+  it('排名变化只有全部/上升/大幅上升三档，且边界 150000 只归大幅上升', () => {
+    expect(RANGE_PRESETS.change.map((p) => p.label)).toEqual(['全部', '上升', '大幅上升']);
+    const inRange = (v: number, r: { min?: number; max?: number }) =>
+      (r.min === undefined || v >= r.min) && (r.max === undefined || v <= r.max);
+    const up = RANGE_PRESETS.change[1].value;
+    const big = RANGE_PRESETS.change[2].value;
+    expect([-1, -149999].map((v) => inRange(v, up))).toEqual([true, true]);
+    expect([-1, -149999].map((v) => inRange(v, big))).toEqual([false, false]);
+    expect([-150000, -300000].map((v) => inRange(v, big))).toEqual([true, true]);
+    expect([-150000, -300000].map((v) => inRange(v, up))).toEqual([false, false]);
+    for (const v of [0, 1, 500]) {
+      expect(inRange(v, up) || inRange(v, big)).toBe(false);
+    }
+  });
+
+  it('旧的已保存区间不会被静默映射成新档位', () => {
+    expect(matchedPreset({ max: -100 }, RANGE_PRESETS.change)).toBeUndefined();
+    expect(matchedPreset({ max: -1 }, RANGE_PRESETS.change)).toBeUndefined();
   });
 
   it('区间等于某档位时该档位高亮', () => {
@@ -262,4 +287,32 @@ describe('行集合开关', () => {
     expect(body.competitor_new).toBe(true);
   });
 
+});
+
+describe('关键词匹配方式 qMode', () => {
+  const scope = { site: 'US', view: 'DAY' as const, date: '2026-07-18' };
+
+  it('默认全部词；关键词输入时随请求带上 keyword_mode', () => {
+    expect(defaultFilters().qMode).toBe('ALL_TERMS');
+    const body = toSearchBody(scope, { ...defaultFilters(), q: 'faucet sink organizer' });
+    expect(body.keyword).toBe('faucet sink organizer');
+    expect(body.keyword_mode).toBe('ALL_TERMS');
+  });
+
+  it('选了连续词组就带 PHRASE；缺省（旧快照）视同全部词', () => {
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'rug', qMode: 'PHRASE' }).keyword_mode).toBe(
+      'PHRASE',
+    );
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'rug', qMode: undefined }).keyword_mode).toBe(
+      'ALL_TERMS',
+    );
+  });
+
+  it('ASIN、空输入、仅掉榜时不带 keyword_mode', () => {
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'B07Z82895W' }).keyword_mode).toBeUndefined();
+    expect(toSearchBody(scope, { ...defaultFilters(), q: '' }).keyword_mode).toBeUndefined();
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), q: 'rug', include: 'DROPPED' }).keyword_mode,
+    ).toBeUndefined();
+  });
 });

@@ -231,6 +231,37 @@ describe('分析查询屏 · 作用域与筛选', () => {
     expect(searchAnalysis.mock.calls[2][0].asin).toBeUndefined();
   });
 
+  /**
+   * 检索模式必须跟检索词一起固化（PR #129 复审 P1）：`submitScope` 曾只复制 keyword/asin，
+   * 查过一次后切到「连续词组」再点立即查询，请求仍带着上一次的模式，且 `draftSig` 与生效
+   * 签名永远对不上。
+   */
+  it('查询后切换检索模式再点立即查询，请求带新模式且不再显示未生效改动', async () => {
+    await renderSettled();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/输入 ASIN 或关键词/), 'coffee maker');
+    await act(async () => {
+      await user.click(submit());
+    });
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+    expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ keyword_mode: 'ALL_TERMS' });
+
+    fireEvent.mouseDown(document.querySelector('.scope-bar__mode .ant-select-selector')!);
+    fireEvent.click(await screen.findByText('连续词组', { selector: '.ant-select-item-option-content' }));
+    await act(async () => {
+      await user.click(submit());
+    });
+
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
+    expect(searchAnalysis.mock.calls[2][0]).toMatchObject({
+      keyword: 'coffee maker',
+      keyword_mode: 'PHRASE',
+    });
+    expect(screen.queryByText(/条件已修改|有未生效/)).not.toBeInTheDocument();
+  });
+
   it('切站点重拉日期与类目，但不重查表格', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
@@ -403,6 +434,35 @@ describe('分析查询屏 · 作用域与筛选', () => {
      * `runRequest` 若不核对调用序号，仍会用这次旧响应把 `loadedSite` 改回旧站点，
      * 表格明明已经在展示新站点的行，之后点开的详情却按旧站点取数（PR #87 第五轮 P2）。
      */
+    /**
+     * 访问变色（issue #125，PR #127 复审 P2）：切站点后新请求还没落地时，屏上仍是旧站点的行。
+     * 此刻点击关键词，访问记录必须记在行实际所属的站点（US）名下，不能记到已提交的新站点（DE）。
+     */
+    it('新站点请求在途时点击旧行关键词，访问记录记在旧行所属的站点', async () => {
+      window.localStorage.clear();
+      await renderSettled();
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1)); // 首屏：US
+
+      const user = userEvent.setup();
+      searchAnalysis.mockReturnValueOnce(new Promise(() => {})); // DE 请求永不落地
+
+      await user.click(screen.getByText('🇺🇸 美国站（US）'));
+      await act(async () => {
+        await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      });
+      await act(async () => {
+        fireEvent.click(submit());
+      });
+      await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('coffee maker').closest('a')!);
+      });
+
+      const stored = JSON.parse(window.localStorage.getItem('keywordiq.analysis.visited.1') ?? '{}');
+      expect(stored.keys).toEqual(['US|coffee maker']);
+    });
+
     it('切站点两次、较早那次请求较晚落地时，不倒灌覆盖较新请求的站点', async () => {
       getKeywordTrend.mockResolvedValue({
         success: true,

@@ -74,6 +74,36 @@ describe('buildColumns', () => {
     expect(a.getAttribute('rel')).toContain('noopener');
   });
 
+  it('点击与中键才标记已访问，其他鼠标键不标；已访问的词变色', () => {
+    const markVisited = vi.fn();
+    const visited = { isVisited: (_s: any, k: string) => k === 'seen', markVisited };
+    const col: any = buildColumns('DAY', 'amazon.com', undefined, 'US', undefined, visited).find(
+      (c) => c.title === '关键词',
+    )!;
+    const { container } = render(
+      <>
+        {col.render(null, { keyword: 'seen' })}
+        {col.render(null, { keyword: 'fresh' })}
+      </>,
+    );
+    const [seen, fresh] = Array.from(container.querySelectorAll('a'));
+
+    expect(seen.style.color).not.toBe('');
+    expect(fresh.style.color).toBe('');
+
+    fireEvent.click(fresh);
+    expect(markVisited).toHaveBeenLastCalledWith('US', 'fresh');
+    markVisited.mockClear();
+    fireEvent(fresh, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(markVisited).toHaveBeenCalledWith('US', 'fresh');
+    markVisited.mockClear();
+    // 右键 / 悬浮 / 其他辅助键不算访问
+    fireEvent(fresh, new MouseEvent('auxclick', { bubbles: true, button: 2 }));
+    fireEvent.mouseOver(fresh);
+    fireEvent.contextMenu(fresh);
+    expect(markVisited).not.toHaveBeenCalled();
+  });
+
   it('拿不到站点域名时降级为纯文本，不渲染链接', () => {
     const col = buildColumns('DAY', undefined).find((c) => c.title === '关键词')!;
     const { container } = render(<>{(col as any).render(null, { keyword: 'power bank' })}</>);
@@ -90,7 +120,7 @@ describe('buildColumns', () => {
 
     const trends = links.find((a) => a.getAttribute('href')?.includes('trends.google.com'))!;
     expect(trends.getAttribute('href')).toBe(
-      'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=today+12-m',
+      'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=now+7-d',
     );
     const adLibrary = links.find((a) => a.getAttribute('href')?.includes('facebook.com'))!;
     expect(adLibrary.getAttribute('href')).toBe(
