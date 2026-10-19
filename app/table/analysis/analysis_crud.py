@@ -111,6 +111,7 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
             req.change_max, req.click_share_min, req.click_share_max,
             req.conversion_share_min, req.conversion_share_max, req.is_new,
             req.competitor_new or None,
+            req.exclude_brand_in_keyword or None,
         )
     )
 
@@ -315,6 +316,31 @@ def _count_base_query(site: str, view: str, on: date):
     return stmt, fact
 
 
+# 类目下拉里不展示的类目（issue #119）：Kindle 电子书一类的数字商品没有选品价值，却因
+# 数量大长期占着下拉前排。**只藏下拉选项**——不影响任何一行的展示、总数或导出；已经
+# 勾选/保存的该类目筛选仍然有效，只是选项列表里看不到它。比较不分大小写。
+HIDDEN_CATEGORY_NAMES = frozenset({"digital_ebook_purchase"})
+
+# 品牌名短于此长度不参与「关键词含品牌」判定：单字母品牌（如 "A"）会命中几乎所有词。
+MIN_BRAND_LEN_FOR_KEYWORD_MATCH = 2
+
+_REGEX_SPECIALS = r"([.^$*+?()\[\]{}|\\])"
+
+
+def brand_in_keyword(keyword_col, brand_name_col):
+    """布尔表达式：关键词文本把该品牌名作为完整单词包含（不分大小写）。
+
+    品牌名里的正则元字符先转义（品牌名是任意文本）；边界为 ``[^[:alnum:]]`` 或串首/串尾。
+    品牌名为空或过短时恒为假，不会因空正则匹配所有词。
+    """
+    escaped = func.regexp_replace(brand_name_col, _REGEX_SPECIALS, r"\\\1", "g")
+    pattern = func.concat("(^|[^[:alnum:]])", escaped, "([^[:alnum:]]|$)")
+    return and_(
+        func.char_length(brand_name_col) >= MIN_BRAND_LEN_FOR_KEYWORD_MATCH,
+        keyword_col.op("~*")(pattern),
+    )
+
+
 def keyword_conditions(keyword: str, mode: str) -> list:
     """关键词检索条件（issue #126）。``/search`` 与 ``/export`` 经 ``_apply_filters`` 共用。
 
@@ -370,6 +396,19 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id
             or_(fact.top1_category_id.in_(ids), fact.top2_category_id.in_(ids),
                 fact.top3_category_id.in_(ids))
         )
+    # 关键词含自己前三品牌之一就排除。三个槽位各一个相关 EXISTS（走 dim_brand 主键）；
+    # 品牌为 NULL 时 EXISTS 为假，该槽位不排除任何词。
+    if req.exclude_brand_in_keyword:
+        for n in (1, 2, 3):
+            b = aliased(DimBrand)
+            stmt = stmt.where(
+                ~select(1)
+                .where(
+                    b.brand_id == getattr(fact, f"top{n}_brand_id"),
+                    brand_in_keyword(DimKeyword.keyword, b.name),
+                )
+                .exists()
+            )
     # ASIN 是精确码，**等值匹配**：先解析出单个 product_id（走 `uq_dim_product_asin`
     # 唯一索引），再对三个商品槽位做 OR——之前只匹配 top1，把一个实际排第二、第三名次
     # 的 ASIN 粘进搜索框会查不到任何结果，这个限制对用户不可见（issue #56 P2）。
@@ -700,7 +739,11 @@ def shape_history(rows, on: date, view: str) -> dict[int, list[int | None]]:
 
 def shape_category_options(rows) -> list[dict[str, Any]]:
     """(top_category, cnt) 行 → 下拉选项列表。"""
-    return [{"category": r[0], "count": r[1]} for r in rows]
+    return [
+        {"category": r[0], "count": r[1]}
+        for r in rows
+        if str(r[0]).lower() not in HIDDEN_CATEGORY_NAMES
+    ]
 
 
 def shape_brand_options(rows) -> list[dict[str, Any]]:

@@ -52,6 +52,11 @@ export interface FilterDraft {
    */
   competitorNew: boolean;
   /**
+   * 排除关键词里带有自己前三品牌名的词（issue #119）。**缺省视同开启**（`!== false`）：
+   * 旧快照没有这个字段，行为应与新进屏一致。只在「只看新词」时才随请求发出，见 toSearchBody。
+   */
+  excludeBrandWords?: boolean;
+  /**
    * 行集合维度，缺省 ALL。**不是筛选条件**——它决定"哪些行进表"，而筛选决定
    * "进表的行里留哪些"。放在同一个草稿里是因为它和筛选一起被「立即查询」提交。
    */
@@ -81,6 +86,7 @@ export const defaultFilters = (): FilterDraft => ({
   brands: [],
   productTitle: '',
   competitorNew: false,
+  excludeBrandWords: true,
 });
 
 /**
@@ -216,5 +222,11 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     conversion_share_max: onlyDropped ? undefined : filters.conversionShare.max,
     is_new: onlyDropped ? undefined : filters.isNew,
     competitor_new: !onlyDropped && filters.competitorNew ? true : undefined,
+    // 默认开启、且只在「只看新词」时生效：品牌词对找新机会没价值，但对「全部词」榜单是
+    // 额外的数据缩减，用户没要求就不该替他缩。
+    exclude_brand_in_keyword:
+      !onlyDropped && filters.isNew === true && filters.excludeBrandWords !== false
+        ? true
+        : undefined,
   };
 }
