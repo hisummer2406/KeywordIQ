@@ -1,4 +1,4 @@
-import type { Include, SearchBody, View } from '@/services/analysis';
+import type { Include, KeywordMode, SearchBody, View } from '@/services/analysis';
 
 /**
  * 分析查询屏的条件模型与转换。
@@ -30,6 +30,11 @@ export interface Range {
 export interface FilterDraft {
   /** 单一检索框的原文，目标字段由 detectSearchKind 判定 */
   q: string;
+  /**
+   * 关键词匹配方式，只作用于检索框里被判为「关键词」的输入（ASIN 是等值匹配，没有模式）。
+   * 缺省视同 ALL_TERMS。不入库（保存的条件不含检索词，模式单独存没有意义）。
+   */
+  qMode?: KeywordMode;
   categories: string[];
   ranking: Range;
   change: Range;
@@ -66,6 +71,7 @@ export interface FilterDraft {
  */
 export const defaultFilters = (): FilterDraft => ({
   q: '',
+  qMode: 'ALL_TERMS',
   categories: [],
   ranking: {},
   change: {},
@@ -194,6 +200,8 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     date: scope.date ?? undefined,
     include: filters.include && filters.include !== 'ALL' ? filters.include : undefined,
     keyword: !onlyDropped && kind === 'keyword' ? q : undefined,
+    keyword_mode:
+      !onlyDropped && kind === 'keyword' ? (filters.qMode ?? 'ALL_TERMS') : undefined,
     asin: !onlyDropped && kind === 'asin' ? q : undefined,
     brands: !onlyDropped && filters.brands.length ? filters.brands : undefined,
     product_title: onlyDropped ? undefined : trimmed(filters.productTitle),

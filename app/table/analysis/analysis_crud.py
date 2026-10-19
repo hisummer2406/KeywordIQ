@@ -24,6 +24,13 @@ from app.table.analysis.fact_model import (
     FactWeekly,
     SiteDataStats,
 )
+from app.table.analysis.keyword_match import (
+    LIKE_ESCAPE,
+    escape_like,
+    term_regex,
+    term_stem,
+    tokenize,
+)
 from app.table.competitor.asin_model import CompetitorSellerAsin
 from app.table.competitor.seller_model import CompetitorSeller
 from app.table.competitor.watch_crud import NEW_DISCOVERY_WINDOW_DAYS
@@ -308,6 +315,28 @@ def _count_base_query(site: str, view: str, on: date):
     return stmt, fact
 
 
+def keyword_conditions(keyword: str, mode: str) -> list:
+    """关键词检索条件（issue #126）。``/search`` 与 ``/export`` 经 ``_apply_filters`` 共用。
+
+    ``ALL_TERMS``：每个词各一个条件，AND 叠加；每个词先用 ``ILIKE '%词干%'`` 走 trgm 索引
+    缩小范围，再用词边界正则做精确判定（单靠正则也能走索引，但带 ``|`` 的交替式更容易
+    让计划器放弃，预筛是稳妥的双保险）。输入里没有任何字母数字（如只有 ``&``）时拆不出词，
+    退回连续子串——否则这样的输入会变成「不筛」，用户看到的是整张表。
+
+    ``PHRASE``：旧行为，连续子串。``%`` ``_`` 现在按字面匹配（此前被当成通配符）。
+    """
+    tokens = tokenize(keyword) if mode == "ALL_TERMS" else []
+    if not tokens:
+        return [DimKeyword.keyword.ilike(f"%{escape_like(keyword.strip())}%", escape=LIKE_ESCAPE)]
+    conds = []
+    for token in tokens:
+        stem = term_stem(token)
+        if stem:
+            conds.append(DimKeyword.keyword.ilike(f"%{stem}%", escape=LIKE_ESCAPE))
+        conds.append(DimKeyword.keyword.op("~*")(term_regex(token)))
+    return conds
+
+
 def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int):
     """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。
 
@@ -321,7 +350,7 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id
     MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
     """
     if req.keyword:
-        stmt = stmt.where(DimKeyword.keyword.ilike(f"%{req.keyword}%"))
+        stmt = stmt.where(*keyword_conditions(req.keyword, req.keyword_mode))
     # 品牌与类目：**前三任一命中**。它们是关键词级排行，挂在事实表的六个引用列上，
     # 与商品槽位无关。语义是「这个词的前三品牌里有 X」——展示口径与筛选口径由此一致。
     #

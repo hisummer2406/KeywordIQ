@@ -201,7 +201,7 @@ export default function AnalysisPage() {
       });
       return {
         scope: s,
-        filters: sanitizeCompetitorNew({ ...saved.filters, q: '' }, access.canViewCompetitor),
+        filters: sanitizeCompetitorNew({ ...saved.filters, q: '', qMode: 'ALL_TERMS' }, access.canViewCompetitor),
         view: saved.view,
       };
     } catch {
@@ -309,10 +309,12 @@ export default function AnalysisPage() {
           availableDates={availableDates}
           scope={scope}
           q={query.filters.q}
+          qMode={query.filters.qMode}
           dirty={query.dirty}
           savedApplied={query.savedApplied}
           onScopeChange={scopeState.onScopeChange}
           onQChange={(q) => query.setFilters((f) => ({ ...f, q }))}
+          onQModeChange={(qMode) => query.setFilters((f) => ({ ...f, qMode }))}
           onSubmit={query.submitScope}
         />
       </Card>

@@ -1,4 +1,5 @@
 import { Button, Input, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import type { KeywordMode } from '@/services/analysis';
 import type { SiteOption } from '@/services/upload';
 import { detectSearchKind, type ScopeDraft } from './filters';
 import { formatSiteLabel } from './siteLabel';
@@ -18,12 +19,17 @@ const KIND_LABEL = {
   none: '',
 } as const;
 
+const MODE_HINT =
+  '全部词：输入的每个词都要作为完整单词出现，顺序不限、可夹其他词，英语常规单复数（rug/rugs、berry/berries）互通，不含不规则变化。连续词组：关键词中按原样连续包含输入文本（子串）。';
+
 export interface ScopeBarProps {
   sites: SiteOption[];
   availableDates: string[];
   scope: ScopeDraft;
   /** 检索框原文（属于过滤草稿，但输入位置在这一行） */
   q: string;
+  /** 关键词匹配方式（草稿） */
+  qMode?: KeywordMode;
   /** 草稿与生效条件不一致——存在未生效的改动 */
   dirty: boolean;
   /**
@@ -36,6 +42,7 @@ export interface ScopeBarProps {
   loading?: boolean;
   onScopeChange: (next: ScopeDraft) => void;
   onQChange: (next: string) => void;
+  onQModeChange: (next: KeywordMode) => void;
   onSubmit: () => void;
 }
 
@@ -44,11 +51,13 @@ export default function ScopeBar({
   availableDates,
   scope,
   q,
+  qMode = 'ALL_TERMS',
   dirty,
   savedApplied,
   loading,
   onScopeChange,
   onQChange,
+  onQModeChange,
   onSubmit,
 }: ScopeBarProps) {
   const kind = detectSearchKind(q);
@@ -97,12 +106,34 @@ export default function ScopeBar({
           onPressEnter={onSubmit}
           // 判定是自动的，但不能是不可见的：搜不到东西时用户需要知道系统搜的是哪个字段
           suffix={
-            kind === 'none' ? (
-              <span />
-            ) : (
+            kind === 'asin' ? (
               <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                {KIND_LABEL[kind]}
+                {KIND_LABEL.asin}
               </Typography.Text>
+            ) : (
+              // ASIN 是等值匹配、没有模式；其余输入（含还没输入）都显示模式选择。
+              // 「按关键词检索」的回显照旧保留——自动判定必须可见。
+              <Space size={4}>
+                {kind === 'keyword' && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                    {KIND_LABEL.keyword}
+                  </Typography.Text>
+                )}
+              <Tooltip title={MODE_HINT}>
+                <Select
+                  className="scope-bar__mode"
+                  size="small"
+                  variant="borderless"
+                  popupMatchSelectWidth={false}
+                  value={qMode}
+                  onChange={onQModeChange}
+                  options={[
+                    { label: '全部词', value: 'ALL_TERMS' },
+                    { label: '连续词组', value: 'PHRASE' },
+                  ]}
+                />
+              </Tooltip>
+              </Space>
             )
           }
         />
