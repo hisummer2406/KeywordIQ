@@ -56,9 +56,9 @@ _PERIOD_CONFIG: dict[str, tuple[str, str, int, int]] = {
 }
 
 
-# 新词判定的回看天数：本期之前这么多天内出现过的词不算新词。天、周视图共用——周报
-# 期次间隔 7 天，回看 7 天恰好就是上一周。
-NEW_WORD_LOOKBACK_DAYS = 7
+# 首次入榜（keyword-first-seen）比较键里「日报优先于周报」的次序：同一期次日期下日报的
+# 精度更高，必须有确定的胜者，否则日周导入顺序不同会得到不同的 period_type。
+FIRST_SEEN_PERIOD_RANK = {"DAY": 0, "WEEK": 1}
 
 
 class ImportError_(Exception):
@@ -217,21 +217,70 @@ def _stage_csv(session: Session, source: ImportSource) -> tuple[int, int, int]:
     return total, staged, skipped
 
 
-def _upsert_dimensions(session: Session, site: str) -> None:
-    """第二段：从暂存表补齐维度，维度先于事实。"""
-    # dim_keyword：本站点的去重关键词。
+def _upsert_keywords(session: Session, site: str, period: str, report_date: date) -> None:
+    """补齐 dim_keyword 并写永久首次入榜记录（keyword-first-seen）。
+
+    ``dim_keyword`` 行只增不删，所以「站点内不存在」就等于「从未见过」。三条规则：
+
+    - **基线期**：站点没有任何首次记录，或本期不晚于站点最早已知期次（含补更早的历史）。
+      基线期里新插入的词只记 ``EARLIEST_OBSERVED``——没有更早的对照期，说它们是「首次」是在
+      没有证据时下判断，否则新站点首导/补历史会让整期涌进首次入榜且没有任何报错。
+      判定只读 ``dim_keyword``（永久），不读会被保留清理的 ``site_data_stats``。
+    - **非基线期**新插入的词记 ``CONFIRMED``。
+    - **已存在的词**只在证据更早时向前修正，比较键（期次日期，日优先于周）；``CONFIRMED`` 不
+      降级，``EARLIEST_OBSERVED`` 不升级，``UNKNOWN`` 见到证据后变 ``EARLIEST_OBSERVED``（
+      它是存量词，当然不是新词）。相等不写——重复导入零更新，与 ``dim_product`` 的
+      ``IS DISTINCT FROM`` 同一条纪律（UPDATE 会在每个索引上插新条目，``keyword`` 上挂着 GIN）。
+
+    全部与调用方同一事务，导入失败整体回滚，不会留下失败期次的首次记录。
+    """
+    site_min = session.execute(
+        text("SELECT min(first_seen_date) FROM analysis.dim_keyword WHERE site = :site"),
+        {"site": site},
+    ).scalar()
+    baseline = site_min is None or report_date <= site_min
+    params = {
+        "site": site, "rdate": report_date, "period": period,
+        "rank": FIRST_SEEN_PERIOD_RANK[period],
+        "basis": "EARLIEST_OBSERVED" if baseline else "CONFIRMED",
+    }
     session.execute(
         text(
             """
-            INSERT INTO analysis.dim_keyword (site, keyword)
-            SELECT DISTINCT :site, c1
+            INSERT INTO analysis.dim_keyword
+                   (site, keyword, first_seen_date, first_seen_period_type, first_seen_basis)
+            SELECT DISTINCT :site, c1, CAST(:rdate AS date), :period, :basis
               FROM analysis._import_staging
              WHERE NULLIF(c1, '') IS NOT NULL
             ON CONFLICT (site, keyword) DO NOTHING
             """
         ),
-        {"site": site},
+        params,
     )
+    session.execute(
+        text(
+            """
+            UPDATE analysis.dim_keyword k
+               SET first_seen_date = CAST(:rdate AS date),
+                   first_seen_period_type = :period,
+                   first_seen_basis = CASE WHEN k.first_seen_basis = 'UNKNOWN'
+                                           THEN 'EARLIEST_OBSERVED' ELSE k.first_seen_basis END
+              FROM (SELECT DISTINCT c1 FROM analysis._import_staging
+                     WHERE NULLIF(c1, '') IS NOT NULL) s
+             WHERE k.site = :site AND k.keyword = s.c1
+               AND (k.first_seen_date IS NULL
+                    OR (CAST(:rdate AS date), CAST(:rank AS int))
+                       < (k.first_seen_date,
+                          CASE k.first_seen_period_type WHEN 'DAY' THEN 0 ELSE 1 END))
+            """
+        ),
+        params,
+    )
+
+
+def _upsert_dimensions(session: Session, site: str, period: str, report_date: date) -> None:
+    """第二段：从暂存表补齐维度，维度先于事实。"""
+    _upsert_keywords(session, site, period, report_date)
     # dim_product：三个商品槽位合并去重。SCD Type 1 —— 冲突时更新为最新值。
     # DISTINCT ON (asin) 避免同一 asin 在一条 INSERT 里出现两次触发 ON CONFLICT 报错。
     #
@@ -330,8 +379,7 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
     # 派生值一次算出：
     # - previous_ranking = 上一期同 (site,keyword) 的 current_ranking，无则 0
     # - ranking_change   = 本期 - 上期，无上期则 0
-    # - is_new           = 本期之前 NEW_WORD_LOOKBACK_DAYS 天内一期都没出现过该关键词
-    #                      （与 previous_ranking 的口径不同：后者只看上一期）
+    # 不再写 is_new：首次入榜是 dim_keyword 上的永久记录（补历史后会变，不能固化进事实行）。
     # DISTINCT ON (keyword_id) 防止暂存表里偶发的重复关键词撞唯一约束。
     cur = _num("s.c0") + "::int"
     result = session.execute(
@@ -339,7 +387,7 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
             f"""
             INSERT INTO analysis.{table} (
                 site, {date_col}, keyword_id,
-                current_ranking, previous_ranking, ranking_change, is_new,
+                current_ranking, previous_ranking, ranking_change,
                 top1_product_id, top1_click_share, top1_conversion_share,
                 top2_product_id, top2_click_share, top2_conversion_share,
                 top3_product_id, top3_click_share, top3_conversion_share,
@@ -351,11 +399,6 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
                 {cur},
                 COALESCE(prev.current_ranking, 0),
                 CASE WHEN prev.keyword_id IS NULL THEN 0 ELSE {cur} - prev.current_ranking END,
-                NOT EXISTS (
-                    SELECT 1 FROM analysis.{table} h
-                    WHERE h.site = :site AND h.keyword_id = k.keyword_id
-                      AND h.{date_col} >= :new_from AND h.{date_col} < :rdate
-                ),
                 p1.product_id, {_num('s.c10')}, {_num('s.c11')},
                 p2.product_id, {_num('s.c14')}, {_num('s.c15')},
                 p3.product_id, {_num('s.c18')}, {_num('s.c19')},
@@ -385,7 +428,6 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
             "site": site,
             "rdate": report_date,
             "prev_date": prev_date,
-            "new_from": report_date - timedelta(days=NEW_WORD_LOOKBACK_DAYS),
         },
     )
     return result.rowcount
@@ -563,7 +605,7 @@ def import_report(
     date_warning = None
     if staged:
         date_warning = _check_date_consistency(session, report_date)
-        _upsert_dimensions(session, site)
+        _upsert_dimensions(session, site, period, report_date)
         written = _load_facts(session, site, period, report_date)
         # 必须在事实写入之后：掉榜集合是拿窗口内历史与**本期已落库的事实**做差集算出来的。
         dropped = _load_dropped(session, site, period, report_date)

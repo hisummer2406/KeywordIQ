@@ -20,10 +20,11 @@ schema 由 ``database.Base`` 的 metadata 统一提供（取自 ``settings.DATAB
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
+    Date,
     DateTime,
     Index,
     Integer,
@@ -34,7 +35,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.table.analysis.column_comments import SITE_COLUMN_COMMENT
+from app.table.analysis.column_comments import (
+    FIRST_SEEN_BASIS_COMMENT,
+    FIRST_SEEN_DATE_COMMENT,
+    FIRST_SEEN_PERIOD_COMMENT,
+    SITE_COLUMN_COMMENT,
+)
 from database import Base
 
 # 搜索索引统一用 pg_trgm 三元组 GIN，因为界面的搜索是子串 ILIKE '%x%'（沿用 V1 行为），
@@ -58,9 +64,23 @@ class DimKeyword(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # 永久首次入榜记录（keyword-first-seen）。这张表不分区、不参与保留清理、行只增不删，
+    # 所以它本来就是「这个站点见过哪些词」的永久集合；首次记录放这里才能活过保留窗口。
+    first_seen_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment=FIRST_SEEN_DATE_COMMENT
+    )
+    first_seen_period_type: Mapped[str | None] = mapped_column(
+        String(4), nullable=True, comment=FIRST_SEEN_PERIOD_COMMENT
+    )
+    first_seen_basis: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="UNKNOWN", comment=FIRST_SEEN_BASIS_COMMENT
+    )
 
     __table_args__ = (
         UniqueConstraint("site", "keyword", name="uq_dim_keyword_site_keyword"),
+        # 首次入榜：按期次计数/筛选，以及判定站点最早已知期次（min(first_seen_date)）。
+        # 普通 btree：导入只在出现新词或证据前移时才写它，写放大可忽略。
+        Index("idx_dim_keyword_first_seen", "site", "first_seen_date"),
         # 关键词子串搜索（keyword ILIKE '%x%'）。trigram 索引对大小写不敏感，
         # 天然匹配 ILIKE 的语义。建在这张维度表（约 500 万行/站）上，而不是事实表
         # （约 8 亿行）——同样的 trigram 建在事实表上会是几十 GB 且拖慢热写路径。

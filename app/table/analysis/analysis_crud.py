@@ -71,10 +71,36 @@ SORTABLE_FIELDS = frozenset(
         "previous_ranking",
         "top1_click_share",
         "top1_conversion_share",
-        "is_new",
     }
 )
 _DEFAULT_ORDER = "current_ranking"
+
+# 周期 w 覆盖 [w-6, w]：周报按周日起周六止统计，文件名日期是周结束日。
+FIRST_SEEN_WEEK_SPAN_DAYS = 7
+
+
+def first_listed_expr(view: str, on: date):
+    """「首次入榜」判定（keyword-first-seen），派生自 ``dim_keyword`` 的永久首次记录。
+
+    **只有 ``CONFIRMED`` 才算**：``EARLIEST_OBSERVED`` / ``UNKNOWN`` 的词此前可能见过，
+    把它们算进来就是把「不知道」伪装成「确定是新的」。
+
+    日视图 ``d``：首次记录恰为 ``(d, DAY)``。周视图 ``w``：``(w, WEEK)``，或日报来源且落在
+    ``[w-6, w]``（周报日期是周结束日，周日起周六止）。来自周报的首次只有周精度，**不进任何
+    一天的日视图**——不捏造日期。一个词只有一个首次事件，所以同一视图里不会重复计数。
+    """
+    confirmed = DimKeyword.first_seen_basis == "CONFIRMED"
+    if view == "WEEK":
+        in_week = and_(
+            DimKeyword.first_seen_period_type == "DAY",
+            DimKeyword.first_seen_date >= on - timedelta(days=FIRST_SEEN_WEEK_SPAN_DAYS - 1),
+            DimKeyword.first_seen_date <= on,
+        )
+        this_week = and_(DimKeyword.first_seen_period_type == "WEEK", DimKeyword.first_seen_date == on)
+        return and_(confirmed, or_(this_week, in_week))
+    return and_(
+        confirmed, DimKeyword.first_seen_period_type == "DAY", DimKeyword.first_seen_date == on
+    )
 
 
 def fact_and_datecol(view: str):
@@ -96,8 +122,8 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     "站点当期总词数"这个与筛选前一样的数字，分页页码全部对不上，且两条路径都能正常跑完、
     不会有任何报错或测试失败（`competitor_new` 的教训，见 issue #56 P2 design.md 决策 3）。
 
-    **`competitor_new` 用 `or None` 而不是裸值**：与三态的 `is_new`（`None`/`True`/`False`
-    都是各自不同的筛选结果）不同，`competitor_new` 只有两态——`_apply_filters` 里是
+    **`competitor_new` 用 `or None` 而不是裸值**：与 `competitor_new` 同构，`first_listed` 也只有两态（`None`/`False` 都不施加条件），
+    故同样 `or None`；`competitor_new` 只有两态——`_apply_filters` 里是
     `if req.competitor_new:`，`False` 与 `None` 的查询结果完全一样（都不施加条件）。
     裸传 `req.competitor_new` 会让 `False` 被 `v is not None` 判成"带筛选"，从而错误地
     切到精确计数路径（PR #66 复审 P2 指出）——这条路径本身没有性能问题，错的是语义：
@@ -109,11 +135,25 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
             req.keyword, req.asin, req.product_title,
             req.brands or None, req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
-            req.conversion_share_min, req.conversion_share_max, req.is_new,
+            req.conversion_share_min, req.conversion_share_max, req.first_listed or None,
             req.competitor_new or None,
             req.exclude_brand_in_keyword or None,
         )
     )
+
+
+def earliest_known_first_seen_stmt(site: str):
+    """站点最早已知的首次入榜期次日期（监测起点）。读永久的 ``dim_keyword``，走
+    ``idx_dim_keyword_first_seen``；站点尚无任何首次记录时为 NULL。"""
+    return select(func.min(DimKeyword.first_seen_date)).where(DimKeyword.site == site)
+
+
+def first_listed_count_stmt(site: str, view: str, on: date):
+    """所选期次「首次入榜」的数量，**与「仅 first_listed 筛选」的列表总数同一口径**：
+    走同一个计数 base query（含类目黑名单），数量与筛选结果因此不会各说各话。"""
+    stmt, _ = _count_base_query(site, view, on)
+    capped = stmt.where(first_listed_expr(view, on)).subquery()
+    return select(func.count()).select_from(capped)
 
 
 def available_dates_stmt(site: str, view: str):
@@ -211,7 +251,7 @@ def new_fact_row_dims() -> FactRowDims:
     )
 
 
-def fact_metric_columns(fact, dims: FactRowDims) -> list:
+def fact_metric_columns(fact, dims: FactRowDims, *, view: str, on: date) -> list:
     """一行结果的**指标列**（不含 keyword_id / keyword 这两个身份列）。
 
     **这份投影只有这一处定义**，分析查询屏与词库盯盘屏共用。两屏若各写一份，分叉不会
@@ -228,7 +268,9 @@ def fact_metric_columns(fact, dims: FactRowDims) -> list:
         fact.current_ranking.label("current_ranking"),
         fact.previous_ranking.label("previous_ranking"),
         fact.ranking_change.label("ranking_change"),
-        fact.is_new.label("is_new"),
+        first_listed_expr(view, on).label("first_listed"),
+        DimKeyword.first_seen_date.label("first_seen_date"),
+        DimKeyword.first_seen_basis.label("first_seen_basis"),
         DimProduct.asin.label("top1_asin"),
         DimProduct.title.label("top1_title"),
         fact.top1_click_share.label("top1_click_share"),
@@ -285,7 +327,7 @@ def _base_query(site: str, view: str, on: date):
         select(
             fact.keyword_id.label("keyword_id"),
             DimKeyword.keyword.label("keyword"),
-            *fact_metric_columns(fact, dims),
+            *fact_metric_columns(fact, dims, view=view, on=on),
         )
         .select_from(fact)
         .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
@@ -395,7 +437,9 @@ def keyword_conditions(keyword: str, mode: str) -> list:
     return conds
 
 
-def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int):
+def _apply_filters(
+    stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int, view: str, on: date
+):
     """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。
 
     **ASIN 与「竞对新发现」按前三商品槽位任一命中**（与品牌/类目同一形状：解析成
@@ -510,8 +554,8 @@ def _apply_filters(stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id
         stmt = stmt.where(fact.top1_conversion_share >= req.conversion_share_min)
     if req.conversion_share_max is not None:
         stmt = stmt.where(fact.top1_conversion_share <= req.conversion_share_max)
-    if req.is_new is not None:
-        stmt = stmt.where(fact.is_new == req.is_new)
+    if req.first_listed:
+        stmt = stmt.where(first_listed_expr(view, on))
     return stmt
 
 
@@ -536,7 +580,7 @@ def search_stmt(
     算出，不能再从页码反推。``user_id`` 只给「竞对新发现」筛选用，见 ``_apply_filters``。
     """
     stmt, fact = _base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
     stmt = _apply_order(stmt, fact, req)
     if offset is None:
         offset = (req.page - 1) * req.perPage
@@ -555,7 +599,7 @@ def count_capped_stmt(
     列表总数是另一回事，必须精确，见 :func:`count_filtered_stmt`。
     """
     stmt, fact = _count_base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
     capped = stmt.limit(cap).subquery()
     return select(func.count()).select_from(capped)
 
@@ -567,7 +611,7 @@ def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchReque
     换来的是 total 可以被当成真数使用——翻页器据此算页数，用户才够得着全部命中行。
     """
     stmt, fact = _count_base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
     return select(func.count()).select_from(stmt.subquery())
 
 
@@ -579,7 +623,7 @@ def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limi
     好让上层能按块批量补齐当前视图的搜索趋势。
     """
     stmt, fact = _base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
     stmt = _apply_order(stmt, fact, req)
     return stmt.limit(limit).execution_options(yield_per=EXPORT_CHUNK_SIZE)
 

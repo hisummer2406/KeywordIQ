@@ -105,12 +105,13 @@ class AnalysisSearchRequest(BaseModel):
     conversion_share_max: float | None = Field(None, description="转化份额最大值")
 
     # 布尔筛选
-    is_new: bool | None = Field(None, description="是否本周期新词")
+    # 首次入榜（keyword-first-seen）：只两态——`true` 只看首次入榜，`false`/未传不筛。
+    first_listed: bool | None = Field(None, description="只看所选期次首次入榜的关键词")
 
     # 竞对新发现：命中口径见 competitor-keyword-crosslink 能力——三个商品槽位任一个的
     # ASIN，是当前用户在当前站点关注的卖家**近期新发现**的 ASIN
     # （`first_seen_at > baseline_at` 且落在 `NEW_DISCOVERY_WINDOW_DAYS` 窗口内）。
-    # `None` 不筛，与 `is_new` 同构。
+    # `None` 不筛，与 `first_listed` 同构。
     #
     # **不是"在售集合"。** `competitor_seller_asin` 不做下架删除，按"曾经上报过"判定会
     # 命中卖家有史以来的全部商品（PR #66 复审 P1 的原始缺陷）。判定口径改了、这行文案
@@ -192,7 +193,12 @@ class FactRowBase(BaseModel):
     current_ranking: int | None = None
     previous_ranking: int | None = None
     ranking_change: int | None = None
-    is_new: bool = False
+    # 首次入榜判定与依据（派生自 dim_keyword 的永久首次记录）。掉榜行没有当期，恒 False。
+    first_listed: bool = False
+    first_seen_date: _Date | None = Field(None, description="首次入榜的期次日期；依据未知时为空")
+    first_seen_basis: str | None = Field(
+        None, description="CONFIRMED 已确认 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知"
+    )
 
     # 掉榜行独有：它唯一能携带的跨期信息，且期次明确标注。
     is_dropped: bool = False
@@ -278,6 +284,23 @@ class ScopeInfo(BaseModel):
     view: View
     latest_date: _Date | None = None
     available_dates: list[_Date] = Field(default_factory=list)
+
+
+class FirstListedSummary(BaseModel):
+    """所选 (站点, 视图, 日期) 的「首次入榜」数量与统计范围。
+
+    ``judgeable=False`` 表示所选期次不晚于站点最早已知期次——那一期所有词都只是「最早可观测」，
+    此时 ``count`` 为空，**不是 0**：0 会被读成「这期没有新词」，而真实情况是无法判断。
+    """
+
+    site: str
+    view: View
+    on: _Date
+    judgeable: bool
+    count: int | None = None
+    earliest_known_date: _Date | None = Field(
+        None, description="站点最早已知的首次入榜期次日期（监测起点）"
+    )
 
 
 class CategoryOption(BaseModel):

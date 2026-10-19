@@ -107,8 +107,14 @@ def main() -> int:
         kw_ids = []
         for i in range(N_KEYWORDS):
             kid = db.execute(
-                text(f"INSERT INTO {SCHEMA}.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
-                {"s": site, "k": f"demo-keyword-{i:02d}"},
+                text(f"INSERT INTO {SCHEMA}.dim_keyword(site,keyword,first_seen_date,"
+                     f"first_seen_period_type,first_seen_basis) "
+                     f"VALUES (:s,:k,:fd,'DAY',:fb) RETURNING keyword_id"),
+                # 演示：每 5 个词里有 1 个在第 4 天「首次入榜」（已确认），其余是监测起点
+                # 的存量（最早可观测），这样默认的「只看首次入榜」在演示库里也有结果可看。
+                {"s": site, "k": f"demo-keyword-{i:02d}",
+                 "fd": days[3] if i % 5 == 0 else days[0],
+                 "fb": "CONFIRMED" if i % 5 == 0 else "EARLIEST_OBSERVED"},
             ).scalar()
             kw_ids.append(kid)
 
@@ -154,28 +160,28 @@ def main() -> int:
                 prev = rank_of(i, d - 1) if d > 0 else cur
                 db.execute(
                     text(f"INSERT INTO {SCHEMA}.fact_daily"
-                         f"(site,report_date,keyword_id,current_ranking,previous_ranking,ranking_change,is_new,"
+                         f"(site,report_date,keyword_id,current_ranking,previous_ranking,ranking_change,"
                          f" top1_product_id,top1_click_share,top1_conversion_share,"
                          f" top2_product_id,top2_click_share,top2_conversion_share,"
                          f" top3_product_id,top3_click_share,top3_conversion_share) "
-                         f"VALUES (:s,:d,:k,:cur,:prev,:ch,:new,"
+                         f"VALUES (:s,:d,:k,:cur,:prev,:ch,"
                          f" :p1,:cs1,:vs1, :p2,:cs2,:vs2, :p3,:cs3,:vs3)"),
                     {"s": site, "d": day, "k": kid, "cur": cur, "prev": prev,
-                     "ch": cur - prev, "new": (d == 0), **slot_params},
+                     "ch": cur - prev, **slot_params},
                 )
             for week_index, week_date in enumerate(week_dates):
                 wk_cur = rank_of(i, week_index)
                 wk_prev = rank_of(i, week_index - 1) if week_index > 0 else wk_cur
                 db.execute(
                     text(f"INSERT INTO {SCHEMA}.fact_weekly"
-                         f"(site,report_date_week,keyword_id,current_ranking,previous_ranking,ranking_change,is_new,"
+                         f"(site,report_date_week,keyword_id,current_ranking,previous_ranking,ranking_change,"
                          f" top1_product_id,top1_click_share,top1_conversion_share,"
                          f" top2_product_id,top2_click_share,top2_conversion_share,"
                          f" top3_product_id,top3_click_share,top3_conversion_share) "
-                         f"VALUES (:s,:w,:k,:cur,:prev,:ch,:new,"
+                         f"VALUES (:s,:w,:k,:cur,:prev,:ch,"
                          f" :p1,:cs1,:vs1, :p2,:cs2,:vs2, :p3,:cs3,:vs3)"),
                     {"s": site, "w": week_date, "k": kid, "cur": wk_cur,
-                     "prev": wk_prev, "ch": wk_cur - wk_prev, "new": week_index == 0,
+                     "prev": wk_prev, "ch": wk_cur - wk_prev,
                      **slot_params},
                 )
 

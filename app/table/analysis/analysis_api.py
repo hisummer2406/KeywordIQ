@@ -3,6 +3,7 @@
 - POST /api/analysis/search   分页查询，成功返回 ProTable 契约 + 作用域回显
 - POST /api/analysis/export   作用域内流式导出 CSV
 - GET  /api/analysis/scope    作用域元信息（可选日期集 + 最新日期），日期选择器用
+- GET  /api/analysis/first-listed  所选期次首次入榜数量与统计范围
 - GET  /api/analysis/categories  类目下拉选项（按作用域）
 - GET  /api/analysis/topslot-history  ASIN/品牌悬浮历史（issue #96），分页
 
@@ -36,6 +37,7 @@ from app.table.search.search_schemas import (
     AnalysisSearchResponse,
     BrandOption,
     CategoryOption,
+    FirstListedSummary,
     ScopeInfo,
 )
 from database import get_async_db, get_db
@@ -106,6 +108,21 @@ async def get_scope(
 ) -> ScopeInfo:
     """作用域元信息：可选日期集 + 最新日期。非法站点 → 422。"""
     return await service.get_scope(db, site, view)
+
+
+@analysis_router.get("/first-listed", response_model=FirstListedSummary | None)
+async def get_first_listed(
+    view: _View = Query("DAY"),
+    site: str | None = Query(None),
+    date: _Date | None = Query(None, description="报告日期，缺省取该作用域最新可用日期"),
+    db: AsyncSession = Depends(get_async_db),
+    _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
+) -> FirstListedSummary | None:
+    """所选期次的「首次入榜」数量与统计范围（keyword-first-seen）。
+
+    所选期次是站点监测起点时 ``judgeable=false`` 且 ``count`` 为空——无法判断，不是 0。
+    """
+    return await service.get_first_listed(db, site, view, date)
 
 
 @analysis_router.get("/categories", response_model=list[CategoryOption])
