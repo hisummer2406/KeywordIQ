@@ -58,7 +58,7 @@ function row(overrides: Record<string, unknown> = {}) {
     status: 'LISTED',
     added_at: '2026-08-01T00:00:00Z',
     is_dropped: false,
-    is_new: false,
+    first_listed: false,
     current_ranking: 12,
     previous_ranking: 15,
     ranking_change: -3,

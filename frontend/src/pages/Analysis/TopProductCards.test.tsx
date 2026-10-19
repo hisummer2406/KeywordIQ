@@ -26,7 +26,7 @@ function row(slots: number): AnalysisRow {
     current_ranking: 1,
     previous_ranking: 4,
     ranking_change: -3,
-    is_new: false,
+    first_listed: false,
   };
   for (let rank = 1; rank <= 3; rank += 1) {
     const filled = rank <= slots;

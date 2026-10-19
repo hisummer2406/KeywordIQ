@@ -79,7 +79,7 @@ _DEFAULT_ORDER = "current_ranking"
 FIRST_SEEN_WEEK_SPAN_DAYS = 7
 
 
-def first_listed_expr(view: str, on: date):
+def first_listed_expr(site: str, view: str, on: date):
     """「首次入榜」判定（keyword-first-seen），派生自 ``dim_keyword`` 的永久首次记录。
 
     **只有 ``CONFIRMED`` 才算**：``EARLIEST_OBSERVED`` / ``UNKNOWN`` 的词此前可能见过，
@@ -89,7 +89,10 @@ def first_listed_expr(view: str, on: date):
     ``[w-6, w]``（周报日期是周结束日，周日起周六止）。来自周报的首次只有周精度，**不进任何
     一天的日视图**——不捏造日期。一个词只有一个首次事件，所以同一视图里不会重复计数。
     """
-    confirmed = DimKeyword.first_seen_basis == "CONFIRMED"
+    # 站点条件对结果是冗余的（keyword_id 已唯一确定站点），但它让 idx_dim_keyword_first_seen
+    # 的 (site, first_seen_date) 两列都进索引条件；漏了它索引只用上日期，会把其他站点同一天
+    # 首次入榜的词也扫一遍（EXPLAIN 实测）。
+    confirmed = and_(DimKeyword.site == site, DimKeyword.first_seen_basis == "CONFIRMED")
     if view == "WEEK":
         in_week = and_(
             DimKeyword.first_seen_period_type == "DAY",
@@ -152,7 +155,7 @@ def first_listed_count_stmt(site: str, view: str, on: date):
     """所选期次「首次入榜」的数量，**与「仅 first_listed 筛选」的列表总数同一口径**：
     走同一个计数 base query（含类目黑名单），数量与筛选结果因此不会各说各话。"""
     stmt, _ = _count_base_query(site, view, on)
-    capped = stmt.where(first_listed_expr(view, on)).subquery()
+    capped = stmt.where(first_listed_expr(site, view, on)).subquery()
     return select(func.count()).select_from(capped)
 
 
@@ -251,7 +254,7 @@ def new_fact_row_dims() -> FactRowDims:
     )
 
 
-def fact_metric_columns(fact, dims: FactRowDims, *, view: str, on: date) -> list:
+def fact_metric_columns(fact, dims: FactRowDims, *, site: str, view: str, on: date) -> list:
     """一行结果的**指标列**（不含 keyword_id / keyword 这两个身份列）。
 
     **这份投影只有这一处定义**，分析查询屏与词库盯盘屏共用。两屏若各写一份，分叉不会
@@ -268,7 +271,7 @@ def fact_metric_columns(fact, dims: FactRowDims, *, view: str, on: date) -> list
         fact.current_ranking.label("current_ranking"),
         fact.previous_ranking.label("previous_ranking"),
         fact.ranking_change.label("ranking_change"),
-        first_listed_expr(view, on).label("first_listed"),
+        first_listed_expr(site, view, on).label("first_listed"),
         DimKeyword.first_seen_date.label("first_seen_date"),
         DimKeyword.first_seen_basis.label("first_seen_basis"),
         DimProduct.asin.label("top1_asin"),
@@ -327,7 +330,7 @@ def _base_query(site: str, view: str, on: date):
         select(
             fact.keyword_id.label("keyword_id"),
             DimKeyword.keyword.label("keyword"),
-            *fact_metric_columns(fact, dims, view=view, on=on),
+            *fact_metric_columns(fact, dims, site=site, view=view, on=on),
         )
         .select_from(fact)
         .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
@@ -555,7 +558,7 @@ def _apply_filters(
     if req.conversion_share_max is not None:
         stmt = stmt.where(fact.top1_conversion_share <= req.conversion_share_max)
     if req.first_listed:
-        stmt = stmt.where(first_listed_expr(view, on))
+        stmt = stmt.where(first_listed_expr(site, view, on))
     return stmt
 
 

@@ -89,15 +89,17 @@ UPDATE analysis.dim_keyword k
 
 迁移**删除** `fact_daily`/`fact_weekly` 的 `is_new` 列（分区表 `DROP COLUMN` 是元数据操作，随分区继承），并删除 `scripts/backfill_is_new.py`。**备选**：保留列但不再写——否决，留一个口径已经不同、名字还叫“新词”的列，正是 CLAUDE.md 说的“名不副实”。
 
-接口：请求字段 `is_new` → `first_listed`（布尔，两态）；响应行字段 `is_new` → `first_listed`（该行当期是否命中上表）+ `first_seen_date`/`first_seen_basis`（供界面标注）。排序白名单里与 `is_new` 相关的项同步改名。`SAVED_MODE_VERSION` +1，旧保存条件静默丢弃；`CACHE_VERSION` +1（会话快照形状变了）。
+接口：请求字段 `is_new` → `first_listed`（布尔，两态；`false` 与未传等价）；原按 `is_new` 排序的选项一并去掉（派生自维度表的布尔排序没有使用场景）；响应行字段 `is_new` → `first_listed`（该行当期是否命中上表）+ `first_seen_date`/`first_seen_basis`（供界面标注）。排序白名单里与 `is_new` 相关的项同步改名。`SAVED_MODE_VERSION` +1，旧保存条件静默丢弃；`CACHE_VERSION` +1（会话快照形状变了）。
 
 「排除品牌词」仍是首次入榜筛选下的子条件，只在「只看首次入榜」时随请求发出，语义不变。
 
 ### D6：当期数量与统计范围的呈现
 
-`/scope`（日期选择器那条接口）响应增加 `first_listed_count`（当前站点、视图、所选日期的实算数）与 `first_seen_coverage`：`{earliest_known_date, confirmed_since}`。`confirmed_since` = 站点内最早的 `CONFIRMED` 的上线边界——即基线期之后的第一期。
+**数量走独立接口 `GET /api/analysis/first-listed?site&view&date`**，不塞进 `/scope`：`/scope` 只回可选日期集（与日期无关），而数量是 (站点, 视图, 日期) 的函数，每换日期就要重取。响应 `{judgeable, count, earliest_known_date}`；`count` 用与「仅 `first_listed` 筛选」**同一个计数 base query**（含类目黑名单）算，两处因此不会各说各话。
 
-界面：筛选与列用「首次入榜」；说明文案“本期首次进入监测范围的关键词数量”；当所选期次 `<= confirmed_since`（即基线期，所有词都是 `EARLIEST_OBSERVED`）时显示“该期是监测起点，无法判断首次入榜”而不是 0。**0 与“不可判断”必须分开**，与 CLAUDE.md 里“空表格三种成因”是同一类陷阱。
+`earliest_known_date` = `min(first_seen_date)`（监测起点）。所选期次 `<= earliest_known_date`（或站点尚无任何首次记录）时 `judgeable=false`、`count=null`。界面在作用域栏下方展示，**跟着表格实际加载的切片**（`loadedSite/View/Date`）走，不跟草稿走。
+
+界面三种呈现必须分开：有数量（含真 0）、监测起点（“无法判断首次入榜”）、取数失败（不显示）。**0 与“不可判断”必须分开**，与 CLAUDE.md 里“空表格三种成因”是同一类陷阱。周视图一个已知的边界：站点最早已知日落在某周窗内（`w > earliest` 但 `w-6 <= earliest`）时，该周只覆盖了部分天，计数偏少；本变更不为这个单独加标记。
 
 ### D7：存量迁移与回填
 
