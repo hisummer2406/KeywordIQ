@@ -24,7 +24,6 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     Date,
     DateTime,
     Index,
@@ -54,8 +53,8 @@ def _fact_indexes(prefix: str, date_column: str) -> tuple[Index, ...]:
 
     - 日期+排名的复合索引是绝对热点（V1 ``idx_date_ranking_nonzero`` 被扫 8.2 万次），
       对应这里的 ``_ranking``。
-    - 新词筛选是高频功能（V1 ``idx_amazon_new_day`` 5.9 万次），对应这里的 ``_new``
-      部分索引——只索引 is_new 的少数行，很小。
+    - 首次入榜筛选不在事实表上：它读 ``dim_keyword`` 的永久首次记录（见
+      ``keyword-first-seen``），事实行不再带 ``is_new``，也就没有 ``_new`` 部分索引。
     - top1 商品关联（V1 ``idx_optimized_count`` 2736 次、``idx_top_category_with_id``
       1908 次），对应 ``_top1_product``。
     - 份额排序使用度中等（V1 click_share 542 次、conversion 173 次），保留但不再拆出
@@ -72,10 +71,6 @@ def _fact_indexes(prefix: str, date_column: str) -> tuple[Index, ...]:
         Index(f"idx_{prefix}_keyword_history", "site", "keyword_id", date_column),
         # 默认排序：当期排名升序。V1 实测最热路径。
         Index(f"idx_{prefix}_ranking", "site", date_column, "current_ranking"),
-        # 新词筛选 + 按排名排序。部分索引，只覆盖 is_new 的少数行，体积很小。
-        # V1 该筛选被扫 5.9 万次，是真高频功能。
-        Index(f"idx_{prefix}_new", "site", date_column, "current_ranking",
-              postgresql_where=text("is_new")),
         # 按排名变化排序/筛选。
         Index(f"idx_{prefix}_change", "site", date_column, "ranking_change"),
         # ASIN / 标题筛选：先在 dim_product 上解析出 product_id，再回查事实表。
@@ -118,10 +113,6 @@ class FactDaily(Base):
     current_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="当期搜索频率排名")
     previous_ranking: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上一期排名，写入时算定")
     ranking_change: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="较上一期的变化，写入时算定")
-    is_new: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False,
-        comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选",
-    )
 
     top1_product_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, comment="点击量第 1 名商品 → dim_product.product_id（可空：无商品时）")
@@ -179,10 +170,6 @@ class FactWeekly(Base):
     current_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="当期搜索频率排名")
     previous_ranking: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上一期排名，写入时算定")
     ranking_change: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="较上一期的变化，写入时算定")
-    is_new: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False,
-        comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选",
-    )
 
     top1_product_id: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True, comment="点击量第 1 名商品 → dim_product.product_id（可空：无商品时）")

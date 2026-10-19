@@ -330,20 +330,12 @@ class TestFactTableStructure:
                 f"{idx.name}：类目索引需要先有实测依据（见 design 决策 4）"
             )
 
-    @pytest.mark.parametrize("model,table_name", [
-        (FactDaily, "fact_daily"),
-        (FactWeekly, "fact_weekly"),
-    ])
-    def test_is_new_partial_index_exists(self, model, table_name):
-        """新词筛选是高频功能（V1 实测 5.9 万次），必须有部分索引。
-
-        必须是 partial（带 WHERE is_new），否则会索引全部行、失去"只索引少数新词"
-        的体积优势。
-        """
-        idx = {i.name: i for i in model.__table__.indexes}.get(f"idx_{table_name}_new")
-        assert idx is not None, "缺少新词筛选索引"
-        where = idx.dialect_options["postgresql"].get("where")
-        assert where is not None, "is_new 索引必须是部分索引（带 WHERE），否则失去体积优势"
+    @pytest.mark.parametrize("model", [FactDaily, FactWeekly])
+    def test_fact_rows_have_no_is_new(self, model):
+        """首次入榜是 dim_keyword 上的永久记录；事实行不再带会随补历史变陈旧的 is_new，
+        也就不该再有 `_new` 部分索引。"""
+        assert "is_new" not in model.__table__.c
+        assert not [i for i in model.__table__.indexes if i.name.endswith("_new")]
 
     @pytest.mark.parametrize("model", [FactDaily, FactWeekly])
     def test_no_speculative_range_partial_indexes(self, model):

@@ -1,14 +1,14 @@
 ## 1. 证据盘点与前置核实
 
-- [ ] 1.1 核实周报文件名日期的语义（周起始日还是周结束日），据此固定周窗常量（设计假设 `[w-6, w]`），在 design.md 的 Open Questions 里勾销并补上真实文件名例子
+- [x] 1.1 周报文件名日期语义：用户确认为周结束日（周日起、周六止，如 `Week_2026_10_17`），周窗 `[w-6, w]`，已在 design.md 勾销
 - [ ] 1.2 盘点每个站点 × 周期在库最早期次、缺期、保留下界、最早 `COMPLETED` 批次，结果写入本变更的 PR 说明（不入库）
-- [ ] 1.3 确认 `keywordiq_test` 可用；`pnpm install` 完成
+- [x] 1.3 本机无项目测试库，另起独立容器 `pgbase`（postgres:15，映射 127.0.0.1:5433，库 `keywordiq_test`）；`pnpm install` 已触发
 
 ## 2. 数据模型与迁移
 
-- [ ] 2.1 `DimKeyword` 加 `first_seen_date`、`first_seen_period_type`、`first_seen_basis`（NOT NULL 默认 `UNKNOWN`）及列注释；登记索引 `idx_dim_keyword_first_seen (site, first_seen_date)`
-- [ ] 2.2 从 `FactDaily`/`FactWeekly` 删除 `is_new`；清理仍引用它的模型/索引
-- [ ] 2.3 手写 alembic 迁移（加列、建索引、删 `is_new`），`alembic upgrade head --sql` 核对分区 DDL 未丢，`test_models_match_migrated_schema` 绿
+- [x] 2.1 `DimKeyword` 加 `first_seen_date`、`first_seen_period_type`、`first_seen_basis`（NOT NULL 默认 `UNKNOWN`）及列注释；登记索引 `idx_dim_keyword_first_seen (site, first_seen_date)`
+- [x] 2.2 从 `FactDaily`/`FactWeekly` 删除 `is_new`；清理仍引用它的模型/索引
+- [x] 2.3 手写 alembic 迁移（加列、建索引、删 `is_new`），`alembic upgrade head --sql` 核对分区 DDL 未丢，`test_models_match_migrated_schema` 绿
 - [ ] 2.4 在接近生产体量的库上实测 `CREATE INDEX` 耗时并记录
 
 ## 3. 导入侧
