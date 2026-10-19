@@ -10,7 +10,7 @@ import { type FirstListedSummary as Summary, getFirstListed, type View } from '@
  *
  * 三种不同的情形必须分开呈现，尤其是第二种不能显示成 0：
  * 1. 有数量（含真的是 0）；
- * 2. 所选期次是监测起点——所有词都只是「最早可观测」，**无法判断**，不是 0；
+ * 2. 所选期次早于统计起点——那之前的词都只是「最早可观测」，**无法判断**，不是 0；
  * 3. 取数失败/还没取到——不显示数字，也不显示 0。
  */
 export interface FirstListedSummaryProps {
@@ -56,8 +56,8 @@ export default function FirstListedSummary({ site, view, date }: FirstListedSumm
         <Typography.Text strong>{summary.count}</Typography.Text>
       ) : (
         <span>
-          该期是监测起点，无法判断首次入榜
-          {summary.earliest_known_date ? `（监测始于 ${summary.earliest_known_date}）` : ''}
+          该期早于首次入榜统计的起点，无法判断
+          {summary.earliest_known_date ? `（统计始于 ${summary.earliest_known_date}）` : ''}
         </span>
       )}
     </Typography.Text>

@@ -964,7 +964,8 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
     只有周精度，不进任何一天的日视图**，不捏造日期。命中表达式只在
     `analysis_crud.first_listed_expr`，筛选、行字段、数量、词库盯盘共用；当期数量
     （`GET /api/analysis/first-listed`）查询时实算、与「仅 first_listed 筛选」的总数同一口径，
-    **不存按期统计**，所以补历史/乱序不需要校正。监测起点期次返回 `judgeable=false`、
+    **不存按期统计**，所以补历史/乱序不需要校正。早于统计起点（站点最早的 `CONFIRMED` 期次，`confirmed_since_stmt`；**不是**
+    `min(first_seen_date)`，回填后后者是库内最早期次）的期次返回 `judgeable=false`、
     `count=null`——**无法判断，不是 0**，界面必须分开呈现。
   请求字段 `is_new` → `first_listed`（两态，`false` 与未传等价，须 `or None` 计入
   `request_has_filters`）；`SAVED_MODE_VERSION`=4、`CACHE_VERSION`=3。

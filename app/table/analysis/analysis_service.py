@@ -579,15 +579,15 @@ async def get_first_listed(
 ) -> FirstListedSummary | None:
     """所选期次「首次入榜」数量 + 统计范围。
 
-    所选期次不晚于站点最早已知期次（监测起点）时 ``judgeable=False``、``count=None``：
-    那一期所有词都只是「最早可观测」，没有更早的对照期，**无法判断而不是 0**。
+    所选期次早于站点最早的「已确认首次」期次（首次入榜统计的起点）时 ``judgeable=False``、
+    ``count=None``：那之前只有「最早可观测/未知」的词，**无法判断而不是 0**。
     站点无数据时返回 ``None``（调用方给空），与下拉选项同一约定。
     """
     resolved_site, resolved_date = await _resolve_options_scope(db, site, view, on)
     if resolved_date is None:
         return None
-    earliest = (await db.execute(crud.earliest_known_first_seen_stmt(resolved_site))).scalar()
-    if earliest is None or resolved_date <= earliest:
+    earliest = (await db.execute(crud.confirmed_since_stmt(resolved_site))).scalar()
+    if earliest is None or resolved_date < earliest:
         return FirstListedSummary(
             site=resolved_site, view=view, on=resolved_date,  # type: ignore[arg-type]
             judgeable=False, earliest_known_date=earliest,

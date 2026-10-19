@@ -137,7 +137,7 @@ export interface FirstListedSummary {
   on: string;
   judgeable: boolean;
   count: number | null;
-  /** 站点最早已知的首次入榜期次（监测起点） */
+  /** 站点首次入榜统计的起点：最早的「已确认首次」期次 */
   earliest_known_date: string | null;
 }
 

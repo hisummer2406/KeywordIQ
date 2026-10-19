@@ -299,7 +299,7 @@ class FirstListedSummary(BaseModel):
     judgeable: bool
     count: int | None = None
     earliest_known_date: _Date | None = Field(
-        None, description="站点最早已知的首次入榜期次日期（监测起点）"
+        None, description="站点首次入榜统计的起点：最早的「已确认首次」期次日期"
     )
 
 
