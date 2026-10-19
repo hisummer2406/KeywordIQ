@@ -291,7 +291,7 @@ def _base_query(site: str, view: str, on: date):
         .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
     )
     stmt = join_fact_row_dims(stmt, fact, dims).where(fact.site == site, date_col == on)
-    return stmt, fact
+    return exclude_hidden_categories(stmt, fact), fact
 
 
 def _count_base_query(site: str, view: str, on: date):
@@ -313,13 +313,36 @@ def _count_base_query(site: str, view: str, on: date):
         .join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
         .where(fact.site == site, date_col == on)
     )
-    return stmt, fact
+    return exclude_hidden_categories(stmt, fact), fact
 
 
-# 类目下拉里不展示的类目（issue #119）：Kindle 电子书一类的数字商品没有选品价值，却因
-# 数量大长期占着下拉前排。**只藏下拉选项**——不影响任何一行的展示、总数或导出；已经
-# 勾选/保存的该类目筛选仍然有效，只是选项列表里看不到它。比较不分大小写。
-HIDDEN_CATEGORY_NAMES = frozenset({"digital_ebook_purchase"})
+# 不展示的类目（V1 黑名单迁入，issue #119 跟进）：图书、杂货、电子游戏与各类数字商品
+# 没有选品价值。**一份名单、一处生效**：``_base_query`` / ``_count_base_query`` 按它排除
+# 「第一类目命中」的行（V1 过滤的也是 top_category），类目下拉按同一份名单隐藏选项——
+# 表格、总数、导出与下拉因此不会各说各话。比较不分大小写，名单里一律写小写。
+#
+# 掉榜段不受它影响：掉榜行只存关键词与最后名次，没有类目可判断（见 ``dropped_stmt``）。
+HIDDEN_CATEGORY_NAMES = frozenset(
+    {
+        "books",
+        "grocery",
+        "video games",
+        "digital_video_download",
+        "digital_ebook_purchase",
+        "digital_music_purchase",
+    }
+)
+
+
+def exclude_hidden_categories(stmt, fact):
+    """排除第一类目在黑名单里的行。类目为空的行保留（NOT IN 遇 NULL 会把它们误杀）。"""
+    hidden_ids = select(DimCategory.category_id).where(
+        func.lower(DimCategory.name).in_(HIDDEN_CATEGORY_NAMES)
+    )
+    return stmt.where(
+        or_(fact.top1_category_id.is_(None), fact.top1_category_id.not_in(hidden_ids))
+    )
+
 
 # 品牌名短于此长度不参与「关键词含品牌」判定：单字母品牌（如 "A"）会命中几乎所有词。
 MIN_BRAND_LEN_FOR_KEYWORD_MATCH = 2
