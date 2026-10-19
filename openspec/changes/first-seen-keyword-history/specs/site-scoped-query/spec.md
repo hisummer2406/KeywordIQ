@@ -61,7 +61,7 @@
 
 ### Requirement: 首次入榜筛选与当期数量同一口径
 
-查询接口 SHALL 提供布尔筛选 `first_listed`（取代原 `is_new`），命中口径与 `keyword-first-seen` 的日周映射一致：仅「已确认首次」的关键词，日视图按日、周视图按 `[w-6, w]` 窗。`first_listed` 为 `true` 时 SHALL 计入“带筛选”（掉榜行随之消失，沿用既有规则）；`false` 与未传 SHALL 等价于不筛。系统 SHALL 提供按 (站点, 视图, 日期) 查询「首次入榜」数量与统计范围的接口（`GET /api/analysis/first-listed`），数量按同一口径实算，与仅施加 `first_listed` 筛选的列表总数一致；所选期次不晚于站点监测起点时，数量 SHALL 以“不可判断”表达而不是 0。导出 SHALL 与查询共用同一口径。
+查询接口 SHALL 提供布尔筛选 `first_listed`（取代原 `is_new`），命中口径与 `keyword-first-seen` 的日周映射一致：仅「已确认首次」的关键词，日视图按日、周视图按 `[w-6, w]` 窗。`first_listed` 为 `true` 时 SHALL 计入“带筛选”（掉榜行随之消失，沿用既有规则）；`false` 与未传 SHALL 等价于不筛。系统 SHALL 提供按 (站点, 视图, 日期) 查询「首次入榜」数量与统计范围的接口（`GET /api/analysis/first-listed`），数量按同一口径实算，与仅施加 `first_listed` 筛选的列表总数一致；所选期次早于站点首次入榜统计的起点（最早的「已确认首次」期次）时，数量 SHALL 以“不可判断”表达而不是 0。导出 SHALL 与查询共用同一口径。
 
 #### Scenario: 筛选与数量一致
 
@@ -73,9 +73,9 @@
 - **WHEN** 查看周期 `w` 的周视图，窗 `[w-6, w]` 内有首次记录为 DAY 与 WEEK 的词
 - **THEN** 两类词都命中，同一个词只计一次
 
-#### Scenario: 监测起点期次不可判断
+#### Scenario: 早于统计起点的期次不可判断
 
-- **WHEN** 所选日期是站点最早已知期次
+- **WHEN** 所选日期早于站点最早的「已确认首次」期次（含回填出来的历史期次）
 - **THEN** 接口返回 `judgeable=false` 且 `count` 为空，不返回 0
 
 #### Scenario: 补历史后无需校正

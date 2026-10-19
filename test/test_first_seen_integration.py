@@ -218,3 +218,17 @@ def test_filter_total_equals_summary_count_and_rows_carry_flags(session, tmp_pat
     flags = {r.keyword: (r.first_listed, r.first_seen_basis) for r in all_rows}
     assert flags["base"] == (False, "EARLIEST_OBSERVED")
     assert flags["n1"] == (True, "CONFIRMED")
+
+
+def test_confirmed_since_is_the_first_judgeable_period(session, tmp_path):
+    """首次入榜统计的起点 = 站点最早的已确认首次期次；之前（含回填出来的历史）无法判断。"""
+    from app.table.analysis import analysis_crud as crud
+
+    def since():
+        return session.execute(crud.confirmed_since_stmt("US")).scalar()
+
+    _imp(session, tmp_path, "a", ["x"], D(2026, 7, 10))
+    _imp(session, tmp_path, "b", ["x", "y"], D(2026, 7, 11))  # 7/10 是基线，7/11 起才有已确认
+    assert since() == D(2026, 7, 11)
+    _imp(session, tmp_path, "c", ["x", "y", "z"], D(2026, 7, 12))
+    assert since() == D(2026, 7, 11)  # 7/10 无法判断，7/11 起可判断

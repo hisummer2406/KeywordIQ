@@ -97,7 +97,7 @@ UPDATE analysis.dim_keyword k
 
 **数量走独立接口 `GET /api/analysis/first-listed?site&view&date`**，不塞进 `/scope`：`/scope` 只回可选日期集（与日期无关），而数量是 (站点, 视图, 日期) 的函数，每换日期就要重取。响应 `{judgeable, count, earliest_known_date}`；`count` 用与「仅 `first_listed` 筛选」**同一个计数 base query**（含类目黑名单）算，两处因此不会各说各话。
 
-`earliest_known_date` = `min(first_seen_date)`（监测起点）。所选期次 `<= earliest_known_date`（或站点尚无任何首次记录）时 `judgeable=false`、`count=null`。界面在作用域栏下方展示，**跟着表格实际加载的切片**（`loadedSite/View/Date`）走，不跟草稿走。
+`earliest_known_date` = 站点最早的 `CONFIRMED` 期次（首次入榜统计的起点；`confirmed_since_stmt`）。所选期次 `< earliest_known_date`（或站点尚无任何已确认首次）时 `judgeable=false`、`count=null`。**不能用 `min(first_seen_date)` 当起点**：回填后它是库内最早期次，上线前的历史期次会因此显示成可判断的 0。界面在作用域栏下方展示，**跟着表格实际加载的切片**（`loadedSite/View/Date`）走，不跟草稿走。
 
 界面三种呈现必须分开：有数量（含真 0）、监测起点（“无法判断首次入榜”）、取数失败（不显示）。**0 与“不可判断”必须分开**，与 CLAUDE.md 里“空表格三种成因”是同一类陷阱。周视图一个已知的边界：站点最早已知日落在某周窗内（`w > earliest` 但 `w-6 <= earliest`）时，该周只覆盖了部分天，计数偏少；本变更不为这个单独加标记。
 

@@ -145,10 +145,16 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     )
 
 
-def earliest_known_first_seen_stmt(site: str):
-    """站点最早已知的首次入榜期次日期（监测起点）。读永久的 ``dim_keyword``，走
-    ``idx_dim_keyword_first_seen``；站点尚无任何首次记录时为 NULL。"""
-    return select(func.min(DimKeyword.first_seen_date)).where(DimKeyword.site == site)
+def confirmed_since_stmt(site: str):
+    """站点最早的「已确认首次」期次日期——**首次入榜统计的起点**。
+
+    早于它的期次不存在任何 ``CONFIRMED`` 的词（存量词只有最早可观测/未知），数量显示 0 会被
+    读成「这天没有首次入榜」，而真实情况是无法判断。读永久的 ``dim_keyword``，走
+    ``idx_dim_keyword_first_seen``；站点尚无已确认首次时为 NULL。
+    """
+    return select(func.min(DimKeyword.first_seen_date)).where(
+        DimKeyword.site == site, DimKeyword.first_seen_basis == "CONFIRMED"
+    )
 
 
 def first_listed_count_stmt(site: str, view: str, on: date):
