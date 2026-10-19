@@ -1315,6 +1315,23 @@ Claude Code 先按 Issue 判断流程重量；需要长期留档的变更走 Ope
 仓库外 worktree 规则。PR 是给审核者的完整审核包，必须链接 Issue，并包含：对应的
 `openspec/changes/<id>`、本次 spec delta、实现摘要、已运行验证及其结果、已知未覆盖风险。
 
+#### Claude Code 代发 `@codex review`
+
+Codex 评审由 PR 下的 `@codex review` 评论触发（GitHub 上的 Codex 应用响应，评论作者是用户自己的
+GitHub 账号）。**用户在对话里明确要求时（如「让 codex 评审」「再发一轮复审」），Claude Code 直接代发**，
+不必让用户打开网页；没有这类明确要求时仍不自行发送——评审轮次由用户把控，`/deliver-pr`、
+`/fix-review` 的调用本身不构成授权，授权也只对当次要求有效，不延伸到之后的轮次。
+
+代发前先核对：PR 存在且 base 为 `v2`；本地提交已推送，PR 的 `headRefOid` 等于要评审的提交；
+该 SHA 的 CI 已有结果（红灯先报告，由用户决定是否仍发）。发送用：
+
+```bash
+gh pr comment <PR号> --body "@codex review"
+```
+
+可在评论里补一两行"请重点看"的范围，不贴聊天或日志。发完只报告评论链接，不轮询等待评审结果
+（用户之后再调 `/fix-review` 处理）。`@claude` 触发评论仍不代发。
+
 ### 3. 审核与修复：独立视角，但不越权改分支
 
 Codex 审核 Issue / OpenSpec / PR diff 是否一致，并检查数据正确性、权限边界、迁移与测试缺口。
