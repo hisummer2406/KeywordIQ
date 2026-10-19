@@ -200,12 +200,10 @@ async def _listed_total(
     """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
 
     这一点与 ``include_total`` 无关：那个开关管的是"要不要把总数报给前端"，而分界线
-    是内部分页正确性的前提。带筛选时必须精确实算（预存值不反映筛选后的行数）；
-    无筛选时读预存值，O(1)。
+    是内部分页正确性的前提。**无筛选时也必须实算**：``site_data_stats.row_count`` 是整
+    切片的预存值，不扣黑名单类目（``HIDDEN_CATEGORY_NAMES``），拿它当分界线会比实际可
+    翻的行数多，末页出现空页。``has_filters`` 仍管掉榜段是否显示，与这里无关。
     """
-    if not has_filters:
-        result = await _timed_execute(db, crud.scope_row_count_stmt(site, view, on), db_ms)
-        return result.scalar_one_or_none() or 0
     result = await _timed_execute(db, crud.count_filtered_stmt(site, view, on, req, user_id), db_ms)
     return result.scalar_one()
 
@@ -449,10 +447,8 @@ def resolve_export_scope(
     # 就只能给出 200 加一份被截断的 CSV——截断的 CSV 会被当成完整数据使用。
     listed = 0
     if wants_listed(req.include):
-        listed = (
-            crud.count_capped(db, site, req.view, on, req, cap + 1, user_id) if has_filters
-            else crud.scope_row_count(db, site, req.view, on)
-        )
+        # 无筛选也实算：预存的 row_count 不扣黑名单类目，会高估（见 ``_listed_total``）。
+        listed = crud.count_capped(db, site, req.view, on, req, cap + 1, user_id)
     # 带筛选时掉榜段恒为空：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配。
     dropped = (
         crud.scope_dropped_count(db, site, req.view, on)
