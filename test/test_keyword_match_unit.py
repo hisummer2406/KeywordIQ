@@ -46,6 +46,14 @@ def test_tokenize_of_punctuation_only_is_empty():
         ("dress", {"dress", "dresses"}),
         ("glasses", {"glasses", "glass"}),
         ("toy", {"toy", "toys"}),
+        # -o / -oes：tomato→tomatoes（不是 tomatos），tomatoes→tomato（不是只剩 tomatoe）
+        ("tomato", {"tomato", "tomatoes"}),
+        ("tomatoes", {"tomatoes", "tomato"}),
+        ("hero", {"hero", "heroes"}),
+        ("heroes", {"heroes", "hero"}),
+        ("photo", {"photo", "photos"}),
+        ("photos", {"photos", "photo"}),
+        ("shoes", {"shoes", "shoe"}),
     ],
 )
 def test_regular_english_plurals_are_covered_both_ways(word, expected):

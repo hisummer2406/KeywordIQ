@@ -58,12 +58,17 @@ def word_forms(token: str) -> list[str]:
         forms += [token[:-3] + "y", token[:-1]]
     elif token.endswith("y") and token[-2] not in _VOWELS:
         forms.append(token[:-1] + "ies")  # berry → berries
+    elif token.endswith("oes"):
+        # tomatoes → tomato；shoes → shoe。两种还原都收（多出的假词形不会命中真词）
+        forms += [token[:-2], token[:-1]]
     elif token.endswith("es") and token[:-2].endswith(_SIBILANT_ENDINGS):
         forms.append(token[:-2])  # boxes → box, dresses → dress
     elif token.endswith("s") and not token.endswith("ss") and len(token) > 3:
         forms.append(token[:-1])  # rugs → rug
     elif token.endswith(_SIBILANT_ENDINGS):
         forms.append(token + "es")  # box → boxes, dress → dresses
+    elif token.endswith("o"):
+        forms += [token + "es", token + "s"]  # tomato → tomatoes，photo → photos
     else:
         forms.append(token + "s")  # rug → rugs
     return list(dict.fromkeys(forms))
