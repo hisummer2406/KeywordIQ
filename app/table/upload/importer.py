@@ -56,6 +56,11 @@ _PERIOD_CONFIG: dict[str, tuple[str, str, int, int]] = {
 }
 
 
+# 新词判定的回看天数：本期之前这么多天内出现过的词不算新词。天、周视图共用——周报
+# 期次间隔 7 天，回看 7 天恰好就是上一周。
+NEW_WORD_LOOKBACK_DAYS = 7
+
+
 class ImportError_(Exception):
     """导入过程中的可预期错误（结构不符、周期非法等）。"""
 
@@ -325,7 +330,8 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
     # 派生值一次算出：
     # - previous_ranking = 上一期同 (site,keyword) 的 current_ranking，无则 0
     # - ranking_change   = 本期 - 上期，无上期则 0
-    # - is_new           = 上一期不存在该关键词
+    # - is_new           = 本期之前 NEW_WORD_LOOKBACK_DAYS 天内一期都没出现过该关键词
+    #                      （与 previous_ranking 的口径不同：后者只看上一期）
     # DISTINCT ON (keyword_id) 防止暂存表里偶发的重复关键词撞唯一约束。
     cur = _num("s.c0") + "::int"
     result = session.execute(
@@ -345,7 +351,11 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
                 {cur},
                 COALESCE(prev.current_ranking, 0),
                 CASE WHEN prev.keyword_id IS NULL THEN 0 ELSE {cur} - prev.current_ranking END,
-                prev.keyword_id IS NULL,
+                NOT EXISTS (
+                    SELECT 1 FROM analysis.{table} h
+                    WHERE h.site = :site AND h.keyword_id = k.keyword_id
+                      AND h.{date_col} >= :new_from AND h.{date_col} < :rdate
+                ),
                 p1.product_id, {_num('s.c10')}, {_num('s.c11')},
                 p2.product_id, {_num('s.c14')}, {_num('s.c15')},
                 p3.product_id, {_num('s.c18')}, {_num('s.c19')},
@@ -371,7 +381,12 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
             ORDER BY k.keyword_id, s.ctid
             """
         ),
-        {"site": site, "rdate": report_date, "prev_date": prev_date},
+        {
+            "site": site,
+            "rdate": report_date,
+            "prev_date": prev_date,
+            "new_from": report_date - timedelta(days=NEW_WORD_LOOKBACK_DAYS),
+        },
     )
     return result.rowcount
 
