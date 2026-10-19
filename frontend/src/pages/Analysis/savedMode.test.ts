@@ -90,6 +90,13 @@ describe('savedMode', () => {
       expect(window.localStorage.getItem(KEY(1))).toBeNull();
     });
 
+    it('v2 旧 payload 被丢弃——它没有 excludeBrandWords，缺失会被当成「开启」而悄悄改掉已保存的结果集', () => {
+      window.localStorage.setItem(KEY(1), JSON.stringify({ ...MODE, version: 2 }));
+
+      expect(readSavedMode(1)).toBeNull();
+      expect(window.localStorage.getItem(KEY(1))).toBeNull();
+    });
+
     it('JSON 损坏', () => {
       window.localStorage.setItem(KEY(1), '{不是 JSON');
 
