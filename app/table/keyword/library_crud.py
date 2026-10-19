@@ -194,7 +194,7 @@ def watch_stmt(
             _segment_expr(fact, FactDropped.keyword_id).label("segment"),
             FactDropped.last_seen_date.label("last_seen_date"),
             FactDropped.last_ranking.label("last_ranking"),
-            *analysis_crud.fact_metric_columns(fact, dims, view=view, on=on),
+            *analysis_crud.fact_metric_columns(fact, dims, site=site, view=view, on=on),
         )
         .select_from(KeywordGroupItem)
         .join(DimKeyword, DimKeyword.keyword_id == KeywordGroupItem.keyword_id)

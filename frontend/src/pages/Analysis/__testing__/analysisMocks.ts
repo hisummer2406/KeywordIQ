@@ -22,6 +22,7 @@ export const userState = { currentUser: { id: 1 } as { id: number } | undefined 
 export const searchAnalysis = vi.fn();
 export const getScope = vi.fn();
 export const getCategories = vi.fn();
+export const getFirstListed = vi.fn();
 export const getBrands = vi.fn();
 export const getSites = vi.fn();
 export const exportAnalysis = vi.fn();
@@ -38,7 +39,7 @@ export const ROW = {
   current_ranking: 1,
   previous_ranking: 4,
   ranking_change: 3,
-  is_new: false,
+  first_listed: false,
   top1_asin: 'B00TEST001',
   top1_title: 'Some Product',
   top1_brand: 'ACME',
@@ -91,6 +92,14 @@ export function seedAnalysisMocks(): void {
     { brand: 'ACME', count: 9 },
     { brand: 'Anker', count: 4 },
   ]);
+  getFirstListed.mockResolvedValue({
+    site: 'US',
+    view: 'DAY',
+    on: '2026-07-18',
+    judgeable: true,
+    count: 3,
+    earliest_known_date: '2026-07-01',
+  });
   getCategories.mockResolvedValue([
     { category: 'Home', count: 12 },
     { category: 'Electronics', count: 7 },

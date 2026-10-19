@@ -16,6 +16,7 @@ import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
 import AddToLibraryModal from './AddToLibraryModal';
 import CategoryPanel from './CategoryPanel';
 import FilterPanel, { LABEL_WIDTH } from './FilterPanel';
+import FirstListedSummary from './FirstListedSummary';
 import ScopeBar from './ScopeBar';
 import './AnalysisTable.less';
 import { buildColumns, totalColumnWidth } from './columns';
@@ -228,7 +229,7 @@ export default function AnalysisPage() {
     scopeState.loadSites();
     // 首屏拉完作用域元数据后**立即按默认作用域查一次**——这一屏是主力数据屏，用户
     // 进来就是要看数据的，让他先点一下才出数据是多余的一步。默认作用域是默认站点 +
-    // 按天 + 最新一期 + **默认筛选（只看新词）**，回答的是「今天有哪些新词」。
+    // 按天 + 最新一期 + **默认筛选（只看首次入榜）**，回答的是「本期首次入榜了哪些词」。
     //
     // 筛选必须用 `defaultFilters()`，与初始草稿同源——若这里改用别的值，表格显示的
     // 就不是筛选控件所声称的那组条件。
@@ -317,6 +318,9 @@ export default function AnalysisPage() {
           onQModeChange={(qMode) => query.setFilters((f) => ({ ...f, qMode }))}
           onSubmit={query.submitScope}
         />
+        <div style={{ marginTop: 8 }}>
+          <FirstListedSummary site={loadedSite} view={loadedView} date={loadedDate} />
+        </div>
       </Card>
 
       <Card
@@ -588,7 +592,6 @@ export default function AnalysisPage() {
               { label: '历史排名', value: 'previous_ranking' },
               { label: '点击份额', value: 'top1_click_share' },
               { label: '转化份额', value: 'top1_conversion_share' },
-              { label: '新词', value: 'is_new' },
             ]}
           />,
           <Select

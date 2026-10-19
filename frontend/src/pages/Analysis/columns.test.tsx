@@ -162,14 +162,14 @@ describe('buildColumns', () => {
 const listedRow = {
   keyword_id: 1, keyword: 'coffee maker', is_dropped: false,
   last_seen_date: null, last_ranking: null,
-  current_ranking: 120, previous_ranking: 100, ranking_change: 20, is_new: false,
+  current_ranking: 120, previous_ranking: 100, ranking_change: 20, first_listed: false,
   history: [100, 90, 80],
 } as any;
 
 const droppedRow = {
   keyword_id: 2, keyword: 'gone word', is_dropped: true,
   last_seen_date: '2026-07-17', last_ranking: 305,
-  current_ranking: null, previous_ranking: null, ranking_change: null, is_new: false,
+  current_ranking: null, previous_ranking: null, ranking_change: null, first_listed: false,
   history: [305, null, 210],
 } as any;
 
@@ -179,28 +179,30 @@ function cell(view: 'DAY' | 'WEEK', title: string, row: any) {
   return render(<>{col.render(null, row)}</>);
 }
 
-describe('现排名列吃掉「新词」独立列', () => {
-  it('不再有独立的「新词」列', () => {
-    expect(buildColumns('DAY').map((c) => c.title)).not.toContain('新词');
+describe('现排名列吃掉独立的首次入榜列', () => {
+  it('不再有独立的「新词」或「首次入榜」列', () => {
+    const titles = buildColumns('DAY').map((c) => c.title);
+    expect(titles).not.toContain('新词');
+    expect(titles).not.toContain('首次入榜');
   });
 
-  it('新词以标签形式出现在排名列里', () => {
-    const { getByText } = cell('DAY', '排名', { ...listedRow, is_new: true });
+  it('首次入榜以标签形式出现在排名列里', () => {
+    const { getByText } = cell('DAY', '排名', { ...listedRow, first_listed: true });
     expect(getByText('120')).toBeTruthy();
-    expect(getByText('新词')).toBeTruthy();
+    expect(getByText('首次入榜')).toBeTruthy();
   });
 
   it('掉榜行显示「已掉榜」与最后在榜期，且不显示当期排名', () => {
     const { getByText, queryByText } = cell('DAY', '排名', droppedRow);
     expect(getByText('已掉榜')).toBeTruthy();
     expect(getByText(/2026-07-17/)).toBeTruthy();
-    expect(queryByText('新词')).toBeNull();   // 两标签互斥
+    expect(queryByText('首次入榜')).toBeNull();   // 两标签互斥
   });
 
-  it('掉榜与新词互斥——掉榜优先，不会同时出现', () => {
-    const { getByText, queryByText } = cell('DAY', '排名', { ...droppedRow, is_new: true });
+  it('掉榜与首次入榜互斥——掉榜优先，不会同时出现', () => {
+    const { getByText, queryByText } = cell('DAY', '排名', { ...droppedRow, first_listed: true });
     expect(getByText('已掉榜')).toBeTruthy();
-    expect(queryByText('新词')).toBeNull();
+    expect(queryByText('首次入榜')).toBeNull();
   });
 });
 
@@ -280,8 +282,8 @@ describe('排名变化率列', () => {
     expect(up.getByText(/25(\.0)?%/)).toBeTruthy();
   });
 
-  it('日视图：新词（昨天没出现）只要 7 天前有排名也能算出', () => {
-    const row = { ...listedRow, is_new: true, previous_ranking: null, ranking_change: null };
+  it('日视图：昨天没出现的词只要 7 天前有排名也能算出', () => {
+    const row = { ...listedRow, first_listed: true, previous_ranking: null, ranking_change: null };
     expect(cell('DAY', '7天变化率', row).getByText(/50(\.0)?%/)).toBeTruthy();
   });
 

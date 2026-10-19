@@ -8,6 +8,7 @@ import {
   exportAnalysis,
   getBrands,
   getCategories,
+  getFirstListed,
   getKeywordTrend,
   getScope,
   getSites,
@@ -26,6 +27,7 @@ vi.mock('@/services/analysis', () => ({
   searchAnalysis,
   getScope,
   getCategories,
+  getFirstListed,
   getBrands,
   exportAnalysis,
 }));
@@ -149,16 +151,16 @@ describe('分析查询屏 · 作用域与筛选', () => {
 
   /**
    * `competitor_new` 曾漏出 `FILTER_KEYS`（PR #66 二次复审 P2）：只启用它、其余筛选
-   * （包括默认的「只看新词」）都关掉时，后端仍会走带筛选路径、排除全部掉榜行，但界面
+   * （包括默认的「只看首次入榜」）都关掉时，后端仍会走带筛选路径、排除全部掉榜行，但界面
    * 曾因为这个清单不完整而不显示既有的「本次结果不含掉榜行」提示——用户看到的会是
    * 一份悄悄漏了行的结果，且没有任何解释。
    */
-  it('只启用竞对新发现筛选（新词切到全部）时仍显示掉榜提示', async () => {
+  it('只启用竞对新发现筛选（首次入榜切到全部）时仍显示掉榜提示', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
 
-    // 关掉默认的新词筛选，让「竞对新发现」成为生效条件里唯一在起作用的筛选维度。
+    // 关掉默认的首次入榜筛选，让「竞对新发现」成为生效条件里唯一在起作用的筛选维度。
     // 按 value 用 JS `===` 定位，不用 `[value="all"]` 属性选择器——jsdom 的属性匹配
     // 大小写不敏感，会连带选中行集合开关那组默认选中的 `ALL`。
     const allOption = Array.from(
@@ -174,7 +176,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
     const body = searchAnalysis.mock.calls[1][0];
     expect(body.competitor_new).toBe(true);
-    expect(body.is_new).toBeUndefined();
+    expect(body.first_listed).toBeUndefined();
     expect(await screen.findByText(/本次结果不含掉榜行/)).toBeInTheDocument();
   });
 
