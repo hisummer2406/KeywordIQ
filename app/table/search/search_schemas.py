@@ -11,7 +11,9 @@
 from datetime import date as _Date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.table.analysis.keyword_match import MAX_TERMS, tokenize
 
 View = Literal["DAY", "WEEK"]
 Include = Literal["ALL", "LISTED", "DROPPED"]
@@ -56,7 +58,12 @@ class AnalysisSearchRequest(BaseModel):
     orderDir: Literal["asc", "desc"] | None = Field(None, description="排序方向")
 
     # 子串筛选（走维度表 trgm 索引）
-    keyword: str | None = Field(None, description="关键词子串")
+    keyword: str | None = Field(None, description="关键词检索词（匹配方式见 keyword_mode）")
+    # ALL_TERMS：输入拆词，每个词都作为完整单词出现，顺序不限、允许额外词，英语常规单复数双向
+    # 覆盖；PHRASE：连续子串（旧行为）。规则的唯一定义在 keyword_match.py（issue #126）。
+    keyword_mode: Literal["ALL_TERMS", "PHRASE"] = Field(
+        "ALL_TERMS", description="关键词匹配方式：ALL_TERMS 全部词 / PHRASE 连续词组"
+    )
     product_title: str | None = Field(None, description="标题子串（top1 商品）")
 
     # **ASIN 是精确码，等值匹配**（不是子串筛选）。界面上它只能从顶部检索框输入，而那里
@@ -127,6 +134,25 @@ class AnalysisSearchRequest(BaseModel):
         None,
         description="排除关键词文本中包含该词前三品牌名（整词、不分大小写）的词",
     )
+
+    @field_validator("keyword")
+    @classmethod
+    def _normalise_keyword(cls, v: str | None) -> str | None:
+        """去首尾空白；全空白视同没填（否则 ``%%`` 匹配所有行，却被计为「带筛选」）。"""
+        if v is None:
+            return None
+        return v.strip() or None
+
+    @model_validator(mode="after")
+    def _cap_keyword_terms(self) -> "AnalysisSearchRequest":
+        """全部词模式下词数设上限：每个词是一个独立的正则条件。"""
+        if (
+            self.keyword
+            and self.keyword_mode == "ALL_TERMS"
+            and len(tokenize(self.keyword)) > MAX_TERMS
+        ):
+            raise ValueError(f"关键词最多支持 {MAX_TERMS} 个词，请缩短检索词")
+        return self
 
     @field_validator("asin")
     @classmethod

@@ -1,4 +1,4 @@
-import type { Include, SearchBody, View } from '@/services/analysis';
+import type { Include, KeywordMode, SearchBody, View } from '@/services/analysis';
 
 /**
  * 分析查询屏的条件模型与转换。
@@ -30,6 +30,11 @@ export interface Range {
 export interface FilterDraft {
   /** 单一检索框的原文，目标字段由 detectSearchKind 判定 */
   q: string;
+  /**
+   * 关键词匹配方式，只作用于检索框里被判为「关键词」的输入（ASIN 是等值匹配，没有模式）。
+   * 缺省视同 ALL_TERMS。不入库（保存的条件不含检索词，模式单独存没有意义）。
+   */
+  qMode?: KeywordMode;
   categories: string[];
   ranking: Range;
   change: Range;
@@ -71,6 +76,7 @@ export interface FilterDraft {
  */
 export const defaultFilters = (): FilterDraft => ({
   q: '',
+  qMode: 'ALL_TERMS',
   categories: [],
   ranking: {},
   change: {},
@@ -149,12 +155,12 @@ export const RANGE_PRESETS = {
   // 排名变化为负表示名次数字变小、即排名上升。手输区间用原始数值（与表格
   // 「排名变化」列一致），档位用中文语义承担可读性——界面上翻转符号会让用户
   // 拿表格里看到的数字回填筛选时得到相反的结果。
+  // 两档不重叠：-150000 归「大幅上升」。「下降」「持平」不再提供快捷档（issue #125），
+  // 想研究它们仍可手输区间。旧的已保存区间（如 max=-100）保留原义，只是不再命中任何档位。
   change: [
     { label: '全部', value: {} },
-    { label: '上升', value: { max: -1 } },
-    { label: '大幅上升', value: { max: -100 } },
-    { label: '下降', value: { min: 1 } },
-    { label: '持平', value: { min: 0, max: 0 } },
+    { label: '上升', value: { min: -149999, max: -1 } },
+    { label: '大幅上升', value: { max: -150000 } },
   ],
   // 份额库里就是 0~100 的百分数（Numeric(10,2)），界面、档位、接口一路都是百分数，
   // 不引入换算——换算点是最容易单向遗漏的地方，而这里没有引入它的理由。
@@ -200,6 +206,8 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     date: scope.date ?? undefined,
     include: filters.include && filters.include !== 'ALL' ? filters.include : undefined,
     keyword: !onlyDropped && kind === 'keyword' ? q : undefined,
+    keyword_mode:
+      !onlyDropped && kind === 'keyword' ? (filters.qMode ?? 'ALL_TERMS') : undefined,
     asin: !onlyDropped && kind === 'asin' ? q : undefined,
     brands: !onlyDropped && filters.brands.length ? filters.brands : undefined,
     product_title: onlyDropped ? undefined : trimmed(filters.productTitle),

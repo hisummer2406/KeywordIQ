@@ -4,10 +4,10 @@ import { googleTrendsUrl } from './googleTrendsUrl';
 describe('googleTrendsUrl', () => {
   it('站点码直接当 geo 参数用，不做映射', () => {
     expect(googleTrendsUrl('power bank', 'US')).toBe(
-      'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=today+12-m',
+      'https://trends.google.com/trends/explore?q=power+bank&geo=US&date=now+7-d',
     );
     expect(googleTrendsUrl('wasserkocher', 'DE')).toBe(
-      'https://trends.google.com/trends/explore?q=wasserkocher&geo=DE&date=today+12-m',
+      'https://trends.google.com/trends/explore?q=wasserkocher&geo=DE&date=now+7-d',
     );
   });
 

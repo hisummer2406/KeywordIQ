@@ -81,6 +81,6 @@ disable-model-invocation: true
 返回 PR 链接、修复 SHA、各项处理结论、检查/CI 结果、验收条件满足情况、是否建议
 继续下一轮复审（附判断依据）、该结论是否已发布为 PR 顶层评论，以及未解决事项。
 若结论是"不建议继续下一轮"，提醒用户该结论已记录、`/close-change` 可据此跳过等待
-外部复审；若结论是"建议再发一轮"，提醒用户手动发送 `@codex review`，不代发、
-不自动等待/启动下一轮。不合并、不部署、不关闭 Issue、不归档 OpenSpec、不删除
+外部复审；若结论是"建议再发一轮"，提醒用户发送 `@codex review`（用户在对话里明确要求代发时，按 CLAUDE.md
+「Claude Code 代发 `@codex review`」一节执行），不自行代发、不自动等待/启动下一轮。不合并、不部署、不关闭 Issue、不归档 OpenSpec、不删除
 分支或 worktree。

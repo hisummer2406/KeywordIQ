@@ -9,6 +9,9 @@ export type View = 'DAY' | 'WEEK';
 /** 行集合维度。**不是筛选条件**——筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行。 */
 export type Include = 'ALL' | 'LISTED' | 'DROPPED';
 
+/** ALL_TERMS：全部词（无序、可插词、英语常规单复数）；PHRASE：连续词组 */
+export type KeywordMode = 'ALL_TERMS' | 'PHRASE';
+
 export interface AnalysisRow {
   keyword_id: number;
   keyword: string;
@@ -71,6 +74,8 @@ export interface SearchBody {
   orderBy?: string;
   orderDir?: 'asc' | 'desc';
   keyword?: string;
+  /** 关键词匹配方式，缺省由后端按 ALL_TERMS 处理；PHRASE 为连续子串（旧行为） */
+  keyword_mode?: KeywordMode;
   brands?: string[];
   /** 类目精确匹配集合，命中其一即可；空集合不传（视同不筛） */
   categories?: string[];
