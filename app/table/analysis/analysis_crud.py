@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, NamedTuple
 
-from sqlalchemy import and_, func, or_, select, text
+from sqlalchemy import and_, case, false, func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
 from app.table.analysis.dimension_model import (
@@ -358,9 +358,18 @@ def brand_in_keyword(keyword_col, brand_name_col):
     """
     escaped = func.regexp_replace(brand_name_col, _REGEX_SPECIALS, r"\\\1", "g")
     pattern = func.concat("(^|[^[:alnum:]])", escaped, "([^[:alnum:]]|$)")
+    # 先用 strpos 做廉价的子串判断，命中才跑正则：每行的模式都不同，正则要逐行重新编译，
+    # 对整个切片（数万行 × 3 槽位）直接跑，线上默认首屏的总数从 ~1s 级涨到 7.7s。子串是整词
+    # 命中的必要条件，所以结果不变。必须用 CASE：AND 的求值顺序不受保证，可能先跑正则。
     return and_(
         func.char_length(brand_name_col) >= MIN_BRAND_LEN_FOR_KEYWORD_MATCH,
-        keyword_col.op("~*")(pattern),
+        case(
+            (
+                func.strpos(func.lower(keyword_col), func.lower(brand_name_col)) > 0,
+                keyword_col.op("~*")(pattern),
+            ),
+            else_=false(),
+        ),
     )
 
 
