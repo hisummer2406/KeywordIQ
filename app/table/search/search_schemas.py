@@ -127,6 +127,14 @@ class AnalysisSearchRequest(BaseModel):
         ),
     )
 
+    # 排除「关键词文本包含它自己前三品牌之一」的词（issue #119）：这类词多是品牌词，对找
+    # 新机会没有价值。**这是筛选条件**——必须同步进 crud.request_has_filters()，且与其余
+    # 筛选一样以锚定期那一行为准（掉榜行因此全部消失）。界面默认只在「只看新词」时带上它。
+    exclude_brand_in_keyword: bool | None = Field(
+        None,
+        description="排除关键词文本中包含该词前三品牌名（整词、不分大小写）的词",
+    )
+
     @field_validator("keyword")
     @classmethod
     def _normalise_keyword(cls, v: str | None) -> str | None:
