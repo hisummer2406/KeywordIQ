@@ -11,6 +11,10 @@ import { googleTrendsUrl } from './googleTrendsUrl';
 import { tiktokAdLibraryUrl } from './tiktokAdLibraryUrl';
 import TopProductCards from './TopProductCards';
 import TopslotHistoryPopover from './TopslotHistoryPopover';
+import type { VisitedKeywords } from './visitedKeywords';
+
+/** 已访问关键词的颜色：与默认链接蓝色区分明显，白底对比度约 7:1。 */
+export const VISITED_COLOR = '#722ed1';
 
 /**
  * 悬浮历史面板需要的作用域三元组（issue #96）：站点、视图、锚定日。
@@ -150,6 +154,7 @@ export function buildColumns(
   onOpenTrend?: (row: AnalysisRow) => void,
   siteCode?: string,
   historyScope?: HistoryScope,
+  visited?: VisitedKeywords,
 ): ProColumns<AnalysisRow>[] {
   return alignColumns([
     {
@@ -180,8 +185,18 @@ export function buildColumns(
             target="_blank"
             rel="noopener noreferrer"
             title={`在亚马逊搜索「${r.keyword}」`}
+            // 点击（含 Ctrl/Cmd 点击与键盘回车，它们都会触发 click）与鼠标中键才算访问；
+            // 悬浮、复制关键词、打开详情都不经过这个链接，因此不会误标。
+            onClick={() => visited?.markVisited(siteCode, r.keyword)}
+            onAuxClick={(e) => {
+              if (e.button === 1) visited?.markVisited(siteCode, r.keyword);
+            }}
+            data-visited={visited?.isVisited(siteCode, r.keyword) ? 'true' : undefined}
             // 长词无空格时也要断得开，否则会把列宽顶破
-            style={{ wordBreak: 'break-word' }}
+            style={{
+              wordBreak: 'break-word',
+              ...(visited?.isVisited(siteCode, r.keyword) ? { color: VISITED_COLOR } : {}),
+            }}
           >
             {r.keyword}
           </a>
@@ -379,7 +394,7 @@ export function buildColumns(
                 href={trendsUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="在 Google Trends 中查看该词的站外搜索热度"
+                title="Google Trends · 最近7天（与报表日期无关）"
                 aria-label="查看 Google 搜索趋势"
               >
                 <GoogleOutlined />
