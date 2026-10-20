@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.common.errors import BadRequestError, ConflictError, NotFoundError
+from app.table.competitor import store_fetcher
 from app.table.competitor import store_service as service
 from app.table.competitor.store_schemas import (
     STATUS_NEVER_FETCHED,
@@ -109,6 +111,13 @@ def _meta_response(request: httpx.Request) -> httpx.Response:
 def stub_probe(monkeypatch):
     """默认返回一个合法的 Shopify meta，不出网。"""
     monkeypatch.setattr(service, "_store_client", _stub_client(_meta_response))
+
+    # 探测失败会按 1.5s×(n+1) 退避重试，「打不开」类用例因此各空等 4.5s。重试逻辑
+    # 照常走，只把等待换成空操作；换掉 fetcher 模块里的 asyncio 引用而非全局 asyncio.sleep
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(store_fetcher, "asyncio", SimpleNamespace(sleep=_no_sleep))
     return monkeypatch
 
 
