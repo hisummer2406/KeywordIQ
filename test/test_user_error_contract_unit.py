@@ -118,6 +118,7 @@ class TestWritePathsRaise:
         crud = UserCenterCRUD(session)
         monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
         monkeypatch.setattr(crud, "_default_role_id", _async_return(1))
+        monkeypatch.setattr(crud, "hash_password", _async_return("hashed"))  # 与本用例无关，免跑 bcrypt
 
         with pytest.raises(DuplicateUserNameError) as exc:
             await crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
@@ -132,6 +133,7 @@ class TestWritePathsRaise:
         crud = UserCenterCRUD(session)
         monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
         monkeypatch.setattr(crud, "_default_role_id", _async_return(1))
+        monkeypatch.setattr(crud, "hash_password", _async_return("hashed"))  # 与本用例无关，免跑 bcrypt
 
         with pytest.raises(IntegrityError):
             await crud.create_user(UserCenterCreate(user_name="alice", password="pwd12345"))
@@ -148,41 +150,30 @@ class TestWritePathsRaise:
 
         assert session.rolled_back
 
-    async def test_authenticate_hashes_even_for_unknown_user(self, monkeypatch):
-        """用户不存在时也要走一遍 bcrypt，否则响应时间就是用户名枚举接口。
+    @pytest.mark.parametrize(
+        "user",
+        [None, _existing_user(is_active=False)],
+        ids=["unknown_user", "inactive_user"],
+    )
+    async def test_authenticate_hashes_even_when_no_usable_user(self, monkeypatch, user):
+        """用户不存在、或存在但被禁用时，也要走一遍 bcrypt，否则响应时间就是用户名枚举接口。
 
         bcrypt 单次约 247 ms，跳过它的分支返回是毫秒级——两者差三个数量级，
         不用统计手段、肉眼看响应时间就能把有效用户名一个个试出来。
+        「存在但禁用」也不该比「不存在」快。
         """
         calls: list[tuple[str, str]] = []
 
         async def record(plain, hashed):
             calls.append((plain, hashed))
-            return False
+            return user is not None  # 禁用账号密码对也必须被拒，见 authenticate_user
 
         crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
-        monkeypatch.setattr(crud, "verify_password", record)
-
-        assert await crud.authenticate_user("ghost", "pwd12345") is None
-        assert len(calls) == 1, "用户不存在时跳过了密码校验，时间差可被观测"
-
-    async def test_authenticate_hashes_even_for_inactive_user(self, monkeypatch):
-        """被禁用的账号同理——「存在但禁用」也不该比「不存在」快。"""
-        calls: list[tuple[str, str]] = []
-
-        async def record(plain, hashed):
-            calls.append((plain, hashed))
-            return True
-
-        crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(
-            crud, "get_user_by_username", _async_return(_existing_user(is_active=False))
-        )
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(user))
         monkeypatch.setattr(crud, "verify_password", record)
 
         assert await crud.authenticate_user("alice", "pwd12345") is None
-        assert len(calls) == 1
+        assert len(calls) == 1, "跳过了密码校验，时间差可被观测"
 
     async def test_dummy_hash_is_a_usable_bcrypt_hash(self):
         """哑哈希必须是真能被 verify 处理的串。
@@ -239,6 +230,7 @@ class TestWritePathsRaise:
         crud = UserCenterCRUD(session)
         monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
         monkeypatch.setattr(crud, "_default_role_id", _async_return(1))
+        monkeypatch.setattr(crud, "hash_password", _async_return("hashed"))  # 与本用例无关，免跑 bcrypt
         monkeypatch.setattr(session, "commit", _async_raise(boom))
 
         with pytest.raises(OperationalError):
