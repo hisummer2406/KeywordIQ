@@ -1,57 +1,60 @@
 ---
 name: local-db
-description: 起本地 PostgreSQL 测试库并跑含集成测试的全量回归。当需要运行集成测试、验证迁移、或 pytest 报大量 skip 时使用。
+description: 准备本地一次性 PostgreSQL 测试库并运行真实数据库回归；用于迁移、分区、锁验证或排查 pytest 跳过数据库用例。
 ---
 
-# 本地测试库与集成测试
+# 本地测试库与真实回归
 
-`test/` 下约 45 个集成测试由 `TEST_DATABASE_URL` 环境变量开关控制。不设它们会
-**静默跳过**——`225 passed` 与 `181 passed, 45 skipped` 长得很像，跳过的那 45 个
-恰好是唯一会碰真实分区表、咨询锁、`COPY` 装载的部分。所以「测试全绿」这句话，
-在没设这个变量时是没有意义的。
+在仓库根目录执行。输入为测试目标、拟跑用例及已核实的本地连接配置；输出为目标身份、迁移版本、
+命令/退出码、passed/failed/skipped 和未执行项。不要输出密码或完整连接串。
 
-## 跑法
+## 先确认目标与占用
 
-```bash
-# 1. 确认库在
-docker ps --filter name=pgbase --format '{{.Names}}\t{{.Ports}}'
-# 不在就起：docker start pgbase
-
-# 2. 确认测试库存在（一次性库，可随时重建）
-docker exec pgbase psql -U postgres -lqt | cut -d'|' -f1 | grep keywordiq_test \
-  || docker exec pgbase createdb -U postgres keywordiq_test
-
-# 3. 建 schema 与表
-DATABASE_URL=postgresql://postgres:pwd123@localhost/keywordiq_test \
-DATABASE_URL_ASYNC=postgresql+asyncpg://postgres:pwd123@localhost/keywordiq_test \
-  uv run alembic upgrade head
-
-# 4. 全量（含集成）
-TEST_DATABASE_URL=postgresql://postgres:pwd123@localhost/keywordiq_test \
-  uv run pytest test/ -q
-```
-
-全量约 4–5 秒。跑完看到的应当是 `2xx passed, 1 skipped`——**只有 1 个 skip**。
-若 skip 数是 45，说明 `TEST_DATABASE_URL` 没生效，这次运行不能作为「通过」的证据。
-
-## 重建测试库
-
-它是一次性的，schema 脏了直接推倒重来，不要手工改：
+1. 从当前配置、容器端口和连接方式核实目标；不猜 pgbase 名称、端口或默认密码。
+   测试仅用本地一次性库。不能指向生产/开发业务库，也不能把转发到生产的回环端口当作本地实例。
+2. 用只读查询核对 `current_database()`、`current_user`、服务端地址/端口和迁移版本。
+   这些返回值需与本地实例证据共同判断；数据库名包含 test 不是充分证明。
+3. 运行测试前确认没有其他会话正在使用同一库；测试夹具可能 TRUNCATE 业务表或执行分区 DDL。
+   有其他使用者就停止该库的写入验证并报告，不杀连接、不抢共享资源；未经协调不改用另一库绕过约定。
+4. 仅在目标确认无误后，准备下列变量。KI_TEST_SYNC_URL 和 KI_TEST_ASYNC_URL 是本次选定目标的
+   同步/异步连接串，由受信本地配置读取，不在聊天或日志打印。确认三个变量指向同一目标。
 
 ```bash
-docker exec pgbase dropdb -U postgres --if-exists keywordiq_test
-docker exec pgbase createdb -U postgres keywordiq_test
-# 再跑上面第 3 步
+: "${KI_TEST_SYNC_URL:?先确认并设置同步测试库连接}"
+: "${KI_TEST_ASYNC_URL:?先确认并设置异步测试库连接}"
+export DATABASE_URL="$KI_TEST_SYNC_URL"
+export DATABASE_URL_ASYNC="$KI_TEST_ASYNC_URL"
+export TEST_DATABASE_URL="$KI_TEST_SYNC_URL"
+uv run alembic current
+uv run alembic upgrade head
+# 按本次影响面选文件；需要全量时才用 test/
+uv run pytest test/ -q -ra
 ```
 
-## 两个已知的坑
+命令前确保变量已赋值且非空；不要复制生产 .env 到测试运行环境。缺少非连接配置时参考当前 CI 的
+测试配置，不将生产凭证或业务配置整份继承。失败应先读错误，不自动反复重建数据库。
 
-**咨询锁的抢锁时序。** 导入用 `pg_try_advisory_lock` 串行化。测试里若用默认连接池，
-上一个测试归还的连接可能仍持有锁，下一个测试拿不到锁而失败，且表现为随机偶发。
-测试夹具里给测试引擎显式用 `NullPool`（每次新连接、用完即关）可规避。看到
-「导入被拒 / QUEUED」类的偶发失败，先查这一条，不要当成业务 bug 排查。
+## 确需创建或重建时
 
-**迁移的可回滚性。** CI 会跑 `alembic downgrade -1 && alembic upgrade head`。
-分区表与物化视图不在 SQLAlchemy 的 DDL 生成范围内，autogenerate 会把事实表产成
-普通表并静默丢掉分区。写完迁移务必 `uv run alembic upgrade head --sql` 核对生成的
-DDL 里确有 `PARTITION BY`，再本地跑一遍降级升级。
+确认实例可用后，目标库不存在可创建本地一次性测试库；不要因名称相似删除其他库。
+重建只在用户已授权该次重建、普通迁移无法解决且没有使用者时进行；已有授权不重复询问。
+删除前从管理员连接到维护库（不是目标库）再次查活动连接：
+
+```sql
+SELECT pid, usename, application_name, state
+FROM pg_stat_activity
+WHERE datname = :verified_test_database
+  AND pid <> pg_backend_pid();
+```
+
+`:verified_test_database` 是驱动绑定参数，不直接粘贴给 psql；用所选客户端的绑定语法。
+返回任何连接先停；没有连接也需确认无其他会话在准备使用。按已核实目标执行创建/重建，
+不使用强制断开/强制删除，不默认执行 dropdb。完成后重新迁移并复核身份，再跑测试。
+
+## 判断结果
+
+- 退出码0不足以证明数据库回归通过。列出实际收集的数据库用例与每个 skip 原因；目标用例被跳过则未验证。
+- 不固定 passed/skip 数量或耗时；不要把历史“只有1个skip”作为门槛。区分预期排除与环境导致跳过。
+- 迁移变更在一次性库核对 upgrade、降一步再升回和模型差异；分区/视图手写迁移先离线核对DDL。
+- 锁相关偶发失败核对引擎/连接生命周期与测试夹具，不先提高超时或强行释放别人的锁。
+- 本Skill只验证指定测试目标；测试库通过不等于生产可发布或真实体量导入已通过。
