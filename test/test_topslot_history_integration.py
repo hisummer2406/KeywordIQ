@@ -190,7 +190,7 @@ async def test_counts_only_periods_where_asin_actually_ranked(db):
     k1 = await db.run_sync(_seed)
     resp = await _history(db, k1)
     # D0/D1/D2/D3 四期命中：STALE 在保留窗口外不计入；_seed 里还埋了同 ASIN 的另一关键词
-    # （US）与另一站点（DE）各一期，它们若被串进来 total 会是 5 或 6
+    # （US）与另一站点（DE）各一期，任一路被串进来 total 都会变成 5（两路都串则是 6）
     assert resp.total == 4
 
 
