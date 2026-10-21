@@ -57,10 +57,10 @@
 | CLAUDE.md:254–254 | 修改前读竞对指南；插件还须读 extension/README.md 及采集变更 design。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:256–277 | - 共享主体/观测不带账号属性；分组/关注/预览私有且逐查询限制 user_id，别人的记录返回 404。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:279–279 | ### 浏览器插件（extension/） | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:281–286 | - manifest 与 package 版本一致，manifest 保留公钥 key 固定扩展 ID；私钥不得入库。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/auth.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:281–286 | - manifest 与 package 版本一致，manifest 保留公钥 key 固定扩展 ID；私钥不得入库。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/extension.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:288–288 | ## 部署与运维：只走授权入口，V1 不动 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
 | CLAUDE.md:290–290 | 开始 ECS、OSS 或 ops-bot 工作前先读交接与运维指南；环境记录不是当前在线状态，必要时重新验证。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:292–308 | - V2 只由 Deploy V2 to ECS 手动发布。必须为 refs/heads/v2、完整 SHA 位于 origin/ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:292–308 | - V2 只由 Deploy V2 to ECS 手动发布。必须为 refs/heads/v2、完整 SHA 位于 origin/ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:310–310 | ## 流程重量：默认最轻，长期决策才留完整规格 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
 | CLAUDE.md:312–312 | 沿用三档；用户已明确范围与方案时直接按授权推进。必要澄清一次问完，不串行多轮追问。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
 | CLAUDE.md:314–318 | / 档位 / 产物 / 适用 / | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
