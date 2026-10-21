@@ -43,6 +43,21 @@
 
 - [x] 7.1 重写 `CLAUDE.md` 新词相关一节（口径、基线、日周映射、`UNKNOWN` 不可升 `CONFIRMED`）并同步 #119 引用
 - [x] 7.2 本变更 `specs/` 与主 specs 一致性检查（`openspec validate`）
-- [x] 7.3 完整 CSV 导入流程验证（`verify-import`，2026-10-21，独立库，US 真实报表 日 07-18/07-30、周 07-11/07-18，DE 日 07-16）：基线日报全部 `EARLIEST_OBSERVED`；新一天日报新词 `CONFIRMED`，接口数 = 黑名单口径下的 SQL 实算数（55860 / 总 64336）；日→周与乱序补更早周报只往前改日期（0 行后移、0 行降级、0 行升成 CONFIRMED）；同一期重复导入（日 07-18、07-30，周 07-11）首次记录摘要不变；DE 导入后 US 摘要不变；无重复关键词。**待验**：周报先于日报导入的次序未测
+- [ ] 7.3 完整 CSV 导入流程验证（`verify-import`）：**须在第 8 节口径修订实现后重跑**。2026-10-21 的一次通过（独立库，US 日 07-18/07-30、周 07-11/07-18，DE 日 07-16）跑在旧口径（导入时打 CONFIRMED/EARLIEST_OBSERVED 标签）上，其中“只往前改、重复导入摘要不变、跨站点隔离”的结论对新口径仍成立，但首次入榜数量需重测
 - [ ] 7.4 通知用户做市场分析页的实际浏览器验收（说明要看：默认只看首次入榜、数量文案、监测起点提示、日/周切换）；记录已通过与待验项目
 - [ ] 7.5 PR 说明附：迁移/回填清单、处理数量、无法确认数量、抽样核验结果、已知未覆盖风险
+
+## 8. 口径修订：首次入榜按最终数据派生，与导入顺序无关（PR #141 Codex P1，2026-10-21）
+
+用户要求：选哪天，哪天的首次入榜要正确，与导入顺序无关。设计 D2 已改写（见 design.md）。取值 `CONFIRMED` 改名 `IMPORTED`；本变更未上线，直接改同一条迁移，无数据迁移。
+
+- [ ] 8.1 模型与迁移：`first_seen_basis` 取值/列注释改为 `IMPORTED / EARLIEST_OBSERVED / UNKNOWN`（改 `3c8e5b1d7f42`，`test_models_match_migrated_schema` 绿）；全仓 `CONFIRMED` 引用同步（后端、前端、脚本、测试、CLAUDE.md）
+- [ ] 8.2 `importer`：新词条一律记 `IMPORTED`，删除“基线期”分流与对 `min(first_seen_date)` 的读取；`UNKNOWN → EARLIEST_OBSERVED` 与向前修正（D3）不变
+- [ ] 8.3 `analysis_crud`：站点监测起点 `B = min(first_seen_date) WHERE basis='IMPORTED'`（回填不移动 B）；`first_listed_expr` 加 `first_seen_date > B` 且来源 `IMPORTED`；不可判断（日 `d ≤ B`、周 `w-6 ≤ B`、`B` 为空）时筛选不命中任何词；`confirmed_since_stmt` 改为取 `B`；`fact_metric_columns` 同步（分析屏与词库盯盘共用）
+- [ ] 8.4 `analysis_service.get_first_listed`：`judgeable` 按 D4 的日/周条件；`earliest_known_date` 返回 `B`
+- [ ] 8.5 回填脚本：文案/断言按新取值；仍永不写 `IMPORTED`；补测试
+- [ ] 8.6 **顺序无关性测试（真库，验收核心）**：同站点 3 份日报全部 6 种导入顺序，逐行比较 `dim_keyword` 并比较每一天首次入榜数量；2 份日报 + 1 份覆盖它们的周报全部顺序；乱序中途夹一次重复导入；补更早报告后先到的基线词（design D4 例子里的词 E）出现在日视图首次入榜
+- [ ] 8.7 前端：不可判断文案按“不晚于监测起点”；标签仅在 `first_listed` 为真时出现（已满足，核对）；`CACHE_VERSION` / `SAVED_MODE_VERSION` 按字段形状变化决定是否再 +1
+- [ ] 8.8 `CLAUDE.md` 首次入榜一节、PR #141 说明按新口径重写
+- [ ] 8.9 重跑 7.3（真实 CSV，含乱序：先周 07-18、后日 07-18、再补更早周 07-11，对比顺序导入的结果）
+- [ ] 8.10 部署兼容（PR #141 Codex P1-2，expand/contract）：`is_new` 已随 2026-10-19 部署上线，本次迁移**不删列、不删其部分索引**，只给 `is_new` 加 DB 侧 `server_default false`（旧后端窗口内仍可读写，回滚可用）；新代码不再读写它；模型与 `test_models_match_migrated_schema` 为该列做带注释的例外；下个版本单独变更删列，需开 issue 登记
