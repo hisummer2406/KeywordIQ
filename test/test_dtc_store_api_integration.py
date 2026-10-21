@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.common.errors import BadRequestError, ConflictError, NotFoundError
+from app.table.competitor import store_fetcher
 from app.table.competitor import store_service as service
 from app.table.competitor.store_schemas import (
     STATUS_NEVER_FETCHED,
@@ -112,6 +114,31 @@ def stub_probe(monkeypatch):
     return monkeypatch
 
 
+class _AsyncioWithRecordedSleep:
+    """store_fetcher 看到的 ``asyncio``：只有 ``sleep`` 换成记账的空操作，其余照旧透传。"""
+
+    def __init__(self, sleeps: list[float]):
+        async def _sleep(seconds):
+            sleeps.append(seconds)
+
+        self.sleep = _sleep
+
+    def __getattr__(self, name):
+        return getattr(asyncio, name)
+
+
+@pytest.fixture(autouse=True)
+def backoff_sleeps(monkeypatch):
+    """探测失败会按 1.5s×(n+1) 退避重试，「打不开」类用例因此各空等 4.5s。
+
+    重试逻辑照常走，只把等待换成空操作并记下每次退避时长，供用例断言重试确实发生。
+    不改 ``_RETRY_BACKOFF_SECONDS``：它被绑成了函数默认参数，运行期改模块常量不生效。
+    """
+    sleeps: list[float] = []
+    monkeypatch.setattr(store_fetcher, "asyncio", _AsyncioWithRecordedSleep(sleeps))
+    return sleeps
+
+
 async def _add(db, user_id, domain=DOMAIN, **kw):
     return await service.add_store(db, user_id, StoreAddRequest(domain=domain, **kw))
 
@@ -145,7 +172,7 @@ async def test_非Shopify站点在加入这一步就被拒绝(db, stub_probe):
     assert "Shopify" in exc.value.message
 
 
-async def test_站点打不开与非Shopify是两种拒绝(db, stub_probe):
+async def test_站点打不开与非Shopify是两种拒绝(db, stub_probe, backoff_sleeps):
     users = await db.run_sync(_seed_users)
 
     def _unreachable(request):
@@ -156,6 +183,10 @@ async def test_站点打不开与非Shopify是两种拒绝(db, stub_probe):
     with pytest.raises(BadRequestError) as exc:
         await _add(db, users["owner"])
     assert "无法访问" in exc.value.message
+    # 瞬时故障要重试满 _RETRIES 次，每次退避线性递增（1.5s、3s）
+    assert backoff_sleeps == [
+        store_fetcher._RETRY_BACKOFF_SECONDS * n for n in range(1, store_fetcher._RETRIES + 1)
+    ]
 
 
 async def test_粘贴亚马逊链接给出去处而不是笼统报错(db):

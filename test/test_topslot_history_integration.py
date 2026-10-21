@@ -189,7 +189,8 @@ async def _history(db, k1, **overrides):
 async def test_counts_only_periods_where_asin_actually_ranked(db):
     k1 = await db.run_sync(_seed)
     resp = await _history(db, k1)
-    # D0/D1/D2/D3 四期命中（STALE 在保留窗口外，不计入）
+    # D0/D1/D2/D3 四期命中：STALE 在保留窗口外不计入；_seed 里还埋了同 ASIN 的另一关键词
+    # （US）与另一站点（DE）各一期，任一路被串进来 total 都会变成 5（两路都串则是 6）
     assert resp.total == 4
 
 
@@ -210,18 +211,6 @@ async def test_duplicate_slot_in_same_period_counts_once_with_best_rank(db):
     d3_items = [item for item in resp.items if item.date == D3]
     assert len(d3_items) == 1
     assert d3_items[0].rank == 1
-
-
-async def test_other_keyword_not_counted(db):
-    k1 = await db.run_sync(_seed)
-    resp = await _history(db, k1)
-    assert resp.total == 4  # 不含 k2 那一期
-
-
-async def test_other_site_not_counted(db):
-    k1 = await db.run_sync(_seed)
-    resp = await _history(db, k1)
-    assert resp.total == 4  # 不含 DE 站点那一期
 
 
 async def test_out_of_retention_period_excluded(db):

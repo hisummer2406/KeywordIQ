@@ -92,6 +92,15 @@ def _existing_user(**kwargs):
     return SimpleNamespace(**base)
 
 
+@pytest.fixture
+def no_bcrypt(monkeypatch):
+    """create_user 的失败路径与密码哈希无关，免得每个用例真跑一次 bcrypt（约 247 ms）。
+
+    patch 在类上而非实例上：用例里的 ``UserCenterCRUD(session)`` 是各自建的。
+    """
+    monkeypatch.setattr(UserCenterCRUD, "hash_password", _async_return("hashed"))
+
+
 # --------------------------------------------------------------------------
 # 写路径：失败抛出语义正确的异常，而不是返回元组
 # --------------------------------------------------------------------------
@@ -108,6 +117,7 @@ class TestWritePathsRaise:
         assert exc.value.http_status == 409
         assert exc.value.code == CODE_USER_DUPLICATE_NAME
 
+    @pytest.mark.usefixtures("no_bcrypt")
     async def test_create_user_unique_violation_raises_409(self, monkeypatch):
         """两个请求同时创建同名用户：先查后插挡不住，最后一道是库里的唯一约束。
 
@@ -126,6 +136,7 @@ class TestWritePathsRaise:
         assert exc.value.code == CODE_USER_DUPLICATE_NAME
         assert session.rolled_back
 
+    @pytest.mark.usefixtures("no_bcrypt")
     async def test_create_user_other_integrity_error_still_propagates(self, monkeypatch):
         """只认唯一约束冲突。别的完整性错误（如外键）不能被冒充成「用户名已存在」。"""
         session = _FakeSession(commit_raises=_integrity_error("23503"))
@@ -148,41 +159,27 @@ class TestWritePathsRaise:
 
         assert session.rolled_back
 
-    async def test_authenticate_hashes_even_for_unknown_user(self, monkeypatch):
-        """用户不存在时也要走一遍 bcrypt，否则响应时间就是用户名枚举接口。
+    @pytest.mark.parametrize("kind", ["unknown_user", "inactive_user"])
+    async def test_authenticate_hashes_even_when_no_usable_user(self, monkeypatch, kind):
+        """用户不存在、或存在但被禁用时，也要走一遍 bcrypt，否则响应时间就是用户名枚举接口。
 
         bcrypt 单次约 247 ms，跳过它的分支返回是毫秒级——两者差三个数量级，
         不用统计手段、肉眼看响应时间就能把有效用户名一个个试出来。
+        「存在但禁用」也不该比「不存在」快。
         """
+        user = None if kind == "unknown_user" else _existing_user(is_active=False)
         calls: list[tuple[str, str]] = []
 
         async def record(plain, hashed):
             calls.append((plain, hashed))
-            return False
+            return user is not None  # 禁用账号密码对也必须被拒，见 authenticate_user
 
         crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(crud, "get_user_by_username", _async_return(None))
-        monkeypatch.setattr(crud, "verify_password", record)
-
-        assert await crud.authenticate_user("ghost", "pwd12345") is None
-        assert len(calls) == 1, "用户不存在时跳过了密码校验，时间差可被观测"
-
-    async def test_authenticate_hashes_even_for_inactive_user(self, monkeypatch):
-        """被禁用的账号同理——「存在但禁用」也不该比「不存在」快。"""
-        calls: list[tuple[str, str]] = []
-
-        async def record(plain, hashed):
-            calls.append((plain, hashed))
-            return True
-
-        crud = UserCenterCRUD(_FakeSession())
-        monkeypatch.setattr(
-            crud, "get_user_by_username", _async_return(_existing_user(is_active=False))
-        )
+        monkeypatch.setattr(crud, "get_user_by_username", _async_return(user))
         monkeypatch.setattr(crud, "verify_password", record)
 
         assert await crud.authenticate_user("alice", "pwd12345") is None
-        assert len(calls) == 1
+        assert len(calls) == 1, "跳过了密码校验，时间差可被观测"
 
     async def test_dummy_hash_is_a_usable_bcrypt_hash(self):
         """哑哈希必须是真能被 verify 处理的串。
@@ -232,6 +229,7 @@ class TestWritePathsRaise:
 
         assert exc.value.http_status == 409
 
+    @pytest.mark.usefixtures("no_bcrypt")
     async def test_write_failure_rolls_back_and_propagates(self, monkeypatch):
         """写失败必须回滚，且异常继续上抛交全局处理器——不吞、不转译成元组。"""
         boom = OperationalError("SELECT 1", {}, Exception("connection refused"))
