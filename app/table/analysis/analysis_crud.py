@@ -79,30 +79,42 @@ _DEFAULT_ORDER = "current_ranking"
 FIRST_SEEN_WEEK_SPAN_DAYS = 7
 
 
-def first_listed_expr(site: str, view: str, on: date):
-    """「首次入榜」判定（keyword-first-seen），派生自 ``dim_keyword`` 的永久首次记录。
+def first_listed_window_start(view: str, on: date) -> date:
+    """所选期次「首次入榜」映射窗口的起点：日视图就是 ``d``，周视图是 ``w-6``。"""
+    return on - timedelta(days=FIRST_SEEN_WEEK_SPAN_DAYS - 1) if view == "WEEK" else on
 
-    **只有 ``CONFIRMED`` 才算**：``EARLIEST_OBSERVED`` / ``UNKNOWN`` 的词此前可能见过，
-    把它们算进来就是把「不知道」伪装成「确定是新的」。
+
+def first_listed_expr(site: str, view: str, on: date):
+    """「首次入榜」判定（keyword-first-seen），对最终数据的派生，与导入顺序无关。
+
+    三个条件同时成立：来源是 ``IMPORTED``（本系统导入创建；``EARLIEST_OBSERVED`` / ``UNKNOWN``
+    的存量词此前可能见过，算进来就是把「不知道」伪装成「确定是新的」）；首次记录落在映射窗口内；
+    窗口起点晚于站点监测起点 ``B``（``imported_since_stmt``）。
 
     日视图 ``d``：首次记录恰为 ``(d, DAY)``。周视图 ``w``：``(w, WEEK)``，或日报来源且落在
     ``[w-6, w]``（周报日期是周结束日，周日起周六止）。来自周报的首次只有周精度，**不进任何
     一天的日视图**——不捏造日期。一个词只有一个首次事件，所以同一视图里不会重复计数。
+
+    ``B`` 缺失（站点没有导入创建的词）时比较为 NULL，不命中任何词；窗口起点不晚于 ``B`` 的
+    期次同样不命中——与 ``get_first_listed`` 的「无法判断」一致。窗口起点晚于 ``B`` 也就保证了
+    词的首次日期晚于 ``B``，无需再单列该条件。
     """
     # 站点条件对结果是冗余的（keyword_id 已唯一确定站点），但它让 idx_dim_keyword_first_seen
     # 的 (site, first_seen_date) 两列都进索引条件；漏了它索引只用上日期，会把其他站点同一天
     # 首次入榜的词也扫一遍（EXPLAIN 实测）。
-    confirmed = and_(DimKeyword.site == site, DimKeyword.first_seen_basis == "CONFIRMED")
+    imported = and_(DimKeyword.site == site, DimKeyword.first_seen_basis == "IMPORTED")
+    start = first_listed_window_start(view, on)
+    judgeable = imported_since_stmt(site).scalar_subquery() < start
     if view == "WEEK":
         in_week = and_(
             DimKeyword.first_seen_period_type == "DAY",
-            DimKeyword.first_seen_date >= on - timedelta(days=FIRST_SEEN_WEEK_SPAN_DAYS - 1),
+            DimKeyword.first_seen_date >= start,
             DimKeyword.first_seen_date <= on,
         )
         this_week = and_(DimKeyword.first_seen_period_type == "WEEK", DimKeyword.first_seen_date == on)
-        return and_(confirmed, or_(this_week, in_week))
+        return and_(imported, judgeable, or_(this_week, in_week))
     return and_(
-        confirmed, DimKeyword.first_seen_period_type == "DAY", DimKeyword.first_seen_date == on
+        imported, judgeable, DimKeyword.first_seen_period_type == "DAY", DimKeyword.first_seen_date == on
     )
 
 
@@ -145,15 +157,16 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     )
 
 
-def confirmed_since_stmt(site: str):
-    """站点最早的「已确认首次」期次日期——**首次入榜统计的起点**。
+def imported_since_stmt(site: str):
+    """站点监测起点 ``B``：来源为 ``IMPORTED`` 的词的最小首次日期。
 
-    早于它的期次不存在任何 ``CONFIRMED`` 的词（存量词只有最早可观测/未知），数量显示 0 会被
-    读成「这天没有首次入榜」，而真实情况是无法判断。读永久的 ``dim_keyword``，走
-    ``idx_dim_keyword_first_seen``；站点尚无已确认首次时为 NULL。
+    **只取 ``IMPORTED``**：回填只给存量词写 ``EARLIEST_OBSERVED`` 和更早的日期，若取全部行，
+    回填会把 ``B`` 拉到几个月前，使这些历史日期全部「可判断」，而那些日子里没有任何导入创建的词，
+    于是每天显示 0——把「0」和「无法判断」混为一谈。读永久的 ``dim_keyword``，走部分索引
+    ``idx_dim_keyword_first_seen``；站点尚无导入创建的词时为 NULL。
     """
     return select(func.min(DimKeyword.first_seen_date)).where(
-        DimKeyword.site == site, DimKeyword.first_seen_basis == "CONFIRMED"
+        DimKeyword.site == site, DimKeyword.first_seen_basis == "IMPORTED"
     )
 
 

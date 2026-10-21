@@ -35,13 +35,13 @@ describe('FirstListedSummary', () => {
     expect(await screen.findByText('0')).toBeInTheDocument();
   });
 
-  it('早于统计起点显示「无法判断」而不是 0', async () => {
+  it('不晚于监测起点显示「无法判断」而不是 0', async () => {
     getFirstListed.mockResolvedValue({
       site: 'US', view: 'DAY', on: '2026-07-01', judgeable: false, count: null,
       earliest_known_date: '2026-07-01',
     });
     render(<FirstListedSummary site="US" view="DAY" date="2026-07-01" />);
-    expect(await screen.findByText(/该期早于首次入榜统计的起点，无法判断/)).toBeInTheDocument();
+    expect(await screen.findByText(/该期不晚于监测起点，无法判断/)).toBeInTheDocument();
     expect(screen.queryByText('0')).toBeNull();
   });
 

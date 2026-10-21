@@ -1,4 +1,4 @@
-"""dim_keyword 增加永久首次入榜记录，事实表删除 is_new
+"""dim_keyword 增加永久首次入榜记录，事实表 is_new 加默认值（下版本再删）
 
 Revision ID: 3c8e5b1d7f42
 Revises: d4e5f6a7b8c9
@@ -8,8 +8,12 @@ issue #137 V1，见 openspec/changes/first-seen-keyword-history。
 
 `fact_*.is_new` 是「本期之前 7 天没出现过」的滚动窗口口径，导入时算定写进事实行：掉榜 8 天
 再回来又算新词、日周各算各的、补更早数据后会变陈旧。首次入榜改由 `dim_keyword` 上的永久
-记录表达（该表不分区、不参与保留清理、行只增不删），因此事实行的 `is_new` 与它的部分索引
-一并删除。
+记录表达（该表不分区、不参与保留清理、行只增不删），事实行的 `is_new` 因此不再被读写。
+
+**但本迁移不删 `is_new` 及其部分索引**（expand/contract）：它已随 2026-10-19 的部署上线，
+`deploy.sh` 先迁移、后切容器，窗口内旧后端仍读写它；回滚到旧版本同理。只给它补 DB 侧
+`DEFAULT false`（旧模型的默认值在 Python 侧，新代码插入时不带这一列，没有默认值会
+NOT NULL 失败）。删列另开一个版本。
 
 **既有关键词一律 `UNKNOWN`、日期为空**——迁移日不是任何词的首次入榜日，把它写进去会让上线
 当天整库变成「首次入榜」，而且没有任何报错。能证明的最早日期由
@@ -20,7 +24,10 @@ issue #137 V1，见 openspec/changes/first-seen-keyword-history。
 全为 NULL 的列上，很快，但会短暂锁写 `dim_keyword`（alembic 事务内不能 CONCURRENTLY），
 应在导入空闲时执行。
 
-`downgrade` 把 `is_new` 加回来但值全为默认 false——旧口径本来就要废弃，不尝试重算。
+`idx_dim_keyword_first_seen` 是只含 `IMPORTED` 行的部分索引：回填会给存量词写几百万个更早的
+日期，不收录它们，站点监测起点 `min(first_seen_date) WHERE basis='IMPORTED'` 才能直接取索引最左项。
+
+`downgrade` 只删本迁移加的东西并撤掉 `is_new` 的默认值；`is_new` 的值本迁移从未动过。
 """
 from collections.abc import Sequence
 
@@ -54,30 +61,20 @@ def upgrade() -> None:
     op.add_column(
         "dim_keyword",
         sa.Column("first_seen_basis", sa.String(20), nullable=False, server_default="UNKNOWN",
-                  comment="首次入榜依据：CONFIRMED 已确认首次 / EARLIEST_OBSERVED 最早可观测"
+                  comment="首次入榜依据：IMPORTED 本系统导入创建 / EARLIEST_OBSERVED 最早可观测"
                           "(此前可能见过) / UNKNOWN 无证据"),
         schema=SCHEMA,
     )
     op.create_index("idx_dim_keyword_first_seen", "dim_keyword", ["site", "first_seen_date"],
-                    schema=SCHEMA)
+                    schema=SCHEMA, postgresql_where=sa.text("first_seen_basis = 'IMPORTED'"))
 
     for table, _ in _FACTS:
-        op.execute(f"DROP INDEX IF EXISTS {SCHEMA}.idx_{table}_new")
-        op.drop_column(table, "is_new", schema=SCHEMA)
+        op.alter_column(table, "is_new", server_default=sa.false(), schema=SCHEMA)
 
 
 def downgrade() -> None:
-    for table, date_col in _FACTS:
-        op.add_column(
-            table,
-            sa.Column("is_new", sa.Boolean, nullable=False, server_default=sa.false(),
-                      comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选"),
-            schema=SCHEMA,
-        )
-        op.create_index(
-            f"idx_{table}_new", table, ["site", date_col, "current_ranking"],
-            schema=SCHEMA, postgresql_where=sa.text("is_new"),
-        )
+    for table, _ in _FACTS:
+        op.alter_column(table, "is_new", server_default=None, schema=SCHEMA)
     op.drop_index("idx_dim_keyword_first_seen", table_name="dim_keyword", schema=SCHEMA)
     for col in ("first_seen_basis", "first_seen_period_type", "first_seen_date"):
         op.drop_column("dim_keyword", col, schema=SCHEMA)

@@ -331,11 +331,13 @@ class TestFactTableStructure:
             )
 
     @pytest.mark.parametrize("model", [FactDaily, FactWeekly])
-    def test_fact_rows_have_no_is_new(self, model):
-        """首次入榜是 dim_keyword 上的永久记录；事实行不再带会随补历史变陈旧的 is_new，
-        也就不该再有 `_new` 部分索引。"""
-        assert "is_new" not in model.__table__.c
-        assert not [i for i in model.__table__.indexes if i.name.endswith("_new")]
+    def test_is_new_is_deprecated_but_has_db_default(self, model):
+        """is_new 已弃用但本版本保留（expand/contract）：旧后端在部署窗口内仍读写它，新代码
+        不写，所以必须有 DB 侧默认值，否则新代码插入事实行会 NOT NULL 失败。下版本删列时
+        连同本测试一起删。"""
+        col = model.__table__.c.is_new
+        assert col.server_default is not None
+        assert not col.nullable
 
     @pytest.mark.parametrize("model", [FactDaily, FactWeekly])
     def test_no_speculative_range_partial_indexes(self, model):

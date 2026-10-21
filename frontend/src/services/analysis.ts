@@ -29,7 +29,7 @@ export interface AnalysisRow {
   /** 所选期次是否首次入榜（派生自关键词的永久首次记录；掉榜行恒 false） */
   first_listed: boolean;
   first_seen_date?: string | null;
-  /** CONFIRMED 已确认 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知 */
+  /** IMPORTED 导入创建 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知 */
   first_seen_basis?: string | null;
   /**
    * 三个历史参照点的排名，顺序固定（日视图：昨天 / 3 天前 / 7 天前）。

@@ -110,11 +110,11 @@ def main() -> int:
                 text(f"INSERT INTO {SCHEMA}.dim_keyword(site,keyword,first_seen_date,"
                      f"first_seen_period_type,first_seen_basis) "
                      f"VALUES (:s,:k,:fd,'DAY',:fb) RETURNING keyword_id"),
-                # 演示：每 5 个词里有 1 个在第 4 天「首次入榜」（已确认），其余是监测起点
-                # 的存量（最早可观测），这样默认的「只看首次入榜」在演示库里也有结果可看。
+                # 演示：每 5 个词里有 1 个在第 4 天「首次入榜」（导入创建），其余是监测起点
+                # 当天的词（没有对照期，不算首次入榜），这样默认的「只看首次入榜」在演示库里也有结果可看。
                 {"s": site, "k": f"demo-keyword-{i:02d}",
                  "fd": days[3] if i % 5 == 0 else days[0],
-                 "fb": "CONFIRMED" if i % 5 == 0 else "EARLIEST_OBSERVED"},
+                 "fb": "IMPORTED"},
             ).scalar()
             kw_ids.append(kid)
 

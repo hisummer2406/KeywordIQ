@@ -32,6 +32,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -78,9 +79,11 @@ class DimKeyword(Base):
 
     __table_args__ = (
         UniqueConstraint("site", "keyword", name="uq_dim_keyword_site_keyword"),
-        # 首次入榜：按期次计数/筛选，以及判定站点最早已知期次（min(first_seen_date)）。
-        # 普通 btree：导入只在出现新词或证据前移时才写它，写放大可忽略。
-        Index("idx_dim_keyword_first_seen", "site", "first_seen_date"),
+        # 首次入榜：按期次计数/筛选，以及判定站点监测起点（IMPORTED 行的 min(first_seen_date)）。
+        # 部分索引只含 IMPORTED：回填会给存量词写入几百万个更早的日期，不收录它们才能让
+        # min() 直接取索引最左一项，而不是顺着 EARLIEST_OBSERVED 的行往后扫。
+        Index("idx_dim_keyword_first_seen", "site", "first_seen_date",
+              postgresql_where=text("first_seen_basis = 'IMPORTED'")),
         # 关键词子串搜索（keyword ILIKE '%x%'）。trigram 索引对大小写不敏感，
         # 天然匹配 ILIKE 的语义。建在这张维度表（约 500 万行/站）上，而不是事实表
         # （约 8 亿行）——同样的 trigram 建在事实表上会是几十 GB 且拖慢热写路径。

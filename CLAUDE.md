@@ -948,25 +948,32 @@ WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
   - **首次记录是 `dim_keyword` 上的永久事实，不是事实行上的字段。** `first_seen_date` /
     `first_seen_period_type`（DAY/WEEK）/ `first_seen_basis`。`dim_keyword` 不分区、不参与保留
     清理、行只增不删，所以「站点内不存在」就等于「从未见过」；日报周报共用同一份，站点之间
-    互相独立。**事实行不再有 `is_new`**（迁移已删列与 `idx_*_new`），旧口径「前 7 天没出现过」
-    与 `NEW_WORD_LOOKBACK_DAYS`、`scripts/backfill_is_new.py` 一并退役。口径只在
-    `importer._upsert_keywords` 写入，一处定义。
-  - **只有 `CONFIRMED` 才计入首次入榜。** 三个依据等级：`CONFIRMED` 已确认首次 /
-    `EARLIEST_OBSERVED` 最早可观测（此前可能见过）/ `UNKNOWN` 无证据。**站点最早已知期次
-    （含补更早的历史）里新插入的词只记 `EARLIEST_OBSERVED`**——否则新站点首导、补历史会整期
-    涌进首次入榜且无报错；这一判定只读 `dim_keyword`，**不读会被保留清理的 `site_data_stats`**。
-    迁移后既有词全是 `UNKNOWN`；`scripts/backfill_first_seen.py` 只产出 `EARLIEST_OBSERVED`，
-    **永不产出 `CONFIRMED`**（库内最早一条记录不等于历史首次，事实表只留三个月）。
-    已存在的词只在证据更早时向前修正，比较键（期次日期，日报优先于周报），相等不写；
-    `CONFIRMED` 不降级、不会因补历史被升级。
-  - **日周映射固定：周期 `w` 覆盖 `[w-6, w]`**（周报按周日起周六止，文件名日期是周结束日）。
-    日视图只命中 `(d, DAY)`；周视图命中 `(w, WEEK)` 或日报来源且落在窗内。**周报来源的首次
-    只有周精度，不进任何一天的日视图**，不捏造日期。命中表达式只在
-    `analysis_crud.first_listed_expr`，筛选、行字段、数量、词库盯盘共用；当期数量
-    （`GET /api/analysis/first-listed`）查询时实算、与「仅 first_listed 筛选」的总数同一口径，
-    **不存按期统计**，所以补历史/乱序不需要校正。早于统计起点（站点最早的 `CONFIRMED` 期次，`confirmed_since_stmt`；**不是**
-    `min(first_seen_date)`，回填后后者是库内最早期次）的期次返回 `judgeable=false`、
-    `count=null`——**无法判断，不是 0**，界面必须分开呈现。
+    互相独立。**事实行的 `is_new` 已弃用但本版本仍在库里**（expand/contract：它已随 2026-10-19
+    部署上线，`deploy.sh` 先迁移后切容器，窗口内旧后端仍读写它，回滚也要能用）：迁移只给它补 DB
+    侧 `DEFAULT false`，新代码不读不写；删列与 `idx_*_new` 另开版本做（见 tasks 8.10 / design D8）。
+    `NEW_WORD_LOOKBACK_DAYS`、`scripts/backfill_is_new.py` 已退役。
+  - **导入只记证据，不判断「是不是首次」；那是查询时对最终数据的派生，所以与导入顺序无关。**
+    三个来源等级：`IMPORTED` 本系统导入创建 / `EARLIEST_OBSERVED` 存量词、此前可能见过 /
+    `UNKNOWN` 无证据。导入里新插入的词一律 `IMPORTED`，已存在的词只在证据更早时向前修正
+    （比较键 = 期次日期，日报优先于周报；相等不写；`IMPORTED` 不降级，`UNKNOWN` 见到证据变
+    `EARLIEST_OBSERVED`）。**不要在导入时再按「基线期」分流**——曾经那样做，先导入 7/12 再补
+    7/10，只出现在 7/12 的词永远是「最早可观测」，与按时间顺序导入的结果不同，且无任何报错
+    （PR #141 复审 P1）。顺序无关性由 `test_first_seen_integration.py::test_import_order_does_not_change_result`
+    （全排列 + 中途重复导入）担保，改导入或判定逻辑必须保持它绿。
+  - **某期的「首次入榜」= `IMPORTED` 且首次记录落在映射窗口内，且窗口起点晚于站点监测起点 `B`。**
+    `B = min(first_seen_date) WHERE basis='IMPORTED'`（`imported_since_stmt`，走部分索引
+    `idx_dim_keyword_first_seen`）。**`B` 只取 `IMPORTED` 行**：回填给存量词写的更早日期若参与，
+    会把 `B` 拉到几个月前，使历史每天都「可判断」却一个导入创建的词都没有，显示成 0。
+    映射固定：周期 `w` 覆盖 `[w-6, w]`（周报按周日起周六止，文件名日期是周结束日）；日视图只命中
+    `(d, DAY)` 且 `d > B`，周视图命中 `(w, WEEK)` 或日报来源落在窗内且 `w-6 > B`（窗口含 `B` 的
+    那一周只有 `B` 之后几天可判，计数偏少，整周按不可判断）。**周报来源的首次只有周精度，不进
+    任何一天的日视图**。命中表达式只在 `analysis_crud.first_listed_expr`，筛选、行字段、数量、
+    词库盯盘共用；数量（`GET /api/analysis/first-listed`）查询时实算、与「仅 first_listed 筛选」
+    的总数同一口径，**不存按期统计**。不可判断时返回 `judgeable=false`、`count=null`——
+    **无法判断，不是 0**，界面必须分开呈现；筛选在这些期次上不命中任何词。补更早的报告只让
+    `B` 前移、不重写词。生产上线后历史日期一律「无法判断」，不承诺补出历史首次入榜；
+    `scripts/backfill_first_seen.py` 只给存量词写 `EARLIEST_OBSERVED`，永不产出 `IMPORTED`，
+    也不移动 `B`。
   请求字段 `is_new` → `first_listed`（两态，`false` 与未传等价，须 `or None` 计入
   `request_has_filters`）；`SAVED_MODE_VERSION`=4、`CACHE_VERSION`=3。
 - **#119 里仍有效的两项规则**：（1）**「排除品牌词」**

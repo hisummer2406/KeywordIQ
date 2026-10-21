@@ -220,36 +220,28 @@ def _stage_csv(session: Session, source: ImportSource) -> tuple[int, int, int]:
 def _upsert_keywords(session: Session, site: str, period: str, report_date: date) -> None:
     """补齐 dim_keyword 并写永久首次入榜记录（keyword-first-seen）。
 
-    ``dim_keyword`` 行只增不删，所以「站点内不存在」就等于「从未见过」。三条规则：
+    ``dim_keyword`` 行只增不删，所以「站点内不存在」就等于「从未见过」。导入**只记证据，
+    不判断「是不是首次」**——那是查询时对最终数据的派生（``analysis_crud.first_listed_expr``），
+    这样补更早的报告、乱序导入、重复导入的最终结果都与到达顺序无关。两条规则：
 
-    - **基线期**：站点没有任何首次记录，或本期不晚于站点最早已知期次（含补更早的历史）。
-      基线期里新插入的词只记 ``EARLIEST_OBSERVED``——没有更早的对照期，说它们是「首次」是在
-      没有证据时下判断，否则新站点首导/补历史会让整期涌进首次入榜且没有任何报错。
-      判定只读 ``dim_keyword``（永久），不读会被保留清理的 ``site_data_stats``。
-    - **非基线期**新插入的词记 ``CONFIRMED``。
-    - **已存在的词**只在证据更早时向前修正，比较键（期次日期，日优先于周）；``CONFIRMED`` 不
+    - **新插入的词**一律记 ``IMPORTED``（本系统导入创建，证据是这一期）。
+    - **已存在的词**只在证据更早时向前修正，比较键（期次日期，日优先于周）；``IMPORTED`` 不
       降级，``EARLIEST_OBSERVED`` 不升级，``UNKNOWN`` 见到证据后变 ``EARLIEST_OBSERVED``（
       它是存量词，当然不是新词）。相等不写——重复导入零更新，与 ``dim_product`` 的
       ``IS DISTINCT FROM`` 同一条纪律（UPDATE 会在每个索引上插新条目，``keyword`` 上挂着 GIN）。
 
     全部与调用方同一事务，导入失败整体回滚，不会留下失败期次的首次记录。
     """
-    site_min = session.execute(
-        text("SELECT min(first_seen_date) FROM analysis.dim_keyword WHERE site = :site"),
-        {"site": site},
-    ).scalar()
-    baseline = site_min is None or report_date <= site_min
     params = {
         "site": site, "rdate": report_date, "period": period,
         "rank": FIRST_SEEN_PERIOD_RANK[period],
-        "basis": "EARLIEST_OBSERVED" if baseline else "CONFIRMED",
     }
     session.execute(
         text(
             """
             INSERT INTO analysis.dim_keyword
                    (site, keyword, first_seen_date, first_seen_period_type, first_seen_basis)
-            SELECT DISTINCT :site, c1, CAST(:rdate AS date), :period, :basis
+            SELECT DISTINCT :site, c1, CAST(:rdate AS date), :period, 'IMPORTED'
               FROM analysis._import_staging
              WHERE NULLIF(c1, '') IS NOT NULL
             ON CONFLICT (site, keyword) DO NOTHING
