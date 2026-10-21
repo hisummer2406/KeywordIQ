@@ -8,6 +8,8 @@
 - 下表逐段登记职责去向；目标中的导航再指向现有具体spec/design/操作文件，不代表所有段落都需保留为指令。
 - 已实现清单、历史事故数字与部署状态退出当前指令，历史证据留在固定Git、Issue/PR和归档design；当前状态依实际验证。
 - 本次自检是文档和范围核对，不能证明所有原功能已验收或Agent原生加载已运行。
+- 2026-10-22 更正：原 CLAUDE.md 77 行条目的「当前去向」中规则文件列错位（例如分层条目指向 ingestion、插件条目指向 auth），
+  已按原文所属章节重新对应；guides 条目按「指南→同名规则」对应，复核无误。逐行去向仍为章节级对应，不代表每句话都逐字保留。
 
 ## 原文逐段去向
 
@@ -15,78 +17,78 @@
 |---|---|---|---|
 | CLAUDE.md:1–1 | # CLAUDE.md | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
 | CLAUDE.md:3–7 | 本文件面向所有在仓库工作的智能体；文件名沿用历史命名。先读根目录 AGENTS.md，再读本文件。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:9–9 | ## 开工必读：按改动范围加载细则 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:11–13 | 所有任务先读本文件；动手前再读下表命中的指南。涉及多个领域时取并集，不得只读摘要就实现。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:15–23 | / 改动范围或任务 / 必须先读 / | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:25–26 | 主文件保留关键判据，指南保存完整细则、反例与测试入口。业务需求及其场景仍以 openspec/specs/ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:28–28 | ## 项目与命令 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:30–32 | KeywordIQ 是 Amazon 搜索词分析平台，FastAPI + PostgreSQL 15 + AntD Pro/Umi | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:34–44 | bash | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:9–9 | ## 开工必读：按改动范围加载细则 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
+| CLAUDE.md:11–13 | 所有任务先读本文件；动手前再读下表命中的指南。涉及多个领域时取并集，不得只读摘要就实现。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:15–23 | / 改动范围或任务 / 必须先读 / | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:25–26 | 主文件保留关键判据，指南保存完整细则、反例与测试入口。业务需求及其场景仍以 openspec/specs/ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:28–28 | ## 项目与命令 | 按职责重组标题 | CLAUDE.md 与对应导航 |
+| CLAUDE.md:30–32 | KeywordIQ 是 Amazon 搜索词分析平台，FastAPI + PostgreSQL 15 + AntD Pro/Umi | 规则保留/行为归规格 | CLAUDE.md 通用部分；CLAUDE.md 开头；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:34–44 | bash | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/backend.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:46–47 | 生产 .env 中数据库主机为容器网络 db，宿主机不能直接使用该连接；不要裸跑宿主机迁移。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:49–49 | ## 分层与通用编码约束 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:51–63 | - app/table/* 按 model、crud、service、api、schemas 分层；调用方向 api → serv | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:65–65 | ## V2 数据模型：事实只追加，站点只有一个来源 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:67–67 | 表、字段、索引和迁移细则见分析指南。V1 csv_processor.py、关键词 UPSERT 与 JSONB 趋势已退役。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:69–79 | / 表/模块 / 约束 / | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:81–89 | 1. **四类事实表只追加，不原地 UPDATE。** 排名及派生值在导入时算定；查询只读。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:91–91 | ### 分区、迁移与保留清理 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:93–102 | - 业务模型新增时登记 migration_scope.V2_TABLES；ops 模型登记 OPS_TABLES。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:104–104 | ## 分析查询、导出与排名趋势 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:106–106 | 修改该域前读分析指南；首次入榜、筛选与缓存展示还需读前端指南。接口作用域为单站点、单视图、锚定期。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/frontend.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:108–113 | / 维度 / DAY / WEEK / | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:115–136 | - 行集合为在榜 ∪ 掉榜，include=ALL/LISTED/DROPPED；掉榜恒排在在榜之后，不随升降序翻转。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:138–138 | ### 持续增长市场与我的词库 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:140–149 | - 增长榜仅日报：窗口每期在榜、累计名次净增严格超过阈值、6 个日环比均达到阈值。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:151–151 | ### 首次入榜（#137 V1 / #141） | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:153–162 | - 永久证据存 dim_keyword.first_seen_date/first_seen_period_type/first_ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:164–164 | ## 导入：先直传、后流式 COPY、后台串行接手 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:49–49 | ## 分层与通用编码约束 | 按职责重组标题 | CLAUDE.md 与.claude/rules/backend.md 与导航 |
+| CLAUDE.md:51–63 | - app/table/* 按 model、crud、service、api、schemas 分层；调用方向 api → serv | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/backend.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:65–65 | ## V2 数据模型：事实只追加，站点只有一个来源 | 按职责重组标题 | CLAUDE.md 与.claude/rules/analysis.md 与导航 |
+| CLAUDE.md:67–67 | 表、字段、索引和迁移细则见分析指南。V1 csv_processor.py、关键词 UPSERT 与 JSONB 趋势已退役。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:69–79 | / 表/模块 / 约束 / | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:81–89 | 1. **四类事实表只追加，不原地 UPDATE。** 排名及派生值在导入时算定；查询只读。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:91–91 | ### 分区、迁移与保留清理 | 按职责重组标题 | CLAUDE.md 与.claude/rules/analysis.md；.claude/rules/backend.md 与导航 |
+| CLAUDE.md:93–102 | - 业务模型新增时登记 migration_scope.V2_TABLES；ops 模型登记 OPS_TABLES。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；.claude/rules/backend.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:104–104 | ## 分析查询、导出与排名趋势 | 按职责重组标题 | CLAUDE.md 与.claude/rules/analysis.md 与导航 |
+| CLAUDE.md:106–106 | 修改该域前读分析指南；首次入榜、筛选与缓存展示还需读前端指南。接口作用域为单站点、单视图、锚定期。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:108–113 | / 维度 / DAY / WEEK / | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/analysis.md；既有skill/command；原文历史见 fe2870a |
+| CLAUDE.md:115–136 | - 行集合为在榜 ∪ 掉榜，include=ALL/LISTED/DROPPED；掉榜恒排在在榜之后，不随升降序翻转。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:138–138 | ### 持续增长市场与我的词库 | 按职责重组标题 | CLAUDE.md 与.claude/rules/analysis.md 与导航 |
+| CLAUDE.md:140–149 | - 增长榜仅日报：窗口每期在榜、累计名次净增严格超过阈值、6 个日环比均达到阈值。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:151–151 | ### 首次入榜（#137 V1 / #141） | 按职责重组标题 | CLAUDE.md 与.claude/rules/analysis.md 与导航 |
+| CLAUDE.md:153–162 | - 永久证据存 dim_keyword.first_seen_date/first_seen_period_type/first_ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:164–164 | ## 导入：先直传、后流式 COPY、后台串行接手 | 按职责重组标题 | CLAUDE.md 与.claude/rules/ingestion.md 与导航 |
 | CLAUDE.md:166–166 | 修改前读导入指南与分析指南；改变导入路径须做真实体量端到端验证。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:168–171 | 1. /oss/upload-credentials 先落 UPLOADING 批次，再交受限 STS 凭证；落库失败不能签发。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:173–180 | - 导入用 pg_try_advisory_lock 串行；拿不到进 QUEUED。轮询任务必须实际接手，不能只靠上次导入结束链式 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:182–182 | ## 认证与错误契约 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:182–182 | ## 认证与错误契约 | 按职责重组标题 | CLAUDE.md 与.claude/rules/auth.md 与导航 |
 | CLAUDE.md:184–184 | 修改登录、退出、令牌清理、RBAC、SSO 前读认证指南；安全边界不能只靠前端隐藏。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/auth.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:186–186 | ### 认证、会话与权限 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:186–186 | ### 认证、会话与权限 | 按职责重组标题 | CLAUDE.md 与.claude/rules/auth.md 与导航 |
 | CLAUDE.md:188–207 | - 自建 PyJWT/HS256 + bcrypt + RBAC；没有全局鉴权中间件，受保护端点逐个挂依赖。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/auth.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:209–209 | ### 所有失败响应统一 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:211–213 | json | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:215–221 | - Service 抛 APIError 子类；API 不用 try/except 盖掉域错误码，不返元组或失败的 200 Pro | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/frontend.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:223–223 | ## 前端与导航：生效条件、缓存和缺失态不能混淆 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:225–225 | 修改前读前端指南；本节仅保留跨屏原则和高风险判据。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:227–250 | - 导航按数据域命名，八项顺序为机会中心、市场分析、词库工具、竞对监控、产品档案、风险核查、定价核算、数据管理。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:252–252 | ## 竞对监控与插件：共享观测，私有关注 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:209–209 | ### 所有失败响应统一 | 按职责重组标题 | CLAUDE.md 与.claude/rules/backend.md 与导航 |
+| CLAUDE.md:211–213 | json | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/backend.md；既有skill/command；原文历史见 fe2870a |
+| CLAUDE.md:215–221 | - Service 抛 APIError 子类；API 不用 try/except 盖掉域错误码，不返元组或失败的 200 Pro | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/backend.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:223–223 | ## 前端与导航：生效条件、缓存和缺失态不能混淆 | 按职责重组标题 | CLAUDE.md 与.claude/rules/frontend.md；.claude/rules/auth.md 与导航 |
+| CLAUDE.md:225–225 | 修改前读前端指南；本节仅保留跨屏原则和高风险判据。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/frontend.md；.claude/rules/auth.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:227–250 | - 导航按数据域命名，八项顺序为机会中心、市场分析、词库工具、竞对监控、产品档案、风险核查、定价核算、数据管理。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/frontend.md；.claude/rules/auth.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:252–252 | ## 竞对监控与插件：共享观测，私有关注 | 按职责重组标题 | CLAUDE.md 与.claude/rules/competitor.md 与导航 |
 | CLAUDE.md:254–254 | 修改前读竞对指南；插件还须读 extension/README.md 及采集变更 design。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:256–277 | - 共享主体/观测不带账号属性；分组/关注/预览私有且逐查询限制 user_id，别人的记录返回 404。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:279–279 | ### 浏览器插件（extension/） | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:281–286 | - manifest 与 package 版本一致，manifest 保留公钥 key 固定扩展 ID；私钥不得入库。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/extension.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:288–288 | ## 部署与运维：只走授权入口，V1 不动 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:279–279 | ### 浏览器插件（extension/） | 按职责重组标题 | CLAUDE.md 与.claude/rules/extension.md；.claude/rules/competitor.md 与导航 |
+| CLAUDE.md:281–286 | - manifest 与 package 版本一致，manifest 保留公钥 key 固定扩展 ID；私钥不得入库。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/extension.md；.claude/rules/competitor.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:288–288 | ## 部署与运维：只走授权入口，V1 不动 | 按职责重组标题 | CLAUDE.md 与.claude/rules/operations.md 与导航 |
 | CLAUDE.md:290–290 | 开始 ECS、OSS 或 ops-bot 工作前先读交接与运维指南；环境记录不是当前在线状态，必要时重新验证。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:292–308 | - V2 只由 Deploy V2 to ECS 手动发布。必须为 refs/heads/v2、完整 SHA 位于 origin/ | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/operations.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:310–310 | ## 流程重量：默认最轻，长期决策才留完整规格 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:310–310 | ## 流程重量：默认最轻，长期决策才留完整规格 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
 | CLAUDE.md:312–312 | 沿用三档；用户已明确范围与方案时直接按授权推进。必要澄清一次问完，不串行多轮追问。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
 | CLAUDE.md:314–318 | / 档位 / 产物 / 适用 / | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
 | CLAUDE.md:320–322 | 取舍看决策以后是否需要翻阅，不按改动大小；一次性脚本、测试辅助或提交信息不展开长篇背景。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:324–324 | ### 跨 Agent 交付：Issue 是契约，PR 是审核包 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:324–324 | ### 跨 Agent 交付：Issue 是契约，PR 是审核包 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
 | CLAUDE.md:326–327 | 默认 Codex 讨论、Issue 交接、Claude Code 实现、Codex 独立审核；用户可另行指定执行者。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:329–334 | 1. 完整流程先读 .claude/skills/start-change/SKILL.md，认领并建独立仓库外 worktree | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:336–336 | #### 代发 @codex review | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:329–334 | 1. 完整流程先读 .claude/skills/start-change/SKILL.md，认领并建独立仓库外 worktree | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:336–336 | #### 代发 @codex review | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
 | CLAUDE.md:338–341 | 仅用户当次明确要求“让 codex 评审/再发一轮复审”时可代发，不因 deliver-pr/fix-review 自行触发。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:343–343 | ### 工作分支与并行会话 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:345–358 | - 所有变更从 v2 建分支，通常 change/<id>，不是 main；PR 显式 --base v2，创建后核对。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/auth.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:360–360 | ### 手动交付入口 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:362–366 | - ［/deliver-pr］(.claude/commands/deliver-pr.md)：检查、提交、推送、创建/更新 PR | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:368–368 | ## 验证与开发 harness | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:370–371 | Codex 等环境不受 Claude Code PreToolUse hook 保护，必须主动跑检查；详见 AGENTS.md。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/frontend.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:373–378 | / 改动范围 / 提交前检查 / | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:380–388 | - 前端可用 vitest related 缩小影响，但 .umirc.ts、vitest.config.ts、setup.ts  | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/ingestion.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:390–390 | ## CLAUDE.md 的维护纪律（#142） | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:343–343 | ### 工作分支与并行会话 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
+| CLAUDE.md:345–358 | - 所有变更从 v2 建分支，通常 change/<id>，不是 main；PR 显式 --base v2，创建后核对。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:360–360 | ### 手动交付入口 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
+| CLAUDE.md:362–366 | - ［/deliver-pr］(.claude/commands/deliver-pr.md)：检查、提交、推送、创建/更新 PR | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:368–368 | ## 验证与开发 harness | 按职责重组标题 | CLAUDE.md 与.claude/rules/backend.md 与导航 |
+| CLAUDE.md:370–371 | Codex 等环境不受 Claude Code PreToolUse hook 保护，必须主动跑检查；详见 AGENTS.md。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/backend.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:373–378 | / 改动范围 / 提交前检查 / | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/backend.md；既有skill/command；原文历史见 fe2870a |
+| CLAUDE.md:380–388 | - 前端可用 vitest related 缩小影响，但 .umirc.ts、vitest.config.ts、setup.ts  | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/backend.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:390–390 | ## CLAUDE.md 的维护纪律（#142） | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
 | CLAUDE.md:392–393 | 主文件目标 700～780 行、上限 800 行；同时检查实际文本量，不靠去空行或长行拼接凑数。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:395–395 | ### 经验晋升 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:397–401 | 一般经验首次记共享 Issue 或版本化 OpenSpec，记录问题/根因/范围/证据；本地 worklog 不作为唯一依据。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:403–403 | ### 审计与处置 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
-| CLAUDE.md:405–407 | 用户发起、大版本收尾或发现冲突时审计，不默认建定时任务。记录基准提交/本地差异、范围与未核实项。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/frontend.md；openspec/guides/ 对应参考入口 |
-| CLAUDE.md:409–414 | / 处置 / 判据 / | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/analysis.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:395–395 | ### 经验晋升 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
+| CLAUDE.md:397–401 | 一般经验首次记共享 Issue 或版本化 OpenSpec，记录问题/根因/范围/证据；本地 worklog 不作为唯一依据。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:403–403 | ### 审计与处置 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
+| CLAUDE.md:405–407 | 用户发起、大版本收尾或发现冲突时审计，不默认建定时任务。记录基准提交/本地差异、范围与未核实项。 | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
+| CLAUDE.md:409–414 | / 处置 / 判据 / | 规则保留/行为归规格 | CLAUDE.md 通用部分；.claude/rules/workflow.md；openspec/guides/ 对应参考入口 |
 | CLAUDE.md:416–418 | 删改清单逐项列原条目、证据、去向、确认状态与执行结果。#142 首轮逐条处置仍需逐条确认； | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
-| CLAUDE.md:420–420 | ### 完整流程的双向覆盖 | 按职责重组标题 | CLAUDE.md 与对应局部规则/导航 |
+| CLAUDE.md:420–420 | ### 完整流程的双向覆盖 | 按职责重组标题 | CLAUDE.md 与.claude/rules/workflow.md 与导航 |
 | CLAUDE.md:422–423 | 只约束新完整流程变更，轻量两档与已归档变更不补矩阵；沿用 tasks 内联标注，不新增独立矩阵文件。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
 | CLAUDE.md:425–428 | text | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
 | CLAUDE.md:430–433 | PR 审核、合并前从需求查 task/实际改动/验证，反向从 diff 查批准范围；特别查非目标和砍掉功能是否被实现。 | 通用规则精简/流程去重 | CLAUDE.md；.claude/rules/workflow.md；既有skill/command；原文历史见 fe2870a |
