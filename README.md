@@ -138,7 +138,7 @@ docker compose up -d   # 拉起应用容器（restart: unless-stopped，崩溃/�
 | 类别 | 规格 |
 |------|------|
 | 应用服务器 | 阿里云 ECS · Alibaba Cloud Linux 3.2104 LTS 64 位 · 4 vCPU / 8 GiB |
-| 数据库 | 阿里云 RDS PostgreSQL 15.0 · 2C4G · `max_connections=400` |
+| 数据库 | PostgreSQL 15.8 · Docker Compose 容器，与应用同机（独立库 `keywordiq_v2`） · 连接数以 `.env` / Compose 为准 |
 
 三个月保留窗口下满窗约 2 亿行 / 50 GB，当前规格通常无需扩容；扩容触发条件与连接池取值算式
 见 [CLAUDE.md](./CLAUDE.md)「Production Environment」一节。
