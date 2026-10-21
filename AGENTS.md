@@ -30,6 +30,8 @@
 - **站点码唯一事实来源是 `app/site_registry.py`**（英国是 `GB` 不是 `UK`）。别处硬编码站点
   列表、为站点元数据建库表，都是开第二事实来源。非法/缺失站点码必须报错（422），
   不得回退 `DEFAULT_SITE`。
+- **`is_new` 列、DEFAULT false 与其部分索引在 expand/contract 阶段必须保留。** 旧容器仍引用，
+  提前 drop 列/索引会让旧版本报错；新请求只用 `first_listed`，删除须走独立 contract 迁移。
 
 ### 分区与迁移
 

@@ -1,11 +1,14 @@
 ---
 paths:
   - "app/table/competitor/**/*.py"
+  - "app/jobs/**/*.py"
   - "frontend/src/pages/Competitor/**/*"
   - "extension/src/**/*"
   - "test/test*competitor*.py"
   - "test/test*store*.py"
   - "test/test*asin*.py"
+  - "test/test*dtc*.py"
+  - "test/test*seller*.py"
 ---
 
 # 竞对数据实现约束
