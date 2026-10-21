@@ -4,10 +4,10 @@
 
 ## What Changes
 
-- `dim_keyword` 新增永久首次入榜记录：`first_seen_date`、`first_seen_period_type`（DAY/WEEK）、`first_seen_basis`（`CONFIRMED` 已确认 / `EARLIEST_OBSERVED` 最早可观测 / `UNKNOWN` 未知）。`dim_keyword` 不分区、不参与保留清理，天然是“见过的词”的永久集合。
-- 导入第二段（补齐维度）同时写首次记录：新词条带本次期次入库；已存在的词只在证据更早时向前修正（`(日期, 日优先于周)` 取小），重复导入、重试、乱序、日周交叉导入结果一致。
-- 站点最早一期（及更早的补历史）里首次遇到的词只记 `EARLIEST_OBSERVED`，**不算首次入榜**——避免新站点首导、补更早报告时整批涌进当期。
-- 存量迁移：迁移只加列，既有词一律 `UNKNOWN`；`scripts/backfill_first_seen.py` 用库内仍保留的事实数据把能证明的最早日期补成 `EARLIEST_OBSERVED`，**永不写成 `CONFIRMED`**，输出处理数/无证据数/抽样核验。
+- `dim_keyword` 新增永久首次入榜记录：`first_seen_date`、`first_seen_period_type`（DAY/WEEK）、`first_seen_basis`（词条来源：`IMPORTED` 导入创建 / `EARLIEST_OBSERVED` 存量且最早可观测 / `UNKNOWN` 存量且无证据）。`dim_keyword` 不分区、不参与保留清理，天然是“见过的词”的永久集合。
+- 导入第二段（补齐维度）同时写首次记录：新词条带本次期次入库并记来源 `IMPORTED`；已存在的词只在证据更早时向前修正（`(日期, 日优先于周)` 取小），重复导入、重试、乱序、日周交叉导入结果一致。
+- **“是不是首次入榜”不在导入时下判断，查询时按最终数据派生**：来源为 `IMPORTED` 且首次日期晚于站点监测起点 `B`（站点由导入监测到的最早一期，仅取“导入创建”的词，回填不移动它）。因此结果只取决于导入过哪些报告，与导入顺序、重复导入、重试无关；补更早报告只让 `B` 前移，不重写任何词。`B` 当天及更早的词、存量词不算首次入榜，避免新站点首导、补更早报告时整批涌进当期。
+- 存量迁移：迁移只加列，既有词一律 `UNKNOWN`；`scripts/backfill_first_seen.py` 用库内仍保留的事实数据把能证明的最早日期补成 `EARLIEST_OBSERVED`，**永不写成 `IMPORTED`**，输出处理数/无证据数/抽样核验。
 - 查询侧：「新词」筛选、列、导出改为「首次入榜」，判据是 `dim_keyword` 首次记录落在所选期次内（日视图按日；周视图按周期窗口 `[w-6, w]`，周报来源只有周精度，不捏造某一天）。当期「首次入榜」数量查询时按同一口径实算，不再存按期统计，因此补历史/乱序不需要统计校正。
 - 退役 `fact_daily/fact_weekly.is_new` 的 7 天口径：停止写入、迁移删列，`scripts/backfill_is_new.py` 删除。
 - **BREAKING**（对内）：请求字段 `is_new` → `first_listed`；保存的条件版本号 +1，旧保存条件静默丢弃（沿用既有约定）。
