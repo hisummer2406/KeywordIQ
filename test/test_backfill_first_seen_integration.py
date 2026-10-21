@@ -85,3 +85,15 @@ def test_dry_run_reports_real_counts(session, tmp_path):
     _reset_to_legacy(session)
     stats = bf.backfill_site(session, "US", dry_run=True)
     assert stats == {"periods": 1, "updated": 2}
+
+
+def test_dry_run_does_not_recount_a_keyword_seen_in_several_periods(session, tmp_path):
+    """x 出现在两期：正式跑只会在较早那期改它一次，dry-run 的数字必须与之相等。
+
+    逐期回滚时第二期从原状态重来，x 被算两次（updated=3）；统一回滚才是 2
+    （x 一次 + 只在第二期出现的 y 一次）。"""
+    _imp(session, tmp_path, "a", ["x"], D(2026, 7, 10))
+    _imp(session, tmp_path, "b", ["x", "y"], D(2026, 7, 11))
+    _reset_to_legacy(session)
+    stats = bf.backfill_site(session, "US", dry_run=True)
+    assert stats == {"periods": 2, "updated": 2}
