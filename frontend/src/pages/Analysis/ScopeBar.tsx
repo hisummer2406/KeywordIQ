@@ -113,7 +113,9 @@ export default function ScopeBar({
             ) : (
               // ASIN 是等值匹配、没有模式；其余输入（含还没输入）都显示模式选择。
               // 「按关键词检索」的回显照旧保留——自动判定必须可见。
-              <Space size={4}>
+              // 拦住 click 冒泡：Input 外壳的 onClick 会把焦点抢回输入框，下拉刚展开就被 blur 收起，
+              // 表现为模式选不动。jsdom 里 fireEvent 不走这条冒泡，测试覆盖不到，别删。
+              <Space size={4} onClick={(e) => e.stopPropagation()}>
                 {kind === 'keyword' && (
                   <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                     {KIND_LABEL.keyword}
