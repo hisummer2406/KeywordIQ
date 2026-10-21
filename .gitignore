@@ -11,6 +11,7 @@ plugins/
 # settings.local.json 仍然被忽略——那里放个人权限与本机路径。
 !.claude/hooks/
 !.claude/skills/
+!.claude/rules/
 !.claude/commands/
 .claude/commands/*
 !.claude/commands/deliver-pr.md
