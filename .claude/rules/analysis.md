@@ -1,0 +1,39 @@
+---
+paths:
+  - "app/table/analysis/**/*.py"
+  - "app/table/keyword/**/*.py"
+  - "app/table/search/**/*.py"
+  - "app/table/upload/**/*.py"
+  - "app/site_registry.py"
+  - "alembic/**/*.py"
+  - "scripts/backfill*.py"
+  - "scripts/prune_retention.py"
+  - "test/test*analysis*.py"
+  - "test/test*first_seen*.py"
+  - "test/test*keyword*.py"
+  - "test/test*retention*.py"
+  - "test/test*site_scoped*.py"
+---
+
+# 数据与查询实现约束
+
+- 改动前从 [分析导航](../../openspec/guides/analysis.md) 选择相关规格；不要在规则里重新定义业务公式。
+- fact_daily/weekly/dropped/growth 只追加；同一期重导才删该切片重写，不 UPDATE 事实。写前无条件 ensure_fact_partitions。
+- 分区新表登记 PARTITIONED_TABLES；竞对普通表不登记，避免按月 DROP 有价值的历史。
+- dim_product 保留 IS DISTINCT FROM 守卫；维度去重预筛和等值不写纪律不能删除，避免静默写放大。
+- 站点与元数据只来自 site_registry；非法站点拒绝，不猜 DEFAULT_SITE，不另建清单或站点表。
+- 周表日期列是 report_date_week，不能照抄日报 report_date；查询不能跨站点或跨日/周混数。
+- search/导出/数量/词库复用现有口径与投影；过滤布尔 false 与未传等价时用 or None，避免错入带筛选路径。
+- 掉榜集合与增长榜由导入算定，查询不再重算；改增长阈值必须回填历史，不能只等新数据。
+- 可见在榜数量按黑名单实算；不能把未扣除黑名单的统计值当分页分界。黑名单基线不算用户筛选。
+- 分页排序要完整确定性次级键；小样本稳定不能替代 ORDER BY 结构核对。
+- 分页后批量补趋势/历史，共用回溯；shape_trends/日期裁剪传 on/view，避免多画回溯点。
+- 导出与 search 同口径、开流前拒绝超上限，不静默截断；流式会话遵守 backend 规则。
+- 单关键词历史使用 keyword_history 索引；掉榜不走日期先于 keyword_id 的主键，避免扫描全站掉榜窗口。
+- 趋势先排除保留下界再判断导入；on 来自来源期次，切视图复用原值，解析只在后端。
+- 首次证据永久保留于 dim_keyword，导入顺序/重复不改变最终结果；查询复用 first_listed_expr，不另存按期计数。
+- UNKNOWN/最早可观测不伪装成确认首次，周精度不捏造日日期；兼容期旧事实列按获批迁移计划退役。
+- 词库条目驱动行集合，LEFT JOIN 补数；分组站点、私有性及限额按 keyword-library 规格，不照抄竞对标签模型。
+- 保留清理无条件清超期 site_data_stats/category_stats/brand_stats，不依赖本轮 DROP；保留 report_date 单列清理索引。
+- 清理写路径与导入共用 import_lock/IMPORT_LOCK_KEY；拿不到记 lock_skipped，不阻塞/重试，防事实与统计错位。
+- 涉及权限放宽时读 auth 规则；公共趋势可按规格接受任一权限，私有竞对筛选不得套用。

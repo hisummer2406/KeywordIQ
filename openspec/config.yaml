@@ -1,39 +1,10 @@
 schema: spec-driven
 
 context: |
-  项目：KeywordIQ —— 亚马逊搜索词数据分析平台。支持 GB 级 CSV 导入、实时查询与可视化，
-  约 200 并发用户、读多写少，配合周期性批量导入。
-
-  技术栈：
-  - Python 3 + FastAPI，uv 管理依赖（uv sync / uv add / uv run）
-  - SQLAlchemy 2.0（仅新式 API：DeclarativeBase / Mapped / mapped_column / select()），
-    同步（psycopg2）与异步（asyncpg）双引擎并存
-  - Pydantic v2（仅新式 API：ConfigDict / field_validator / model_validate / model_dump）
-  - PostgreSQL 15，schema 固定为 `analysis`；表结构变更走 Alembic 迁移，禁止裸 SQL 改库
-  - pytest 测试，Docker Compose 部署
-
-  分层约定（app/table/* 模块严格遵守）：
-  model → crud → service → api → schemas。
-  API 层只做薄控制器；事务边界由 service 层控制，crud 层永不 commit。
-
-  数据规模（性能决策的前提）：
-  - 日报：约 30 万行 / 150MB CSV，每天导入一次
-  - 周报：约 300 万行 / 1.5GB CSV，每周导入一次
-  两者量级相差 10 倍，导入性能应当作为两个独立问题域处理。
-
-  项目约定与按需上下文：
-  - 先读 CLAUDE.md，并按其必读表加载 openspec/guides/ 下的领域指南。
-  - 生产状态见 docs/ops/v2-ecs-handoff.md；容量/连接预算见 CLAUDE.md「部署与运维」。
-  - 不复用已退役的 RDS、单连接池和 V1 并行分片参数；默认值见 .env.example/config.py。
-
-  硬性红线：
-  - 不得在 FastAPI 事件循环上做 CPU 密集的 CSV 解析、阻塞式数据库操作或整文件读取
-  - 不得把 GB 级文件整体读入内存，不得返回未分页的全表结果
-  - 导入的子进程必须自建并释放独立引擎/会话，禁止复用父进程连接
-  - 单元测试不得依赖真实 PostgreSQL；导入类测试使用小样本 fixture，禁止使用真实客户 CSV
-  - 新增配置项必须同步更新 .env.example（含单位与安全的本地默认值）
-  - 不得提交 uploads/、logs/、临时切分文件与真实报表数据
-  - 提交信息使用中文、conventional commits 风格（如 `fix: 优化分析列表统计查询`）
+  KeywordIQ：FastAPI + PostgreSQL + AntD Pro，依赖由 uv/pnpm 管理。
+  先读 CLAUDE.md；按任务影响范围读取 .claude/rules/，业务行为读取已有 openspec/specs。
+  规格/设计/操作导航见 openspec/guides/README.md；不要把功能清单、历史状态或完整配置复制进 Agent 指令。
+  默认值查 .env.example/config.py；生产操作先读 docs/ops/v2-ecs-handoff.md。
 
 rules:
   proposal:
