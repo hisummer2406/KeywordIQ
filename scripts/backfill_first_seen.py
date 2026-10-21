@@ -123,18 +123,23 @@ def sample_check(session, site: str, n: int) -> tuple[int, int]:
 
 
 def backfill_site(session, site: str, *, dry_run: bool) -> dict:
-    """逐期推进，每期一个事务（一期失败不回滚已完成的期次，便于分批推进）。"""
+    """逐期推进。正式跑每期一个事务（一期失败不回滚已完成的期次，便于分批推进）。
+
+    dry-run 则**所有期次留在同一个事务里，最后只回滚一次**：逐期回滚会把前面期次的模拟
+    更新一并撤销，下一期从生产原状态重新开始，同一个词出现在多期就被重复计入，报出的
+    ``updated`` 虚高，也无法预览正式跑产出的依据分布（Codex 评审 PR #141 P2）。
+    """
     periods = list_periods(session, site)
     updated = 0
     for report_date, period in periods:
         n = backfill_period(session, site, period, report_date)
         updated += n
-        if dry_run:
-            session.rollback()
-        else:
+        if not dry_run:
             session.commit()
         logger.info("%s %s %s：更新 %d 个词%s", site, period, report_date, n,
-                    "（dry-run，已回滚）" if dry_run else "")
+                    "（dry-run，最后统一回滚）" if dry_run else "")
+    if dry_run:
+        session.rollback()
     return {"periods": len(periods), "updated": updated}
 
 
