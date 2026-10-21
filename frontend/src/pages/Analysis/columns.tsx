@@ -85,7 +85,7 @@ const HISTORY_LABEL_WIDTH = 52;
  * - **周视图**：变化量相对**上期**（上一周）排名的百分比，列名「排名变化率」。
  * - **日视图**：对比 **7 天前**的排名（issue #119），列名「7天变化率」。基期取接口 `history`
  *   的第三位（日视图固定为 昨天 / 3 天前 / 7 天前），不是 `previous_ranking`——后者是昨天，
- *   新词（昨天没出现）因此也能在 7 天前有过排名时算出变化。
+ *   昨天没出现的词因此也能在 7 天前有过排名时算出变化。
  *
  * 在展示层算而不在库里存：它是已有字段的纯函数，存一份就多一处可能与那些数对不上的地方
  * （事实表只追加，改口径要重导）。
@@ -120,8 +120,8 @@ function renderChangeRate(row: AnalysisRow, view: View) {
 /**
  * 现排名单元格：排名数值 + 状态标签。
  *
- * 「新词」与「已掉榜」**互斥**，掉榜优先：一行要么是本期新出现的，要么是本期已经没有的，
- * 不可能同时成立。原先「新词」是独立一列，掉榜行在那一列只能显示占位符，白占一列宽度。
+ * 「首次入榜」与「已掉榜」**互斥**，掉榜优先：一行要么是本期首次进入监测范围的，要么是本期
+ * 已经没有的，不可能同时成立。原先「新词」是独立一列，掉榜行在那一列只能显示占位符，白占一列宽度。
  *
  * 掉榜行没有当期排名（一律为空，不用最后在榜期的值顶替），故显示最后在榜期而非数字。
  */
@@ -137,7 +137,7 @@ function renderRanking(row: AnalysisRow) {
   return (
     <span>
       {row.current_ranking ?? PLACEHOLDER}
-      {row.is_new ? <Tag color="gold" style={{ marginInlineStart: 6 }}>新词</Tag> : null}
+      {row.first_listed ? <Tag color="gold" style={{ marginInlineStart: 6 }}>首次入榜</Tag> : null}
     </span>
   );
 }

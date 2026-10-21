@@ -129,7 +129,7 @@ def _fact_insert_sql(table: str, date_column: str) -> str:
     return f"""
         INSERT INTO analysis.{table} (
             site, {date_column}, keyword_id,
-            current_ranking, previous_ranking, ranking_change, is_new,
+            current_ranking, previous_ranking, ranking_change,
             top1_product_id, top1_click_share, top1_conversion_share,
             top2_product_id, top2_click_share, top2_conversion_share,
             top3_product_id, top3_click_share, top3_conversion_share
@@ -140,7 +140,6 @@ def _fact_insert_sql(table: str, date_column: str) -> str:
                g,
                GREATEST(1, g + (g % 21) - 10),
                (g % 21) - 10,
-               (g % 50) = 0,
                1 + (power(random(), 3) * :product_max)::bigint,
                round((random() * 30)::numeric, 2),
                round((random() * 20)::numeric, 2),

@@ -12,3 +12,8 @@ from __future__ import annotations
 
 SITE_COLUMN_COMMENT = "ISO 3166-1 alpha-2 大写站点码（英国用 GB 不用 UK），取值由应用层站点清单约束"
 PERIOD_COLUMN_COMMENT = "周期类型：DAY 或 WEEK"
+FIRST_SEEN_DATE_COMMENT = "首次入榜的报告期次日期（取自文件名日期，非上传/迁移时间）；依据未知时为空"
+FIRST_SEEN_PERIOD_COMMENT = "首次入榜的日期来自日报(DAY)还是周报(WEEK)；周报来源只有周精度"
+FIRST_SEEN_BASIS_COMMENT = (
+    "首次入榜依据：IMPORTED 本系统导入创建 / EARLIEST_OBSERVED 最早可观测(此前可能见过) / UNKNOWN 无证据"
+)

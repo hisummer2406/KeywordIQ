@@ -26,7 +26,11 @@ export interface AnalysisRow {
   current_ranking: number | null;
   previous_ranking: number | null;
   ranking_change: number | null;
-  is_new: boolean;
+  /** 所选期次是否首次入榜（派生自关键词的永久首次记录；掉榜行恒 false） */
+  first_listed: boolean;
+  first_seen_date?: string | null;
+  /** IMPORTED 导入创建 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知 */
+  first_seen_basis?: string | null;
   /**
    * 三个历史参照点的排名，顺序固定（日视图：昨天 / 3 天前 / 7 天前）。
    * 参照期缺失（未导入或已被保留清理移出）时该位为 `null`，不补齐、不用相邻期顶替。
@@ -89,10 +93,10 @@ export interface SearchBody {
   click_share_max?: number;
   conversion_share_min?: number;
   conversion_share_max?: number;
-  is_new?: boolean;
+  first_listed?: boolean;
   /**
    * 竞对新发现：前三商品槽位任一 ASIN，是当前用户关注的卖家**近 7 日新发现**的 ASIN
-   * （晚于该卖家基线批次且落在窗口内），与 `is_new` 同构（不传 = 不筛）。
+   * （晚于该卖家基线批次且落在窗口内），与 `first_listed` 同构（不传 = 不筛）。
    *
    * **不是"关注卖家的全部在售商品"**——空结果有两个成因：插件未上线（数据没进来）、
    * 或商品都是 7 天前见到的（过了窗口）。界面提示两条都要说（见 `COMPETITOR_NEW_HINT`）。
@@ -124,6 +128,17 @@ export interface ScopeInfo {
   view: View;
   latest_date: string | null;
   available_dates: string[];
+}
+
+/** 所选期次「首次入榜」数量与统计范围。`judgeable=false` 时 `count` 为空——无法判断，不是 0。 */
+export interface FirstListedSummary {
+  site: string;
+  view: View;
+  on: string;
+  judgeable: boolean;
+  count: number | null;
+  /** 站点首次入榜统计的起点：最早的「已确认首次」期次 */
+  earliest_known_date: string | null;
 }
 
 export interface BrandOption {
@@ -170,6 +185,15 @@ export async function getCategories(site: string | undefined, view: View, date?:
   return request<CategoryOption[]>('/api/analysis/categories', {
     method: 'GET',
     params: { view, ...(site ? { site } : {}), ...(date ? { date } : {}) },
+  });
+}
+
+/** 所选期次的「首次入榜」数量；站点无数据时后端返回 null。 */
+export async function getFirstListed(site: string | undefined, view: View, date?: string | null) {
+  return request<FirstListedSummary | null>('/api/analysis/first-listed', {
+    method: 'GET',
+    params: { view, ...(site ? { site } : {}), ...(date ? { date } : {}) },
+    skipErrorHandler: true,
   });
 }
 

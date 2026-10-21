@@ -37,7 +37,7 @@ const FILTER_KEYS = [
   'keyword', 'asin', 'product_title', 'brands', 'categories',
   'ranking_min', 'ranking_max', 'change_min', 'change_max',
   'click_share_min', 'click_share_max', 'conversion_share_min', 'conversion_share_max',
-  'is_new', 'competitor_new', 'exclude_brand_in_keyword',
+  'first_listed', 'competitor_new', 'exclude_brand_in_keyword',
 ] as const satisfies readonly (keyof SearchBody)[];
 
 type SortDraft = { field: string; dir: 'asc' | 'desc' };
@@ -265,9 +265,9 @@ export function useAnalysisQuery(options: {
   };
 
   /**
-   * 「重置」清成**默认**（含只看新词），不是清成全不筛。界面因此没有一键回到「全部词」
+   * 「重置」清成**默认**（含只看首次入榜），不是清成全不筛。界面因此没有一键回到「全部词」
    * 的入口——那需要第二个按钮「恢复默认」，与「重置」语义相近，用户得先分辨差别才能
-   * 选对，正是「一个筛选维度恰好一个入口」要避免的形态。想看全量榜单就把新词开关拨到
+   * 选对，正是「一个筛选维度恰好一个入口」要避免的形态。想看全量榜单就把首次入榜开关拨到
    * 「全部」，多一次点击。
    *
    * `q` 保留：重置的是过滤区，作用域栏的检索框不归它管。

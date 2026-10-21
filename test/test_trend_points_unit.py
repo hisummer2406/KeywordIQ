@@ -27,7 +27,7 @@ def test_day_row_serializes_trend_dates():
         current_ranking=10,
         previous_ranking=20,
         ranking_change=-10,
-        is_new=False,
+        first_listed=False,
         trend=[20, 10],
         trend_dates=[date(2026, 7, 17), date(2026, 7, 18)],
     )
@@ -43,7 +43,7 @@ def test_week_row_also_carries_trend():
         current_ranking=10,
         previous_ranking=20,
         ranking_change=-10,
-        is_new=False,
+        first_listed=False,
         trend=[30, 20, 10],
         trend_dates=[date(2026, 6, 27), date(2026, 7, 4), date(2026, 7, 11)],
     )

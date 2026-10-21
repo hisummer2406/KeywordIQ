@@ -70,7 +70,7 @@ def _row(segment, **extra):
         "last_ranking": None,
         "current_ranking": None,
         "top1_click_share": None,
-        "is_new": None,
+        "first_listed": None,
     }
     base.update(extra)
     return _FakeRow(base)
@@ -78,7 +78,7 @@ def _row(segment, **extra):
 
 def test_三种状态各自翻译正确():
     rows = crud.shape_watch_rows([
-        _row(0, current_ranking=12, top1_click_share=3.5, is_new=False),
+        _row(0, current_ranking=12, top1_click_share=3.5, first_listed=False),
         _row(1, last_seen_date=date(2026, 7, 10), last_ranking=800),
         _row(2),
     ])
@@ -106,7 +106,7 @@ def test_无数据行能通过行schema校验():
     assert item.status == "MISSING"
     assert item.current_ranking is None
     assert item.top1_click_share == 0
-    assert item.is_new is False
+    assert item.first_listed is False
 
 
 def test_在榜行保留事实值():
