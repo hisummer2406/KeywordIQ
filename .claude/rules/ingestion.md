@@ -1,6 +1,7 @@
 ---
 paths:
   - "app/table/upload/**/*.py"
+  - "app/jobs/**/*.py"
   - "scripts/backfill*.py"
   - "scripts/check_oss.py"
   - "test/test*import*.py"

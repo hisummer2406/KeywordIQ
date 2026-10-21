@@ -10,6 +10,8 @@ paths:
   - "frontend/src/access.ts"
   - "test/test*auth*.py"
   - "test/test*sso*.py"
+  - "test/test*dingtalk*.py"
+  - "test/test*rbac*.py"
   - "test/test*session*.py"
 ---
 
