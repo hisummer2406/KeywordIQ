@@ -44,6 +44,7 @@ from app.table.search.search_schemas import (
     BrandOption,
     CategoryOption,
     DayRowItem,
+    FirstListedSummary,
     ScopeInfo,
     WeekRowItem,
 )
@@ -98,7 +99,7 @@ _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
     ("current_ranking", "当期排名"),
     ("previous_ranking", "上期排名"),
     ("ranking_change", "排名变化"),
-    ("is_new", "是否新词"),
+    ("first_listed", "首次入榜"),
     *_product_slot_columns(1),
     *_product_slot_columns(2),
     *_product_slot_columns(3),
@@ -254,7 +255,7 @@ def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
         "has_asin_filter": bool(req.asin),
         "categories_count": len(req.categories) if req.categories else 0,
         "brands_count": len(req.brands) if req.brands else 0,
-        "is_new": req.is_new,
+        "first_listed": req.first_listed,
         "competitor_new": req.competitor_new,
         "exclude_brand_in_keyword": req.exclude_brand_in_keyword,
         "include": req.include,
@@ -571,6 +572,31 @@ async def get_categories(
         return []
     rows = (await db.execute(crud.category_options_stmt(resolved_site, view, resolved_date))).all()
     return [CategoryOption(**opt) for opt in crud.shape_category_options(rows)]
+
+
+async def get_first_listed(
+    db: AsyncSession, site: str | None, view: str, on: date | None = None
+) -> FirstListedSummary | None:
+    """所选期次「首次入榜」数量 + 统计范围。
+
+    映射窗口起点（日 ``d``；周 ``w-6``）不晚于站点监测起点 ``B``（导入创建的词的最早首次日期）
+    时 ``judgeable=False``、``count=None``：那之前没有对照期，**无法判断而不是 0**。
+    站点无数据时返回 ``None``（调用方给空），与下拉选项同一约定。
+    """
+    resolved_site, resolved_date = await _resolve_options_scope(db, site, view, on)
+    if resolved_date is None:
+        return None
+    earliest = (await db.execute(crud.imported_since_stmt(resolved_site))).scalar()
+    if earliest is None or crud.first_listed_window_start(view, resolved_date) <= earliest:
+        return FirstListedSummary(
+            site=resolved_site, view=view, on=resolved_date,  # type: ignore[arg-type]
+            judgeable=False, earliest_known_date=earliest,
+        )
+    count = (await db.execute(crud.first_listed_count_stmt(resolved_site, view, resolved_date))).scalar_one()
+    return FirstListedSummary(
+        site=resolved_site, view=view, on=resolved_date,  # type: ignore[arg-type]
+        judgeable=True, count=count, earliest_known_date=earliest,
+    )
 
 
 async def get_brands(

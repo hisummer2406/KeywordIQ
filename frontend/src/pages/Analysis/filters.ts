@@ -40,20 +40,20 @@ export interface FilterDraft {
   change: Range;
   clickShare: Range;
   conversionShare: Range;
-  /** undefined = 全部 */
-  isNew?: boolean;
+  /** 只看所选期次首次入榜的词；`undefined` = 全部。两态：不存在「只看非首次入榜」。 */
+  firstListed?: boolean;
   /** 品牌精确多选（前三任一命中），与 categories 对称 */
   brands: string[];
   productTitle: string;
   /**
    * 竞对新发现：前三商品槽位任一 ASIN，是当前用户关注的卖家近 7 日新发现的 ASIN
    * （晚于基线批次且在窗口内，见 services/analysis.ts 的 `competitor_new`）。两态开关，
-   * 不做三态——不像 isNew 是核心维度，这是一个可选的叠加信号，缺省不筛（issue #56 P2）。
+   * 不做三态——不像 firstListed 是核心维度，这是一个可选的叠加信号，缺省不筛（issue #56 P2）。
    */
   competitorNew: boolean;
   /**
    * 排除关键词里带有自己前三品牌名的词（issue #119）。**缺省视同开启**（`!== false`）：
-   * 旧快照没有这个字段，行为应与新进屏一致。只在「只看新词」时才随请求发出，见 toSearchBody。
+   * 旧快照没有这个字段，行为应与新进屏一致。只在「只看首次入榜」时才随请求发出，见 toSearchBody。
    */
   excludeBrandWords?: boolean;
   /**
@@ -66,13 +66,13 @@ export interface FilterDraft {
 /**
  * 筛选草稿的默认值——**进屏看到的**与**「重置」清成的**是同一份。
  *
- * `isNew: true` 是默认值而不是空值：用户进这一屏最常问的第一个问题是「今天有哪些
- * 新词」，不是「今天的榜单长什么样」。首屏自动查询用的也是这一份，两者必须同源，
- * 否则会出现表格里是新词、而筛选控件显示「全部」的错位。
+ * `firstListed: true` 是默认值而不是空值：用户进这一屏最常问的第一个问题是「本期
+ * 首次入榜了哪些词」，不是「今天的榜单长什么样」。首屏自动查询用的也是这一份，两者必须同源，
+ * 否则会出现表格里是首次入榜、而筛选控件显示「全部」的错位。
  *
- * 这个函数从前叫 `emptyFilters`。带上 `isNew: true` 之后那个名字与事实相反，而
+ * 这个函数从前叫 `emptyFilters`。带上 `firstListed: true` 之后那个名字与事实相反，而
  * 它正被测试当作「中性基线」使用——名不副实的工厂函数会被下一个人当空值直接用。
- * 要真正的中性值请显式写 `{ ...defaultFilters(), isNew: undefined }`。
+ * 要真正的中性值请显式写 `{ ...defaultFilters(), firstListed: undefined }`。
  */
 export const defaultFilters = (): FilterDraft => ({
   q: '',
@@ -82,7 +82,7 @@ export const defaultFilters = (): FilterDraft => ({
   change: {},
   clickShare: {},
   conversionShare: {},
-  isNew: true,
+  firstListed: true,
   brands: [],
   productTitle: '',
   competitorNew: false,
@@ -220,12 +220,12 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     click_share_max: onlyDropped ? undefined : filters.clickShare.max,
     conversion_share_min: onlyDropped ? undefined : filters.conversionShare.min,
     conversion_share_max: onlyDropped ? undefined : filters.conversionShare.max,
-    is_new: onlyDropped ? undefined : filters.isNew,
+    first_listed: onlyDropped ? undefined : filters.firstListed,
     competitor_new: !onlyDropped && filters.competitorNew ? true : undefined,
-    // 默认开启、且只在「只看新词」时生效：品牌词对找新机会没价值，但对「全部词」榜单是
+    // 默认开启、且只在「只看首次入榜」时生效：品牌词对找新机会没价值，但对「全部词」榜单是
     // 额外的数据缩减，用户没要求就不该替他缩。
     exclude_brand_in_keyword:
-      !onlyDropped && filters.isNew === true && filters.excludeBrandWords !== false
+      !onlyDropped && filters.firstListed === true && filters.excludeBrandWords !== false
         ? true
         : undefined,
   };

@@ -32,6 +32,7 @@ from sqlalchemy import (
     Numeric,
     SmallInteger,
     String,
+    false,
     func,
     text,
 )
@@ -118,8 +119,12 @@ class FactDaily(Base):
     current_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="当期搜索频率排名")
     previous_ranking: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上一期排名，写入时算定")
     ranking_change: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="较上一期的变化，写入时算定")
+    # 已弃用（expand/contract 的第一步）：首次入榜改由 dim_keyword 的永久记录表达，新代码
+    # 不再读写本列。保留列与 idx_*_new 是为了部署窗口内的旧后端、以及回滚到旧版本仍可用；
+    # 加 DB 侧默认值是因为旧模型的 default=False 只在 Python 侧，新代码插入时不会带这一列。
+    # 下一个版本单独变更删除。
     is_new: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False,
+        Boolean, nullable=False, default=False, server_default=false(),
         comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选",
     )
 
@@ -179,8 +184,12 @@ class FactWeekly(Base):
     current_ranking: Mapped[int] = mapped_column(Integer, nullable=False, comment="当期搜索频率排名")
     previous_ranking: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上一期排名，写入时算定")
     ranking_change: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="较上一期的变化，写入时算定")
+    # 已弃用（expand/contract 的第一步）：首次入榜改由 dim_keyword 的永久记录表达，新代码
+    # 不再读写本列。保留列与 idx_*_new 是为了部署窗口内的旧后端、以及回滚到旧版本仍可用；
+    # 加 DB 侧默认值是因为旧模型的 default=False 只在 Python 侧，新代码插入时不会带这一列。
+    # 下一个版本单独变更删除。
     is_new: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False,
+        Boolean, nullable=False, default=False, server_default=false(),
         comment="本站本周期内首次出现的关键词；有部分索引 idx_*_new 支撑新词筛选",
     )
 

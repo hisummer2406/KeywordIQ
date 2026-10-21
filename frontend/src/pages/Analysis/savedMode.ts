@@ -9,7 +9,7 @@ import type { FilterDraft } from './filters';
  * 1. **本会话缓存**（`stateCache.ts`，模块级内存）——有缓存就整段跳过初始化、一个请求
  *    都不发。刷新即失效。
  * 2. **用户保存的条件**（本模块，localStorage）——跨登录存活，直到用户点「重置条件」。
- * 3. **内置默认**（`filters.ts` 的 `defaultFilters()`，只看新词）——没保存过时的兜底。
+ * 3. **内置默认**（`filters.ts` 的 `defaultFilters()`，只看首次入榜）——没保存过时的兜底。
  *
  * **这份必须活过 `doLogout`，与会话快照待遇不同。** `app.tsx` 登出时 `clearSnapshot()`
  * 清会话快照，理由是它是**无主的单份**——同一标签页换账号登录会看到上一个用户的条件与
@@ -29,7 +29,7 @@ import type { FilterDraft } from './filters';
  * 这条比 `stateCache` 的 `CACHE_VERSION` 更要紧——会话快照最多活一次刷新，而这份能活
  * 几个月、跨好几次上线。旧形状渗进 UI 的表现是零散的空白控件，极难归因。
  */
-export const SAVED_MODE_VERSION = 3;
+export const SAVED_MODE_VERSION = 4;
 
 const KEY_PREFIX = 'keywordiq.analysis.savedMode.v1';
 

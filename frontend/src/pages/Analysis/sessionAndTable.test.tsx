@@ -7,6 +7,7 @@ import {
   exportAnalysis,
   getBrands,
   getCategories,
+  getFirstListed,
   getKeywordTrend,
   getScope,
   getSites,
@@ -24,6 +25,7 @@ vi.mock('@/services/analysis', () => ({
   searchAnalysis,
   getScope,
   getCategories,
+  getFirstListed,
   getBrands,
   exportAnalysis,
 }));

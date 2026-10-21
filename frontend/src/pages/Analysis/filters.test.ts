@@ -42,8 +42,8 @@ describe('toSearchBody', () => {
   });
 
   it('空条件只带作用域，其余字段一律 undefined', () => {
-    // 这里要的是真正的中性值，故显式关掉默认的新词筛选（见 defaultFilters 的注释）。
-    const body = toSearchBody(scope, { ...defaultFilters(), isNew: undefined });
+    // 这里要的是真正的中性值，故显式关掉默认的首次入榜筛选（见 defaultFilters 的注释）。
+    const body = toSearchBody(scope, { ...defaultFilters(), firstListed: undefined });
     expect(body.site).toBe('US');
     expect(body.view).toBe('DAY');
     expect(body.date).toBe('2026-07-18');
@@ -97,15 +97,14 @@ describe('toSearchBody', () => {
     expect(body.change_min).toBeUndefined();
   });
 
-  it('新词三态：true / false 传出，undefined 不传', () => {
-    // 三态都显式传值，不依赖默认值恰好是其中某一个——默认值改动时这条不该跟着变。
-    expect(toSearchBody(scope, { ...defaultFilters(), isNew: true }).is_new).toBe(true);
-    expect(toSearchBody(scope, { ...defaultFilters(), isNew: false }).is_new).toBe(false);
-    expect(toSearchBody(scope, { ...defaultFilters(), isNew: undefined }).is_new).toBeUndefined();
+  it('首次入榜两态：true 传出，undefined 不传', () => {
+    // 两态都显式传值，不依赖默认值恰好是其中某一个——默认值改动时这条不该跟着变。
+    expect(toSearchBody(scope, { ...defaultFilters(), firstListed: true }).first_listed).toBe(true);
+    expect(toSearchBody(scope, { ...defaultFilters(), firstListed: undefined }).first_listed).toBeUndefined();
   });
 
   it('竞对新发现是两态开关：勾选时传 true，不勾选不传（issue #56 P2）', () => {
-    // 与新词不同，这里没有第三态——不勾选就是「不筛」，不需要区分「未勾选」与「明确要全部」。
+    // 与首次入榜一样，这里没有第三态——不勾选就是「不筛」，不需要区分「未勾选」与「明确要全部」。
     expect(toSearchBody(scope, { ...defaultFilters(), competitorNew: true }).competitor_new).toBe(
       true,
     );
@@ -136,25 +135,25 @@ describe('sanitizeCompetitorNew', () => {
 });
 
 describe('defaultFilters', () => {
-  it('默认只看新词', () => {
-    expect(defaultFilters().isNew).toBe(true);
-    expect(toSearchBody(scope, defaultFilters()).is_new).toBe(true);
+  it('默认只看首次入榜', () => {
+    expect(defaultFilters().firstListed).toBe(true);
+    expect(toSearchBody(scope, defaultFilters()).first_listed).toBe(true);
   });
 
-  it('除新词与排除品牌词外其余维度默认都不筛', () => {
+  it('除首次入榜与排除品牌词外其余维度默认都不筛', () => {
     const body = toSearchBody(scope, defaultFilters());
     const rest = Object.entries(body).filter(
-      ([k]) => !['site', 'view', 'date', 'is_new', 'exclude_brand_in_keyword'].includes(k),
+      ([k]) => !['site', 'view', 'date', 'first_listed', 'exclude_brand_in_keyword'].includes(k),
     );
     expect(rest.every(([, v]) => v === undefined)).toBe(true);
   });
 
-  it('排除品牌词默认开启，但只在「只看新词」时随请求发出（issue #119）', () => {
+  it('排除品牌词默认开启，但只在「只看首次入榜」时随请求发出（issue #119）', () => {
     expect(toSearchBody(scope, defaultFilters()).exclude_brand_in_keyword).toBe(true);
-    // 看全部 / 非新词：不替用户缩减榜单
-    for (const isNew of [undefined, false]) {
+    // 看全部：不替用户缩减榜单
+    for (const firstListed of [undefined]) {
       expect(
-        toSearchBody(scope, { ...defaultFilters(), isNew }).exclude_brand_in_keyword,
+        toSearchBody(scope, { ...defaultFilters(), firstListed }).exclude_brand_in_keyword,
       ).toBeUndefined();
     }
     // 用户关掉、旧快照缺字段（视同开启）、仅掉榜
@@ -256,7 +255,7 @@ describe('行集合开关', () => {
       change: { min: -50 },
       clickShare: { min: 10 },
       conversionShare: { min: 5 },
-      isNew: true,
+      firstListed: true,
       competitorNew: true,
     });
     expect(body.include).toBe('DROPPED');
@@ -270,7 +269,7 @@ describe('行集合开关', () => {
     expect(body.change_min).toBeUndefined();
     expect(body.click_share_min).toBeUndefined();
     expect(body.conversion_share_min).toBeUndefined();
-    expect(body.is_new).toBeUndefined();
+    expect(body.first_listed).toBeUndefined();
     expect(body.competitor_new).toBeUndefined();
   });
 

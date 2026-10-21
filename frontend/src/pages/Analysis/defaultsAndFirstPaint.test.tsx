@@ -7,6 +7,7 @@ import {
   exportAnalysis,
   getBrands,
   getCategories,
+  getFirstListed,
   getScope,
   getSites,
   listGroups,
@@ -23,6 +24,7 @@ vi.mock('@/services/analysis', () => ({
   searchAnalysis,
   getScope,
   getCategories,
+  getFirstListed,
   getBrands,
   exportAnalysis,
 }));
@@ -34,7 +36,7 @@ import { clearSnapshot } from '@/pages/Analysis/stateCache';
 import { applyFilters, renderSettled, settle } from './__testing__/analysisHarness';
 
 /**
- * 首屏自动查询、默认只看新词、以及用户保存的默认条件三级优先级。
+ * 首屏自动查询、默认只看首次入榜、以及用户保存的默认条件三级优先级。
  *
  * 分析屏的用例按主题分成四个文件（本文件是其中之一），**不是按体量硬切**：这一屏的
  * 用例曾集中在一个文件里跑 42.7 秒，而 vitest 按文件并行，一个文件就成了整个套件的
@@ -80,8 +82,8 @@ describe('分析查询屏 · 首屏与默认条件', () => {
         site: 'US',
         view: 'DAY',
         date: '2026-07-18',
-        // 默认筛选是「只看新词」——首屏回答的是「今天有哪些新词」
-        is_new: true,
+        // 默认筛选是「只看首次入榜」——首屏回答的是「本期首次入榜了哪些词」
+        first_listed: true,
       });
     });
 
@@ -130,21 +132,21 @@ describe('分析查询屏 · 首屏与默认条件', () => {
   });
 
   /**
-   * 默认筛选是「只看新词」——用户进这一屏最常问的第一个问题是「今天有哪些新词」。
+   * 默认筛选是「只看首次入榜」——用户进这一屏最常问的第一个问题是「本期首次入榜了哪些词」。
    *
    * 三条边界都要守住：控件显示与实际发出的条件一致（否则用户以为系统漏筛了）、
    * 会话快照优先于默认值（用户主动关掉的筛选不该被默认值覆盖回去）、切视图不动筛选。
    */
-  describe('默认只看新词', () => {
+  describe('默认只看首次入榜', () => {
     /**
-     * 新词那组按钮按 `value` 定位，不按可见文字：Row 的标签「新词」与选项「新词」文字
-     * 相同，`getByText` 会撞上两个。
+     * 首次入榜那组按钮按 `value` 定位，不按可见文字：Row 的标签「首次入榜」与选项文字
+     * 相近，`getByText` 容易撞上多个。
      *
      * **必须用 JS 的 `===` 比对，不能用 `[value="all"]` 属性选择器**：jsdom 里属性值
      * 匹配是大小写不敏感的，`[value="all"]` 会选中行集合开关那组的 `ALL`——而它默认就是
      * 选中态，断言「全部未被选中」于是失败，报错却完全指不到选错了控件。
      */
-    const isNewOption = (value: 'all' | 'true' | 'false') =>
+    const isNewOption = (value: 'all' | 'true') =>
       Array.from(document.querySelectorAll<HTMLInputElement>('input[type="radio"]'))
         .find((radio) => radio.value === value)!
         .closest('label')!;
@@ -152,21 +154,21 @@ describe('分析查询屏 · 首屏与默认条件', () => {
     /**
      * 选中与否看 antd 的 `-checked` 类名，**不看原生 `input.checked`**。
      *
-     * 这一屏两组 Radio.Group（行集合 ALL/LISTED/DROPPED、新词 all/true/false）在 jsdom 里
+     * 这一屏两组 Radio.Group（行集合 ALL/LISTED/DROPPED、首次入榜 all/true）在 jsdom 里
      * 被当成**同一个原生 radio 组**——实测在检索框里打个字，行集合的 `ALL` 就自己变成
-     * 未选中；点新词的「全部」反而让 `ALL` 回到选中、把新词的「新词」顶掉。原生 checked
+     * 未选中；点首次入榜的「全部」反而让 `ALL` 回到选中、把首次入榜的「只看首次入榜」顶掉。原生 checked
      * 在这里根本不描述界面显示的是什么，而类名由 React props 渲染，才是真的。
      */
-    const isNewChecked = (value: 'all' | 'true' | 'false') =>
+    const isNewChecked = (value: 'all' | 'true') =>
       isNewOption(value).classList.contains('ant-radio-button-wrapper-checked');
 
     /** 点外层 label：input 被 antd 藏了，直接点它不会触发 Radio.Group 的 onChange。 */
-    const clickIsNew = (value: 'all' | 'true' | 'false') =>
+    const clickIsNew = (value: 'all' | 'true') =>
       fireEvent.click(isNewOption(value));
 
     const searchBox = () => screen.getByPlaceholderText(/输入 ASIN 或关键词/);
 
-    it('首屏新词控件就显示为「新词」', async () => {
+    it('首屏首次入榜控件就显示为「只看首次入榜」', async () => {
       await renderSettled();
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
@@ -175,7 +177,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
     });
 
     /**
-     * 默认带筛选的直接后果：首屏就走带筛选路径，掉榜行不在结果内。`is_new` 在
+     * 默认带筛选的直接后果：首屏就走带筛选路径，掉榜行不在结果内。`first_listed` 在
      * `FILTER_KEYS` 里，所以那句提示自动成立——不额外加判断，也不能让它漏掉：
      * 用户看到的会是「进来就没有掉榜词」，而没有任何东西解释为什么。
      */
@@ -186,7 +188,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       expect(await screen.findByText(/本次结果不含掉榜行/)).toBeInTheDocument();
     });
 
-    it('「重置条件」回到默认（只看新词）而非清空，且不动检索框', async () => {
+    it('「重置条件」回到默认（只看首次入榜）而非清空，且不动检索框', async () => {
       await renderSettled();
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
@@ -200,7 +202,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       expect(searchBox()).toHaveValue('coffee');
     });
 
-    it('用户关掉新词筛选后切走再切回，复原的是「全部」而不是默认值', async () => {
+    it('用户关掉首次入榜筛选后切走再切回，复原的是「全部」而不是默认值', async () => {
       await renderSettled();
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
@@ -208,7 +210,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       await act(async () => {
         fireEvent.click(applyFilters());
       });
-      await waitFor(() => expect(searchAnalysis.mock.calls.at(-1)![0].is_new).toBeUndefined());
+      await waitFor(() => expect(searchAnalysis.mock.calls.at(-1)![0].first_listed).toBeUndefined());
 
       cleanup();
       vi.clearAllMocks();
@@ -221,7 +223,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       expect(isNewChecked('all')).toBe(true);
     });
 
-    it('切到周视图时新词筛选原样保留', async () => {
+    it('切到周视图时首次入榜筛选原样保留', async () => {
       await renderSettled();
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
@@ -262,7 +264,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
             change: {},
             clickShare: {},
             conversionShare: {},
-            isNew: undefined,
+            firstListed: undefined,
             brands: [],
             productTitle: '',
             competitorNew: false,
@@ -278,7 +280,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       await renderSettled(false);
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
-      expect(searchAnalysis.mock.calls[0][0]).toMatchObject({ site: 'US', is_new: true });
+      expect(searchAnalysis.mock.calls[0][0]).toMatchObject({ site: 'US', first_listed: true });
       expect(screen.queryByText('我的默认')).not.toBeInTheDocument();
     });
 
@@ -293,13 +295,13 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       expect(await screen.findByText('我的默认')).toBeInTheDocument();
     });
 
-    it('保存的筛选盖过内置默认（存的是「全部」就不该变回「只看新词」）', async () => {
+    it('保存的筛选盖过内置默认（存的是「全部」就不该变回「只看首次入榜」）', async () => {
       seedSaved(1);
 
       await renderSettled();
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
-      expect(searchAnalysis.mock.calls[0][0].is_new).toBeUndefined();
+      expect(searchAnalysis.mock.calls[0][0].first_listed).toBeUndefined();
     });
 
     /**
@@ -318,7 +320,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
           change: {},
           clickShare: {},
           conversionShare: {},
-          isNew: undefined,
+          firstListed: undefined,
           brands: [],
           productTitle: '',
           competitorNew: true,
@@ -411,7 +413,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
 
       const stored = JSON.parse(window.localStorage.getItem(KEY(1))!);
       expect(stored).toMatchObject({ version: SAVED_MODE_VERSION, site: 'US', view: 'DAY' });
-      expect(stored.filters.isNew).toBe(true);
+      expect(stored.filters.firstListed).toBe(true);
       // 检索词不入库：一次性查找不是「常看的模式」
       expect(stored.filters.q).toBeUndefined();
     });

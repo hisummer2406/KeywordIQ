@@ -33,7 +33,7 @@ def _row(kid: int, keyword: str, ranking: int, *, slots: int = 3) -> dict:
         "current_ranking": ranking,
         "previous_ranking": ranking + 3,
         "ranking_change": 3,
-        "is_new": False,
+        "first_listed": False,
     }
     for slot in range(1, slots + 1):
         row.update({
@@ -214,8 +214,8 @@ def test_export_missing_slot_is_blank_not_shifted(monkeypatch):
     assert cell["Top3 点击份额"] == ""
 
 
-def test_export_renders_is_new_as_chinese(monkeypatch):
-    rows = [dict(_row(1, "kettle", 1), is_new=True)]
+def test_export_renders_first_listed_as_chinese(monkeypatch):
+    rows = [dict(_row(1, "kettle", 1), first_listed=True)]
     app = _build_app(monkeypatch, user=_StubUser(is_super=True), rows=rows)
     assert "是" in _post(app).content.decode("utf-8-sig").splitlines()[1]
 

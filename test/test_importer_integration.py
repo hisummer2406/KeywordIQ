@@ -1,7 +1,7 @@
 """三段式导入的数据库集成测试。
 
 验证 COPY→维度→事实的完整流程在真实 PostgreSQL 上的行为：派生值计算、跨站点不覆盖、
-跨日期不覆盖、覆盖语义、坏行跳过计数、is_new。单元测试无法验证 COPY 与集合式 SQL。
+跨日期不覆盖、覆盖语义、坏行跳过计数。首次入榜见 test_first_seen_integration.py。单元测试无法验证 COPY 与集合式 SQL。
 
 默认跳过，只在设置 ``TEST_DATABASE_URL`` 时运行（沿用数据模型变更的 gate 模式）。测试库
 必须已迁移（alembic upgrade head）。每个测试独占事务、结束回滚，零残留。
@@ -102,39 +102,14 @@ def test_empty_second_third_product_is_null(session, tmp_path):
     assert row[1] is None and row[2] is None
 
 
-def test_is_new_true_when_no_previous_day(session, tmp_path):
-    _import(session, tmp_path, "d1.csv", [_row(5, "kw", a1="B1", t1="T")])
-    is_new = session.execute(text("SELECT is_new FROM analysis.fact_daily WHERE report_date='2026-07-15'")).scalar()
-    assert is_new is True
-
-
 def test_previous_day_drives_ranking_change(session, tmp_path):
-    # 7/14 排名 100，7/15 排名 80 → change = -20，is_new=false
+    # 7/14 排名 100，7/15 排名 80 → change = -20
     _import(session, tmp_path, "d14.csv", [_row(100, "kw", a1="B1", t1="T")], d=date(2026, 7, 14))
     _import(session, tmp_path, "d15.csv", [_row(80, "kw", a1="B1", t1="T")], d=date(2026, 7, 15))
     row = session.execute(text("""
-        SELECT current_ranking, previous_ranking, ranking_change, is_new
+        SELECT current_ranking, previous_ranking, ranking_change
         FROM analysis.fact_daily WHERE report_date='2026-07-15'""")).one()
-    assert row == (80, 100, -20, False)
-
-
-def test_is_new_looks_back_seven_days(session, tmp_path):
-    # kw 在 7/10 出现，7/11~7/14 缺席，7/15 回来：回看窗口 [7/8, 7/14] 内出现过 → 非新词，
-    # 但上一天没有它，所以 previous_ranking 仍为 0。
-    _import(session, tmp_path, "d10.csv", [_row(100, "kw", a1="B1", t1="T")], d=date(2026, 7, 10))
-    _import(session, tmp_path, "d15.csv", [_row(80, "kw", a1="B1", t1="T")], d=date(2026, 7, 15))
-    row = session.execute(text("""
-        SELECT previous_ranking, ranking_change, is_new
-        FROM analysis.fact_daily WHERE report_date='2026-07-15'""")).one()
-    assert row == (0, 0, False)
-    # 窗口外：只在 7/1 出现过，7/15 回来 → 新词（同一期重导会覆盖 7/15 切片并重算）。
-    _import(session, tmp_path, "d1.csv", [_row(9, "old kw", a1="B1", t1="T")], d=date(2026, 7, 1))
-    _import(session, tmp_path, "d15b.csv", [_row(80, "kw", a1="B1", t1="T"), _row(7, "old kw", a1="B1", t1="T")], d=date(2026, 7, 15))
-    flags = dict(session.execute(text("""
-        SELECT k.keyword, f.is_new FROM analysis.fact_daily f
-        JOIN analysis.dim_keyword k ON k.keyword_id=f.keyword_id
-        WHERE f.report_date='2026-07-15'""")).all())
-    assert flags == {"kw": False, "old kw": True}
+    assert row == (80, 100, -20)
 
 
 def test_cross_site_same_keyword_coexist(session, tmp_path):
