@@ -1,1603 +1,433 @@
 # CLAUDE.md
 
-本文件是这个仓库的开发约定与设计记录，**面向所有在这里干活的智能体**，不只是 Claude Code
-——名字只是历史沿革。仓库根部的 `AGENTS.md` 是给 Codex 等其他智能体的入口，它**不复制**
-本文件的内容，只列出本文件里少数几句「只对 Claude Code 这个运行环境成立」的差异
-（提交门禁、skill 机制、`AskUserQuestion`）。**新增约定写进本文件，不要写进 `AGENTS.md`。**
+本文件面向所有在仓库工作的智能体；文件名沿用历史命名。先读根目录 `AGENTS.md`，再读本文件。
+本文件规定项目红线、开发流程与按需读取入口；[领域指南](openspec/guides/README.md) 是它的细则附录。
+新增约定写在这里或对应领域指南；`AGENTS.md` 只维护运行环境差异与 Codex 审核规则。
+修改被 Codex 审核规则浓缩的约束时，必须同步核对 `AGENTS.md`，防止两份口径分叉。
+用户当次指令优先；已有明确授权继续有效，不能因换工具而重复索取。
 
-## Project Overview
+## 开工必读：按改动范围加载细则
 
-KeywordIQ - A professional Amazon search term data analysis platform supporting GB-level file processing, real-time data analysis, and visualization. Built with FastAPI + PostgreSQL, serving ~200 concurrent users for read-heavy operations with periodic batch data imports.
+所有任务先读本文件；动手前再读下表命中的指南。涉及多个领域时取并集，不得只读摘要就实现。
+指南不自动全部加载；历史 Issue/change id 用于溯源，不能把旧部署参数或历史测试结果当作当前事实。
+指南路径相对仓库根目录；若实现与约定冲突，先核实并报告，不能默默选一份绕过约束。
 
-**Import data volumes (critical for performance decisions):**
-- Daily report: ~300K rows, ~150MB CSV, imported once per day
-- Weekly report: ~3M rows, ~1.5GB CSV, imported once per week
-- The 10× size difference means daily and weekly imports have fundamentally different performance characteristics and must be treated as separate problem domains
+| 改动范围或任务 | 必须先读 |
+|---|---|
+| 事实/维度、分区/保留、查询/导出、增长榜/词库/排名趋势 | [分析、词库与数据模型](openspec/guides/analysis.md) |
+| 导入、首次入榜证据写入、批次/重导、OSS 直传 | [CSV 与 OSS 导入](openspec/guides/ingestion.md) + 分析指南 |
+| 导航、分析筛选、首次入榜展示、表格/缓存/保存条件 | [导航与分析界面](openspec/guides/frontend.md)；涉及口径时同时读分析指南 |
+| 卖家关注、ASIN 上报、Shopify、上新流、浏览器插件 | [竞对监控与浏览器插件](openspec/guides/competitor.md)；联动分析筛选时同时读前端指南 |
+| 本地登录/退出、会话/JWT、RBAC、钉钉登录/回调 | [认证、权限与钉钉登录](openspec/guides/auth.md) |
+| V2 ECS/OSS/飞书运维、容量、部署/健康检查 | [生产边界与容量](openspec/guides/operations.md) + [当前部署交接](docs/ops/v2-ecs-handoff.md) |
+| 开始/接手完整变更、提交、PR、评审、合并/归档 | [开发流程与历史依据](openspec/guides/workflow.md) + 对应 skill/command |
 
-## Development Commands
+主文件保留关键判据，指南保存完整细则、反例与测试入口。业务需求及其场景仍以 `openspec/specs/`
+和获批变更的 spec delta 为准；指南解释维护约束，不另建一套业务规格。实现时还须读对应 spec。
+
+## 项目与命令
+
+KeywordIQ 是 Amazon 搜索词分析平台，FastAPI + PostgreSQL 15 + AntD Pro/Umi Max SPA。
+读多写少，约 200 并发；日报约 30 万行 / 150 MB，周报约 300 万行 / 1.5 GB，性能需分别评估。
+V2 全面重建、已上线；V1 代码不复用，但同机 V1 服务仍受隔离保护。所有工作基于 `v2`。
 
 ```bash
-# Local development (uv manages .venv per .python-version + uv.lock)
 uv sync
-uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
-# Run tests
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000  # 仅本地；生产 V2 宿主机为 8001
 uv run pytest test/
-
-# Add a dependency
-uv add <package>          # runtime
-uv add --dev <package>    # dev-only
-
-# Production deployment (Docker Compose: app + self-hosted PostgreSQL + Netdata；
-# host nginx 只托管前端 SPA 产物并反代 /api，不再直接管理裸 uvicorn 进程)
-#
-# 常规发布入口是 GitHub Actions 的「Deploy V2 to ECS」：只在 v2 分支上手动触发，核验该
-# SHA 在 origin/v2 历史上、且三项 CI（后端/前端/插件）全部成功后 SSH 到 ECS，fast-forward 到该 SHA 并执行
-# `./deploy.sh --yes`，最后用 /health 探活。合并进 v2 不会自动发布。一次性引导与 secrets
-# 见 .github/v2-ecs-cd.md。下面这组是 ECS 上 deploy.sh 本身的用法（V2 应用监听 127.0.0.1:8001）。
-./deploy.sh                            # Full release: build image → migrate (in container) → build SPA → publish → reload nginx
-./deploy.sh --skip-migrate             # Frontend-only release
-docker compose up -d                   # 拉起/切换容器（restart: unless-stopped，崩溃与宿主机重启由 Docker 自动拉起）
-docker compose logs app --tail 100 -f  # Monitor app logs（不再是 tail logs/app.log；容器内 logs/ 仍挂宿主机目录，两种方式都能看）
-./start.sh                             # 仅供非容器环境（本地开发/应急）直接起 uvicorn，生产不再使用
-
-# Database operations
-# Uses PostgreSQL with schema "analysis"
-# Connection: sync (psycopg2) + async (asyncpg) engines both configured
-
-# Database migrations (Alembic)——本地开发直连数据库时用这组；
-# 生产的自建 db 只绑宿主机回环 127.0.0.1:5432（给 host 级 ops-bot 用，不对公网暴露），而
-# 生产 `.env` 里的 DATABASE_URL 指向容器网络里的 `db`，宿主机解析不了——生产迁移走
-# `docker compose run --rm app alembic ...`（deploy.sh 已封装），下面这组裸命令只在本地用。
-uv run alembic upgrade head          # 应用迁移
-uv run alembic downgrade -1          # 回滚一步
-uv run alembic upgrade head --sql    # 只生成 SQL，不连库（离线预览）
-uv run alembic revision -m "说明"     # 新建空迁移（分区表/物化视图必须手写）
-uv run alembic revision --autogenerate -m "说明"  # 从模型差异生成
-uv run alembic current               # 当前版本
+uv add <package>                 # 开发依赖用 --dev
+uv run alembic upgrade head      # 本地数据库；生产迁移由发布工作流封装
+uv run alembic revision -m "说明" # 分区表/物化视图必须手写
+uv run alembic upgrade head --sql
+openspec list
+openspec validate --strict --all
 ```
 
-## V2 数据模型
+生产 `.env` 中数据库主机为容器网络 `db`，宿主机不能直接使用该连接；不要裸跑宿主机迁移。
+常规发布入口只有 GitHub Actions `Deploy V2 to ECS`，授权和门槛见「部署与运维」。
 
-V1 已完成使命并退役，V2 是完整重建。数据模型、导入、查询、界面均已落地，V2 已在阿里云
-ECS 上线（2026-09-19，域名 `key.liangtong.online`，环境与接手状态见文末「当前部署交接」）。
-旧稿里的「归档」层现在是按月保留清理（见「数据保留」），**数据库没有自动备份**
-（2026-09-20 决定，见「Production Environment」）。
+## 分层与通用编码约束
 
-**V2 的表**（星型模型，全部在 `analysis` schema 下）：
+- `app/table/*` 按 model、crud、service、api、schemas 分层；调用方向 api → service → crud。
+  API 是薄控制器，业务编排及事务由 service 管理；新 CRUD 不自行 commit。
+- **SQLAlchemy 2.0 Only**：`DeclarativeBase`、`Mapped`、`mapped_column`、`select()`、`Session.execute()`。
+  不引入 `declarative_base()`、`Column(...)` 模型声明或 `.query()`。
+- **Pydantic 2.0 Only**：`ConfigDict`、`field_validator`、`model_validate`、`model_dump`；不引入 v1 API。
+- 业务表全部使用配置的 `analysis` schema；`ops_bot/` 独立使用 `ops` schema 与 `OpsBase`。
+- 不在 FastAPI 事件循环上做阻塞数据库调用、长 CPU 解析或整文件读取；GB 文件必须流式、内存有界。
+  子进程若存在，必须自建并释放引擎/会话，不继承父进程连接；V2 导入不恢复 V1 的并行分片流程。
+- 不返回未分页全表；引入筛选/关联前考虑连接池、内存、索引与执行计划，按日报/周报分别论证。
+- 新配置同步 `.env.example`，注明单位、安全默认值与生效范围；运行值由配置和交接记录确定。
+  本文件不复制完整环境模板；不得提交 `.env`、私钥、AccessKey、App Secret、客户报表、日志或临时切分文件。
+- 问题定位先看失败用例和真实前提，再设计；租户、权限、数据源和收费等前提需查证。
+  缺失数据与尚未接入能力明确显示缺失或未接入，不编造 0、销量、结论或已验收状态。
 
-| 表 | 说明 |
+## V2 数据模型：事实只追加，站点只有一个来源
+
+表、字段、索引和迁移细则见分析指南。V1 `csv_processor.py`、关键词 UPSERT 与 JSONB 趋势已退役。
+
+| 表/模块 | 约束 |
 |---|---|
-| `dim_keyword` | 关键词维度，`(site, keyword)` 唯一；GIN 全文索引建在这里 |
-| `dim_product` | 商品维度，`asin` 唯一；SCD Type 1（不留历史版本） |
-| `fact_daily` / `fact_weekly` | 事实表，按期次日期月度 RANGE 分区 + 按 `site` 二级 LIST 分区。**分区列名两表不同**：日报是 `report_date`，周报是 `report_date_week`——照着日报的列名写周报查询会直接报 `UndefinedColumn` |
-| `fact_dropped` | 掉榜词表，按 `anchor_date` 月度 RANGE 分区，**只有一级、没有站点子分区**（站点是普通索引列）。它是差集不是全量，比事实表小一到两个数量级，二级分区的裁剪收益抵不上分区数翻倍的代价 |
-| `fact_growth` | 持续增长词表（关键词工具），同样按 `anchor_date` 月度 RANGE、无站点子分区。**只有日报**，故没有 `period_type` 列 |
-| `site_data_stats` | 按站点/周期/期次的行数（`row_count` 在榜 + `dropped_count` 掉榜），服务分页总数与日期选择器 |
-| `import_batch` | 导入批次记录 |
-| `keyword_group` / `keyword_group_item` | 词库：用户自建的关键词清单（关键词工具 · 我的词库）。普通表，不分区、不参与保留清理、不被导入写入 |
+| `dim_keyword` | `(site, keyword)` 唯一；关键词全文检索与永久首次记录在这里 |
+| `dim_product` | ASIN 唯一；SCD Type 1，仅属性真变才写 |
+| `fact_daily` / `fact_weekly` | 按日期月度 RANGE + 站点 LIST 分区；日期列分别为 `report_date` / `report_date_week` |
+| `fact_dropped` | 按 `anchor_date` 月度分区，无站点子分区；含周期 |
+| `fact_growth` | 按 `anchor_date` 月度分区，无站点子分区；只有日报，无 `period_type` |
+| `site_data_stats` | 期次、在榜/掉榜数量，供作用域与掉榜总数；在榜可见总数另按当前基线实算 |
+| `category_stats` / `brand_stats` | 站点/周期/期次普通统计表，导入只重算当期切片 |
+| `keyword_group` / `keyword_group_item` | 私有词库普通表，不被导入写入，不参与保留清理 |
+| `competitor_*` / `user_*_watch` | 普通表；共享观测与私有关注分层，不参与事实分区保留清理 |
 
-分区表的注册表是 `partitioning.PARTITIONED_TABLES`（表名 → `PartitionScheme(date_column, site_subpartition)`）——「这张表分不分站点」只有这一处答案，`ensure_fact_partitions` 与
-`retention_service` 都读它，新增分区表登记进去即自动纳入建分区与按月 `DROP`。
+1. **四类事实表只追加，不原地 UPDATE。** 排名及派生值在导入时算定；查询只读。
+   唯一例外为同期重导：删除该站点/周期/期次切片，再重新写入；不扫描重写其他切片。
+2. **写事实前无条件调用 `ensure_fact_partitions`**，它是幂等的。
+   新分区表登记 `partitioning.PARTITIONED_TABLES`；普通竞对表不得登记，否则历史会被整月 DROP。
+3. 维度 UPSERT 保留 `IS DISTINCT FROM` 守卫；`dim_keyword`/brand/category 的去重预筛也不可随意删除。
+   相同值 UPDATE 仍制造死元组、索引写入与 WAL，测试绿不代表写放大安全。
+4. **站点与展示元数据唯一来源为 `app/site_registry.py`**；英国用 `GB`，不用 `UK`。
+   非法或必填场景缺失的站点返回 422，不猜测 `DEFAULT_SITE`，不另建站点表/硬编码清单。
+   仅接口明确允许省略站点时使用配置默认值；卖家裸 ID 必须由调用方提供站点依据。
 
-**三条不可违反的约束**：
+### 分区、迁移与保留清理
 
-1. **事实表只追加，不原地更新。** 排名、上期排名、排名变化都在写入时算定。
-   这是按月归档成立的前提，也是死元组归零的原因。唯一例外是同一期重复导入（先删该
-   切片再写）。**`fact_dropped` 同受此约束**：掉榜集合是锚定期的一项事实，锚定期一旦
-   确定就不再变化，同样在导入收尾时算定、只追加，查询侧只读不算。重复导入同样是先删
-   该期再重算。
-2. **写事实表前必须调用 `app.table.analysis.partitioning.ensure_fact_partitions`。**
-   分区缺失会让导入直接报错，该函数是幂等的，无条件调用即可。
-3. **站点码的唯一事实来源是 `app/site_registry.py`。** 不要在别处硬编码站点列表。
-   英国是 `GB` 不是 `UK`。站点的展示元数据（中文名/时区/域名）同样只在那里，界面经
-   `GET /api/upload/sites` 取用——**不要为此建库表**。曾有一张 `sites` 参考表存同样三个
-   字段，从建表到删除没有任何代码写过它，库里始终是空的；它真正的害处是给站点元数据开了
-   第二个事实来源的入口，而两份副本分叉正是 `GB`/`UK` 这类问题的由来。
+- 业务模型新增时登记 `migration_scope.V2_TABLES`；ops 模型登记 `OPS_TABLES`。
+  漏登会让 autogenerate 静默忽略；分区表/物化视图必须手写迁移，离线核对 DDL 中 `PARTITION BY`。
+- 列注释参与 autogenerate 比对；模型、迁移与库保持一致，共用文本放 `column_comments.py`。
+  真实数据库迁移到 head 后，模型比对必须为空；大量注释噪声会掩盖真正的结构差异。
+- `HOT_WINDOW_MONTHS` 默认 3，按自然月保留；过期分区整月 DROP，日/周同口径，不承诺更早历史可查询。
+  运行 `scripts/prune_retention.py` 前先 dry-run；是否调度、是否留档按运维交接确认。
+- 保留清理无条件删除 `site_data_stats`/`category_stats`/`brand_stats` 的超期记录，不能依赖本次有 DROP。
+  后两表保留 `report_date` 单列索引；仅复合主键不能支持这一清理的范围过滤（#100 / #101）。
+- 清理非 dry-run 路径必须持有与导入共用的 `import_lock` / `IMPORT_LOCK_KEY`。
+  拿不到锁返回 `lock_skipped`，不阻塞、不重试；否则事实提交与统计提交间会出现事实被删、统计被补回。
 
-**迁移注意**：分区表与物化视图不在 SQLAlchemy 的 DDL 生成范围内，autogenerate 会把
-事实表产成普通表并静默丢掉分区。涉及这两类对象的迁移必须手写，并用
-`alembic upgrade head --sql` 核对生成的 DDL 里确有 `PARTITION BY`。
+## 分析查询、导出与排名趋势
 
-**新增模型必须登记进 `migration_scope.py` 的 `V2_TABLES`**（`alembic/env.py` 的
-`include_object` 用它做白名单；清单单独成模块是为了让测试能 import 到同一份——`env.py`
-在 alembic 运行时之外导不进来）。漏登的表 autogenerate 既看不见也不报错，对模型改动
-一律回答「没有差异」。`test_conventions.py` 会拦住漏登。
+修改该域前读分析指南；首次入榜、筛选与缓存展示还需读前端指南。接口作用域为单站点、单视图、锚定期。
 
-**列注释参与 autogenerate 比对**，因此模型里的注释文本要与库里一字不差；改注释就要配
-一条迁移。跨表复用的文本（`site`、`period_type`）收在
-`app/table/analysis/column_comments.py`。这不是洁癖：曾有约 40 条纯注释差异常驻在
-autogenerate 输出里，把 `user_center` 时间戳丢了时区这条真差异整个盖住。集成测试
-`test_v2_integration.py::test_models_match_migrated_schema` 现在要求 autogenerate 对
-迁移到 head 的库产出**空**结果。
-
-**V2 查询层（site-scoped-query + window-scoped-rows，已落地）**：分析查询查 V2 星型模型，
-作用域是「**单一站点 + 单一视图（DAY/WEEK）+ 锚定期 + 行窗口**」——站点与视图那两维仍是
-硬边界，MUST NOT 突破；时间那一维从「单一事实切片」放宽为一个窗口：
-
-| | 天视图 | 周视图 |
+| 维度 | DAY | WEEK |
 |---|---|---|
-| 行窗口（决定哪些词进表） | 锚定日往前 7 天 `[d-6, d]` | 锚定周往前 4 周 `[w-3, w]` |
-| 历史参照点（只补齐已选定的行） | `d-1` / `d-3` / `d-7` | `w-1` / `w-4` / `w-12` |
-| 趋势窗口（小图点数） | 近 7 天 = 7 点 | 近 4 周 = 4 点 |
-
-**行集合 = 在榜 ∪ 掉榜**：在榜 = 锚定期有数据；掉榜 = 行窗口内出现过但锚定期没有（读
-`fact_dropped`，查询侧只读不算）。开关是请求字段 `include`（`ALL`/`LISTED`/`DROPPED`，
-默认 `ALL`），它是行集合维度**不是筛选条件**。掉榜行恒排在在榜行之后、不随升降序翻转。
-
-**但带筛选的路径仍然锁死在单一事实切片里。** 筛选一律以锚定期那一行为准,必然后果是
-**任何筛选一生效、掉榜行全部消失**（它们在锚定期没有行可匹配），此时 `dropped_total`
-短路为 0、掉榜段连查都不查。所以「筛选后的扫描范围由一期数据决定」这个性能论据没有变——
-放宽的只是无筛选路径的行集合。界面必须明示这一点，否则用户会当成系统弄丢了数据。
-
-要点：
-
-- **日期选择器走 `site_data_stats`**（不在 8 亿行上实时聚合；在榜总数因类目黑名单已改为实算，见分析查询屏一节）；类目下拉走
-  `category_stats`（按站点/周期/日期分片的普通表，2026-08-05 由物化视图改造而来，见
-  迁移 `f5a6b7c8d9e0`——旧视图统计粒度比筛选粗一层、刷新代价与数据总量同阶，改表后
-  导入只需重算当期切片）。查询代码在 `app/table/analysis/analysis_crud.py`（纯 SQL 组装）
-  → `analysis_service.py`（作用域解析、`ScopeError`）→ `analysis_api.py`
-  （`POST /search`、`GET /scope`、`GET /categories`，均 `require_permission(analysis:view)`；
-  另有 `POST /export`，权限点是 `analysis:export`）。
-- **导出**（`POST /api/analysis/export`）与 `/search` 共用请求体，导出的就是用户当下看到的那份
-  数据（分页参数忽略）。CSV 经服务端游标（`crud.iter_export_rows` 的 `yield_per`）分块流式产出，
-  内存与块大小同阶；流式生成器**自建会话**（`SessionFactory`），因为响应体在依赖清理之后才被消费，
-  复用请求会话会踩「会话已关闭」。行数超 `EXPORT_ROW_CAP`（默认 5 万）**拒绝**（413），
-  不静默截断——截断的 CSV 会被当成完整数据用。上限检查必须在开始流式输出之前做完。
-- **类目筛选是多选**：请求字段 `categories`（列表，命中其一即可，上限 100），空列表视同不筛。
-  没有单值的 `category_exact`——它在 `redesign-analysis-filter-layout` 里被替换掉了。
-- **默认站点** `DEFAULT_SITE`（config，须属站点清单）；未传站点用它、非法站点报错**不回退**。
-- **两个视图都附带只读的走势与各点日期**（天 7 点 / 周 4 点，`trends_stmt` +
-  `shape_trends`，「先分页再批量补附加」），以及三个历史参照点的排名。**走势与历史排名
-  共用同一次回溯查询**：回溯范围取「趋势窗口」与「最远参照点」的大者
-  （`fetch_lookback_days`，天 7 天 / 周 84 天），历史排名因此不多发一条查询。
-  代价是回溯范围**比趋势窗口宽**，多出来的期次只喂历史排名列、不进小图，所以
-  `shape_trends` / `shape_trend_dates` 必须拿到 `on`/`view` 做裁剪——漏传就会画出
-  天 8 点 / 周 13 点，而这种错误没有任何地方会报错（导出路径踩过一次）。
-  **排序白名单**按视图，走势与历史排名字段一律不许排序。
-  **日视图不再附带「当周排名变化」**——它把周报数据混进日报视图，让「这一行属于哪份数据」
-  变得含糊，还要求查询侧自行定义周边界（`date_trunc('week')`），而导入侧只存文件名日期、
-  不定义周边界。要看周维度的变化就切到周视图。
-- 列表响应走 ProTable 契约 `{data,total,success}` + 作用域回显。集成测试
-  `test/test_site_scoped_query_integration.py`（`TEST_DATABASE_URL` gate）。
-- 演示数据：`scripts/seed_demo_data.py`（连续 7 天 + 对齐周报，让走势可见，仅本地）。
-
-**关键词工具 · 持续增长市场（`/api/keyword/growth/*`，权限点 `keyword:view`）**：近 7 天名次
-持续前进的关键词榜。命中口径三条同时成立——窗口内每期都在榜、累计净增 `rank(d-6) − rank(d)`
-> `GROWTH_MIN_RANK_GAIN`、6 个日环比全部 ≥ `GROWTH_MIN_DAILY_RATE`。五条要点：
-
-- **只有日报**。周报没有「连续 7 天」，`period='WEEK'` 的导入不算定、不写表。
-- **导入收尾算定（`importer.load_growth`），查询侧只读**，与 `fact_dropped` 同一模式。
-  口径只有那一处定义；查询层或脚本里再写一遍，漂移的表现是「界面显示的行不满足界面
-  自己写的口径」，没有任何地方会报错。
-- **改 `GROWTH_*` 阈值不会影响已算定的期次**（表里只存命中行，不存全量指标）。改完
-  必须跑 `scripts/backfill_growth.py` 重算，**上线时也必须跑一次**，否则库里明明有三个月
-  日报、界面却要等 7 天才出现第一条榜单。
-- **窗口内缺期时榜单据实为空**，缺失期次随响应回传、界面必须明示——「今天没有增长词」
-  与「有两天数据没导进来」在界面上长得一模一样。
-- **这一屏首屏不自动查榜单**（与分析查询屏相反，那一屏进去就查）。榜单按锚定日切片，而
-  默认的最新一期恰恰最可能因窗口缺期或口径过严而为空，先查一次既浪费请求、又让用户在
-  还没做任何选择时就看到空表。
-
-  代价是空表格从两种成因变成**三种**——还没查 / 窗口缺期 / 口径下确实没命中——含义
-  完全不同却长得一样。所以「还没查」必须在三处同时说清：**不显示条数**（「持续增长词：0」
-  会被读成今天没有增长词）、**不显示「条件已修改」标签**（用户一个条件都没改，那句话是
-  错的）、**空状态提示去点「立即查询」**。少任何一处，缺陷就伪装成一条正常的空榜单。
-
-**关键词工具 · 我的词库（`/api/keyword/library/*`，权限点同为 `keyword:view`）**：用户自建的
-关键词清单，把关心的词攒起来长期盯排名。两张普通表 `keyword_group`（分组）/
-`keyword_group_item`（条目），不分区、不参与保留清理、不被导入路径写入。六条要点：
-
-- **行集合由条目决定，事实表只补数**——与分析查询屏相反（那边行集合 = 在榜 ∪ 掉榜，
-  由事实表决定）。盯盘查询由条目表驱动、LEFT JOIN 事实表与 `fact_dropped`，每个词恒有
-  一行，状态三选一：**在榜 / 掉榜 / 该期无数据**。盯的词掉出榜单恰恰是最该看见的事，
-  不能因为事实表里没有行就让它消失。
-- **条目只存 `keyword_id`**，不另存关键词文本与站点码（`dim_keyword` 已唯一确定
-  `(site, keyword)`）。**分组绑定站点且建后不可改**；同一批词要盯三个站点就建三个组。
-- **两个上限都是拒绝式的**：`LIBRARY_MAX_GROUPS_PER_SITE`（20）、
-  `LIBRARY_MAX_ITEMS_PER_GROUP`（500），超限 422 且**整批不写**。后者同时是盯盘查询的
-  规模保证——那条查询最坏是上限这么多行的嵌套循环（两侧走
-  `idx_fact_*_keyword_history` 与 `fact_dropped` 主键），**上调前必须重测**。
-- **入库入口只有分析查询屏**（勾选结果行 → 加入词库），词库屏只能移除。理由是身份：
-  从结果行加入时 `keyword_id` 是现成的，词必然真实存在于该站点；手工录入要按文本反查，
-  错别字、多余空格、跨站点同名词各自的失败行为在盯盘清单里没有正确答案。
-- **私有性由每条查询里的 `user_id` 保证**，不靠界面不展示；别人的分组一律 404 而非 403
-  （403 等于确认了 id 存在，而 id 连续自增）。**不新增权限点**——「禁止某人管理自己的
-  收藏夹」不是真实的授权需求。
-- **这一屏进去就查**（与持续增长市场屏相反）：盯盘的空表都与「还没做选择」无关。
-  但三种成因要分开说——**没有分组 / 站点没数据 / 组里没词**，三句文案各不相同。
-- **分组管理是表格上方独立的一块（`GroupBar`），不做侧栏**：盯盘表格要 1688px，侧栏形态下
-  右侧只剩 1292px（1920 视口实测），近 400px 被裁进横向滚动。分组一览有价值，但代价必须
-  落在**纵向**——纵向可以滚，横向被裁掉的列找不回来。选中/改名/删除/新建都在这一块里。
-
-事实行的列投影由 `analysis_crud.fact_metric_columns` 提供，**两屏共用一份**；复制第二份
-不会报错，表现是同一个词在两屏显示不同的值。
-
-**关键词工具 · 排名趋势详情（`GET /api/keyword/trend`，issue #86）**：单关键词的日/周排名
-历史，市场分析与我的词库共用同一个只读端点，抽屉形式，不设导航菜单。查询固定
-`keyword_id + site + view`，按 `idx_fact_{daily,weekly}_keyword_history` 与
-`idx_fact_dropped_keyword_history`（`site, period_type, keyword_id, anchor_date`）
-取数，不扫全站榜单。**掉榜段不走 `fact_dropped` 的主键**——主键是
-`(site, period_type, anchor_date, keyword_id)`，`anchor_date` 排在 `keyword_id`
-之前，单关键词历史查询里 `anchor_date` 是范围（`range=ALL` 或 30 天窗口）而非等值，
-`keyword_id` 因此退化成扫描内 filter，代价随该站点/视图窗口内的掉榜行数增长，而不是
-随目标关键词的历史行数增长（PR #87 复审 P1）。新建的
-`idx_fact_dropped_keyword_history` 把 `keyword_id` 提到 `anchor_date` 之前，
-把范围先收窄到单个关键词再扫描。五条要点：
-
-- **五态分类，且不信任 `site_data_stats` 在保留下界之前的行。** `retention_service`
-  现在会在同一次清理里，把 `site_data_stats`/`category_stats`/`brand_stats` 中报告
-  日期早于保留下界的残留行一并清掉（issue #100，不再是「从不清理」）；但判定顺序仍然
-  把 `report_date < retention_cutoff` 放在最前面、且**不查** `site_data_stats`——保留
-  清理是按调度运行的，日历翻页到保留下界之后、下一次清理真正执行之前，天然存在一段
-  分区还在但下界已经前移的间隔（这段数据仍是真实可查的，不属于残留），而这条判定顺序
-  同时防住了另一种情况：万一某次清理漏跑、统计表短暂残留，也不会被误判成「已导入但
-  未收录」，让用户以为那份数据还在、只是没收这个词。这是双重保险，不因为清理本身已经
-  修好就删掉。其余四态：在榜（`RANKED`）/ 掉榜（沿用既有 `fact_dropped`
-  口径，`DROPPED`）/ 报表已导入但未收录（`NO_DATA`）/ 报表未导入（`NOT_IMPORTED`）。
-- **周视图的期次步长是 7 天，不是自然周边界。** 复用 `app/table/upload/importer.py`
-  的 `_PERIOD_CONFIG["WEEK"]`「上一期偏移」——`previous_ranking`/`ranking_change` 已经
-  在用这个数，这里不新造一套周定义。
-- **锚定期解析统一是「取 `<= on` 的最新一期，取不到就退化为全局最新一期」**
-  （`trend_service._resolve_anchor`）。这一条规则同时覆盖两种情形：同视图的正常查询
-  （`on` 本就在集合内，取到就是它自己）与日/周切换（`on` 来自另一个视图，找不到精确
-  匹配）。**`on` 必须是打开详情那一刻来源页面正在看的期次**，不是「今天」——从历史查询
-  结果打开详情却看见比来源页面更新的数据，是「静默跳到最新期」的一种形态。
-- **`latest_available` 与锚定期当期可能不是同一天，前端必须分别标注日期。** 锚定期本身
-  若是掉榜/未收录/未导入，`latest_available` 会取更早的一个在榜点；把它显示成「当前
-  排名」是这条口径唯一容易踩的坑。
-- **权限接受 `analysis:view` 或 `keyword:view` 任一**（`simple_auth.require_any_permission`），
-  不新增权限点。这是刻意的例外：端点只读一个公共 `keyword_id` 的历史排名，不携带任何
-  域私有数据，两个入口各自的合法用户都不该被另一个域的权限矩阵挡住。**这个原语只在
-  「端点跨域共用且不携带私有数据」时才该用**——像 `competitor_new` 那种读取用户私有
-  关注关系的筛选，仍然是`check_permission` 按需叠加校验，不能用「任一满足」放宽。
-
-## 顶栏菜单：按数据域命名，不设按排除法命名的容器
-
-顶栏八项，名称统一四字，顺序固定：**机会中心 → 市场分析 → 词库工具 → 竞对监控 →
-产品档案 → 风险核查 → 定价核算 → 数据管理**（机会中心是主动式工作流的入口排最前，中间
-四项「看 ABA、竞对与产品数据」，风险核查次之，数据管理是唯一「喂数据/管数据」的，排最后）。路由与菜单在
-`frontend/src/routes.ts`——它从 `.umirc.ts` 抽出来单独成文件是为了**可测**
-（`src/routes.test.ts`；直接 import `.umirc.ts` 会经 `@umijs/max` 拽进 esbuild，
-jsdom 下启动即崩）。
-
-**新增一级菜单的判据是「它读哪个数据域」，没有一项匹配就新开一个。** 这里曾有一个叫
-「工具箱」的一级菜单，定义是「不属于选品主线的其他东西」——名字说的是它不是什么，
-因而不给新功能提供任何归属判据：下一个功能只能问「它像不像已经在里面的那些」，而那个
-问题没有答案。它最后装了四个屏，两个读 ABA 事实表、两个读根本不存在的专利/商标库；
-竞对监控没有放进去，就是它已经没有原则的证据。已拆成「词库工具」（原名「关键词工具」）
-与「侵权查询」两项，「侵权查询」后来（issue #76）又改名「风险核查」。
-
-**单页顶层（`/opportunity`、`/analysis`、`/competitor`、`/products`、`/pricing`）不得加二级菜单。** 布局是
-`layout: 'mix'` + `splitMenus`，顶层节点一有子项就长出约 208px 的左侧栏。按数据域，
-增长榜与词库本该并进 `关键词市场分析`（原名 ABA数据选品），正是这条否决了它——分析
-查询屏是全产品最宽的表，横向裁掉的列找不回来（与「我的词库」「竞对监控」两屏拒绝侧栏
-形态的是同一笔账）。机会中心的六个状态同理不拆二级路由，用页内 Tab 承载。
-
-**机会中心（`/opportunity`，issue #76）是承接"确定性 Signal → 候选机会 → 验证推进 →
-风险核查"这条主动式工作流的入口**，不叫「AI Agent」或「聊天助手」——那是技术实现，
-不是用户任务。**权限点 `opportunity:view` 是当前唯一一个默认不授予任何内置角色
-（含 admin）的权限点**，只有 `is_super=true` 能看到，即便某个用户角色码是 `admin`
-也不例外——`role_code == 'admin'` 与 `is_super == True` 是两个独立字段（见
-`user_crud.create_user`）。落地这条规则时踩过一个陷阱：`app/auth/permissions.py` 的
-`ROLES["admin"]` 历来定义成 `set(PERMISSIONS.keys())`（动态取全部权限），若把
-`OPPORTUNITY_VIEW` 直接塞进 `PERMISSIONS` 而不处理，admin 角色会自动继承它——因此
-新增了 `SUPER_ONLY_PERMISSIONS` 集合，`ROLES["admin"]` 改为
-`set(PERMISSIONS.keys()) - SUPER_ONLY_PERMISSIONS`，把这个权限点显式排除在"admin 隐含
-全部权限"这条默认规则之外。当前页面只有导航与权限骨架，不发任何请求——信号计算、机会
-评分、验证流程分别在 issue #7 / #13 / #24 / #25 / #38 / #54 / #55 里逐步接入，接入前
-MUST NOT 展示编造的 0 值或结论。
-
-**风险核查（`/ip`，审核待办 / 外观专利 / 商标查询 / 风险案例，原名「侵权查询」）只是占位屏**：仓库里没有
-任何专利/商标数据，**不发请求、无后端端点**。因此它**没有权限点**。可见性见下文
-「占位屏仅超管可见」。给没有端点的屏开权限点，就是再造一遍 `user:manage` 那种「勾了也不生效」
-的复选框；接上数据源、有了真实端点再加权限点，那时是加法，不会留下失效的历史勾选。别为了
-「每个菜单都有 access」的整齐而补一个权限点。
-
-**四字导航（2026-09-05）**：导航简称不强制缩短业务页面标题。「市场分析」页面仍可显示
-「关键词市场分析」。词库工具子菜单为「增长市场 / 我的词库」，数据管理为「文件导入 /
-导入历史」。风险核查默认进入 `/ip/review`，原专利与商标路径继续有效。
-
-产品档案（`/products`）与定价核算（`/pricing`）本轮只提供明确标注尚未接入的入口，
-不发请求、不生成业务数据、不新增空权限点；真实端点落地时补服务端权限。
-
-**占位屏仅超管可见（2026-09-20）**：产品档案、风险核查、定价核算三个一级菜单挂前端 access
-`canViewUnreleased`（`access.ts`，判据 `is_super`），运营/分析师/admin 角色码都看不到。
-这是**前端 access 键，不是权限点**——后端无端点可守，权限矩阵里也没有对应项，所以没有
-「勾了也不生效」的复选框。真实端点落地时，按数据域各开权限点并把对应菜单的 `access`
-换掉，同时给运营/分析师授予；别把 `canViewUnreleased` 留在已开发好的屏上。
-定价核算用「快速核价 / 核价记录 / 费用配置」页内 Tab，产品档案保持全宽。
-产品档案统一关联风险审核与核价记录，两个业务域不能各自复制一份产品档案。
-
-把它放进顶栏是自觉取舍：产品最空的一块因此成了最显眼的一块，换来的是「这块在做」这个
-路线图信号可见。
-
-旧地址 `/toolbox`、`/toolbox/growth`、`/toolbox/library` 保留重定向；两个占位屏的旧地址
-**不留**——没有人会去书签一个写着「数据源尚未接入」的屏。
-
-## 竞对监控（`/api/competitor/*`，权限点 `competitor:view`）
-
-盯别人的店：把竞对卖家攒成关注清单，供后续的上新监控使用。**P0（关注清单）、P3a
-服务端侧（Amazon 卖家 ASIN 上报，见下文独立小节）、P3a 客户端（浏览器插件，被动采集，
-插件见仓库根 `extension/`）与 P2（分析查询屏「竞对新发现」筛选 + ASIN 三槽位扩展，见
-「分析查询屏」一节）均已实现**（issue #56）；浏览器插件后台自动巡检（P3b）与 Keepa
-拉取式接入（P3c）未开工——「竞对新发现」筛选在插件覆盖率不足时会长期少命中甚至没有
-命中，这不是缺陷。方向 C（品牌级联查，卖家 → 品牌名 → `top1/2/3_brand_id`）因拿不到
-「卖家 → 品牌名」这层映射，移出 P2 范围。
-
-**插件的两处限制与一处已澄清的误解，改动前先读 `extension/README.md` 与对应变更的
-design.md**（`openspec/changes/archive/2026-09-03-add-competitor-browser-collector/`）：
-
-- **令牌是从已登录网页里同步来的 24 小时 JWT，全权限**（`session-sync.ts` 读网页
-  `localStorage` 的 `keywordiq_token`，不再手动粘贴，见 `sync-extension-token-from-web`
-  变更）。同步只解决"不用手动粘贴"，不解决"权限过大、无法单独收回插件"——那要后端签发
-  独立的可吊销令牌，是另一个变更。
-- **DOM 选择器（`extension/src/parse-storefront.ts`）本仓库无法自动化验证**，只能人工在真机
-  核实。维护者已于 2026-09-20 分发前确认在真机上验证过；逐站点的覆盖范围与
-  `tasks.md` 第 8 节的勾选**没有留档**，Amazon 页面改版后要重新核。
-- **插件的跨域请求不依赖后端 CORS。** service worker 的 `fetch` 由 `optional_host_permissions`
-  （用户保存 API 地址时按需弹权限框申请）放行，与服务端是否回 `Access-Control-Allow-Origin`
-  无关（`host-permission.ts` 头部注释，MV3 权限模型）。这里曾写过"依赖 `allow_origins=["*"]`、
-  收紧 CORS 前必须先给插件开白名单"，是对权限模型的误判，已删除。收紧 CORS **不会**让插件
-  失效；插件"网络异常"要先查 host 权限是否授予（换 API 地址要重新授权）。
-
-**采集是「多页本地合并、一次上报」，不是逐页上报。** 逐页上报会让第一页单独落定该卖家的基线，
-之后采到的存量商品因此被服务端判成「新发现」（PR #68 复审 P1，与上文「基线 = 第一次上报」同源）；
-这条约束在插件侧靠 `capture-accumulator.ts` 保证，改采集流程时不要破坏它。
-
-**分发方式是 zip + 加载已解压，不上 Chrome Web Store。** `pnpm run pack`（`extension/
-scripts/pack.mjs`）构建并产出 `extension/release/keywordiq-competitor-collector-v<版本>.zip`
-（不含 sourcemap，`release/` 与 `dist/` 都被 gitignore）。三条约束：
-
-- **版本号有两处，必须一致**：`manifest.json` 与 `package.json`。打包脚本与
-  `test/manifest.test.ts` 都会拦；两者不一致时发出去的包版本号会撒谎。
-- **`manifest.json` 的 `key` 字段固定扩展 ID**（`deeognacliaabdllgfhofccnfipmmidl`）。没有它，
-  未打包扩展的 ID 由**解压路径**决定，运营挪一下文件夹，设置与 host 权限就整体丢失。`key`
-  是公钥，可入库；**对应私钥在维护者本机（`~/.keywordiq/`），不入库**，只有将来上商店想沿用
-  同一 ID 时才需要，丢了不影响已安装的插件。
-- **升级靠覆盖解压 + 在 `chrome://extensions` 点重新加载**，没有自动更新。给运营看的安装、
-  三项设置与常见提示写在 `docs/extension-install.md`（`docs/` 整体被 gitignore，这份是
-  `git add -f` 强制加进库的；已被跟踪，后续修改正常提交即可，新增 docs 下的文件才要 `-f`）。
-
-**两层数据模型，分层的判据是「这条数据属于谁」**：
-
-| 表 | 层 | 说明 |
-|---|---|---|
-| `competitor_seller` | 共享 | 卖家主体，`(seller_id, site)` 复合主键。**MUST NOT 携带账号属性** |
-| `user_seller_group` | 私有 | 用户自建的归类标签，`(user_id, name)` 唯一 |
-| `user_seller_watch` | 私有 | 关注关系，`UNIQUE(user_id, seller_id, site)` |
-| `competitor_watch_preview` | 技术 | 导入两步流的暂存，**替代引入 Redis** |
-| `competitor_seller_asin` | 共享 | 卖家在售 ASIN，`(seller_id, site, asin)` 主键，只增不改 |
-| `competitor_asin_report` | 共享 | 一次上报的观测元数据（不是快照），见下文独立小节 |
-
-六张都是普通表，不分区、不参与保留清理、不被导入路径写入。
-
-分共享层的理由是抓取代价：后续上新监控要按卖家抓商品，**一个卖家被十个用户关注也只该
-抓一次**。把站点码或 `baseline_at` 挪进私有表就等于按人重复抓，这是整个分层唯一的意义。
-
-**与词库（`keyword_group`）刻意不同的两点**，抄错了不会报错：
-
-- **分组不绑站点。** 这条后来还多兑现了一次：独立站监控落地时，同一个分组直接就能装
-  Amazon 卖家与独立站两类成员，分组表一行代码都没改。词库的分组绑站点，因为 `keyword_id`
-  不含站点；这里 `CompetitorSeller`
-  已由 `(seller_id, site)` 唯一确定站点，分组只是标签，允许跨站点。
-- **删组不取消关注**（`group_id` 外键 `ON DELETE SET NULL`，落到「未分组」）。分组是标签，
-  关注是「我在盯这个卖家」这件事本身，误删一个标签不该连带把盯了三个月的清单清空。
-
-**解析器 `seller_ref_parser.py` 是纯函数，书签导入与手工粘贴共用一份。** 用户从浏览器
-复制来的必然是带 `ds=` 会话签名的长 URL，两条入口的容错要求完全一样，各写一份的表现是
-「文件导进去了，同样的链接手工粘贴却报错」。六种形态：三种卖家链接（`i=merchant-items&me=`
-/ `/sp?seller=` / `at-a-glance.html?seller=`）、裸卖家 ID，以及两种**明确拒绝并附原因**的
-（品牌店铺页 `/stores/`、商品详情页 `/dp/`）——它们不静默丢弃，否则用户只会看到「2657 条
-进来了 2400 条」而无从知道少的是哪些、为什么。
-
-**站点识别的优先级是 `marketplaceID` > 域名 TLD > 调用方给的 `fallback_site`。**
-裸卖家 ID 天生不带站点信息，**永远**需要那个兜底；拿不到就拒绝，**不猜 `DEFAULT_SITE`**
-（与 `normalize_site_code` 同一条纪律：非法/缺失站点报错不回退）。`ds=` 等会话签名参数
-在解析处即丢弃，从不读取、存储或用于重建请求。
-
-**导入是预览 → 确认两步，配额在预览阶段就判定。** 两条约束：
-
-- **超配额整批拒绝、不截断**，且判定发生在预览而非确认——让用户看完 2657 条的预览再告诉
-  他「超了」，那次预览就白做了。上限见 `.env.example` 的 `COMPETITOR_*`
-  （`MAX_WATCH_PER_USER=3000` / `MAX_IMPORT_BATCH=5000` / `PREVIEW_TTL_SECONDS=600`）。
-- **确认有 `append`（默认）与 `replace_group` 两种模式**。后者必须带 `target_group_id`，
-  先清空该组再写——它是「这个组以我这份书签为准」，不是追加，界面必须说明白。
-
-预览暂存进表而不是 Redis，是为了不给这一个功能引入一个新的基础设施依赖；过期行清理
-**挂在 `import_queue.py` 已有的轮询循环上，不新开定时器**（新开一个就要各自处理多 worker
-重复执行的问题）。书签文件约 2MB，同步读进内存即可，**不走 OSS 直传那一套**——那是给 GB 级
-CSV 准备的，用在这里是过度设计。
-
-**权限点 `competitor:view` 是独立的，不复用 `keyword:view`。** 与「外观专利」那种占位屏
-相反，这一屏有真实端点、真实数据、且每个用户的关注池互相独立，是一个可以真正被授予或
-不授予的能力。私有性靠每条查询里的 `user_id`，别人的分组/关注/预览一律 **404 而非 403**。
-
-### 竞对卖家 ASIN 上报（`/api/competitor/asin-reports`，issue #56 P3a 服务端侧）
-
-**推模型，不是拉模型。** 采集端（浏览器插件，不在本变更范围）主动 `POST` 它在某卖家页面
-看到的 ASIN；后端**不实现**拉取式的 `fetch_listings(seller_id, site)` 协议——那会迫使
-接收端伪造一个"本次拉取覆盖了多少"，而这个问题在推模型下没有答案。上报只表达一件事：
-**在某个时刻，上报者的浏览器里见到了这些 ASIN 属于这个卖家**，不承诺目录完整性。
-
-**由此推出三条边界，缺一条都会在某个时候制造出一批安静的假数据：**
-
-1. **不做下架判定。** "这次没见到"与"已下架"在数据上无法区分。与独立站「下架判定只在
-   `catalog_complete` 为真时做」是同一条纪律的必然结论——独立站有三道完整性判据才敢判，
-   被动采集一道都没有。
-2. **不存逐次目录快照。** 快照记录的是「运营那天翻了几页」，而它与「这家店只有 18 个品」
-   长得一模一样。改为 `competitor_asin_report` 存一次上报一行的观测元数据（谁、何时、
-   哪个卖家、多少条、采集时的配送地区、页面上下文），回答的是「数据有多新、怎么来的」，
-   不是「这家店有什么」。
-3. **产出的是「新发现」，不是「上新」。** 被动采集证明不了商品何时上架，只能证明"我们
-   何时见到"。界面措辞一律「发现于」/「近 N 日新发现」，**0 只表示"已采集范围内没有新
-   发现"，MUST NOT 读作"这家店没有上新"**。独立站有数据源给的 `published_at`，才继续称
-   「上架于」——两条线的措辞差异是数据来源差异的直接结果，不为界面整齐而统一。
-
-**基线 = 第一次上报，一旦落定不再改动。** 某卖家的首次上报把 `baseline_at` 落成本次
-服务端事务时间，该批 ASIN 照常入库但不进上新流；此后只有 `first_seen_at > baseline_at`
-的才算新发现。**改动基线是本路径唯一能造成大面积假数据的方式**——会让基线批次的商品在
-下一次查询里整批涌进上新流，且没有任何地方会报错。实现上落基线的语句是
-`WHERE baseline_at IS NULL`（不是 `SET = COALESCE(baseline_at, now())`）：两者保证等价，
-但前者常态下根本不写——99% 的上报是"基线早就有了"，与 `dim_product` 那条
-`IS DISTINCT FROM` 是同一笔账。**基线与本批 ASIN 必须落在同一个事务里**：Postgres 的
-`now()` 取事务开始时刻而非语句时刻，两者因此严格相等，配上"新发现"判据的严格大于，
-首批才能恒不算新发现——拆到另一个事务里落会让两个时刻不再相等，首批反而全部漏进新发现。
-
-**时间的权威只有服务端。** `baseline_at` 与 `first_seen_at` 一律取服务端事务时间；上报体
-可携带的 `captured_at` 只落进 `competitor_asin_report` 作审计，**MUST NOT 参与任何判定**。
-客户端时钟不可信也不可验证，让它左右判定意味着一台时间偏了的机器就能把整批老品的首次见到
-时刻推到基线之前（整批消失）或推到未来（整批涌进新发现），两种错误在界面上都长得像正常
-数据。
-
-**幂等靠两把锁，缺一把只挡住一半：**
-
-- `request_id`（客户端生成，**必填**，按 `(user_id, request_id)` 唯一）——命中即回放原
-  记录、不新增行、不推进「最近采集于」。唯一性按用户分域是因为跨用户撞键会让后一个用户的
-  上报被吞掉、并把前一个用户的计数回放给他。
-- `request_hash`——只有幂等键不够：它只能认出"这个键来过"，认不出"这两次是不是同一次
-  观测"。摘要覆盖 `seller_id` + `site` + 规范化去重排序后的 ASIN 集合 +
-  `captured_at` + `ship_to_region` + `page_context`（**只排除标题与图片**——易变的展示
-  属性，且只在首次落定、不影响写入结果）。命中键但摘要不一致，说明这个键被用去报了另一次
-  观测，返 **409 `competitor.idempotency_key_reused`**，不写入也不回放——静默回放会把
-  一次真实观测丢掉。**这条摘要范围曾被写反过一次**（把三个审计字段也排除，理由是"重读
-  DOM 后重试会撞出假 409"）：那不是重试，真正的幂等重试重发的是已经序列化好的原请求体，
-  三个字段逐字节相同；重新采集产生新的 `captured_at` 就是另一次观测，本该带新键。判据是
-  两种误判代价不对称——多返一个 409 响亮可自愈，漏判成重放则一次真实观测安静地凭空消失。
-
-**每行在售关系记录首次引入它的上报**（`first_report_id`，`ON DELETE SET NULL`）。共享层
-一个人写错、全体看见，没有这个指针只能在"全删"与"不管"之间选，它比逐次快照便宜两个数量级
-却保留了同样的溯源能力。上报者账号被删时指针置空而非连带删除——商品行是别人也在用的共享
-数据。
-
-**上报只接受上报者本人已关注的卖家，整个请求拒绝（不是逐条）。** 一次上报只对一个
-`(seller_id, site)`，共享数据若不限制写入来源，任何持有令牌的用户都能污染其他人看到的
-数据。`user_id` 一律取自访问令牌，请求体里的同名字段被 schema 无视（`extra="ignore"`，
-不用 `extra="forbid"`——后者变成 422 反而暗示"这个字段是被认识的"）。
-
-**单条 ASIN 格式非法逐条拒绝、其余照写；条数超限整批拒绝、不截断。** 判据是"这样做会不会
-造出一份无法与正常数据区分的残缺记录"：超限意味着采集端手上比送出的多，写入即沉默截断，
-上限见 `.env.example` 的 `COMPETITOR_MAX_REPORT_ITEMS`（默认 200）；单条坏数据丢弃不制造
-完整性假象，原因回传能让插件作者发现选择器取错了元素。同请求内重复 ASIN 去重不拒绝——
-同一个品出现在页面两处是常态。
-
-**零条有效 ASIN（请求为空，或全部条目因格式非法被逐条拒绝）整批拒绝（422），MUST NOT
-落定基线。** 这条不是"单条格式错"的推论，单独成立：放行的话，首次上报会落一个不含任何
-ASIN 的"空基线"，下一次正常上报时该卖家的全部存量商品都晚于这个空基线，被整批误判成新
-发现——这个错误不会报错，界面表现只是新发现数突然涌出一大批。判据不分是否已有基线：即便
-基线已经落定，一次零有效条目的上报本身也不携带任何可用信息，没有受理它的理由。
-
-**非法站点码返回 422，不是 500。** `normalize_site_code` 抛 `UnknownSiteError`，
-`asin_service.submit_report` 必须捕获并转译——不转译就会被全局兜底处理器当成内部错误。
-这条检查在授权检查之前，因为一个连站点码都不合法的请求，谈不上"是否关注了这个卖家"。
-
-**上新流在 SQL 里合并两类来源，不在应用层归并两页**（`store_crud.new_arrivals_stmt` 对
-两侧统一投影后 `union_all`）：各来源自己的 offset 与合并后的全局序号对不上，翻页会重复或
-漏条目，表现是"某条上新出现两次"。**排序必须带次级键**
-（`source, source_key, site, product_key`）：`published_at`/`first_seen_at` 精度有限、同一
-时刻多条是常态，没有次级键时同一行可能在两页各出现一次——**这条在小数据量下测不出来**
-（去掉次级键后集成测试照样绿，Postgres 的顺序碰巧稳定），得靠比 `ORDER BY` 子句本身的
-结构性断言。**`site` 必须进投影与次级键，不是可选项**：共享层的真实粒度是
-`(seller_id, site, asin)`，同一 seller_id 跨站点卖同一 ASIN 是常态；漏了 `site`，这两行
-在响应身份、前端 `rowKey`、排序键上会撞成"同一行"——`(source, source_key, product_key)`
-三者都相同，翻页时互相顶替。独立站没有站点这回事，该列对 DTC 行恒为 NULL，两侧投影列数
-仍须相等（UNION 的硬要求）。卖家清单的「近 N 日新发现」同样有一处容易写错且错了不报错的
-地方：相关子查询里 `count(*)` 恒返回 0 而不是 NULL，**无基线时必须显式 `CASE WHEN
-baseline_at IS NULL THEN NULL` 罩一层**，写成 `COALESCE(...,0)` 会让「待建立基线 vs
-监控中」的界面故事就地塌掉。
-
-**「点开一行看详情」不在本变更范围内**（两类来源都没有这个交互，不是 Amazon 分支特有的
-缺口），已从 `competitor-storefront-watch` spec 的 delta 里移出、记在 issue #65：独立站
-缺 UI 入口去承接已有的变体/价格历史，Amazon 侧连"最近一次采集时刻"这个数据能不能按 ASIN
-维度取到都还没定（当前 schema 只记了每个 ASIN *首次*被哪次上报引入）。
-
-**`competitor_seller_asin`/`competitor_asin_report` 不参与按月保留清理**（不登记进
-`PARTITIONED_TABLES`）：首次见到时刻正是新发现判定的依据，越久越有价值，三个月窗口是为
-八亿行的 ABA 事实表定的，与本能力量级无关。
-
-**配送地区仍不用于过滤或存活判定，只留档。** 实测 Amazon 店铺搜索结果按操作者账号收货
-地址过滤（2026-08-31 抽样 120 家日本地址书签卖家，92 家显示无货，抽查 30 家却有 16 家仍
-在正常卖货，真实存活率回推约 64%），因此在非目标市场地址下"没见到"是账号设置的产物、
-不是事实。上报体的 `ship_to_region` 存下来只为出问题时能分辨"这批数据是在什么账号设置下
-采的"——这个信息事后补不回来，与独立站那边"币种事后补不回来"是同一类。
-
-### 独立站监控（Shopify，`/api/competitor/stores*`）
-
-与 Amazon 卖家**共用分组、权限点与上新流，不共用表与字段**。分的是数据与采集，合的是
-归类与呈现——运营的心智是「我在盯这一批竞对」，不是两套体系。
-
-**为什么先做这条**：它没有未决前提。`/products.json` 是公开端点，服务端一个 HTTP 请求即可，
-不需要插件、浏览器、用户登录或令牌；而且**上架时间是数据源直接给的事实**（`published_at`，
-精确到分钟），首刷即有历史，一条基线都不用建。
-
-| 表 | 粒度 | 写入模式 |
-|---|---|---|
-| `competitor_store` | 站点 | 状态列（`last_fetch_at` 记**尝试**不是成功） |
-| `competitor_store_product` | 商品 | 只增不改 |
-| `competitor_store_price` | **变体** | **仅在取值变化时追加** |
-| `competitor_store_rank` | 商品 × 日 | 每日追加，只存前 N 名 |
-| `user_store_watch` | 关注关系 | 私有，`group_id` 指向**同一张** `user_seller_group` |
-
-五张普通表，**MUST NOT 登记进 `PARTITIONED_TABLES`**——登记即被保留清理按
-`HOT_WINDOW_MONTHS` 整月 DROP，而价格与名次的历史越长越值钱；那个三个月窗口是为八亿行的
-ABA 事实表定的。
-
-**七条不可违反的约束**，每条都对应一个「错了不会报错」的失败形态：
-
-1. **下架判定只在 `catalog_complete` 为真时做。** 完整 = 每页 200 + 翻页因空页自然终止 +
-   **取到的商品数不少于 `/meta.json` 声称的 `published_products_count`**（第三道最硬，实测
-   三家店与逐页累计完全吻合）。撞上 `DTC_MAX_PAGES` 必须记为不完整。不完整时照常写入见到的
-   商品（只增，永远安全），但一次网络抖动把整店判成清仓是这条路唯一能造成大面积假数据的方式。
-2. **新品判定看 `product_id` 在不在库里，不看 `published_at`。** 商户批量重新发布会让后者
-   整体跳到当日，据此判定会伪造出一批假上新。
-3. **上新流按 `first_seen_at > first_fetch_at`，「近 7 日上架数」按 `published_at`。** 两个
-   口径不同不是疏漏：前者答「纳入监控后新出现了什么」，后者答「这家店最近一周上了多少新品」。
-   `first_fetch_at` 用 `COALESCE` 保护，一旦落定不再改动——改了会让首刷那批涌进上新流。
-4. **价格只在 price/compare_at_price/available 任一变化时才写。** 每日全量快照是约 30 倍写
-   放大且其中 99% 与前一日相同，与 `dim_product` 那次 `IS DISTINCT FROM` 是同一条纪律。
-   表里**没有「当前价」列**——当前价就是 `observed_at` 最大的那行。
-5. **币种必须存，且补不回来。** 实测 17 个站点里已有两种（blessrich 是 GBP，其余 USD），
-   而 `/products.json` 的数字不带币种。取自 `/meta.json`，该端点同时充当 Shopify 判据。
-   界面未知币种时**只显示数字不臆造符号**。
-6. **销量只有店内相对名次，没有绝对数字。** `/products.json` 无销量字段；同名的
-   `/collections/all/products.json` 实测**忽略 `sort_by`**，只有 HTML 版
-   `?sort_by=best-selling` 生效（每页 20 个商品、每个 handle 出现 3 次，去重是必需的）。
-   界面 MUST NOT 换算或呈现为销量/销售额，也不可跨店比较。
-7. **四种状态互不合并**：待首次拉取（没到点，不是坏了）/ 未开放商品接口（商户自己关的，
-   **真实形态是 HTTP 404**，重试也不会好）/ 抓取失败（带连续次数）/ 数据不完整。
-   畅销榜解析异常**独立成标记**，与目录状态互不牵连，且绝不显示成「该站销量榜为空」。
-
-**加入入口有两个，共用一份域名规范化**：单条表单（长期主路径）与批量粘贴（一次性初始
-装载）。批量**一步完成，不做预览 + 确认**——判据是这个操作可不可逆：卖家侧那套两步流
-存在的理由是 `replace_group` 会清空整组重建、且 2657 条来自书签文件用户不知道里面有
-什么，这里两条都不成立（用户粘的是自己知道的域名，加错了取关一次点击且数据还留着）。
-批量结果按**输入行**组织并**逐条附原因**，MUST NOT 只报「N 条失败」——三类原因对应的
-动作完全不同。探测并发有上限（信号量 8，共用同一个 `AsyncClient`），单次条数超限
-**整批拒绝不截断**。
-
-**拉取挂在 `import_queue.py` 已有的轮询循环上**，按 `last_fetch_at` 状态列认领
-（`FOR UPDATE SKIP LOCKED`，**不用全局咨询锁**——瓶颈在网络不在数据库，全局串行化只会让
-站点数增长时排队时间线性膨胀）。**网络那段 `await` 在事件循环上，只有数据库写入走
-`run_in_threadpool`**：那 32 条线程与 bcrypt 登录共用，一家店抓 8 秒就占住一条线程 8 秒。
-
-**本变更不做取关后的 GC。** issue #56 定过「保留 7 天」，但那是按每天全量轮询的量写的；
-被动采集量小一到两个数量级。这里写明是**有意不做**，不是漏了。
-
-**数据保留：只保留最近三个月。** 由 `HOT_WINDOW_MONTHS`（默认 3）定义热窗口，报告日期
-早于窗口下界的月度分区由保留清理**自动移出**——日报与周报统一适用同一窗口。移出是整
-分区 `DROP`（连带站点子分区），不逐行删除、不产生死元组、不影响窗口内其他月份。清理逻辑
-在 `app/table/analysis/retention_service.py`，运维入口是可定时触发的 `scripts/prune_retention.py`
-（cron / 容器定时任务在低峰调用，务必先 `--dry-run` 核对、可 `--export-dir` 留档）。
-**注意**：超过三个月的历史数据不再可在线查询（相对早期"12 个月满窗"是行为收窄）。
-
-**分区移出必须同时清理 `site_data_stats`/`category_stats`/`brand_stats` 的对应残留
-行**（issue #100）。这三张表是日期选择器、无筛选总数、类目/品牌下拉唯一的数据来源；
-只 `DROP` 分区不清理它们，查询侧会继续相信一个物理上已经不存在的日期还能查——复现是
-`search` 对一个已被移出的日期返回 `success=true, total>0, data=[]`。清理**无条件
-执行**，不依赖"这次是否真的 DROP 了分区"：否则本变更上线前已经产生的历史残留（分区
-早被移出、统计行还在）永远等不到清理的机会。`scripts/prune_retention.py` 的早退判断
-因此也要同时看这两件事，不能因为这次没有分区要移出就连残留统计一起跳过。
-
-**扩容触发条件**（数据从上线起约 6600 万行/月、16 GB/月增长）：磁盘使用率超过 70%，
-或缓存命中率（`blks_hit / (blks_hit + blks_read)`）持续低于 95%。在三个月保留窗口下满窗
-约 2 亿行 / 50 GB，4C16G / RDS 2C4G 足以稳定承载，通常无需扩容；若保留窗口调大或数据
-增速超预期而触发上述阈值，再评估扩到 8C32G。
-
-## Architecture
-
-### Module Structure
-
-```
-app/
-├── auth/              # 自建 JWT + RBAC（simple_auth.py: 登录/get_current_user/require_permission）
-├── site_registry.py   # 站点码唯一事实来源（英国是 GB 不是 UK）
-├── table/
-│   ├── analysis/      # V2 查询层（model, crud, service, api + retention/partitioning）
-│   ├── search/        # 查询请求/响应 schemas
-│   ├── keyword/       # 关键词工具查询层（增长榜 growth_* + 词库 library_*）
-│   │                  # 模型 fact_growth 寄居在 analysis/fact_model.py——分区、保留、
-│   │                  # 导入收尾都在那个域内，登记一处即被三处接管
-│   └── upload/        # OSS 直传凭证 + 三段式导入（oss_client / import_source / importer / import_service）
-│                      # + 批次历史与重导（import_batch_crud / import_history_service）
-└── user/              # 用户与角色管理 (model, crud, api)
-
-ops_bot/               # 飞书运维机器人：独立于 app/ 的 host 级 systemd 服务（见 Production Environment）
-main.py                # FastAPI app entry, lifespan management, health check
-config.py              # Pydantic settings (env-based config)
-database.py            # SQLAlchemy 2.0 sync + async engines, session factories
-frontend/              # AntD Pro SPA（Umi Max），独立构建，产物由 nginx 托管
-```
-
-### Layered Architecture Pattern
-
-**All table modules follow strict layering:**
-
-1. **Model** (`*_model.py`): SQLAlchemy 2.0 ORM models using `DeclarativeBase`, schema-qualified
-2. **CRUD** (`*_crud.py`): Database access layer, no business logic
-3. **Service** (`*_service.py`): Business logic, calls CRUD layer
-4. **API** (`*_api.py`): FastAPI routers, thin controllers calling services
-5. **Schemas** (`*_schemas.py`): Pydantic v2 models for request/response DTOs
-
-**Example**: `app/table/analysis/` - `analysis_api.py` → `analysis_service.py` → `analysis_crud.py` → `analysis_model.py`
-
-### Data Import Flow
-
-**V2 OSS-first 导入（现行，日报周报同一套流程）**：表格文件**先直传 OSS，再从 OSS 导入**。
-
-1. **签发直传凭证** `POST /oss/upload-credentials`（`upload_api.py` → `oss_client.issue_upload_credentials`）：
-   后端调 STS `AssumeRole` 换取受限临时凭证（RAM 策略限死到指定 bucket + object key 前缀 + 仅写
-   操作 + 短有效期），前端凭此**直传 OSS**，GB 级字节不经应用服务器。服务端凭证只在后端持有。
-   **同时落一条 `UPLOADING` 批次记录，且落库先于交出凭证**——直传那一段服务端全程不知情，
-   没有这条记录，用户关掉标签页就等于什么都没发生过（他以为传上去了，历史屏查不到）。
-   顺序反过来则是「能用的凭证 + 不存在的记录」，正是要消灭的那个状态；落库失败就不签发。
-2. **触发导入** `POST /oss/import`：前端回传 object key；后端校验 key 落在授权前缀内、对象存在，
-   **按 object key 认领第 1 步那条 `UPLOADING` 批次**（认领不到就新建——回收可能刚把它判失败，
-   或调用方跳过签发直接触发），再交后台任务 `run_import`。
-3. **三段式导入**（`importer.py`，源经 `ImportSource` 抽象）：从 OSS 对象**流式** `COPY` → UNLOGGED
-   暂存表 → 补齐维度 → 关联上一期算派生值、**追加**写事实分区（写前必调 `ensure_fact_partitions`）。
-   内存有界，不整文件落地。
-
-   **维度补齐只在属性真变时才写。** `dim_product` 的 UPSERT 带
-   `WHERE dim_product.title IS DISTINCT FROM EXCLUDED.title`，这条 WHERE **不是冗余**：
-   PostgreSQL 的 UPDATE 无论新旧值是否相同都写新元组、标死旧元组、并在该行涉及的每个索引
-   上插新条目——而 title 上挂着这张表最大的索引（GIN trgm，1.3 GB）。无条件更新意味着每次
-   导入重写**所有已存在的商品行**（一份日报约 40 万行 × 3 个槽位 ≈ 120 万个 ASIN 提及，
-   绝大多数早已在库里），而且会自我加速恶化：维度表越大，"已存在"的比例越高，白做的更新
-   越多，承受它们的索引也越大。实测同一份 10 万行日报因此从 54 秒退化到 416 秒（issue #33）。
-   用 `IS DISTINCT FROM` 而非 `<>` 是因为后者遇 NULL 结果为 NULL，将来放宽可空性会静默
-   退化成"NULL 的行永远不更新"。`dim_keyword` / `dim_brand` / `dim_category` 走
-   `DO NOTHING` + `NOT EXISTS` 预筛，本来就不重写既有行。
-4. **OSS 对象即原始归档**：文件入口即持久化于 OSS，不再做导入后本地归档；批次记录（`import_batch.object_key`）
-   持久化 object key 供溯源与重导。失败也无碍——OSS 对象仍在，凭 key 重导。
-
-**object key 约定**：`<OSS_KEY_PREFIX>/<SITE>/<PERIOD>/<report_date>/<uuid>_<原文件名>`，
-如 `imports/US/DAY/2026-07-18/ab12cd34_US_..._Day_2026_07_18.csv`。前缀由服务端生成并写进凭证策略，
-前端无法越权到其他站点/期次；`report_date` 只来自文件名（分区归属的权威来源）。
-
-**配置**：`OSS_*`（见 `.env.example`）；`OSS_ENABLED=false` 时走本地文件退路
-（`LocalFileSource` + `POST /import-csv`，不归档），供本地开发与 CI。配好后用
-`uv run python scripts/check_oss.py` 验证整条链路——它按前端直传的真实顺序跑一遍
-（STS 签发 → 临时凭证直传 → **越权写入必须被拒** → 服务端流式读回 → bucket CORS），
-退出码非 0 即有项未通过。其中"越权被拒"与 CORS 两项无法靠 code review 确认，只能实测。
-
-**bucket 的 CORS 不在本仓库配置范围内，但直传依赖它**：来源需含前端域名、方法需含
-`PUT` 与 `POST`（分片上传的 Initiate/Complete 走 POST）、**暴露头必须含 `ETag`**——
-ali-oss 要读每片的 ETag 才能 `CompleteMultipartUpload`，缺它的表现是字节全传完了、最后
-一步失败，极易误判成网络问题。
-
-**上线前必改**（开发环境放宽处，清单与理由见 `.env.example` 的 OSS 段）：CORS 来源从 `*`
-收窄到实际域名、`OSS_ENDPOINT` 换内网地址、生产用独立 bucket 与独立 RAM 子账号。V2 生产
-已就位的是独立 bucket（`keywordiq-release`，杭州）与服务端内网 Endpoint，并已用
-`scripts/check_oss.py` 全链路验证；**CORS 来源是否已收窄、是否用了独立 RAM 子账号，交接文档
-没有记录**，下次动 OSS 配置时要逐项核对，别当成已完成。
-
-**导入串行**：`pg_try_advisory_lock` 保证同一时刻只有一个导入在跑（2C4G 上两个 GB 级导入并发会争抢
-WAL 与索引构建），拿不到锁的批次置 `QUEUED`。
-
-**`QUEUED` 必须真的会被接手**，否则它就是个死标签。接手者是 `app/table/upload/import_queue.py`
-的轮询任务（lifespan 里起，间隔 `IMPORT_QUEUE_POLL_SECONDS`，默认 30 秒；多 worker 各起一个，
-靠同一把咨询锁保证仍是串行）。历史上没有它：日报 300K 行要跑约 4 分钟，这期间提交的第二个文件
-停在 `QUEUED` 永不开始，界面显示「队列中」，没有任何东西会回头看它——用户在等一件不会发生的事。
-
-因此两条约束：
-
-- **接手用轮询，不用「导入结束时接着跑下一个」**。链式接力在进程被杀、导入崩在半路、或前一个
-  导入由别的 worker 执行时都会断链，而断链的表现恰恰就是「永远排队」，与它要修的病一模一样。
-- **重建不出数据源的批次不许留在 `QUEUED`**。本地退路（`OSS_ENABLED=false`）没有 object_key，
-  批次里只有文件名，接手时无从重建源——这类当场判 `FAILED` 并写明「请稍后重新上传」。
-  留在 `QUEUED` 等于撒谎。
-
-**`UPLOADING` 适用同一条纪律**（`import_service.reap_stale_uploads`，挂在同一个轮询任务上）。
-回收的判据不是「多久算久」，而是**这次上传还有没有可能传完**：直传每个请求都由 STS 凭证签名，
-凭证一过期后续分片一律被拒。阈值因此由 `OSS_STS_DURATION_SECONDS` 推导（`+300` 秒宽限，
-`config.upload_stale_seconds`），**不是独立配置项**——两个旋钮迟早矛盾，而短于凭证有效期会把
-正在好好传的 1.5GB 周报判死。超时后按对象是否真在 OSS 分流：
-
-- **在** → 字节传完了、只是没触发导入（关标签页的典型形态）：置 `QUEUED` 交给上面那个接手者，
-  **不让用户重传**。这条路径**必须重新执行大小上限**——上限本来在 `/oss/import` 里执行，
-  而这里绕过了它，不补就等于开了一条「不调 /oss/import 即可绕过上限」的路。
-- **不在** → 判 `FAILED`，写明请重新上传。
-
-**导入批次有两个读取出口，职责不同、不要合并**：上传屏的「最近导入状态」看板
-（`GET /processing-status`，固定最近 5 条 + 前端 5 秒轮询）回答「我刚传的文件跑到哪了」；
-导入历史屏（`GET /batches`，ProTable 契约 + 站点/周期/状态三项筛选 + 分页，`per_page` 上限
-100 且**超限拒绝不截断**）回答「上周 DE 的周报到底导没导」。历史屏**不轮询**——一张带筛选
-的表每 5 秒整体刷新，用户翻到第 3 页会被刷回第 1 页。两处查询共用 `import_batch_crud`
-的同一份组装代码。
-
-**重导**（`POST /batches/{id}/retry`，权限点同为 `upload:import`）凭批次留存的 object key
-重新导入，不必重传 GB 级文件。两条约束：
-
-- **只允许 `FAILED`。** 重导会先删该 (站点, 周期, 期次) 的现有切片再重写；对 `COMPLETED`
-  做这件事等于让一份正在被查询的数据先消失、再花几分钟重建。也正因只允许 FAILED（失败
-  已整体回滚、切片本就是空的），界面不做二次确认——若将来放开 COMPLETED，必须同时加回确认。
-- **重导新建批次记录，不改写原记录。** 原记录的状态与错误信息是排查依据，抹掉它历史上
-  就只剩一条看不出曾经失败过的成功记录。重导没有独立执行路径，就是拿同一份归属再调一次
-  `run_import`，因此同样受咨询锁串行化、拿不到锁进 `QUEUED` 由轮询任务接手。
-
-准入判定（不存在 404 / 非 FAILED 409 / `object_key` 空 422 / 前缀越权 400 / 对象已删或超限）
-**必须全部在触发后台任务之前完成**——全局处理器不拦 `BackgroundTasks`，校验放进后台任务
-用户只会看到「已触发」然后什么也不发生。越权前缀与对象称量两道校验与 `/oss/import` 共用
-`oss_client.verify_source_object`：重导若少掉越权那道，它就成了绕过授权前缀触发任意切片
-导入的入口。
-
-> V1 的 `csv_processor.py`（pandas 分块 + `ON CONFLICT (keyword)` UPSERT + `ranking_trend_day` JSONB
-> 7 天走势）随 V1 `/upload-csv` 端点一同退役，不要在 V2 路径复用。
-
-### Authentication & Authorization
-
-- **自建 JWT + RBAC**（`fastapi-user-auth`/`fastapi-amis-admin` 已随 amis 于阶段七移除）。
-  用户模型 `UserCenter`（`user_center` 表）、`passlib` bcrypt 密码、`AuthService`（PyJWT/HS256/
-  `ADMIN_SECRET_KEY`）、`simple_auth`（登录、`get_current_user`、`require_permission`、
-  `require_super`）。
-- **RBAC**：`role`/`permission`/`role_permission`（M2M），`user_center.role_id`（每用户一角色）。
-  权限点有六个：`analysis:view`/`analysis:export`/`upload:import`/`keyword:view`/
-  `competitor:view`/`opportunity:view`；内置角色
-  admin/operator/analyst（见 `app/auth/permissions.py`）。逐路由 `require_permission(code)` 授权，
-  is_super 兜底。前端在 `access.ts` 按权限码显隐菜单。**`opportunity:view` 是例外**：默认不
-  授予任何内置角色（含 admin），只有 `is_super=true` 能用，`permissions.py` 的
-  `SUPER_ONLY_PERMISSIONS` 集合把它排除在"admin 隐含全部权限"这条默认规则之外
-  （见上文「顶栏菜单」一节机会中心部分）。
-- **用户管理是「不可授予」的能力，不走权限点**：`/api/user/*` 五个端点一律
-  `Depends(simple_auth.require_super())`，判据只看 `is_super`，**不看角色码**。前端入口在
-  右上角头像下拉里（`components/RightContent`），顶栏不出现（`/user` 路由 `hideInMenu`，
-  但 access 守卫照常生效——菜单隐藏不是访问控制）。
-
-  两条历史教训写在这里，别再走回去：**（1）** 曾有 `user:manage` 权限点，收紧后它成了
-  「勾了也不生效」的复选框——管理员以为把它授予了运营，运营却仍然 403；可授予但无效的
-  权限点比没有更糟，故连同从未被任何代码读过的 `role:manage` 一并从矩阵中删除
-  （迁移 `d0e1f2a3b4c5`）。**（2）** 曾有一个 `get_super_user`，判据是「is_super **或**
-  role_code == 'admin'」——那等于让「谁能管用户」变成改角色配置就能改变的事，已被
-  `require_super` 取代（它声明后从未被使用）。回归在 `test/test_rbac_auth_unit.py`：
-  admin 角色 + 全部权限点、只要 `is_super` 为假就必须 403。
-
-  代价是**能管用户的唯一判据就是 `is_super`**：若唯一超管的该位被误改为 false，界面上
-  没有自救入口，只能靠 `scripts/seed_admin.py` 或直接改库恢复。
-- **端点**：`POST /api/auth/token`（登录发令牌，免鉴权）、`GET /api/auth/me`、
-  `POST /api/auth/logout`（干净 REST）。
-- **账号级会话唯一（issue #89）：JWT 不再是纯粹无状态的。** 每次登录成功（本地密码/钉钉
-  扫码共用同一段逻辑，`UserCenterCRUD.rotate_active_session`）生成新的 `session_id`，覆盖
-  `user_center.active_session_id` 并编码进新签发的 JWT；`get_current_user` 在查用户之外
-  额外比对这一项，缺失、为空串或与库中不一致均判定为会话失效，抛
-  `SessionInvalidError`（`auth.session_invalid`，与其余 401 场景的 `auth.unauthorized`
-  区分，供前端呈现"账号已在其他浏览器登录"）。主动退出（`clear_session_if_current`）是
-  条件更新——只清与本次令牌一致的记录，旧会话的退出请求不会误删更新的登录。**`/logout`
-  的鉴权依赖是专门的 `get_current_user_for_logout`，不是 `get_current_user`**——后者会
-  在会话已不匹配时提前抛 `SessionInvalidError`，条件更新永远执行不到，只在同一请求内部
-  两次数据库往返之间的极窄窗口才真正生效（PR #91 复审第六轮）。并发登录的
-  "最后一次"由数据库对同一行的写入天然串行化决定，不额外加锁。**上线时不兼容缺少
-  `session_id` 的旧令牌**，全体在线用户需重新登录一次；这是刻意的 BREAKING 行为，不做
-  兼容分支。前端 `errorHandler`（`frontend/src/app.tsx`）按错误码区分提示文案，并在清理前
-  比对这次失败请求发起时用的令牌是否仍是当前令牌——不一致（本浏览器已经历过重新登录）时
-  忽略这个迟到的响应，不清理刚取得的新会话。详见
-  `openspec/changes/add-single-session-login/design.md`。
-- **鉴权显式落在每个端点的依赖上**（`Depends(require_permission(code))` 或 `get_current_user`），
-  没有全局鉴权中间件——旧的 `AdminAuthMiddleware` 因 `exclude_paths` 含 `"/"` 形同虚设，已删除。
-  新增受保护端点务必挂鉴权依赖（无全局兜底）。`test/test_protable_contract.py` 有"无 token 必拒"回归。
-- 初始管理员：`scripts/seed_admin.py`（默认 `admin / pwd123`；生产改 `ADMIN_SECRET_KEY`）。
-
-**钉钉单点登录（`/api/auth/sso/*`，全部免鉴权）**：员工扫码即可登录，不必在本系统单设
-密码。走**钉钉开放平台的企业内部应用**，OAuth2 授权码流程 + 浏览器扫码；**不经 IDMesh
-等身份中台**（开放平台的登录与通讯录能力在钉钉免费版即可用，零额外费用）。六条要点：
-
-- **这套不是 OIDC，尽管授权参数里的 scope 叫 `openid`。** 钉钉换回来的是 accessToken，
-  没有 id_token、没有 JWKS、没有 discovery 端点——**接不上任何 OIDC 依赖方库**。而且
-  `/v1.0/contact/users/me` 只给个人身份（unionId、nick，文档明写「无手机号和企业相关
-  信息」），拿企业内 userid、姓名与在职状态要**另一套企业 accessToken** 调通讯录接口。
-  所以 `dingtalk_client.py` 里是**两套凭证**，企业那套带进程内缓存 + `asyncio.Lock`
-  （没有锁，并发登录各换各的、互相覆盖，钉钉侧还会限流，表现为随机登录失败）。
-  另注：`oapi.dingtalk.com/connect/oauth2/sns_authorize` + `sns/getuserinfo_bycode`
-  那一套已于 2021-12 迁入钉钉的历史文档区，**不要采用**。
-- **账号只按 `(external_idp, external_id)` 匹配，`external_id` 存 unionId。**
-  这是本功能唯一实质的攻击面：若按用户名自动绑定已有账号，任何能改自己钉钉 userid 的人
-  都能把它改成 `admin`，扫一次码就接管超管。用户名撞了只说明重名、**不说明是同一个人**，
-  撞了就加数字后缀。存 unionId 而非企业内 userid，是因为后者管理员可改、离职再入职会换
-  ——变一次即老账号成孤儿、当事人被当新人重新开号、角色全丢，且不会有任何报错。
-  代价是同一个人的本地账号与钉钉身份**不会自动合并**，会并存两个账号；这是有意的。
-- **`is_super` 恒假，无例外。** 用户管理是不可授予的能力（`require_super` 把守），
-  不能由外部身份源决定谁拥有它。超管仍只能由 `scripts/seed_admin.py` 产生。
-  首次扫码自动建档，角色取 `SSO_DEFAULT_ROLE_CODE`（默认 `analyst`），**不从钉钉部门/
-  职位映射**——那会让「谁能导入数据」取决于通讯录怎么编排。**登录不回写已建档账号的
-  属性**（回写要处理用户名唯一约束的连锁影响，收益只是显示名跟随改名）。
-- **离职同步靠登录时反查，没有定时任务**：`topapi/user/getbyunionid` 查不到 unionId 即
-  拒登。这条查询本来就在链路上（要拿 userid 才能取姓名），所以离职同步是白送的。
-  已知代价：**离职前签发的 JWT 在过期前仍然有效**（当前 24 小时）。
-- **本地密码登录保留，但只对本地账号有效。** SSO 账号 `hashed_pwd` 存 NULL，
-  `authenticate_user` 复用既有的 `_DUMMY_PASSWORD_HASH` 路径把它挡掉——**不要新增
-  「`hashed_pwd is None` 就提前返回」的分支**：提前返回把这条路径压到毫秒级，
-  「这个用户名是不是 SSO 账号」就能靠响应耗时逐个试出来，正是那个哑哈希当初要堵的侧信道。
-  保留它是钉钉侧不可用时的唯一逃生通道。
-- **`SSO_ENABLED=false` 时端点一律 404（`sso.disabled`），路由仍然注册。** 按开关条件
-  注册路由并不能让它变得可热切换（配置是启动期读入的），只会让这段行为测不到。前端靠
-  免鉴权的 `GET /sso/status` 决定要不要渲染钉钉按钮——不这么做，每次进登录页都要发一个
-  注定失败的请求。开启时凭证缺任一项**启动失败**；`SSO_DEFAULT_ROLE_CODE` 不在角色表里
-  同样启动失败（启动期检查，需连库），但**数据库不可达不中断启动**——为一个配置校验让
-  应用在数据库抖动时起不来，比这个配置错本身更糟。
-
-前端入口在登录页（`pages/Login`）与过场屏 `pages/SsoCallback`（路由 `/sso/callback`，
-`layout: false`、**不挂 access 守卫**——此刻还没有令牌）。登录跳转那段等 `currentUser`
-落位再 push 的竞态修复抽在 `hooks/useLoginRedirect.ts`，**两屏共用一份**：它的正确性全在
-那段注释的推理里，复制出去的副本会各自漂移，而出错表现是偶发的闪回登录页或 403。
-外域跳转走 `utils/redirect.ts` 的 `hardRedirect` 而非 `history.push`（后者在自己的路由表
-里找不到钉钉地址，会落到 404 屏）。
-
-**回调域名配置与真机扫码无法靠 code review 确认**，用 `uv run python scripts/check_dingtalk_sso.py`
-实测——它按真实登录顺序跑一遍并逐项断言，退出码非 0 即有项未通过。两类问题只有它能发现：
-重定向 URL 与开发者后台登记的不一致（表现是扫码后停在钉钉页面，本系统这边**一条日志都
-没有**），以及应用缺通讯录读权限（前面几步全过、直到反查 userid 才失败，而那个失败长得
-跟「这个人离职了」一模一样）。
-
-**后台 UI 是独立的 AntD Pro SPA**（`frontend/`，Umi Max + Ant Design + ProComponents），
-本服务只提供 JSON API（amis 后台已删）。生产由 nginx 托管 SPA 产物 + 反代 `/api`。
-
-**分析查询屏（`frontend/src/pages/Analysis/`）分三段**：顶部作用域栏（站点/视图/日期/检索框/
-立即查询）、中部过滤区（左类目多选、右结果过滤）、底部 ProTable（`search={false}`）。
-
-**状态编排拆成三个 hook，依赖方向单向**（issue #69 阶段二）：`useAnalysisSession`（会话快照、
-复原短路、滚动位置）← `useAnalysisScope`（站点/视图/日期与选项清单）/ `useAnalysisQuery`
-（草稿态与生效态、排序、总数、导出、表格请求）← `index.tsx`（只留跨模块协调与 JSX）。
-**三个 hook 之间没有直接 import**：作用域失效要清筛选那条耦合，由 `index.tsx` 把
-`clearCategoryFilters` 经回调接给 `useAnalysisScope`；组装查询体要读作用域那条，则是把
-`scope` 草稿**按值**传进 `useAnalysisQuery`。两个方向都不许改成 hook 之间互相 import——
-类目在「选项清单」与「用户勾选」两个身份下同名却生命周期相反，合回一处就又要靠上下文
-判断「这个 categories 是哪一个」。三条约定：
-
-- **首屏按默认作用域自动查一次**。进屏先拉站点、作用域与类目（选择器的前提），拿到结果
-  立即用默认站点 + 按天 + 最新一期 + **默认筛选（只看首次入榜）**查一次。这一屏是主力数据屏，
-  用户进来就是要看数据的，而他最常问的第一个问题是「本期首次入榜了哪些词」。**延迟到点击才查的
-  是持续增长市场屏，不是这一屏**——两屏曾被做反过一次，改这段之前先确认改的是哪一屏。
-
-  **默认值只有一处定义**：`filters.ts` 的 `defaultFilters()`，初始草稿、首屏自动查询、
-  「重置条件」三处共用。它带 `isNew: true`——这个函数从前叫 `emptyFilters`，改名是因为
-  名不副实的工厂会被下一个人当空值直接用（测试里正在这么用）。要真正的中性值请显式写
-  `{ ...defaultFilters(), isNew: undefined }`。
-
-  **条件初始化有三级优先级**（`savedMode.ts`），高者胜出：**会话快照 > 用户保存的条件 >
-  内置默认**。三者的存活期完全不同，这决定了它们各自存哪：
-
-  | | 存活期 | 存在哪 | 谁清它 |
-  |---|---|---|---|
-  | 会话快照 | 一次页面会话，刷新即失效 | 模块级内存 | `doLogout` / 刷新 |
-  | 保存的条件 | 跨登录，直到用户点「重置条件」 | `localStorage`，键带 userId | 只有「重置条件」 |
-  | 内置默认 | 永久 | 代码 | —— |
-
-  保存的条件（「保存当前模式」，对标卖家精灵）存**站点 + 视图 + 筛选 + 排序**，
-  **不存日期**（永远取最新一期——存绝对日期的话，保留窗口滚过后那个月的分区已被 `DROP`，
-  条件查不出任何东西）、**不存检索词**（一次性查找不是「常看的模式」）。四条要点：
-
-  - **它必须活过 `doLogout`，这不是漏清。** 会话快照是**无主的单份**，换账号会串，只能清；
-    保存的条件按 `userId` 分键，乙读的是乙的键，天然不串。清了它「下次登录还是这组」就
-    不成立——那正是这个功能的全部意义。取不到 userId 时**不读不写**，绝不回退到共享键。
-  - **payload 带 `SAVED_MODE_VERSION`，改形状就要 +1**，版本不符**静默丢弃且不做迁移**。
-    这条比 `CACHE_VERSION` 更要紧：会话快照最多活一次刷新，这份能跨月、跨多次上线。
-  - **存的是生效条件不是草稿**。实现上靠「`dirty` 时拒绝保存」保证——`draftSig` 由
-    `toSearchBody(scope, filters)` 得出，作用域与筛选都在里面，`dirty` 为假即「草稿 === 生效」。
-    这样不必新增状态，也不必动会话快照的形状。
-  - **保存的站点下线时乐观回退**：首屏直接拿它发 `/scope`（后端对非法站点报错不回退），
-    失败则回退默认站点、清掉保存项、**自行提示**。那次调用带 `skipErrorHandler`，
-    不自己说就成了静默降级——用户以为在看自己保存的站点，实际在看另一个。
-
-  **首屏按保存的作用域初始化时，`reloadScopeMeta` 必须带 `keepCategories`**。它平时会清空
-  已勾选的类目（作用域变了，旧站点的类目在新站点下可能不存在），但首屏这次不是「变化」
-  ——作用域从一开始就是保存的那个、类目也是一起存的，照常清掉等于让「保存类目」静默失效。
-
-  首屏这次查询**带筛选**，两个后果都是既有语义、不是本屏特例：总数走 `count_filtered`
-  精确实算而非 `site_data_stats` 的 O(1) 预存值；**掉榜行不在结果内**。
-
-  自动查询**只发生在无会话缓存的首次进入**（`if (restored) return;` 那道闸之后），切走
-  再切回仍然一个请求都不发。条件必须用 `reloadScopeMeta` 返回的 `s` 组装，**不能读
-  `scope` 状态**：它刚被 `setScope` 写过而 setState 是异步的，读到的还是空日期，组装出的
-  条件会被 `request` 开头 `!body?.date` 那道守卫静默挡掉——表现与"没做自动查询"一模一样。
-
-  站点一期数据都没有时不发请求，此时空表格**必须说明是没有数据**（`scopeHasNoDates`），
-  不能显示「搜索结果：0」——那会被读成条件把行筛没了，用户会去排查筛选条件。
-- **条件改动显式触发查询**。条件改动只进草稿态，点「立即查询」才生效（`draft` 与 `applied`
-  是**两份**状态，不是一份加脏标记——否则「表格现在显示的是哪组条件」无从读出，导出会
-  跟着漂移）。除首屏外两个例外：排序/翻页走 ProTable 自身 `request` 即时生效；改站点或
-  视图立即重拉 `/scope` 与 `/categories`（小表）但**不**重查表格，否则用户会在属于上一个
-  站点的日期清单里做选择。
-- **一个筛选维度只有一个入口**。关键词与 ASIN 归顶部检索框（按 `^B0[A-Z0-9]{8}$` 判定走哪个
-  字段，判定结果必须回显），过滤区不再重复提供。**ASIN 按等值匹配、不是子串**（大小写与
-  空白由 `AnalysisSearchRequest._normalise_asin` 抹平），因此 `dim_product.asin` 上**没有也
-  不要加** trgm 索引——那条正则只有整串才路由到 asin 字段，片段到不了后端，而 GIN 索引要由
-  每次导入的每一行写入维护（生产上 409 MB，issue #49）。那条正则是**路由启发式不是校验**：
-  德国站图书的 ASIN 就是 ISBN-10、不以 `B0` 开头，所以后端只规范化、不校验格式。**「重置条件」清成默认（含只看首次入榜）而非
-  清空**，因此界面上没有一键回到「全部词」的入口——加一个「恢复默认」按钮会与「重置」
-  语义相近，用户得先分辨差别才能选对，正是这条约定要避免的形态。想看全量榜单就把首次入榜
-  开关拨到「全部」，多一次点击是自觉代价。**「重置条件」还连带删除用户保存的默认条件**
-  （否则重置完、下次登录又回到那组他刚明确不要的条件），**不做二次确认**——需求方的明确
-  选择，已知代价是删除不可撤销而这个按钮看起来只是改改表单。它只改筛选，不动站点/视图/排序。
-- **关键词检索有两种匹配方式**（`keyword_mode`，issue #126）：`ALL_TERMS`（默认，「全部词」）与
-  `PHRASE`（「连续词组」，旧行为）。选择器长在检索框的后缀里，只对判为关键词的输入出现——ASIN 是
-  等值匹配，没有模式。`ALL_TERMS` 把输入拆词（小写、按非字母数字切、去重，上限 `MAX_TERMS`=8，
-  超限 422），**每个词都要作为完整单词出现（AND，不是 OR），顺序不限、允许夹词**；英语常规单复数
-  双向互通（`s`/`es`/`ies`↔`y`，仅限 ASCII 纯字母、≥3 字母的词），**不规则变化（mice/mouse）、非英语、
-  含数字的词只做精确匹配**——文案里已说明，别让用户以为是同义词扩展。`rug` 不再命中 `rugby`（要
-  子串就切回「连续词组」）。规则**只在 `app/table/analysis/keyword_match.py` 定义**，`/search`
-  与 `/export` 经 `_apply_filters` 共用；拆不出词的输入（如只有 `&`）退回子串而不是变成「不筛」。
-  每个词先 `ILIKE '%词干%'` 走 `dim_keyword` 的 trgm 索引、再用词边界正则精判。`PHRASE` 里的
-  `%` `_` 现在按字面匹配（此前被当通配符）。模式属于检索框、**不入保存的条件**（`q` 本就不入库）。
-  实测（300 万行合成词，仅 `dim_keyword`）：三词查询 ≈40ms，单个高频词（命中 33 万行）≈500ms
-  对旧规则 ≈150ms——代价随命中数线性增长；真实体量下若不达标，再评估 tsvector 列（要迁移）。
-- **份额是 0~100 的百分数**，界面、快捷档位、接口一路不做换算；**排名变化保留原始符号**
-  （负数=上升），档位用中文语义承担可读性——界面翻转符号会让用户拿表格里的数字回填筛选时
-  得到相反结果。
-- **「首次入榜」取代了「新词」**（issue #137 V1，openspec `first-seen-keyword-history`；#119 的数量
-  对照、品牌排除、7 天变化率、类目黑名单是独立事项，仍有效）。三条要点，每条对应一个「错了
-  不会报错」的失败形态：
-  - **首次记录是 `dim_keyword` 上的永久事实，不是事实行上的字段。** `first_seen_date` /
-    `first_seen_period_type`（DAY/WEEK）/ `first_seen_basis`。`dim_keyword` 不分区、不参与保留
-    清理、行只增不删，所以「站点内不存在」就等于「从未见过」；日报周报共用同一份，站点之间
-    互相独立。**事实行的 `is_new` 已弃用但本版本仍在库里**（expand/contract：它已随 2026-10-19
-    部署上线，`deploy.sh` 先迁移后切容器，窗口内旧后端仍读写它，回滚也要能用）：迁移只给它补 DB
-    侧 `DEFAULT false`，新代码不读不写；删列与 `idx_*_new` 另开版本做（见 tasks 8.10 / design D8）。
-    `NEW_WORD_LOOKBACK_DAYS`、`scripts/backfill_is_new.py` 已退役。
-  - **导入只记证据，不判断「是不是首次」；那是查询时对最终数据的派生，所以与导入顺序无关。**
-    三个来源等级：`IMPORTED` 本系统导入创建 / `EARLIEST_OBSERVED` 存量词、此前可能见过 /
-    `UNKNOWN` 无证据。导入里新插入的词一律 `IMPORTED`，已存在的词只在证据更早时向前修正
-    （比较键 = 期次日期，日报优先于周报；相等不写；`IMPORTED` 不降级，`UNKNOWN` 见到证据变
-    `EARLIEST_OBSERVED`）。**不要在导入时再按「基线期」分流**——曾经那样做，先导入 7/12 再补
-    7/10，只出现在 7/12 的词永远是「最早可观测」，与按时间顺序导入的结果不同，且无任何报错
-    （PR #141 复审 P1）。顺序无关性由 `test_first_seen_integration.py::test_import_order_does_not_change_result`
-    （全排列 + 中途重复导入）担保，改导入或判定逻辑必须保持它绿。
-  - **某期的「首次入榜」= `IMPORTED` 且首次记录落在映射窗口内，且窗口起点晚于站点监测起点 `B`。**
-    `B = min(first_seen_date) WHERE basis='IMPORTED'`（`imported_since_stmt`，走部分索引
-    `idx_dim_keyword_first_seen`）。**`B` 只取 `IMPORTED` 行**：回填给存量词写的更早日期若参与，
-    会把 `B` 拉到几个月前，使历史每天都「可判断」却一个导入创建的词都没有，显示成 0。
-    映射固定：周期 `w` 覆盖 `[w-6, w]`（周报按周日起周六止，文件名日期是周结束日）；日视图只命中
-    `(d, DAY)` 且 `d > B`，周视图命中 `(w, WEEK)` 或日报来源落在窗内且 `w-6 > B`（窗口含 `B` 的
-    那一周只有 `B` 之后几天可判，计数偏少，整周按不可判断）。**周报来源的首次只有周精度，不进
-    任何一天的日视图**。命中表达式只在 `analysis_crud.first_listed_expr`，筛选、行字段、数量、
-    词库盯盘共用；数量（`GET /api/analysis/first-listed`）查询时实算、与「仅 first_listed 筛选」
-    的总数同一口径，**不存按期统计**。不可判断时返回 `judgeable=false`、`count=null`——
-    **无法判断，不是 0**，界面必须分开呈现；筛选在这些期次上不命中任何词。补更早的报告只让
-    `B` 前移、不重写词。生产上线后历史日期一律「无法判断」，不承诺补出历史首次入榜；
-    `scripts/backfill_first_seen.py` 只给存量词写 `EARLIEST_OBSERVED`，永不产出 `IMPORTED`，
-    也不移动 `B`。
-  请求字段 `is_new` → `first_listed`（两态，`false` 与未传等价，须 `or None` 计入
-  `request_has_filters`）；`SAVED_MODE_VERSION`=4、`CACHE_VERSION`=3。
-- **#119 里仍有效的两项规则**：（1）**「排除品牌词」**
-  （`exclude_brand_in_keyword`）：排除关键词文本把**该词自己前三品牌名之一**作为整词包含的行
-  （不分大小写，品牌名按字面而非正则；少于 2 字符的品牌不参与，否则单字母品牌会命中几乎所有词）。
-  它是**筛选条件**——必须计入 `request_has_filters`（`or None`）与前端 `FILTER_KEYS`，掉榜行随之消失；
-  界面默认开启但**只在「只看首次入榜」时随请求发出**，不替用户缩减「全部」榜单。品牌取的是每行自己的
-  前三品牌，不是站点品牌全集，也不是维护的品牌词库。（2）**日视图列「7天变化率」**：当期排名对比
-  7 天前排名（`history` 第三位），不是昨天，所以昨天没出现的词只要 7 天前有排名也能算；基期缺失/
-  为零、当期为空显示占位符，不伪造 0%。周视图仍是「排名变化率」（对比上一周）。`ranking_change`
-  的筛选与排序**不变**，仍是对上一期——列与筛选口径因此在日视图上不同，这是刻意的。另：**类目黑名单**
-  （`HIDDEN_CATEGORY_NAMES`，从 V1 迁入：Books / Grocery / Video Games / Digital_Video_Download /
-  Digital_Ebook_Purchase / Digital_Music_Purchase，名单写小写、比较不分大小写）**一份名单、一处生效**：
-  `_base_query` / `_count_base_query` 排除第一类目（`top1_category_id`）命中的行，下拉按同一份名单
-  隐藏选项——表格、总数、导出、下拉由此一致。类目为空的行保留（NOT IN 遇 NULL 会误杀）。
-  三个后果：（a）它是**恒定基线条件，不计入 `request_has_filters`**，否则掉榜段会在默认视图整体消失；
-  （b）掉榜行没有类目可判断，**不受黑名单影响**；（c）**无筛选的在榜总数也要实算**
-  （`_listed_total`，导出上限检查同理），`site_data_stats.row_count` 是整切片预存值、不扣黑名单，
-  拿它当分页分界线会让末页出现空页。改名单即改行为，无需迁移。
-- **「竞对新发现」是与其余筛选维度 AND 组合的独立布尔开关**（`competitor_new`，与 `first_listed`
-  同构，`None`/未勾选 = 不筛，issue #56 P2）。命中口径：该词前三商品槽位任一 ASIN，是
-  当前用户在当前站点关注的卖家**近期新发现**的 ASIN——判据与卖家清单「近 7 日新发现」
-  （`watch_crud.NEW_DISCOVERY_WINDOW_DAYS`）同构并复用同一个窗口常量：
-  `first_seen_at > baseline_at`（基线批次不算）且落在窗口内。**MUST NOT 只判断"卖家是否
-  上报过这个 ASIN"**——`competitor_seller_asin` 不做下架删除（`asin_model.py` 的既有边界），
-  首版实现漏了时间限定，表现是这个开关命中卖家有史以来上报过的全部商品（PR #66 复审 P1）。
-  **界面标签是「竞对新发现」，不是「竞对新品」**——被动采集证明不了商品何时上架，只能证明
-  我们何时见到，「上新」及其近义词在这条数据线上一律不用（与上文竞对 ASIN 上报一节
-  "产出的是「新发现」，不是「上新」"同一条纪律；PR #66 三次复审 P2 修的就是"口径改了、
-  名字和提示没跟着改"）。请求字段沿用 `competitor_new`，读作 new *discovery*。
-  **界面提示必须同时说出两个空结果成因**：插件未上线（数据没进来）与商品都在 7 天窗口外
-  （数据进来了但过期）——只说前者，等插件上线后用户会照着一条已不成立的原因排查。
-  `baseline_at` 为 `NULL`（卖家尚未建立基线）时
-  `first_seen_at > NULL` 恒为 SQL NULL（假），天然不命中，不需要额外的空值兜底。
-  `user_id`/`site` 都取自访问令牌/作用域，不取自请求体。ASIN 精确匹配同一批改动里从只命中
-  `top1_product_id` 扩到三个商品槽位任一命中（与品牌/类目同一形状），`product_title` 仍只
-  命中 top1、未扩展。**`competitor_new` 必须计入 `analysis_crud.request_has_filters()`
-  的元组，且是 `req.competitor_new or None` 不是裸值**——裸值会让漏掉计入这一项时
-  "确实过滤了行、总数却仍报告站点当期总词数"（`brands`/`categories`/`is_new` 同一陷阱），
-  而不用 `or None` 会让 `competitor_new=false` 被误判成"带筛选"（这个字段只有两态，
-  `_apply_filters` 是 `if req.competitor_new:`，`False` 与 `None` 的查询结果完全一样，
-  PR #66 复审 P2）。**`competitor_new=true` 额外要求 `competitor:view` 权限**，只有
-  `analysis:view`/`analysis:export` 不够——它读的是竞对监控域的私有数据，两个数据域权限
-  独立；`/search`、`/export` 都要在触达数据库之前用 `simple_auth.check_permission` 拦
-  （PR #66 复审 P1，同批漏掉的第二处），前端按 `access.canViewCompetitor` 同步隐藏开关，
-  但那只是体验层，真正的边界在后端。界面开关旁必须提示"近 7 日内首次见到、且晚于该卖家
-  基线批次的商品；数据依赖浏览器插件采集，插件未上线前可能长期无命中"——空结果有三个
-  成因而它们在界面上长得一模一样：插件客户端（issue #56 P3b）尚未开工、某个卖家还没被
-  上报过两次（首次上报即基线，不算新发现）、见到的时刻已经出了 7 天窗口。提示只说其中
-  一个，用户就会照着一条不成立的原因去排查。方向 C（品牌级：卖家 → 品牌名 → `top1/2/3_brand_id`）数据源
-  不存在（拿不到"卖家 → 品牌名"这层映射），移出本次范围。
-
-  **`competitorNew` 必须计入前端 `FILTER_KEYS`**（`useAnalysisQuery.ts`）——它决定「本次结果不含
-  掉榜行」提示的显隐，漏掉的表现是用户只启用这一个筛选、其余（含默认的「只看首次入榜」）都
-  关掉时，后端仍按带筛选路径排除全部掉榜行，界面却不提示，用户以为看到的是全量结果
-  （PR #66 二次复审 P2）。**保存的条件读入草稿时必须按当前权限规范化**
-  （`filters.ts` 的 `sanitizeCompetitorNew`）：保存的条件跨登录持久，若用户保存时有
-  `competitor:view`、之后被收回，原样恢复会让首屏自动查询带着 `competitor_new: true`
-  撞上后端权限校验（403）——而开关本身又因无权限被隐藏，用户看不到也无从关掉这个仍在
-  生效的条件，只能猜测并重置全部条件。规范化点有两处（草稿初值、`resolveInitialScope`
-  的首屏条件），`apply()` 额外做一次同样的兜底作为三处生效入口（立即查询/开始筛选/
-  首屏自动查询）唯一共同必经之处，不依赖调用方各自记得清空这个字段（PR #66 二次复审
-  P2，同批修复）。
-
-- **结果表格可勾选行并批量「加入词库」**（唯一的入库入口，见上文词库一节）。可选分组只列
-  **生效作用域**站点下的分组——草稿切了站点但没查时表格里还是旧站点的行，跟着草稿走会把
-  US 的词加进 DE 的分组。掉榜行同样可勾选（它有 `keyword_id`，「掉出去了想继续盯」正是
-  典型动机）。**选中状态不进会话快照**：它是一次性界面状态，切走再切回清空是预期行为，
-  因此这一项不需要动 `CACHE_VERSION`。
-
-条件转换逻辑在 `filters.ts`（纯函数，vitest 直接测）；展示组件 `ScopeBar` / `CategoryPanel` /
-`FilterPanel` 全受控，不持状态、不发请求。
-
-**切走再切回不刷新，这是约定不是缺陷。** umi 4.6 没有 keepalive，路由一变这个组件真的被
-卸载，切回来是全新实例——条件全丢 + 4 个接口重发（`sites` / `scope` / `categories` / `search`）。
-现在由 `stateCache.ts` 的会话内快照承载状态：`useCachedState` write-through 写入，挂载时有
-快照就原样复原并**跳过整段初始化**，一个请求都不发。要新数据仍然只有「立即查询」。四条要点：
-
-- **短路只作用于复原后的第一次请求**（一次性）。写成「参数相同就用缓存」会把同参数的
-  「立即查询」也吃掉，而那是用户强制刷新的唯一入口——数据刚导完想看新的，点了却什么都不动。
-  翻页、改排序一律真的去查。
-- **缓存在 `doLogout` 里清**（`app.tsx`，与清令牌 / 清 initialState 并列）。不清的话同一
-  标签页内换账号登录会看到上一个用户的条件与结果行。
-- **快照带 `CACHE_VERSION`，改状态形状要 +1**。否则开发期热更新后残留的旧快照会以
-  `undefined` 渗进 UI，表现为零散的空白控件，极难归因。
-- **缓存是模块级的，测试之间会串**：`index.test.tsx` 的 `beforeEach` 必须 `clearSnapshot()`，
-  漏掉的表现是第二个用例起全部看到一屏空数据，而报错（找不到某个按钮）指不到这个原因。
-
-滚动位置一并恢复，且**必须等结果行落到 DOM 之后**——行没渲染时页面高度不足，`scrollTo`
-会被浏览器夹到当前最大滚动量（实测就是回到顶部）。记录侧用 scroll 监听器，**不要改成
-在 cleanup 里读一次**：导航时新页面较矮会把滚动量夹到 0，那个夹取与卸载谁先谁后没有保证，
-排在前面就把正确值覆盖成 0，功能静默失效。
-
-### 错误契约（统一,不可绕过）
-
-**所有失败响应只有一种形状**,由 `app/common/error_handlers.py` 的五类处理器统一产出:
+| 行窗口 | `[d-6,d]` | 近 4 周 |
+| 历史参照 | `d-1/d-3/d-7` | `w-1/w-4/w-12` |
+| 趋势小图 | 7 点 | 4 点 |
+| 回溯查询 | 7 天 | 84 天 |
+
+- 行集合为在榜 ∪ 掉榜，`include=ALL/LISTED/DROPPED`；掉榜恒排在在榜之后，不随升降序翻转。
+  有筛选时只匹配锚定期事实行，掉榜全部消失、`dropped_total=0`；界面必须解释，不能当成数据丢失。
+- 日期选择器走保留范围内 `site_data_stats`；类目/品牌选项走当期统计，不能在事实全表实时聚合。
+  类目多选 `categories`，空列表不筛、上限 100；不恢复已删除的单值 `category_exact`。
+- 在榜总数扣除类目黑名单后实算，筛选总数精确计数、不封顶；不要将原始 `row_count` 当分页分界。
+  黑名单只排除 top1 类目、NULL 保留；下拉/列表/总数/导出一致，不计入 `request_has_filters`。
+- 先分页再批量补走势与历史参照，两者共用回溯查询；`shape_trends` 和日期裁剪必须传 `on/view`。
+  历史排名与走势不排序，排序白名单按视图；日视图不混入“当周排名变化”。
+- 分页使用完整确定性次级键；联合上新流为 `source, source_key, site, product_key`。
+  小样本结果稳定不能证明排序正确，必要时对 ORDER BY 结构断言。
+- 列表成功使用 ProTable `{data,total,success}` 并回显作用域；失败使用非 2xx 的统一错误契约。
+- 导出与 search 共用请求及口径，忽略分页；服务端游标分块、自建 Session，不能复用已清理的请求会话。
+  超 `EXPORT_ROW_CAP`（默认 5 万）在开流前返回 413，禁止静默截断。
+- 排名详情共用只读端点 `GET /api/keyword/trend`，抽屉展示，不新建菜单。
+  事实历史使用 `idx_fact_{daily,weekly}_keyword_history`；掉榜用 `idx_fact_dropped_keyword_history`，
+  **不走掉榜主键**，其日期位于关键词前会导致范围内全站扫描（#87）。
+- 排名详情先判保留下界，再查期次是否导入；不信任下界之前的 `site_data_stats`。
+  区分保留范围外、在榜、掉榜、已导入未收录、未导入五态；缺失不可当排名 0。
+- `on` 是打开详情时来源页面的期次；切日/周沿用同一值，由后端取 `<= on` 最新一期，无则全局最新。
+  `latest_available` 单独标日期；周历史步长复用导入侧 7 天偏移，不另造周边界。
+- 趋势端点仅在“不含域私有数据且跨域共用”条件下允许 `analysis:view` 或 `keyword:view` 任一。
+  `competitor_new` 读取私有关注，不能套用此权限放宽。
+
+### 持续增长市场与我的词库
+
+- 增长榜仅日报：窗口每期在榜、累计名次净增严格超过阈值、6 个日环比均达到阈值。
+  口径只在 `importer.load_growth` 算定；改 `GROWTH_*` 后必须回填已存期次，上线时也必须回填。
+  窗口缺期据实返回空榜和缺期清单；区分未查询、缺期、确无命中。
+- 增长屏首屏不自动查，不显示伪造条数/“条件已修改”，提示“立即查询”；分析屏首屏自动查，不能互换。
+- 词库由条目驱动 LEFT JOIN，词恒有一行，区分在榜、掉榜、该期无数据。
+  条目只存 `keyword_id`；组绑站点且创建后不变；入库入口仅分析结果勾选，词库屏只移除。
+- 词库组数/条数超限整批拒绝，默认每站点 20 组、每组 500 词；提限前重测历史查询的最坏代价。
+  词库/竞对私有查询逐条带 user_id，访问他人的组/条目返回 404；不新增“管理自己收藏”权限。
+- 词库进屏即查；没有分组、站点无数据、组内无词分别展示。组管理放表格上方，不挤压横向表格。
+  词库与分析事实投影共用 `analysis_crud.fact_metric_columns`，不可复制第二份。
+
+### 首次入榜（#137 V1 / #141）
+
+- 永久证据存 `dim_keyword.first_seen_date/first_seen_period_type/first_seen_basis`；站点独立，日/周共用。
+  导入只修正更早证据，不在导入阶段按基线决定“首次”，结果须与导入顺序、重导无关。
+- 新插入词记 `IMPORTED`；存量回填为 `EARLIEST_OBSERVED`，无证据为 `UNKNOWN`。
+  相同日期日报优先，等值不写；`IMPORTED` 不降级，UNKNOWN 有证据后转 EARLIEST_OBSERVED。
+- 监测起点 `B` 只取 IMPORTED 的最早日期；首次命中=IMPORTED、落在映射窗口且窗口起点晚于 B。
+  周报日期是周六结束日，覆盖 `[w-6,w]`；周来源只有周精度，不能分摊到每日。
+- 判据只在 `analysis_crud.first_listed_expr`，列表/数量/筛选/词库共用，不另存按期数量。
+  不可判断返回 `judgeable=false,count=null`；回填不产出 IMPORTED、不移动 B，不承诺补出历史首次。
+- `is_new` 已弃用，但当前 expand/contract 阶段保留列与 DEFAULT false，不能提前删列/索引破坏旧容器。
+  新请求为 `first_listed`；旧回填脚本及 `NEW_WORD_LOOKBACK_DAYS` 已退役，兼容细则见前端指南。
+
+## 导入：先直传、后流式 COPY、后台串行接手
+
+修改前读导入指南与分析指南；改变导入路径须做真实体量端到端验证。
+
+1. `/oss/upload-credentials` 先落 UPLOADING 批次，再交受限 STS 凭证；落库失败不能签发。
+2. 前端直传 OSS；GB 字节不经应用服务器。object key 由服务端限定站点/周期/期次前缀，日期只来自文件名。
+3. `/oss/import` 验证前缀、对象存在与大小，认领 UPLOADING，交后台流式 COPY → UNLOGGED 暂存 → 维度 → 事实。
+4. OSS 对象是原始归档，批次保留 object key 供溯源和失败重导；本地退路仅供本地/CI，不代替生产归档。
+
+- 导入用 `pg_try_advisory_lock` 串行；拿不到进 QUEUED。轮询任务必须实际接手，不能只靠上次导入结束链式接力。
+  无 object key、无法重建源的本地批次判 FAILED 并提示重传，不能永久排队。
+- UPLOADING 回收时限来自 STS 有效期 + 300 秒宽限，不另造旋钮；对象存在则重新校验大小后排队，否则失败。
+- 上传屏最近 5 条轮询与历史分页用途不同，共用 CRUD；历史屏不轮询，单页上限 100，超限拒绝。
+- 重导只允许 FAILED，新建批次保留旧错误；不存在 404、非 FAILED 409、空源 422，其余前缀/称量校验先做完。
+  与 `/oss/import` 共用 `verify_source_object`；后台任务不受全局响应处理器保护，不能把准入校验推入后台。
+- STS 越权拒绝、bucket CORS、ETag 暴露只能实测；生产独立 bucket/RAM、内网 Endpoint 按交接逐项核对。
+  `scripts/check_oss.py` 的结果不能用单元测试或代码评审代替。
+
+## 认证与错误契约
+
+修改登录、退出、令牌清理、RBAC、SSO 前读认证指南；安全边界不能只靠前端隐藏。
+
+### 认证、会话与权限
+
+- 自建 PyJWT/HS256 + bcrypt + RBAC；没有全局鉴权中间件，受保护端点逐个挂依赖。
+  常用权限为 analysis:view/export、upload:import、keyword:view、competitor:view、opportunity:view。
+- 用户管理端点只看 `is_super`，不是 role_code=admin，也不开放可授予但无效的 user:manage/role:manage。
+  opportunity:view 默认不授予任何内置角色；admin 由全部权限减 `SUPER_ONLY_PERMISSIONS`，不能动态继承超管权限。
+- 登录签发会话只有 `UserCenterCRUD.rotate_active_session` 一个入口，本地/SSO 共用。
+  返回本地产生的 session_id，不读 commit/refresh 后的 user.active_session_id，防并发串号。
+- `get_current_user` 对 session_id 缺失/空/不匹配抛 `SessionInvalidError`，错误码 auth.session_invalid。
+  裸 HTTPException 会被映射为 auth.unauthorized，丢失“其他浏览器登录”的区别。
+- logout 使用不校验会话匹配的 `get_current_user_for_logout`；清理必须条件更新，只有本令牌仍为当前会话才清空。
+  否则旧会话退出会清掉新登录；旧会话不能在依赖层被提前拒绝而绕过条件更新。
+- 前端每条失败后清令牌路径都在真正清理前紧贴比对“请求令牌仍为当前令牌”。
+  `app.tsx`、fetchUserInfo、裸 fetch 导出均须覆盖；比对后如有 await，清理前再次比对。
+- 钉钉是授权码 OAuth2，不是 OIDC；个人与企业凭证分开，企业 token 缓存用锁。
+  账号只按 `(external_idp,external_id)` 匹配，external_id 用 unionId，禁止用户名自动绑定或按 userid 识别。
+- SSO 新建用户 is_super 恒 false，角色取配置，不从部门映射，不回写既有属性。
+  登录时反查在职；离职前已签 JWT 可活到过期，不能宣称实时吊销。SSO 不自动合并本地账号。
+- SSO 账号无密码，仍走哑哈希路径，不能提前返回泄露账号类型；本地密码入口保留作故障逃生。
+  SSO 关闭端点统一 404，仍注册路由；开启缺凭证启动失败；角色与数据库不可达的边界详见认证指南。
+- Login/SsoCallback 共用 `useLoginRedirect`；先落 currentUser 再跳转，外域走 hardRedirect。
+  真机扫码、回调域名、通讯录权限须实测 `scripts/check_dingtalk_sso.py`，代码审核不等于已通过。
+
+### 所有失败响应统一
 
 ```json
-{"success": false, "code": "<域>.<原因>", "message": "<面向用户的中文>", "request_id": "0f3a1b2c"}
+{"success":false,"code":"<域>.<原因>","message":"<用户可见中文>","request_id":"0f3a1b2c"}
 ```
 
-- **业务错误一律「抛」不「返」**。服务层抛 `app/common/errors.py` 的 `APIError` 子类,
-  API 层**不做 try/except 转译**——路由层转译会把域内错误码盖成通用码。返值式的失败要靠
-  每个调用点自觉检查,漏检即静默,这正是历史上「用户名已存在」被吞掉的机制。
-- **`message` 面向用户,可直接展示**。内部细节(异常栈、SQL、路径、OSS object key、配置项名)
-  放 `APIError(log_detail=...)`,**只进日志、永不序列化**。
-- **状态码按语义**:400 参数不合法 / 401 未认证 / 403 无权限 / 404 不存在 / 409 与状态冲突 /
-  413 超上限 / 422 业务不接受 / **503 基础设施不可用**(数据库连接超时、池耗尽,与业务 500 分开,
-  以便告警策略分别设定)/ 500 兜底。
-- **ProTable 契约 `{data,total,success}` 只表达成功**。列表失败走非 2xx,不再有 `protable_error`
-  ——失败混在 200 里,前端无法把「查询失败」和「没有数据」区分开。
-- **参数校验错误白名单重建**,只透 `fields:[{field,msg}]`。**绝不透传 Pydantic 的 `input`**:
-  它在 `missing` 错误下是整个请求体,曾把明文密码写进响应体与 nginx access log。
-- **request id 贯穿**请求头 `X-Request-Id` → 日志 → 错误体,入站已有则沿用。
-- **不要给 `FastAPI(...)` 传 `debug=`**,该模式会把 traceback 写进 500 响应体。
+- Service 抛 `APIError` 子类；API 不用 try/except 盖掉域错误码，不返元组或失败的 200 ProTable。
+  内部 SQL、路径、对象 key、栈和配置细节只进 `log_detail` 与日志，不能进入 message。
+- 状态码按语义：400 参数、401 未认证、403 无权限、404 不存在、409 冲突、413 超上限、422 业务拒绝、
+  503 基础设施不可用、500 兜底。Pydantic 校验只重建 fields 的 field/msg，不透传可能含密码的 input。
+- `X-Request-Id` 贯穿请求、日志和错误体；已有值沿用。FastAPI 不传 `debug=`，避免 traceback 泄露。
+- 流式响应的失败在开流前判定；BackgroundTasks 自捕获并 `logger.exception` 留栈，不用 error 丢栈。
+- 前端错误提示唯一出口为 app.tsx 的 errorHandler；skipErrorHandler 必须显式声明并自行呈现失败。
 
-两条容易踩的边界:
+## 前端与导航：生效条件、缓存和缺失态不能混淆
 
-1. **流式端点(如导出)的失败必须在开流前判定。** 一旦返回 `StreamingResponse`,状态码与响应头
-   已发出,之后抛异常只会得到一份**被截断的 200 CSV**,而它会被当成完整数据使用。
-2. **全局处理器不拦截 `BackgroundTasks`。** 后台任务必须自捕获,且用 `logger.exception`
-   （不是 `logger.error(..., exc)`）——栈是这条路径唯一的线索来源。
+修改前读前端指南；本节仅保留跨屏原则和高风险判据。
 
-前端侧:`src/app.tsx` 的 `errorConfig.errorHandler` 是**错误提示的唯一出口**,页面层不写
-try/catch 也能让用户看见失败。确需静默的场景在请求上显式声明 `skipErrorHandler: true`
-（如登录页凭证错误由表单自己呈现）——**静默必须是显式声明的结果,不能是忘记处理的副产品**;
-声明了跳过,就必须自行呈现。
+- 导航按数据域命名，八项顺序为机会中心、市场分析、词库工具、竞对监控、产品档案、风险核查、定价核算、数据管理。
+  路由在 `frontend/src/routes.ts`，不要复塞 `.umirc.ts`；单页顶层不增二级菜单，以免侧栏挤掉宽表。
+- 风险/产品/定价未接入能力不发请求、不造数据、不加空权限点；仅超管前端 access 可见。
+  接入真实端点时补后端权限并替换占位 access；机会中心有独立超管权限，不等同占位屏。
+- 分析三个 hook 以 index.tsx 协调、值与回调传递，彼此不直接 import；展示组件受控、不发请求。
+- 初始化优先级：会话快照 > 按 userId 保存条件 > 内置默认。defaultFilters 是唯一默认定义，默认只看首次入榜。
+  草稿与生效条件分开，用户点立即查询后生效；改站点/视图只重拉元数据，排序/翻页即时请求。
+- 保存条件只存生效站点/视图/筛选/排序，不存日期或检索词；dirty 时拒绝保存。
+  userId 缺失不读写，不回退共享键；保存条件跨 logout，重置才删除，版本变化直接丢弃旧 payload。
+- 会话快照在 logout 清空；切回页面只对首次恢复短路，立即查询/翻页/排序仍发请求。
+  改形状提升 CACHE_VERSION，保存形状提升 SAVED_MODE_VERSION；测试前 clearSnapshot，防用例串数据。
+- 保存条件按当前权限规范化 competitorNew，覆盖草稿初值、首屏初始化与 apply 入口。
+  不得恢复一个用户已无权限、界面又看不到的隐形筛选而触发 403。
+- 首屏使用 reloadScopeMeta 的返回值而非尚未更新的 React state；恢复已保存类目传 keepCategories。
+  无期次不请求，显示无数据；滚动恢复等行落 DOM，位置靠 scroll 监听，不靠卸载 cleanup 读取。
+- ASIN 等值查询、三槽位匹配；前端 B0 正则只是路由启发，不作后端格式限制，ISBN-10 也可能是 ASIN。
+  ASIN 不建无用 trgm；关键词模式只对关键词输入出现，不入保存条件，规则唯一来源 keyword_match.py。
+- ALL_TERMS 为完整词 AND、顺序不限、允许夹词；常规英文单复数互通，非英语/含数字/不规则只精确。
+  最多 8 词，超限 422；拆不出词退回子串。PHRASE 连续子串，%/_ 按字面；不许暗示语义/同义词支持。
+- 份额为 0～100 百分数；排名变化原始负号代表上升，不翻转符号。
+  日视图“7天变化率”对 d-7，周视图对上一周；筛选/排序 ranking_change 仍对上一期，缺基期显示占位。
+- 排除品牌词按该行前三品牌整词匹配，非品牌全集；只在首次入榜筛选时发出，NULL/短品牌边界见指南。
+  所有真筛选进入 request_has_filters 与前端 FILTER_KEYS；布尔 false 与未传等价，使用 `or None`。
+- 加入词库按当前结果的生效站点选组，不能跟草稿站点走；掉榜行可勾选，选中状态不进快照。
 
-### Database Design
+## 竞对监控与插件：共享观测，私有关注
 
-**Schema**: `analysis`
+修改前读竞对指南；插件还须读 `extension/README.md` 及采集变更 design。
 
-表结构见上文「V2 数据模型」一节（星型模型：`dim_keyword` / `dim_product` /
-`fact_daily` / `fact_weekly` / `site_data_stats` / `import_batch`）。
-V1 的 `amazon_origin_search_data` 单宽表与 `my_category_stats` 视图已随 V1 退役删除。
+- 共享主体/观测不带账号属性；分组/关注/预览私有且逐查询限制 user_id，别人的记录返回 404。
+  竞对分组是跨站点标签，删组置 NULL、不取消关注；词库分组绑站点，两者不能照抄。
+- 卖家链接与书签共用纯解析器；marketplaceID > TLD > 调用方 fallback_site，无依据拒绝，不猜站点。
+  丢弃 ds 等会话参数；拒绝品牌店/详情页时逐项给原因。书签走预览→确认，配额预览时整批拒绝。
+- ASIN 上报只接受本人关注的卖家；服务端决定 user_id/时间，captured_at 仅审计、不参与判定。
+  基线与首批 ASIN 同事务写，首批恒不算新发现；基线只在 NULL 时更新，现有观测只增不改。
+- request_id 按 user_id 隔离；命中后对 request_hash，不同内容返回 409，不能误回放吞观测。
+  hash 除标题/图片外仍含 captured_at、ship_to_region、page_context；真正重试重发原请求。
+- 单项坏 ASIN 可拒并回原因，重复去重；超条数整批拒绝，**零条有效 ASIN 整批 422，禁止空基线**。
+  first_report_id 保留溯源，删账号 SET NULL 不连带删共享商品。
+- “竞对新发现”仅首次见到晚于卖家基线且在近 7 日内，不代表商品新品或何时上架。
+  依赖被动采集覆盖；缺采集、仅基线、超窗口分别解释。筛选前三 ASIN，额外要求 competitor:view，search/export 同校验。
+- 上新流 SQL UNION ALL 后统一分页排序，不在应用层拼两页；响应身份、rowKey、完整排序键都包含 site。
+  无基线的数量为 NULL，不用 COALESCE 伪造 0；配送地区只留档，不据“没见到”判下架。
+- Shopify 新品看 product_id 是否已存在，不看可能被商户批量重置的 published_at。
+  下架仅在 catalog_complete 时做：自然翻页终止且数量不少于 meta 声明，触顶/网络异常不可判整店下架。
+- Shopify 价格/compare_at_price/available 真变才追加；当前价取最新观测，不加另一份当前价字段。
+  币种来自 meta 并持久化，未知不造符号；best-selling 只有店内相对名次，不转销量、不跨店比较。
+- 待首次拉取、未开放接口、失败、不完整分别展示；畅销榜解析异常独立标记，不伪装空榜。
+  店域名入口共用规范化；DTC 批量一步完成，限额整批拒绝、逐输入行回原因，不套卖家替换组的两步流。
+- 拉取复用 import_queue 轮询，行认领 SKIP LOCKED；网络异步、仅 DB 写入走线程池，不加全局网络锁。
+  本能力不做取关后 GC；不得把竞对普通表纳入三个月事实清理。
 
-**`category_stats` / `brand_stats`**：普通表，按 (站点, 周期, 日期) 分片提供类目/品牌
-下拉选项与计数，导入后由 `import_service._rebuild_filter_stats` 只重算当期切片（不是
-物化视图——2026-08-05 迁移 `f5a6b7c8d9e0` 已经改造过一次，原因见该迁移文件说明：
-旧视图统计粒度比筛选粗一层、且 `REFRESH` 代价与数据总量同阶）。
+### 浏览器插件（extension/）
 
-### Performance Optimizations
+- manifest 与 package 版本一致，manifest 保留公钥 `key` 固定扩展 ID；私钥不得入库。
+- 多页先本地合并，**一次请求上报**；逐页上报会把后续存量当新发现。
+- 跨域靠 optional_host_permissions，API 地址按设置申请，不依赖后端 CORS、不写死 host_permissions。
+- 插件同步网页的 24 小时全权限 JWT，尚非独立可吊销令牌；不能把同步描述成权限收窄。
+- 分发 zip＋加载已解压，`pnpm run pack`；升级覆盖后重新加载，无自动更新。
+  DOM 选择器需真实 Amazon 页面验证，旧真机确认不代表所有站点当前已验收。
 
-1. **Connection Pooling**: `database.py` 在模块级建了**两个**引擎，各自持有独立的池，
-   服务的负载性质不同，故**分开配置**（`DB_*` 与 `DB_ASYNC_*`）。自
-   `dockerize-selfhosted-infra` 变更起 PostgreSQL 自建、与应用同机部署（不再是独立的
-   阿里云 RDS），自建 `db` 容器的 `max_connections`（`.env` 的 `PG_MAX_CONNECTIONS`，
-   起点值 120）是硬顶，全局上限算式是：
+## 部署与运维：只走授权入口，V1 不动
 
-   ```
-   (DB_POOL_SIZE + DB_MAX_OVERFLOW) × workers        # 同步：导入 COPY、导出游标、迁移
-   + (DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers   # 异步：查询与鉴权
-   ```
+开始 ECS、OSS 或 ops-bot 工作前先读交接与运维指南；环境记录不是当前在线状态，必要时重新验证。
 
-   `start.sh`/Dockerfile 固定 4 workers。当前取值 (2+3)×4 + (8+8)×4 = 84，为
-   `PG_MAX_CONNECTIONS=120` 留出约三分之一余量给 psql/alembic/运维脚本。
-   **应用与数据库现在共享同一组 4 vCPU**（不再是"数据库在独立机器"）：PG 同时真正能
-   执行的查询仍受核心数限制，池开大不提升吞吐，只会把「快速可见的失败」换成「整体缓慢
-   劣化」，且现在这组核心还要分给应用进程，比独立 RDS 时期更紧——这是本次迁移直接采用
-   目标值起步、而非在旧值上"以后再降"的原因（`openspec/changes/
-   dockerize-selfhosted-infra/design.md` 决策 5）。
+- V2 只由 `Deploy V2 to ECS` 手动发布。必须为 refs/heads/v2、完整 SHA 位于 origin/v2 历史，
+  该 SHA 后端/前端/插件三项必需 CI 均 completed/success；不得放宽门槛或用 SSH 绕开。
+- 合并、评审通过、`/close-change` 均不等于发布授权。用户明确要求本次发布时可代触发，不重复索取已有授权。
+  先报告 origin/v2 最新目标、无未推送提交、三项 CI、迁移和无进行中导入；有新迁移需明说并等确认。
+  CI 缺失/失败不能硬触发；按工作流门槛处理，不以用户知情代替 success。
+- 用 `gh workflow run "Deploy V2 to ECS" --ref v2`，跟踪到完成并报告 `/health`。
+  失败只报现象/日志，不自行重试或 SSH 修补；源码里的 deploy.sh/start.sh 不是另一个常规发布入口。
+- V1 `amazon.liangtong.online`、宿主机 8000 不得修改/停止。V2 `key.liangtong.online` 只绑 127.0.0.1:8001，
+  Compose 项目 keywordiq-v2；所有 Compose ports 只绑回环，容器内部 8000 不等于宿主机 V1。
+- 自建 PG15 与应用共享 4 vCPU / 8 GiB。连接预算为两个引擎池分别相加再乘 4 worker，业务 84；
+  ops-bot 再占最多 12，总计 96，对 PG_MAX_CONNECTIONS=120 留 24，改任何池前重算。
+  THREAD_POOL_LIMIT 默认 32，与 DB 池独立，不能跟同步池降到 5；PG 内存与服务同机核算。
+- **数据库没有自动备份**（2026-09-20 决定）；保留手动备份，不默认有恢复点，不擅自加回定时备份或逾期告警。
+  磁盘、缓存命中等容量信号须基于当前观测；旧 RDS 容量估算不作为现机保证。
+- ops_bot 与 app 相互独立，不互 import；重启/发布与导入共用的锁 key 必须两边同步。
+  独立角色/ops schema；只做预定义动作，重启/发布走确认卡，导入中拒绝，生产恢复不开放飞书指令。
+- OSS/RAM/CORS、飞书回调/确认卡和外部拨测按交接逐项验证；本次文档变更不代表它们已配置或真机通过。
 
-   **`THREAD_POOL_LIMIT`（默认 32）与连接池无关，调池时不要跟着一起动。** anyio 的默认
-   线程限流器被三类工作共用，只有第一类占连接：同步 `def` 端点（导出）与健康检查探活、
-   bcrypt 哈希/校验（每次登录 ~247 ms，不占连接）、同步 `BackgroundTask`（导入，一条线程
-   占住整场）。它曾按 `DB_POOL_SIZE + DB_MAX_OVERFLOW` 推导——同步池降到 2+3 后若仍然
-   那样推导，限流器会塌到 5，一个导入在跑就只剩 4 条线程给全部登录，故两者已彻底拆开、
-   互不联动。
-2. **Query Optimization**:
-   - 掉榜段行数读 `site_data_stats.dropped_count`（O(1)）。**在榜段行数不再读预存的
-     `row_count`**：类目黑名单让可见行数小于整切片行数，改为实算（与带筛选同一条精确计数，
-     实测热缓存日报 168ms、周报 242–375ms）。在榜行数同时是**分段分页的分界线**，必须与
-     实际可翻的行数一致，不一致会让跨界页重复或漏行，而那种错误在界面上表现为「某一行出现
-     两次」，极难归因。真实体量下这次计数的耗时尚未实测，若不达标再评估把"扣除黑名单后的行数"
-     在导入时算定写入 `site_data_stats`
-   - 带筛选的总数**精确实算、不封顶**（`analysis_crud.count_filtered`）。曾有 V1 沿用的
-     `FILTERED_COUNT_CAP = 10000`，在 V2 是错的：带筛选的查询本就锁死在单一切片里，计数代价
-     由切片大小决定、不随窗口增长（实测热缓存日报 168ms、周报 242–375ms），而封顶换来的
-     是一个无法与精确值区分的 total——前端据此算页数，超出上限的命中行在界面上够不着
-   - 每次查询都被约束在**单一站点、单一视图**内；时间维上，带筛选走单一事实切片，无筛选
-     走行窗口（天 7 期 / 周 4 期）。掉榜段读的是导入时算定的 `fact_dropped`，查询侧不做
-     反连接——那正是决策 1 要避开的「每翻一页重算一次」
-   - 类目下拉读 `category_stats`（按日期分片的普通表，导入后只重算当期切片），不实时聚合
-3. **Import**: 走 `COPY` 流式装载到 UNLOGGED 暂存表，内存有界；不再有 pandas 分块或多进程分片
-   （V1 的 `BATCH_SIZE`/`MAX_WORKERS`/`FILE_SPLIT_LINES` 等配置已随 V1 一并删除）。
-   导入以 `pg_try_advisory_lock` 串行化，同一时刻只跑一个。
+## 流程重量：默认最轻，长期决策才留完整规格
 
-## Key Configuration (.env)
+沿用三档；用户已明确范围与方案时直接按授权推进。必要澄清一次问完，不串行多轮追问。
 
-完整项与说明见 `.env.example`（新增配置务必同步过去，含单位与安全的本地默认值）。
-
-```bash
-# Database (sync + async URLs both required)
-DATABASE_URL=postgresql://user:pass@host/db
-DATABASE_URL_ASYNC=postgresql+asyncpg://user:pass@host/db
-DATABASE_SCHEMA=analysis
-
-# Sites / retention
-ENABLED_SITES=US,GB,DE   # 必须是 site_registry 已登记的站点码
-DEFAULT_SITE=US
-HOT_WINDOW_MONTHS=3
-
-# 钉钉单点登录。SSO_ENABLED=true 时前三项缺一即启动失败；关闭时端点一律 404
-SSO_ENABLED=false
-DINGTALK_APP_KEY=
-DINGTALK_APP_SECRET=
-SSO_REDIRECT_URI=              # 指向 SPA 的 /sso/callback，须与钉钉后台登记的完全一致
-SSO_DEFAULT_ROLE_CODE=analyst  # 首次扫码建档时赋予的角色，须存在于 role 表
-
-# 持续增长市场的判定口径（仅日报）。改了要跑 scripts/backfill_growth.py 重算历史期次
-GROWTH_WINDOW_DAYS=7          # 窗口期数（含锚定日）；7 期产生 6 个日环比
-GROWTH_MIN_RANK_GAIN=10000    # 累计净增名次下限（不含）
-GROWTH_MIN_DAILY_RATE=0.10    # 每个日环比的下限（含）
-
-# 词库上限（超限 422 拒绝、整批不写）。每组条目数同时是盯盘查询的规模保证，上调前先重测
-LIBRARY_MAX_GROUPS_PER_SITE=20
-LIBRARY_MAX_ITEMS_PER_GROUP=500
-
-# Upload / OSS（OSS_ENABLED=false 时走本地文件退路，其余 OSS_* 可留空）
-MAX_FILE_SIZE=3221225472  # 3GB
-OSS_ENABLED=false
-IMPORT_QUEUE_POLL_SECONDS=30  # 排队批次多久接手一轮；0 = 不自动接手
-
-# Connection pool（两个引擎各自独立配置，上限是两组相加再 × 4 workers；
-# 自建 PG 与应用同机部署后取值即目标值，见 Performance Optimizations 一节）
-DB_POOL_SIZE=2             # 同步：导入 COPY / 导出游标 / 迁移
-DB_MAX_OVERFLOW=3
-DB_ASYNC_POOL_SIZE=8       # 异步：查询与鉴权
-DB_ASYNC_MAX_OVERFLOW=8
-
-# 线程池上限（导出/探活/bcrypt/同步后台任务共用，与连接池无关）
-THREAD_POOL_LIMIT=32
-
-# 自建 PostgreSQL 容器（docker-compose.yml 的 `db` 服务读取，不经 config.py）
-POSTGRES_DB=amazon_search
-POSTGRES_PASSWORD=change-me-in-production
-PGDATA_HOST_PATH=./pgdata   # bind mount，不用具名卷——备份/灾难恢复要能直接摸到文件
-PG_MAX_CONNECTIONS=120
-PG_SHARED_BUFFERS=2GB
-PG_EFFECTIVE_CACHE_SIZE=4GB
-PG_WORK_MEM=16MB
-```
-
-## Production Environment
-
-**服务出问题排查看 `etc/observability-runbook.md`**（怎么用 request_id 关联 nginx/
-应用日志、怎么读慢查询诊断、issue #4 类导入期卡死复发时重启前要采集什么），本文件不
-重复那些操作步骤。
-
-| Category | Spec |
-|----------|------|
-| App Server | Alibaba Cloud ECS · Alibaba Cloud Linux 3.2104 LTS 64-bit · 4 vCPU / 8 GiB RAM |
-| Database | 自建 PostgreSQL 15.x（Docker 容器，与 App Server 同一台 ECS，见 `docker-compose.yml`）· `max_connections` 由 `.env` 的 `PG_MAX_CONNECTIONS` 配置，起点 120 |
-
-应用与数据库不再是两台独立机器——`dockerize-selfhosted-infra` 变更之前是阿里云 RDS
-PostgreSQL 15.0（2C4G，独立机器），出于省去 RDS 托管溢价的考虑改为自建、同机部署。
-详见 `openspec/changes/archive/2026-09-15-dockerize-selfhosted-infra/design.md`。
-
-**V2 上线拓扑（2026-09-19）**——细节与实时状态以 `docs/ops/v2-ecs-handoff.md` 为准，这里只
-留写代码时会撞上的几条：
-
-- **V1 与 V2 同机、完全隔离。** V1 仍是裸部署（域名 `amazon.liangtong.online`、后端 8000），
-  **不得修改或停止**；V2 域名 `key.liangtong.online`，应用容器只绑 `127.0.0.1:8001`
-  （容器内 8000，宿主机 8000 是 V1 的）。部署脚本、健康检查、logrotate、nginx 配置里凡是
-  端口/域名/目录，V2 都有自己的默认值（`deploy.sh`、`.github/v2-ecs-cd.md`），照抄 V1 的
-  会打到别人身上。
-- **V2 的容器与数据都有独立命名**：Compose 项目 `keywordiq-v2`，数据库 `keywordiq_v2`，
-  数据目录 `/var/lib/keywordiq-v2-pgdata`（bind mount），部署目录 `/var/www/keywordiq`，
-  运行用户 `www`，前端产物 `/var/www/keywordiq-web`。生效的 nginx 配置是
-  `/etc/nginx/conf.d/key.liangtong.online_80.conf`，仓库里的 `etc/keywordiq-v2-nginx.conf`
-  是它的模板（写死了证书路径，覆盖前先 diff）。
-- **数据库没有自动备份**（2026-09-20 决定）。机器人不再每日备份，也没有「备份逾期」告警；
-  手动的飞书 `备份` 指令与 `scripts/backup_selfhosted_pg.py` 保留。生产库恢复只能按脚本
-  docstring 手动执行，不经飞书。写方案时别默认"出事能从备份恢复"。
-- **合并进 `v2` ≠ 上线。** 发布是手动触发的「Deploy V2 to ECS」，且必须等该 merge commit 的
-  三项 CI 都出结果——CI 尚未产生 check-runs 就触发会被门禁拒绝（ECS 不会被改动）。
-
-**飞书运维机器人（`ops_bot/`）是与业务 `app` 完全独立的 host 级 systemd 服务**
-（`keywordiq-ops-bot`，以 `www` 运行，监听 `127.0.0.1:8101`，nginx 把 `/ops/` 反代过去）。
-操作手册是 `etc/keywordiq-ops-bot-runbook.md`，设计取舍在
-`openspec/changes/archive/2026-09-17-add-feishu-ops-bot/design.md`，这里只记约束：
-
-- **它崩溃、重启不影响业务 `app`，反之亦然**；`app/` 不 import 它，它也不依赖 `app.*`。
-  唯一的耦合是**咨询锁 key 两边各自定义同一个值**：`import_service._OPS_ACTION_LOCK_KEY`
-  与 `ops_bot/executor` 里的 `0x4B4F`（重启/发布与导入互斥靠它）。改一边不改另一边，
-  互斥静默失效、也不报错。
-- **数据库侧最小权限**：连接用独立角色 `ops_bot_role`，状态表在独立的 `ops` schema
-  （`OpsBase`），与业务 `Base`/`analysis` 物理隔离。**新增 ops 表要登记进
-  `migration_scope.OPS_TABLES`**（不是 `V2_TABLES`），否则 autogenerate 静默忽略。
-  为了让 host 级进程连得上，compose 的 `db` 才发布了 `127.0.0.1:5432`——只绑回环，别改成
-  `0.0.0.0`。它自己有一组连接池（同步 2+2、异步 4+4，最多 12 条，见 `ops_bot/database.py`）。
-- **只做预定义动作，且危险动作必须人工确认。** 文本指令：`状态` / `任务` / `日志 <request_id>`
-  / `备份记录` / `备份`；`重启` 与 `发布 <完整 40 位 SHA>` 走确认卡片，未确认不执行。
-  发布只接受 `origin/v2` 历史上、三项必需 CI 全部成功的完整 SHA，导入进行中一律拒绝。
-  **生产库恢复不作为飞书指令开放。** 卡片按钮回调是未经真实客户端验证的部分。
-- **单人运维，不建群**：`FEISHU_OPS_CHAT_ID` 是与机器人的单聊 `chat_id`，须用**应用身份**
-  取，否则之后发消息全部 `230002`。事件订阅是「发送到服务器」，回调地址
-  `https://key.liangtong.online/ops/feishu/webhook`。用 `scripts/check_feishu_ops.py` 自检。
-- **外部存活探测是阿里云云监控拨测 `/health` 与 `/ops/health`**——交接文档里这一项
-  **尚未配置**，在那之前机器人自己挂了没人知道。
-
-**Capacity implications for code changes:**
-- `PG_MAX_CONNECTIONS`（起点 120）是全局上限的硬顶；全局上限是**两个引擎各自的池相加**
-  再乘 workers：`(DB_POOL_SIZE + DB_MAX_OVERFLOW + DB_ASYNC_POOL_SIZE + DB_ASYNC_MAX_OVERFLOW) × workers`
-  （`start.sh`/Dockerfile 固定 4 workers，当前取值算下来是 84）。改任一组前先核对这个算式
-- ops-bot 是 `PG_MAX_CONNECTIONS` 的**第三个占用方**（前两个是应用的同步与异步池）：最多再占 12 条（同步 2+2、异步
-  4+4），合计 84 + 12 = 96，离 120 的余量只剩 24（还要给 psql/alembic/运维脚本）。
-  上调任何一组池之前把它算进去
-- **应用与数据库现在共享同一组 4 vCPU / 8 GiB**（此前数据库在独立的 RDS 机器上，不与
-  应用争抢）：nginx、4 个 uvicorn worker、导入任务、自建 PostgreSQL 进程本身、Netdata
-  监控容器、ops-bot，**以及同机的 V1 服务**全部挤在这台机器上；导入已由咨询锁串行化，
-  勿再引入并行分片而不实测
-- 8 GiB RAM 下导入靠 `COPY` 流式装载保持内存有界；不要引入整文件读取或全量 DataFrame。
-  自建 PostgreSQL 的 `shared_buffers`/`effective_cache_size`/`work_mem`（`.env` 的
-  `PG_*` 系列）同样要在这 8 GiB 里核算，不能只顾应用侧内存
-
-## Important Constraints
-
-1. **SQLAlchemy 2.0 Only**: Use `DeclarativeBase`, `Mapped`, `mapped_column`, explicit `select()` statements, and `Session.execute(...).scalars()` patterns. Do not introduce `declarative_base()`, `Column(...)` model fields, or `.query()` APIs.
-2. **Dual Engines**: Both sync (`engine`) and async (`async_engine`) available - choose appropriately
-3. **Schema Qualification**: All models use `schema=settings.DATABASE_SCHEMA`
-4. **UPSERT Logic**: CSV imports use raw SQL with `ON CONFLICT (keyword) DO UPDATE` for complex ranking trend JSONB manipulation
-5. **Transaction Boundaries**: Service layer controls commits, CRUD layer never commits
-6. **Pydantic 2.0 Only**: Use `ConfigDict`, `field_validator`, `model_validate()`, and `model_dump()`. Do not introduce v1-style `class Config`, `@validator`, `@root_validator`, `.dict()`, or `.parse_obj()` usage. Keep ORM models, request schemas, and response schemas typed precisely.
-
-## Development Guardrails
-
-- **Database migrations**: Schema changes must go through Alembic migrations, not ad hoc SQL against application databases. When changing ORM models, add or update the matching migration and verify it targets the configured `analysis` schema correctly.
-- **Session/process safety**: Large imports must avoid long transactions and must not reuse parent-process database connections inside worker processes. Worker processes should create and dispose their own database engine/session scope.
-- **Async boundaries**: Do not run long CPU-bound CSV parsing, blocking database work, or full-file reads directly on the FastAPI event loop. Use the existing chunked processing, process pool, or background workflow patterns for large imports, and keep request handlers thin.
-- **Data-heavy paths**: Design for bounded memory and bounded result sets. Do not load entire GB-scale CSV files into memory, do not return unpaginated table-sized query results, and consider indexes and query plans when adding filters or joins used by search/analysis screens.
-- **Tests**: Unit tests should not require a live PostgreSQL instance; database/import tests may require `.env` and should use small fixtures rather than real production CSV files. New tests must be collectable by `pytest` and must not reference deleted or experimental module paths. Bug fixes should include a focused regression test when behavior can be reproduced locally.
-- **Configuration and local data**: Keep `.env.example` in sync when adding new settings, including units and safe local defaults. Do not commit `uploads/`, `logs/`, temporary split files, or real customer/search-report CSV data.
-
-## 流程重量：先问，别默认最重
-
-**开工先问一句这件事要多重，默认取最轻的那档。** 三档：
-
-| 档位 | 做什么 | 适用 |
+| 档位 | 产物 | 适用 |
 |---|---|---|
-| **直接做** | 不写 spec、不建 worktree，改完跑相关测试就提交 | 改样式、修一处逻辑、补一个测试 |
-| **先对齐再做** | **一次**问清关键决策，复述一遍就动手；不写 spec | 需求有分叉但形态清楚 |
-| **完整流程** | openspec 四件套 + worktree + PR | 新子系统、改契约、要长期留档的决策 |
+| 直接做 | 改动＋相关验证 | 样式、局部逻辑、补测试 |
+| 先对齐再做 | 一次对齐关键决策后实施 | 分叉有限、形态明确 |
+| 完整流程 | OpenSpec 四件套＋独立 worktree＋PR | 新子系统、改契约、需长期追溯的决定 |
 
-判据是**这个决策以后还要不要被翻出来看**，不是改动大小。「账号按 unionId 还是 userid 匹配」
-值得留档（改错了没有任何报错），「登录页加个按钮」不值得。
+取舍看决策以后是否需要翻阅，不按改动大小；一次性脚本、测试辅助或提交信息不展开长篇背景。
+提交信息中文 conventional commits，通常 3～5 行；只对不显然且静默失败的取舍展开理由。
+OpenSpec CLI 直接使用，不需绑定某个 Agent；更详细流程和旧事故见开发流程指南。
 
-### 为什么要有这条
+### 跨 Agent 交付：Issue 是契约，PR 是审核包
 
-2026-08-19 的钉钉 SSO 变更（issue #36）事后统计：生产代码 949 行、测试 1106 行、
-**我写的散文 1366 行**（openspec 672 + 提交信息 337 + CLAUDE.md 100 + PR/issue 正文 257）。
-散文比代码多。
+默认 Codex 讨论、Issue 交接、Claude Code 实现、Codex 独立审核；用户可另行指定执行者。
+不要求下一个 Agent 重读完整聊天。Issue 至少含背景目标、可验证验收、非目标、已定约束与待定决策。
 
-原因不是哪一步做错了，而是**默认把所有重流程叠满**：brainstorming 判成 architectural →
-完整问答 + 方案对比 + 分段设计 → openspec 四份产物 → start-change 建 worktree 装依赖 →
-TDD 逐函数红绿 → 每次提交跑全量门禁。每层单独看都合理，叠起来是写第一行代码之前先过一小时。
-而这个判断全程由 agent 做，人没有机会说「不用这么重」。
+1. 完整流程先读 `.claude/skills/start-change/SKILL.md`，认领并建独立仓库外 worktree。
+2. PR 指向 `v2`，包含 Issue、OpenSpec 路径、spec delta、实现摘要、已跑验证与未覆盖风险。
+3. 审核只读 checkout/worktree，核对 Issue/spec/diff，发现分必须修复、建议、疑问；不能改实现者工作区。
+4. 必修全部关闭、相关审核和 CI 通过才可合并；不采纳须说明并获审核者确认，不能当作自动通过。
+5. 用户要求收尾才按 `/close-change` 合并、归档和清理；未完成验收转移并保留链接，不靠勾选冒充验收。
+6. 默认分支 main 仍是 V1；合入 v2 不自动关闭 Issue，完成范围兑现后手动关闭，未完成保持打开。
 
-### 四条具体约束
+#### 代发 @codex review
 
-1. **澄清问题一次问完。** 一个 `AskUserQuestion` 最多带 4 个问题，**不要串行问 4 轮**——
-   每轮都是一次完整的人机往返。superpowers 的 brainstorming skill 规定「一次一个问题」，
-   这条与它冲突时**以本文件为准**（用户指令优先于 skill）。
+仅用户当次明确要求“让 codex 评审/再发一轮复审”时可代发，不因 deliver-pr/fix-review 自行触发。
+先核 PR base=v2、最新提交已推送、head SHA 正确、CI 已有结果；红灯先报告，由用户决定是否仍发评审。
+`gh pr comment <PR号> --body "@codex review"`，只加必要重点，发后报告评论链接，不轮询等结果。
+不代发 @claude；之后的复审须有对应轮次授权。
 
-2. **篇幅按「反事实是否显然」定，不要一律拉满。** 本文件这种「每条都解释不这么做会怎样」
-   的密度，是给**会被反复翻阅的约定**用的。一次性脚本、测试辅助函数、`catch` 这类改动
-   不需要。提交信息 3–5 行说清「改了什么、为什么」即可；只有当「为什么这么写」不显然、
-   且写错了不会报错时，才值得展开。
+### 工作分支与并行会话
 
-3. **先验前提，再设计。** 有没有那个租户 / 权限 / 数据源 / 收不收费——先问或先查。
-   SSO 那次先按 IDMesh + OIDC 出了完整方案，事后才发现收费情况查不实，整段推翻重做。
-   同理排查缺陷时**先读失败的用例源码，再提假设**：看见 `findByText` 超时就去调超时，
-   改完还是红，回头才发现那条用例用的是同步 `getByRole`，跟超时无关。
+- 所有变更从 v2 建分支，通常 `change/<id>`，不是 main；PR 显式 `--base v2`，创建后核对。
+- 先 `openspec list`、`git branch --list 'change/*'`、`git worktree list`、`gh pr list --base v2`。
+  spec 存在不等于有人实现；同变更分支已存在先核实归属，不重复开工，不清理其他会话资源。
+- 完整变更一个仓库外 worktree，通常 `~/.claude-worktrees/<id>`；不放仓库内部，防 watcher 重载风暴。
+  worktree 缺少被忽略的 `.env` 与依赖时按 skill 安全准备，不在输出中暴露配置；文档变更无需复制密钥。
+- worktree 隔离文件与索引，不隔离测试库/端口。keywordiq_test 全局共享，drop 前查 pg_stat_activity。
+  全量集成夹具会 TRUNCATE 业务表，不往共享测试库存要保留的报表；计数断言必须带作用域。
+- 主仓才用默认 dev 端口；worktree 派生独立端口，不抢他人服务。长任务在 tasks 留执行者/时间/进度。
+- 提交前看 status 第一列与 cached diff；按本次路径提交，不能裸 commit 卷入他人 staged 文件。
+  已 staged 后磁盘变化的内容与实际提交不一致时，先解决再验证，不能用磁盘绿证明另一份索引内容。
+- PR 创建后保留分支/worktree 等审核与 CI；仅合并后清理，本地分支用 -d，不为省事 -D/--force。
+  合并使用 merge commit，不 squash/rebase；有未跟踪业务文件或新提交保留资源并报告。
+- 开工扫描孤儿不等于自动删除；分支缺失、归属、文件、活动会话逐项核实，保护其他会话。
+  合并后主工作区必须干净再同步/归档；不允许 worktree 删除自身。
 
-4. **测试按影响面跑，全量只在提交前一次。** 前端全量约 97 秒且随用例数增长；
-   `pnpm test src/pages/Login` 是 7 秒。`pnpm exec vitest related <file>` 走真实模块图，
-   对叶子文件能省 9 倍——但 `.umirc.ts` / `vitest.config.ts` / `src/test/setup.ts` 这类
-   **不在模块图里却影响所有测试**的文件它会匹配出 0 个，那种必须跑全量。
+### 手动交付入口
 
-## 跨 Agent 交付流程：Issue 是交接契约，PR 是审核包
+- [`/deliver-pr`](.claude/commands/deliver-pr.md)：检查、提交、推送、创建/更新 PR，保留审核资源，不合并。
+- [`/fix-review`](.claude/commands/fix-review.md)：取齐评论/review/行内反馈，逐条核实、修复、验证、回复并核当前 CI。
+  不自动发起下一轮审核或合并；相应授权只对当次有效。
+- [`/close-change`](.claude/commands/close-change.md)：按当前 SHA 审核证据和 CI 门槛合并、归档、关闭已兑现 Issue、清理。
+  包含当前 SHA 的 fix-review 结论例外与已合并重跑规则，**执行前完整读 command，不能靠摘要跳过条件**。
 
-默认由用户在 **Codex 桌面端**讨论需求；讨论收敛后，先创建 GitHub Issue，再由
-**Claude Code** 实现、**Codex** 审核。工具的分工不是约束用户必须在哪个界面思考，而是让
-需求作者、实现者与审核者各自有清晰的事实来源：**不要要求下一个 agent 重读上一段完整聊天**。
+## 验证与开发 harness
 
-完整流程如下；小改动仍按上一节的「直接做」或「先对齐再做」分流，不为流程而流程：
+Codex 等环境不受 Claude Code PreToolUse hook 保护，必须主动跑检查；详见 AGENTS.md。
+按影响面先跑 focused，提交前跑对应全量一次；全量通过后无新改动/失败不反复重跑。
+
+| 改动范围 | 提交前检查 |
+|---|---|
+| app/scripts/test/alembic 或顶层 Python | `uv run ruff check .` 与 `uv run pytest test/ -q` |
+| frontend | `cd frontend && pnpm lint && pnpm tsc && pnpm test` |
+| extension | `cd extension && pnpm run typecheck && pnpm run test` |
+| 只有文档/OpenSpec | 文档差异、引用/覆盖核对；OpenSpec 有改动时 strict validate，不要求业务全量测试 |
+
+- 前端可用 `vitest related` 缩小影响，但 `.umirc.ts`、vitest.config.ts、setup.ts 不在模块图时不能以 0 用例当通过。
+- 单元用小 fixture，不依赖真实 PG/生产 CSV；数据库正确性用真实 PG 集成，导入路径另跑真实体量 verify-import。
+  报告 passed/skipped 与数据库是否实际执行，不能把“单元全绿”写成“全量数据库回归通过”。
+- Claude Code hook 按实际提交目标仓库与路径取改动；检查并发但报告按输入顺序，300 秒超时算失败。
+  hook 仅卡提交，不阻止工作中停下问问题；本地测试库连不上时可跳集成，不能隐瞒跳过。
+- 文件内静态规则交 ruff；跨文件一致性、死配置、丢栈日志交 `test/test_conventions.py`，不重复造检查器。
+  新手写检查必须有正反 fixture；基线新增违规失败，修好必须移除登记，不成为永久豁免。
+- `start-change` 管认领/隔离，`local-db` 管真库回归，`verify-import` 管端到端导入；对应文件在 `.claude/skills/`。
+  是否存在自动检查与本次是否实际执行必须分开陈述，测试不能证明真机/线上集成已验收。
+
+## CLAUDE.md 的维护纪律（#142）
+
+主文件目标 700～780 行、上限 800 行；同时检查实际文本量，不靠去空行或长行拼接凑数。
+字数预算服从有效约束完整性；超预算时优先去重或迁出细则，并维护开工必读表，不能直接砍红线。
+
+### 经验晋升
+
+一般经验首次记共享 Issue 或版本化 OpenSpec，记录问题/根因/范围/证据；本地 worklog 不作为唯一依据。
+同根因两个独立事件才默认晋升，先检索并附两次来源；同次修复的多轮评审/重试不重复计数。
+数据损坏、越权、生产误操作及用户明确长期决定首次即可晋升，写来源/理由；推演不能冒充真实事故。
+新条目写约束、边界、具体后果及 Issue/change id，优先合并；纠错/过时修正不必等待复发。
+详细领域约束写对应指南，主文件保留触发入口；docs/ 默认忽略，新增共享记录须确认未被忽略。
+
+### 审计与处置
+
+用户发起、大版本收尾或发现冲突时审计，不默认建定时任务。记录基准提交/本地差异、范围与未核实项。
+每条核对：代码/约束仍有效且无冲突吗；工具覆盖哪些 Agent/路径、何时实际运行/跳过；反例与原失败条件仍成立吗。
+无近期事故、低命中或“已有测试”都不单独构成删除依据；Claude 专属 hook 与可能跳过的集成不算全环境兜底。
+
+| 处置 | 判据 |
+|---|---|
+| 保留/压缩 | 仍影响正确性/授权/决策，或自动覆盖有缺口；保留约束、必要理由、边界与检查入口 |
+| 迁出/降级 | 领域细则按需读并留强制入口；历史取舍入共享归档，不继续作为当前参数依据 |
+| 删除 | 能力失效或重复且另有唯一有效来源；工具完全覆盖时也不能连带删有效设计理由与边界 |
+| 修正/补充 | 内容错误、冲突、边界不足或出现新缺口，按当前证据修正 |
+
+删改清单逐项列原条目、证据、去向、确认状态与执行结果。#142 首轮逐条处置仍需逐条确认；
+本次用户已批准的压缩方案授权去重和迁移，已执行项列入变更清单，其他删除建议不得借此自动执行。
+记录哪些仅核对文档、哪些验证过实现，不把文档迁移称作生产或业务全量审计。同步核对 AGENTS 审核口径。
+
+### 完整流程的双向覆盖
+
+只约束新完整流程变更，轻量两档与已归档变更不补矩阵；沿用 tasks 内联标注，不新增独立矩阵文件。
+行为需求引用 delta 的 Requirement/Scenario，design 只补技术依据；支撑任务引用其服务需求/批准决策。
 
 ```text
-Codex 桌面端讨论 → GitHub Issue → Claude Code：OpenSpec + worktree + 实现
-→ PR + CI → Codex 审核 → Claude Code 修复 → Codex 复审通过
-→ 合并至 v2 → 手动关闭 Issue + 删除分支/worktree
+- [ ] 1.1 <任务>（需求：specs/<能力>/spec.md → <Requirement>/<Scenario>；设计：design.md §<章节>）
+  证据：<实现文件/符号或文档位置>；验证：<已跑检查/结果，或待验收项去处>
 ```
 
-### 1. Issue：跨工具的唯一交接物
-
-Issue 不得只有标题或聊天摘要；至少写明**背景与目标、可验证的验收条件、非目标、已决定的
-关键口径/约束**，以及仍需在 OpenSpec 中落定的决策。这样实现者读取 Issue、仓库约定与
-OpenSpec 即可开工，不依赖任何未共享的会话上下文，也避免把整段聊天、命令日志复制进去消耗
-上下文。
-
-### 2. 实现与 PR：把契约和证据一并交付
-
-Claude Code 先按 Issue 判断流程重量；需要长期留档的变更走 OpenSpec，并遵守下文的认领与
-仓库外 worktree 规则。PR 是给审核者的完整审核包，必须链接 Issue，并包含：对应的
-`openspec/changes/<id>`、本次 spec delta、实现摘要、已运行验证及其结果、已知未覆盖风险。
-
-#### Claude Code 代发 `@codex review`
-
-Codex 评审由 PR 下的 `@codex review` 评论触发（GitHub 上的 Codex 应用响应，评论作者是用户自己的
-GitHub 账号）。**用户在对话里明确要求时（如「让 codex 评审」「再发一轮复审」），Claude Code 直接代发**，
-不必让用户打开网页；没有这类明确要求时仍不自行发送——评审轮次由用户把控，`/deliver-pr`、
-`/fix-review` 的调用本身不构成授权，授权也只对当次要求有效，不延伸到之后的轮次。
-
-代发前先核对：PR 存在且 base 为 `v2`；本地提交已推送，PR 的 `headRefOid` 等于要评审的提交；
-该 SHA 的 CI 已有结果（红灯先报告，由用户决定是否仍发）。发送用：
-
-```bash
-gh pr comment <PR号> --body "@codex review"
-```
-
-可在评论里补一两行"请重点看"的范围，不贴聊天或日志。发完只报告评论链接，不轮询等待评审结果
-（用户之后再调 `/fix-review` 处理）。`@claude` 触发评论仍不代发。
-
-### 3. 审核与修复：独立视角，但不越权改分支
-
-Codex 审核 Issue / OpenSpec / PR diff 是否一致，并检查数据正确性、权限边界、迁移与测试缺口。
-审核在独立的只读 checkout 或 worktree 中进行，**不得直接改 Claude Code 正在开发的 worktree
-或 PR 分支**。发现分为「必须修复」「建议」「疑问」；Claude Code 对每项必须修复逐条修复，
-或说明为何不修复并让审核者确认。只有所有必须修复关闭、相关 CI 与验证通过，才是审核通过。
-
-### 4. 合并与收尾：v2 的 Issue 要手动关闭
-
-审核通过后才合并进 `v2`。GitHub 只会在合并到默认分支时处理 `Closes #...`，而默认分支是
-`main`，所以合进 `v2` 后必须**手动关闭 Issue**。确认合并后，才按下文的收工流程删除远端
-分支与 worktree；评审未结束前保留它们，给 CI 红灯和后续意见留出修复位置。
-
-## 工作分支是 `v2`，不是 `main`
-
-V1 已完成使命并退役，V2 是完整重建（见上文「V2 数据模型」）。**所有工作基于 `v2`**，
-`main` 停在 V1 最后的状态不动，等 V2 整体做完再一次性合并。
-
-两条直接后果：
-
-- **开分支从 `v2` 拉**（`git worktree add -b "change/$ID" ... v2`）。
-- **`gh pr create --base v2` 的 `--base` 不可省。** 仓库的**默认分支是 `main`**，漏掉它会
-  开出一个含上百提交、根本没法读的 PR。开完立刻 `gh pr view` 核一眼 base 对不对。
-
-同理，`Closes #<n>` 在合并进 `v2` 时**不会触发关闭**（GitHub 只在合并进默认分支时关 issue），
-需要手动 `gh issue close`。
-
-**V2 不逐个发布**：各变更合进 `v2` 后不单独上线，整体做完再一次性发布。列剩余工作时不要
-夹带发布步骤。V2 环境与手动触发的发布工作流已经存在（见「Production Environment」），所以
-这条现在的含义是**「不主动发起发布」**，不是「发不了」——是否发布由用户决定，需要时由用户
-触发 `Deploy V2 to ECS`。
-
-## 并行会话：一个变更一个 worktree
-
-**这个仓库经常同时有多个会话在干活。** 默认假设不是「只有我一个人」。
-开工流程见 skill **`start-change`**（认领 → 建 worktree → 收工），下面是它背后的道理。
-
-### 一个变更一个 worktree，路径在仓库外
-
-每个 openspec 变更配一个分支 `change/<变更id>` 和一个 worktree，路径
-`~/.claude-worktrees/<变更id>`——**不要放 `.claude/worktrees/`**。放仓库内，每个
-watcher（uvicorn `--reload`、webpack、pytest 收集）都得单独配排除，漏一个就出事：
-曾有 worktree 让 WatchFiles 把 70 多个文件判为源码变更，连触发 9 次全量重载后
-reloader 直接退出（退出码 144，日志是优雅关闭，极易误判成应用问题）。放仓库外，
-所有 watcher 都看不见它。
-
-worktree 解决的是**共享索引与共享工作树**这两类碰撞：
-
-- `git commit` 提交的是整个索引，别的会话 staged 的文件会被一并带走（真实发生过）
-- 文件在 Read 与 Edit 之间被另一个会话改写，编辑直接失败
-
-### worktree 解决不了的三类，要另外守
-
-1. **重复劳动。** 两个 worktree 不阻止两人做同一件事，只会把撞车从「改到一半」
-   推迟到「合并时」。`openspec list` 只说明变更**存在**，不说明**有人在写代码**——
-   判据是分支：`git branch --list 'change/*'`。开工前查，开工后立刻建分支占位。
-2. **共享测试库。** `keywordiq_test` 是全局的一份。**drop 前必须先查活动连接**
-   （`pg_stat_activity`），无条件 `dropdb` 会把别人正在跑的集成测试拦腰打断，
-   而对方看到的是一堆无从解释的报错。
-
-   **反过来也成立：跑一次全量 pytest 会清空这个库里的业务数据。**
-   `test_import_service_integration.py` 与 `test_oss_ingestion_integration.py` 的夹具在
-   每个测试后 `TRUNCATE analysis.fact_daily, fact_weekly, dim_keyword, dim_product,
-   site_data_stats, import_batch RESTART IDENTITY CASCADE`——它们测的是 `run_import`，
-   而后者内部提交，回滚兜不住，只能靠 TRUNCATE 收尾。所以**别往 `keywordiq_test` 里放
-   你还要用的数据**：`verify-import` 灌进去的真实报表，下一次 `git commit`（门禁会跑
-   全量）就没了，且没有任何提示。要留着就换个库名。
-
-   同理，集成测试里的计数**必须带作用域**（`WHERE site=... AND report_date=...`）。
-   裸 `count(*) FROM analysis.fact_daily` 只在"库里除了我什么都没有"时成立，一旦有别
-   的会话留下的已提交数据就会失败，而报出来的 diff 完全看不出是这个原因。
-3. **共享端口。** 只有主仓跑 dev server（8000/8001）。worktree 里要跑就从变更 id
-   派生端口，不要抢。dev server 被别人杀掉或抢走时，先确认是不是并行会话所致。
-
-### 提交前看索引列
-
-`git status --short` 的**第一列是索引**。看到不属于本次改动的条目，用
-`git commit -- <路径>` 按路径提交，不要裸 `git commit`——后者提交整个索引。
-这条与 worktree 无关，是操作纪律，全面 worktree 化之后同样要守。
-
-**门禁会拦一半。** 索引与工作树对同一文件不一致时（暂存后又改了、或暂存后从磁盘
-删了），裸 `git commit` 被直接拒绝——因为门禁的 ruff / pytest 读的是磁盘，而裸提交
-提交的是索引，两者不一致时那份"跑绿了"的验证描述的不是这次提交的内容。历史上一个
-含未用 import 的文件正是这样进的主干：它被暂存后从磁盘删掉（索引状态 `AD`），
-ruff 根本看不见它。`git commit -a` 与 `git commit -- <路径>` 提交的都是工作树内容，
-与被 lint 的那份一致，故不受此限。
-
-门禁**拦不住**的那一半：索引里那些与你无关、内容又和磁盘一致的文件（别的会话暂存
-好的）——它们看起来完全正常，只有你知道它们不属于这次提交。所以索引列还是得自己看。
-
-> **「暂存区是空的」这件事本身漏过两次，成因不同。** 一次是查错了仓库：会话在
-> worktree 里往主仓提交，门禁查 worktree 的空暂存区，查了个空就放行——现已按**提交
-> 实际落地的仓库**取（`target_repo` 解析 `cd X && git commit` 与 `git -C X commit`），
-> 不按会话 cwd。另一次是查错了地方：`git commit -- <路径>` 提的是工作树内容，暂存区
-> 可以完全是空的，而 `staged_files` 当时只在带 `-a` 时才补看工作树——于是本节推荐的
-> 这条提交方式恰恰是门禁覆盖不到的那条（PR #66 的文案修复那次，20 个文件一条检查
-> 没跑）。现已让路径式提交与 `-a` 走同一条路。
->
-> 两次的共同表现是**没有失败、也没有拦截，输出与"全部检查通过"一模一样**。所以
-> 门禁自己的回归测试（`test/test_pre_commit_hook_unit.py`）里，`staged_files` 那一组
-> 守的不是"检查会不会失败"，而是"门禁到底看不看得见有改动"。
-
-## 开发 harness（提交门禁）
-
-**开工先 `openspec list`。** 手上的活儿很可能正是某个在飞变更里没勾完的任务，
-先看一眼比做完才发现便宜得多。
-
-### 提交门禁
-
-`git commit` 之前会自动按改动范围跑验证，不通过就拒绝提交。挂在 `PreToolUse` 上
-（`.claude/settings.json` → `.claude/hooks/pre_commit.py`），**只卡提交、不卡收尾**——
-改到一半停下来问问题是正常节奏，不该被打断；提交则是「我认为这份改动可以了」的声明，
-在那里要求它是绿的没有歧义。
-
-| 改动范围 | 跑什么 | 耗时 |
-|---|---|---|
-| `app/` `scripts/` `test/` `alembic/` 及顶层 `.py` | `ruff check .` + `pytest test/ -q` | ~5s |
-| `frontend/` | `pnpm lint` + `pnpm tsc` + `pnpm test` | ~30s（其中 vitest 占 ~28s） |
-| `extension/` | `pnpm run typecheck` + `pnpm run test`（在 `extension/` 下） | ~5s |
-| 只有文档 / `openspec/` | 放行 | — |
-
-**这些检查并发跑**（`run_checks`），墙钟是最慢那条而不是各条之和：前后端都改时实测
-从 51 秒降到 42 秒。省不到"总和减最大值"那么多，因为它们要抢 CPU——vitest 本来就按
-核心数起 worker，旁边再跑 pytest 会把它自己拖慢几秒。**失败报告按传入顺序排，不按完成
-顺序**：否则同一份改动两次提交会得到不同顺序的报告，读的人无从判断是不是同一批失败。
-
-本地 `keywordiq_test` 连得上时会自动带上 `TEST_DATABASE_URL` 解开集成测试，连不上就
-只跑单元部分（不因此拒绝提交，CI 有真库兜底）。判据是**真连一次库**而不是探端口——
-本机跑着别的 PostgreSQL 时端口一样是通的，据此喂下去会让集成测试整片失败。
-
-每条检查有 300 秒超时，超时按失败处理。卡住的 pytest（抢咨询锁、半开连接）若没有
-上限，表现是「agent 不动了」而不是「检查没过」，比失败难诊断得多。门禁自身的回归在
-`test/test_pre_commit_hook_unit.py`。
-
-### 铁律检查在哪
-
-分两处，**不重叠**：
-
-- **ruff**（`pyproject.toml` 的 `[tool.ruff.lint]`）——能靠「看一个文件」判定的：
-  事件循环上的阻塞调用（`ASYNC` 组）、未用导入、`banned-api` 拦下的 Pydantic v1 /
-  SQLAlchemy 1.x 导入。
-- **`test/test_conventions.py`**——ruff 表达不了的：配置项与文档的一致性、死配置、
-  `except` 块里丢栈的日志。跑 `uv run pytest -m conventions`，亚秒级、不连库。
-
-新增铁律前先问「ruff 能不能查」，能就别手写。手写的规则**必须自带正反 fixture**
-（违规样本要被抓到、干净样本不能误报）——检查器自己是没人测的检查器，这正是它烂掉的方式。
-
-### 基线棘轮
-
-规则建立之前就存在的违规登记在 `test/conventions_baseline.toml`，被放行，好让门禁
-今天就是绿的。规则同时保证两件事：**新增违规会失败**，且**基线项一旦修好、测试会
-要求你把它从基线删掉**（否则基线会腐烂成永久豁免）。
-
-**基线当前是空的**——建立规则时登记的三笔债已全部清偿。空基线是常态，不是终点：
-下次有规则拦不住又暂时修不了的历史问题，照样往里登记，只要它继续满足「新增会红、
-修好要删」这两条。
-
-已清偿的三笔（留作参照，说明这类问题长什么样）：
-
-- **`user_crud.py` 的返值式错误**——写方法返回 `(success, message, user)` 三元组，
-  读方法用 `except Exception: return []` 吞异常。前者要靠每个调用点自觉检查，
-  API 层为此按中文子串猜状态码（`"不存在" in message` → 404）；后者更糟，全局处理器
-  本会把 `OperationalError` 转成 503，吞掉之后数据库挂了却返回空列表，「查询失败」
-  与「没有用户」再也分不开。现已全部改为抛 `APIError` 子类，那 11 处丢栈日志随之消失
-  ——它们本就是为了把异常压成元组而存在的。
-
-- **`MAX_FILE_SIZE` 曾是死配置**——`.env.example` 与本文件都公示 3GB 上传上限，
-  却没有任何代码读它。现已补上执行点：OSS 路径在 `/oss/import` 触发前 `head_object`
-  称量（直传下字节不经应用服务器，那是服务端唯一能称量文件的时机），本地退路在落盘时
-  边写边计数、超限即中止并删掉半截文件。
-- **连接池的算式曾漏掉一半**——文档写 8/12 且公式是 `(POOL+OVERFLOW) × workers`，
-  但 `database.py` 建了同步与异步**两个**引擎共用同一组配置，真实上限要再乘 2。
-  三处已对齐到 20/10 并写明算式（当前 240）。是否降到 8/12（上限 160）是另一个决定，
-  需先有并发观测数据。
-
-### 项目 skill
-
-- **`start-change`** —— 开始或接手一个变更时先跑它：认领（防止与并行会话重复劳动）、
-  建仓库外的 worktree、收工时按路径提交并清理。**动手写代码之前用**，见上文
-  「并行会话」一节。
-- **`local-db`** —— 起测试库、跑含集成测试的全量回归。注意 `225 passed` 与
-  `181 passed, 45 skipped` 长得很像，跳过的 45 个恰是唯一碰真实分区表与咨询锁的部分。
-  **drop 测试库前先查 `pg_stat_activity`**，别人可能正在用同一个库。
-- **`verify-import`** —— 用真实体量的报表 CSV 跑一遍端到端导入并逐项断言落库结果。
-  改过导入路径就跑一次。
-
-### 项目 command（手动调用）
-
-交付、修复与合并由用户分别触发；流程文件放在 `.claude/commands/`，不另建同名 skill。
-
-- **[`/deliver-pr`](.claude/commands/deliver-pr.md)** —— 按约定检查、commit、push，
-  创建或更新指向 `v2` 的 PR，保留分支/worktree，等待用户手动 `@codex review`。
-- **[`/fix-review [PR号]`](.claude/commands/fix-review.md)** —— 读取 Codex 的普通评论、
-  正式 review 与行内意见，逐项核实、修复、红绿验证、提交、回复并核对当前 SHA 的 CI。
-  不自动触发复审或合并；下一轮由用户再次调用。GitHub 中用 `@claude` 明确要求执行该文件。
-- **[`/close-change [PR号或变更ID]`](.claude/commands/close-change.md)** —— 审核和 CI
-  已通过才合并至 `v2`，转移仍需人工验收的任务、归档 OpenSpec 并推送归档结果，
-  按完成范围手动关闭 Issue，最后清理本变更已合并的分支及干净 worktree。
-  不等待审核、不强制清理、不触碰其他会话资源；已合并的 PR 可重跑以完成剩余收尾。
-
-## 当前部署交接
-
-V2 ECS、OSS 与飞书运维机器人的实时交接状态统一记录在
-[`docs/ops/v2-ecs-handoff.md`](./docs/ops/v2-ecs-handoff.md)。开始任何部署、回调或运维变更前先阅读它；该文件不得记录任何密钥。
+PR 审核、合并前从需求查 task/实际改动/验证，反向从 diff 查批准范围；特别查非目标和砍掉功能是否被实现。
+漏做补实现；超纲移除或先获用户批准再同步 Issue/spec/tasks，不能靠事后补 task 获准。
+证据对应审核 head SHA，后续修改重核受影响部分；归档再核合并结果与验收转移，不能归档时才首次检查。
+发现偏差停止关闭 Issue、留清晰去向；已实现、已验证、待人工验收分别记录。
