@@ -4,9 +4,10 @@
 且日期为空；不回填的话，它们会在各自下一次出现时被导入一个一个顺手补成 ``EARLIEST_OBSERVED``，
 那是一次 UPDATE 风暴（每个被改的词都要在 ``keyword`` 的 GIN 索引上插新条目），所以集中做。
 
-**只产出 ``EARLIEST_OBSERVED``，永不产出 ``CONFIRMED``。** 事实表只留最近三个月，库内最早的
-一条记录不等于这个词的历史首次——更早的可能早被清理。把它写成「已确认」，上线日附近的词
-就会被当成真的首次入榜，而没有任何报错。
+**只产出 ``EARLIEST_OBSERVED``，永不产出 ``IMPORTED``。** 事实表只留最近三个月，库内最早的
+一条记录不等于这个词的历史首次——更早的可能早被清理。把它写成导入创建，上线日附近的词
+就会被当成真的首次入榜，而没有任何报错；它也不得移动站点监测起点（只取 ``IMPORTED`` 行），
+否则回填会让历史每天都「可判断」却显示 0。
 
 口径只有一处：比较键（期次日期，日报优先于周报）与 ``importer._upsert_keywords`` 相同，
 按期次**升序**逐期推进（升序时每个词只在第一次出现的那期被改一次，之后的期次因为更晚而
@@ -194,8 +195,8 @@ def main(argv: list[str] | None = None) -> int:
                         site, stats["periods"], stats["updated"],
                         "（dry-run，未改库）" if args.dry_run else "", before, after,
                     )
-                    if after.get("CONFIRMED", 0) > before.get("CONFIRMED", 0):
-                        logger.error("%s 出现新增的 CONFIRMED——回填不应产生已确认首次，请排查", site)
+                    if after.get("IMPORTED", 0) > before.get("IMPORTED", 0):
+                        logger.error("%s 出现新增的 IMPORTED——回填不应产生导入创建的词，请排查", site)
                         return 4
                     if args.sample and not args.dry_run:
                         total, bad = sample_check(session, site, args.sample)

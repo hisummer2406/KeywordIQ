@@ -51,13 +51,13 @@
 
 用户要求：选哪天，哪天的首次入榜要正确，与导入顺序无关。设计 D2 已改写（见 design.md）。取值 `CONFIRMED` 改名 `IMPORTED`；本变更未上线，直接改同一条迁移，无数据迁移。
 
-- [ ] 8.1 模型与迁移：`first_seen_basis` 取值/列注释改为 `IMPORTED / EARLIEST_OBSERVED / UNKNOWN`（改 `3c8e5b1d7f42`，`test_models_match_migrated_schema` 绿）；全仓 `CONFIRMED` 引用同步（后端、前端、脚本、测试、CLAUDE.md）
-- [ ] 8.2 `importer`：新词条一律记 `IMPORTED`，删除“基线期”分流与对 `min(first_seen_date)` 的读取；`UNKNOWN → EARLIEST_OBSERVED` 与向前修正（D3）不变
-- [ ] 8.3 `analysis_crud`：站点监测起点 `B = min(first_seen_date) WHERE basis='IMPORTED'`（回填不移动 B）；`first_listed_expr` 加 `first_seen_date > B` 且来源 `IMPORTED`；不可判断（日 `d ≤ B`、周 `w-6 ≤ B`、`B` 为空）时筛选不命中任何词；`confirmed_since_stmt` 改为取 `B`；`fact_metric_columns` 同步（分析屏与词库盯盘共用）
-- [ ] 8.4 `analysis_service.get_first_listed`：`judgeable` 按 D4 的日/周条件；`earliest_known_date` 返回 `B`
-- [ ] 8.5 回填脚本：文案/断言按新取值；仍永不写 `IMPORTED`；补测试
-- [ ] 8.6 **顺序无关性测试（真库，验收核心）**：同站点 3 份日报全部 6 种导入顺序，逐行比较 `dim_keyword` 并比较每一天首次入榜数量；2 份日报 + 1 份覆盖它们的周报全部顺序；乱序中途夹一次重复导入；补更早报告后先到的基线词（design D4 例子里的词 E）出现在日视图首次入榜
-- [ ] 8.7 前端：不可判断文案按“不晚于监测起点”；标签仅在 `first_listed` 为真时出现（已满足，核对）；`CACHE_VERSION` / `SAVED_MODE_VERSION` 按字段形状变化决定是否再 +1
+- [x] 8.1 模型与迁移：`first_seen_basis` 取值/列注释改为 `IMPORTED / EARLIEST_OBSERVED / UNKNOWN`（改 `3c8e5b1d7f42`，`test_models_match_migrated_schema` 绿）；全仓 `CONFIRMED` 引用同步（后端、前端、脚本、测试、CLAUDE.md）
+- [x] 8.2 `importer`：新词条一律记 `IMPORTED`，删除“基线期”分流与对 `min(first_seen_date)` 的读取；`UNKNOWN → EARLIEST_OBSERVED` 与向前修正（D3）不变
+- [x] 8.3 `analysis_crud`：站点监测起点 `B = min(first_seen_date) WHERE basis='IMPORTED'`（回填不移动 B）；`first_listed_expr` 加 `first_seen_date > B` 且来源 `IMPORTED`；不可判断（日 `d ≤ B`、周 `w-6 ≤ B`、`B` 为空）时筛选不命中任何词；`confirmed_since_stmt` 改为取 `B`；`fact_metric_columns` 同步（分析屏与词库盯盘共用）
+- [x] 8.4 `analysis_service.get_first_listed`：`judgeable` 按 D4 的日/周条件；`earliest_known_date` 返回 `B`
+- [x] 8.5 回填脚本：文案/断言按新取值；仍永不写 `IMPORTED`；补测试
+- [x] 8.6 **顺序无关性测试（真库，验收核心）**：同站点 3 份日报全部 6 种导入顺序，逐行比较 `dim_keyword` 并比较每一天首次入榜数量；2 份日报 + 1 份覆盖它们的周报全部顺序；乱序中途夹一次重复导入；补更早报告后先到的基线词（design D4 例子里的词 E）出现在日视图首次入榜
+- [x] 8.7 前端：不可判断文案按“不晚于监测起点”；标签仅在 `first_listed` 为真时出现（已满足，核对）；`CACHE_VERSION` / `SAVED_MODE_VERSION` 按字段形状变化决定是否再 +1
 - [ ] 8.8 `CLAUDE.md` 首次入榜一节、PR #141 说明按新口径重写
 - [ ] 8.9 重跑 7.3（真实 CSV，含乱序：先周 07-18、后日 07-18、再补更早周 07-11，对比顺序导入的结果）
-- [ ] 8.10 部署兼容（PR #141 Codex P1-2，expand/contract）：`is_new` 已随 2026-10-19 部署上线，本次迁移**不删列、不删其部分索引**，只给 `is_new` 加 DB 侧 `server_default false`（旧后端窗口内仍可读写，回滚可用）；新代码不再读写它；模型与 `test_models_match_migrated_schema` 为该列做带注释的例外；下个版本单独变更删列，需开 issue 登记
+- [x] 8.10 部署兼容（PR #141 Codex P1-2，expand/contract）：`is_new` 已随 2026-10-19 部署上线，本次迁移**不删列、不删其部分索引**，只给 `is_new` 加 DB 侧 `server_default false`（旧后端窗口内仍可读写，回滚可用）；新代码不再读写它；模型与 `test_models_match_migrated_schema` 为该列做带注释的例外；下个版本单独变更删列，需开 issue 登记

@@ -197,7 +197,7 @@ class FactRowBase(BaseModel):
     first_listed: bool = False
     first_seen_date: _Date | None = Field(None, description="首次入榜的期次日期；依据未知时为空")
     first_seen_basis: str | None = Field(
-        None, description="CONFIRMED 已确认 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知"
+        None, description="IMPORTED 导入创建 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知"
     )
 
     # 掉榜行独有：它唯一能携带的跨期信息，且期次明确标注。

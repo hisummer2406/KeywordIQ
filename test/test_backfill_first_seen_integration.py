@@ -50,7 +50,7 @@ def test_backfill_gives_earliest_observed_never_confirmed(session, tmp_path):
     assert _fs(session, "z") == (D(2026, 7, 18), "WEEK", "EARLIEST_OBSERVED")
     # 库内没有任何事实证据的词保持未知，不被推断
     assert _fs(session, "ghost") == (None, None, "UNKNOWN")
-    assert "CONFIRMED" not in bf.basis_counts(session, "US")
+    assert "IMPORTED" not in bf.basis_counts(session, "US")
 
 
 def test_backfill_is_idempotent(session, tmp_path):
@@ -65,9 +65,9 @@ def test_backfill_is_idempotent(session, tmp_path):
 
 def test_backfill_does_not_touch_confirmed_basis(session, tmp_path):
     _imp(session, tmp_path, "a", ["x"], D(2026, 7, 10))
-    _imp(session, tmp_path, "b", ["c"], D(2026, 7, 12))  # c 是 CONFIRMED
+    _imp(session, tmp_path, "b", ["c"], D(2026, 7, 12))  # c 是 IMPORTED
     bf.backfill_site(session, "US", dry_run=False)
-    assert _fs(session, "c") == (D(2026, 7, 12), "DAY", "CONFIRMED")
+    assert _fs(session, "c") == (D(2026, 7, 12), "DAY", "IMPORTED")
 
 
 def test_sample_check_reports_no_mismatch(session, tmp_path):
