@@ -316,3 +316,29 @@ def test_backfilled_earlier_report_lets_baseline_words_show_up(session, tmp_path
     _imp(session, tmp_path, "early", ["a"], D(2026, 7, 10))
     assert _count(session, "DAY", D(2026, 7, 12)) == 1  # e
     assert _fs(session, "e") == (D(2026, 7, 12), "DAY", "IMPORTED")
+
+
+def test_watch_row_without_current_fact_is_not_first_listed(session, tmp_path):
+    """词库盯盘周视图：词的首次记录落在周窗口内（日报来源），但所选周报里没有它——事实行为空
+    （该期无数据），首次入榜标记必须为假，否则会显示「— 首次入榜」紧挨着「该期无数据」。
+    （PR #141 复审 P2）"""
+    from app.table.keyword import library_crud
+
+    _imp(session, tmp_path, "d10", ["base"], D(2026, 7, 10))
+    _imp(session, tmp_path, "d12", ["base", "w"], D(2026, 7, 12))
+    _imp(session, tmp_path, "w18", ["base"], D(2026, 7, 18), period="WEEK")  # 周报里没有 w
+    uid = session.execute(text(
+        "INSERT INTO analysis.user_center(user_name,hashed_pwd,is_active,is_super) "
+        "VALUES ('fs-watch','x',true,false) RETURNING id")).scalar()
+    gid = session.execute(
+        text("INSERT INTO analysis.keyword_group(user_id,site,name) VALUES (:u,'US','g') "
+             "RETURNING group_id"), {"u": uid}).scalar()
+    session.execute(text(
+        "INSERT INTO analysis.keyword_group_item(group_id,keyword_id) "
+        "SELECT :g, keyword_id FROM analysis.dim_keyword WHERE keyword = 'w'"), {"g": gid})
+
+    stmt = library_crud.watch_stmt(gid, "US", "WEEK", D(2026, 7, 18), order_by="current_ranking",
+                                   order_dir="asc", offset=0, limit=10)
+    rows = library_crud.shape_watch_rows(session.execute(stmt).all())
+    assert [r["status"] for r in rows] == ["MISSING"]
+    assert not rows[0].get("first_listed")
