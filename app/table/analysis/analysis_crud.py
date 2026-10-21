@@ -290,7 +290,9 @@ def fact_metric_columns(fact, dims: FactRowDims, *, site: str, view: str, on: da
         fact.current_ranking.label("current_ranking"),
         fact.previous_ranking.label("previous_ranking"),
         fact.ranking_change.label("ranking_change"),
-        first_listed_expr(site, view, on).label("first_listed"),
+        # 事实行为空（词库盯盘的「该期无数据」/掉榜）时不可能是本期首次入榜：表达式只看
+        # dim_keyword，不加这道门，周视图里日报来源落在窗内的词会在无数据行上也亮标记。
+        and_(fact.keyword_id.is_not(None), first_listed_expr(site, view, on)).label("first_listed"),
         DimKeyword.first_seen_date.label("first_seen_date"),
         DimKeyword.first_seen_basis.label("first_seen_basis"),
         DimProduct.asin.label("top1_asin"),
