@@ -19,7 +19,11 @@ from app.common.request_logging import RequestLoggingMiddleware
 from app.jobs.poller import run_poller
 from app.table.competitor.store_service import refresh_due_store_round
 from app.table.competitor.watch_service import purge_expired_previews_round
-from app.table.upload.import_queue import drain_one_batch_round, reap_stale_uploads_round
+from app.table.upload.import_queue import (
+    drain_one_batch_round,
+    reap_stale_uploads_round,
+    retry_query_stats_round,
+)
 from config import settings
 from database import async_engine, engine
 from monitoring import SystemMonitor
@@ -150,6 +154,7 @@ async def lifespan(app: FastAPI):
                     reap_stale_uploads_round,
                     purge_expired_previews_round,
                     drain_one_batch_round,
+                    retry_query_stats_round,
                     refresh_due_store_round,
                 ],
                 settings.IMPORT_QUEUE_POLL_SECONDS,

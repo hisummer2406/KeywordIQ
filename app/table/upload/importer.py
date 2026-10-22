@@ -34,7 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.site_registry import normalize_site_code
-from app.table.analysis.partitioning import ensure_fact_partitions
+from app.table.analysis.partitioning import ensure_fact_partitions, leaf_partition_name
 from app.table.upload.import_source import ImportSource
 from config import settings
 
@@ -162,6 +162,22 @@ def _validate_period(period: str) -> tuple[str, str, int, int]:
     if period not in _PERIOD_CONFIG:
         raise ImportError_(f"period 只支持 DAY 或 WEEK，收到 {period!r}")
     return _PERIOD_CONFIG[period]
+
+
+def written_fact_tables(period: str) -> list[str]:
+    """一次导入会写入的分区表：当期事实表、掉榜表，日报另有增长表（周报没有「连续 7 天」）。
+
+    建分区与导入后刷新统计都照这一份走——各列一份的话，哪天新增一张派生表只补了建分区，
+    它的统计就永远没人刷新。
+    """
+    table = _validate_period(period)[0]
+    return [table, "fact_dropped", "fact_growth"] if period == "DAY" else [table, "fact_dropped"]
+
+
+def written_leaf_partitions(site: str, period: str, report_date: date) -> list[str]:
+    """一次导入实际写入的叶子分区名（不带 schema）。"""
+    site = normalize_site_code(site)
+    return [leaf_partition_name(t, site, report_date) for t in written_fact_tables(period)]
 
 
 def _raw_cursor(session: Session):
@@ -580,15 +596,13 @@ def import_report(
     调用前应已获得导入串行锁（见 service 层）。会在写事实表前确保分区存在。
     """
     site = normalize_site_code(site)
-    table, _, _, _ = _validate_period(period)
+    _validate_period(period)
 
     validate_structure(source)
-    ensure_fact_partitions(session, table, site, report_date)
-    # 掉榜表也是分区表，写入前同样必须确保分区存在——漏掉的表现是导入到最后一步
+    # 掉榜/增长表也是分区表，写入前同样必须确保分区存在——漏掉的表现是导入到最后一步
     # 才报 "no partition of relation found for row"，前面的事实数据已经写完了。
-    ensure_fact_partitions(session, "fact_dropped", site, report_date)
-    if period == "DAY":
-        ensure_fact_partitions(session, "fact_growth", site, report_date)
+    for table in written_fact_tables(period):
+        ensure_fact_partitions(session, table, site, report_date)
 
     total, staged, skipped = _stage_csv(session, source)
     written = 0

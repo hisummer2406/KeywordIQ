@@ -96,6 +96,18 @@ def site_partition_name(table_name: str, report_date: date, site: str) -> str:
     return f"{month_partition_name(table_name, report_date)}_{normalize_site_code(site).lower()}"
 
 
+def leaf_partition_name(table_name: str, site: str, report_date: date) -> str:
+    """该站点该日期的行实际落入的叶子分区名。
+
+    两级方案是站点子分区，一级方案是月度分区本身。查询按 ``(site, 日期)`` 裁剪后只读
+    这一个叶子，规划器用的也是它的统计——导入后刷新统计要对准的就是这里。
+    """
+    scheme = _validate_table(table_name)
+    if scheme.site_subpartition:
+        return site_partition_name(table_name, report_date, site)
+    return month_partition_name(table_name, report_date)
+
+
 def _validate_table(table_name: str) -> PartitionScheme:
     """校验表名并返回其分区方案。
 

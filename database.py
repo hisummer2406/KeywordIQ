@@ -67,7 +67,11 @@ async_engine = create_async_engine(
         # 而已知的导入期卡死发生在同步引擎——TCP keepalive 已在同步引擎补上。
         # 若将来异步侧也出现半开连接问题，需用 asyncpg 的 socket 层配置单独处理。
         "server_settings": {
-            "timezone": "Asia/Shanghai"
+            "timezone": "Asia/Shanghai",
+            # 交互执行预算（#148）：数据库到点取消语句、释放连接。pool_timeout 只限「等连接」，
+            # 管不了执行——没有它，一条坏计划会无限期占着连接，池耗尽后所有页面一起卡住。
+            # 只设在异步引擎上：导入 / 导出 / 迁移走同步引擎，是合法的长语句。
+            "statement_timeout": str(settings.INTERACTIVE_STATEMENT_TIMEOUT_MS),
         }
     }
 )

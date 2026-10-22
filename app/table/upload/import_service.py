@@ -5,6 +5,8 @@
 - **串行化**：用 PostgreSQL 咨询锁保证同一时刻只有一个导入在跑（2C4G 上两个 GB 级
   导入并发会互相争抢 WAL 与索引构建）。拿不到锁的置为 QUEUED，不并行。
 - **批次记录**：全程记录 site/period/report_date/行数/耗时/状态。
+- **查询统计刷新**（事实提交后、期次可见前）：ANALYZE 本次写入的叶子分区，失败不回滚，
+  批次记 ``stats_status`` 并由导入轮询空闲时重试。
 - **导入后统计回写**（在事实事务提交之后、独立进行）：更新 site_data_stats，并重算
   刚导入那个切片的筛选下拉统计（类目 / 品牌）。
 - **原始文件归档**：成功后移到归档目录（可替换为 OSS）；失败则保留原文件供排查。
@@ -27,6 +29,10 @@ from app.common.errors import CODE_UPLOAD_IMPORT_REJECTED, ConflictError
 from app.site_registry import normalize_site_code
 from app.table.analysis.filter_stats import rebuild_filter_stats
 from app.table.upload.import_batch_model import (
+    STATS_FAILED,
+    STATS_MAX_ATTEMPTS,
+    STATS_PENDING,
+    STATS_READY,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_PROCESSING,
@@ -36,7 +42,8 @@ from app.table.upload.import_batch_model import (
     ImportBatch,
 )
 from app.table.upload.import_source import ImportSource
-from app.table.upload.importer import ImportResult, import_report
+from app.table.upload.importer import ImportResult, import_report, written_leaf_partitions
+from config import settings
 from database import SessionFactory
 
 logger = logging.getLogger(__name__)
@@ -88,6 +95,89 @@ def _update_site_data_stats(session: Session, result: ImportResult) -> None:
         {"site": result.site, "period": result.period, "rdate": result.report_date,
          "n": result.written_rows, "d": result.dropped_rows},
     )
+
+
+def refresh_query_stats(session: Session, *, site: str, period: str, report_date: date) -> None:
+    """对一次导入写入的叶子分区执行 ``ANALYZE``，让规划器统计包含刚写入的期次。不提交。
+
+    **为什么不能等 autovacuum**（#148，design D1）：新期次不在叶子分区的统计（MCV）里时，
+    规划器把整期估成 1 行，选择逐行嵌套循环——实测默认首页 18 s、首次入榜筛选 >120 s，
+    只 ANALYZE 叶子分区（<1 s）就回到 1.3 s 以内。而自动分析要求改动超过分区行数的
+    10%，月中单日导入达不到，统计会滞后好几期。
+
+    只分析叶子：查询按 (site, 日期) 裁剪到叶子，用的就是叶子的统计；维度表实测不需要。
+    ``ANALYZE`` 只取 ShareUpdateExclusive 锁，不阻塞读写。``set_config(..., true)`` 即
+    ``SET LOCAL``，超时只作用于本事务。表名来自分区注册表白名单，可以安全拼进语句。
+    """
+    session.execute(
+        text("SELECT set_config('statement_timeout', :ms, true)"),
+        {"ms": str(settings.IMPORT_ANALYZE_TIMEOUT_SECONDS * 1000)},
+    )
+    schema = settings.DATABASE_SCHEMA
+    for leaf in written_leaf_partitions(site, period, report_date):
+        session.execute(text(f'ANALYZE "{schema}"."{leaf}"'))
+
+
+def _refresh_batch_query_stats(session: Session, batch: ImportBatch) -> bool:
+    """刷新该批次的查询统计并落 ``stats_status``。返回是否成功；**失败不抛**。
+
+    失败不能连累导入：事实已提交，用户要能查到它——慢一点也比「显示无数据」强（那会让
+    人反复重传）。所以这里吞掉异常、记栈、累计失败次数，交给 :func:`retry_pending_query_stats`
+    在空闲时重试，到上限置 FAILED 并在界面上显示出来。
+    """
+    try:
+        refresh_query_stats(
+            session, site=batch.site, period=batch.period_type, report_date=batch.report_date
+        )
+        batch.stats_status = STATS_READY
+        session.commit()
+        return True
+    except Exception:
+        logger.exception("刷新查询统计失败，批次 #%s %s", batch.id, batch.file_name)
+        session.rollback()
+    try:
+        batch.stats_attempts += 1
+        if batch.stats_attempts >= STATS_MAX_ATTEMPTS:
+            batch.stats_status = STATS_FAILED
+        session.commit()
+    except Exception:
+        # 连库都写不进去时（连接断开等）批次停在已提交的 PENDING，重试照样能接手。
+        logger.exception("记录查询统计失败次数时出错，批次 #%s 保持待更新", batch.id)
+        session.rollback()
+    return False
+
+
+def retry_pending_query_stats(
+    *, session_factory: sessionmaker = SessionFactory, limit: int = 10
+) -> int:
+    """重试查询统计待更新的已完成批次，返回本轮尝试的批次数。
+
+    先非阻塞地拿导入串行锁：拿到说明此刻没有导入在跑，``PENDING`` 只可能是刷新失败或
+    导入进程中途退出留下的；拿不到就跳过本轮——不等锁，也不和导入抢 IO。``limit`` 让
+    一轮的工作量有界，积压的留给下一轮。
+
+    同一期被重导过的旧批次不特殊处理：它分析的是同一组分区，结果同样有效。
+    """
+    session = session_factory()
+    try:
+        with import_lock(session) as got_lock:
+            if not got_lock:
+                return 0
+            batches = session.scalars(
+                select(ImportBatch)
+                .where(
+                    ImportBatch.status == STATUS_COMPLETED,
+                    ImportBatch.stats_status == STATS_PENDING,
+                )
+                .order_by(ImportBatch.id)
+                .limit(limit)
+            ).all()
+            for batch in batches:
+                if _refresh_batch_query_stats(session, batch):
+                    logger.info("查询统计重试成功，批次 #%s %s", batch.id, batch.file_name)
+            return len(batches)
+    finally:
+        session.close()
 
 
 def _rebuild_filter_stats(session: Session, result: ImportResult) -> None:
@@ -241,7 +331,13 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
             session, site=batch.site, period=batch.period_type,
             report_date=batch.report_date, source=source,
         )
+        # PENDING 与事实同一事务提交：进程若在下面刷新统计之前退出，重试任务仍能接手。
+        batch.stats_status = STATS_PENDING
         session.commit()
+
+        # 刷新查询统计必须在 site_data_stats 之前——写入它的那一刻新期次就出现在日期选择器
+        # 里，用户第一次能选到这一期时计划就该是对的。失败不抛，见该函数说明。
+        _refresh_batch_query_stats(session, batch)
 
         # 导入后处理：两类统计回写，在事实事务之外。都只涉及刚导入的那个切片。
         _update_site_data_stats(session, result)
@@ -279,6 +375,9 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
             batch.status = STATUS_FAILED
             batch.error_message = str(exc)[:2000]
             batch.processing_seconds = int(time.monotonic() - started)
+            # 未成功的批次查询统计「不适用」：它可能已提交过 PENDING，不清掉的话界面会
+            # 在一个失败批次上提示「统计待更新」。
+            batch.stats_status = None
             session.commit()
         except Exception:
             logger.exception("写入失败状态时再次出错，批次记录可能停留在 PROCESSING")
