@@ -15,7 +15,7 @@
 
 轮询节奏、任务优先级、取消与顶层异常隔离**不在这个文件里**，那是 `app/jobs/poller.py`
 的职责；本文件只暴露 `reap_stale_uploads_round` / `drain_one_batch_round` 两个
-`async () -> bool` 的"一轮工作"入口，由 `main.py` 的 lifespan 组装进 job 列表。
+`async () -> bool` 的"一轮工作"入口（另有 `retry_query_stats_round` 重试导入后的查询统计刷新），由 `main.py` 的 lifespan 组装进 job 列表。
 竞对领域的预览清理与独立站拉取分别在 `app/table/competitor/watch_service.py` 与
 `app/table/competitor/store_service.py` 里暴露各自的入口，同样不在这里。
 """
@@ -27,7 +27,11 @@ import logging
 from starlette.concurrency import run_in_threadpool
 
 from app.table.upload import oss_client
-from app.table.upload.import_service import drain_import_queue, reap_stale_uploads
+from app.table.upload.import_service import (
+    drain_import_queue,
+    reap_stale_uploads,
+    retry_pending_query_stats,
+)
 from app.table.upload.import_source import ImportSource, OSSObjectSource
 from app.table.upload.oss_client import OSSObjectNotFound
 from config import settings
@@ -92,3 +96,17 @@ async def drain_one_batch_round() -> bool:
         return False
     logger.info("排队批次已接手完成 %s: 状态=%s", batch.file_name, batch.status)
     return True
+
+
+async def retry_query_stats_round() -> bool:
+    """轮询 job：重试查询统计待更新的批次（#148）。是维护性任务，恒返回 ``False``。
+
+    排在 ``drain_one_batch_round`` 之后：接到排队批次时那一轮会提前重来，这里自然只在
+    队列空了之后才跑，不拖慢排队中的导入。拿锁、有界、失败计数都在
+    ``retry_pending_query_stats`` 里；异常自己吞掉记栈，不打断同轮其余 job。
+    """
+    try:
+        await run_in_threadpool(retry_pending_query_stats)
+    except Exception:
+        logger.exception("重试查询统计时出错，本轮跳过")
+    return False

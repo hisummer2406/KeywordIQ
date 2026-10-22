@@ -6,6 +6,7 @@ import {
 } from '@ant-design/icons';
 import { Space, Tag, Typography } from 'antd';
 import type { ReactNode } from 'react';
+import type { ImportStatsStatus } from '@/services/upload';
 
 const { Text } = Typography;
 
@@ -38,6 +39,15 @@ export const STATUS_META: Record<
   FAILED: { label: '失败', color: 'error', icon: <CloseCircleOutlined /> },
 };
 
+/**
+ * 已完成批次的查询统计说明。数据已经入库可查，只是新期次的查询统计还没刷新上，查询可能
+ * 暂时较慢——不说出来，用户看到慢会以为没导进去、去重传。READY 与 null（不适用）不打扰。
+ */
+export const STATS_HINT: Partial<Record<NonNullable<ImportStatsStatus>, string>> = {
+  PENDING: '查询统计待更新，该期查询可能暂时较慢',
+  FAILED: '查询统计更新失败，该期查询可能较慢，请联系管理员',
+};
+
 /** 状态码 → 中文名。未知状态码原样返回，不吞掉。 */
 export function statusLabel(status: string) {
   return STATUS_META[status]?.label ?? status;
@@ -55,6 +65,8 @@ export interface ImportStatusCellProps {
   errorMessage?: string;
   /** 失败原因过长时截断为几行；不传则不截断（看板用）。 */
   ellipsisRows?: number;
+  /** 查询统计状态，只在 COMPLETED 时参与说明。 */
+  statsStatus?: ImportStatsStatus;
 }
 
 /**
@@ -63,10 +75,16 @@ export interface ImportStatusCellProps {
  * 失败时说明是错误信息，其余状态是该状态自带的提示。历史屏不提供详情视图，失败原因
  * 若在列表里读不到，用户就无从判断该不该重导——所以这一格不能只有一个 Tag。
  */
-export function ImportStatusCell({ status, errorMessage, ellipsisRows }: ImportStatusCellProps) {
+export function ImportStatusCell({
+  status,
+  errorMessage,
+  ellipsisRows,
+  statsStatus,
+}: ImportStatusCellProps) {
   const meta = STATUS_META[status];
   // 未知状态码原样显示，不吞掉——吞掉会让新状态在界面上表现为「这一格空了」
-  const note = status === 'FAILED' ? errorMessage : meta?.hint;
+  const statsHint = status === 'COMPLETED' && statsStatus ? STATS_HINT[statsStatus] : undefined;
+  const note = status === 'FAILED' ? errorMessage : (statsHint ?? meta?.hint);
   const clamp = Boolean(ellipsisRows);
   return (
     // Space 默认是 inline-flex，宽度由内容撑开。不给 width:100% + minWidth:0，

@@ -15,16 +15,19 @@ import csv
 import io
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.common.errors import (
+    CODE_ANALYSIS_BUSY,
     CODE_ANALYSIS_EXPORT_TOO_LARGE,
     CODE_ANALYSIS_SCOPE_INVALID,
     PayloadTooLargeError,
+    ServiceUnavailableError,
     UnprocessableError,
 )
 from app.site_registry import UnknownSiteError, normalize_site_code
@@ -69,6 +72,55 @@ class ExportTooLargeError(PayloadTooLargeError):
 
     code = CODE_ANALYSIS_EXPORT_TOO_LARGE
     message = "导出结果超出上限"
+
+
+class AnalysisBusyError(ServiceUnavailableError):
+    """分析查询并发已满且排队超时 → 503，稍后重试有意义。"""
+
+    code = CODE_ANALYSIS_BUSY
+    message = "查询繁忙，请稍后重试"
+
+
+# 分析查询的并发闸（#148，design D4）：每个 worker 一把，绑定在创建它的事件循环上——
+# asyncio.Semaphore 首次争用时会绑定 loop，生产每个 worker 只有一个 loop，测试则每个用例
+# 一个，故按 loop 惰性重建。
+_search_gate: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
+
+
+def _search_semaphore() -> asyncio.Semaphore:
+    global _search_gate
+    loop = asyncio.get_running_loop()
+    if _search_gate is None or _search_gate[0] is not loop:
+        _search_gate = (loop, asyncio.Semaphore(settings.ANALYSIS_MAX_CONCURRENT_SEARCHES))
+    return _search_gate[1]
+
+
+@asynccontextmanager
+async def search_slot() -> AsyncIterator[None]:
+    """占一个分析查询并发位，排队超过上限抛 :class:`AnalysisBusyError`。
+
+    一次 search 顺序发 4–6 条 SQL、全程占一条异步连接；不设上限时一批慢查询能把异步池
+    （每 worker 8+8）占满，鉴权、作用域这些轻量请求跟着拿不到连接。排队也必须有界——无界
+    等待只是把「池耗尽」换成「请求堆积」。连接是第一次 execute 时才取的，所以排队中的请求
+    不占连接。
+
+    用 ``asyncio.timeout`` 而不是 ``wait_for``：3.11 的 ``wait_for`` 在「刚拿到许可就超时」
+    时会丢掉这个许可，闸就此永久少一格。``acquired`` 记下是否真的拿到，``finally`` 只还拿到的。
+    """
+    semaphore = _search_semaphore()
+    acquired = False
+    try:
+        try:
+            async with asyncio.timeout(settings.ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS):
+                acquired = await semaphore.acquire()
+        except TimeoutError:
+            logger.warning("分析查询排队超时，返回繁忙（并发上限 %d）",
+                           settings.ANALYSIS_MAX_CONCURRENT_SEARCHES)
+            raise AnalysisBusyError() from None
+        yield
+    finally:
+        if acquired:
+            semaphore.release()
 
 
 # 导出列：与列表屏保持一致的中文表头。两视图都有趋势附加信息，表头明确回溯单位。

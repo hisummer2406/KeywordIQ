@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, Date, DateTime, Index, Integer, SmallInteger, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.table.analysis.column_comments import (
@@ -49,6 +49,16 @@ STATUS_UPLOADING = "UPLOADING"
 VALID_STATUSES = frozenset({
     STATUS_UPLOADING, STATUS_QUEUED, STATUS_PROCESSING, STATUS_COMPLETED, STATUS_FAILED,
 })
+
+# 查询统计状态（``stats_status``）：导入写入的叶子分区在期次可见前要刷新一次规划器统计，
+# 否则新期次不在统计里、被估成 1 行，查询退化成逐行嵌套循环（#148 实测 18–31 s，首次入榜
+# 筛选 >120 s；刷新后 ≤1.3 s）。刷新失败不回滚数据，靠这个状态让失败可见、可被重试。
+# NULL = 不适用（迁移前的旧批次、未成功导入的批次）。
+STATS_PENDING = "PENDING"
+STATS_READY = "READY"
+STATS_FAILED = "FAILED"
+"""重试次数用尽，不再自动重试；之后只能靠 autovacuum 或人工兜底。"""
+STATS_MAX_ATTEMPTS = 3
 
 PERIOD_DAY = "DAY"
 PERIOD_WEEK = "WEEK"
@@ -84,6 +94,14 @@ class ImportBatch(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    stats_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True,
+        comment="查询统计状态：PENDING/READY/FAILED；NULL 为不适用（旧批次或未成功导入）",
+    )
+    stats_attempts: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default="0",
+        comment="查询统计刷新已失败的次数，达到上限后置 FAILED 不再重试",
+    )
 
     __table_args__ = (
         # 按站点追溯导入历史。
