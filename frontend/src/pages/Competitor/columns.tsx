@@ -1,6 +1,6 @@
 import type { ProColumns } from '@ant-design/pro-components';
 import { Popconfirm, Select, Tag, Tooltip, Typography } from 'antd';
-import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
+import { SiteCodeLabel } from '@/pages/Analysis/siteLabel';
 import type { CompetitorGroup, WatchRow, WatchStatus } from '@/services/competitor';
 import type { SiteOption } from '@/services/upload';
 
@@ -83,11 +83,7 @@ export function buildWatchColumns(
       title: '站点',
       dataIndex: 'site',
       width: 90,
-      render: (_, row) => (
-        <span>
-          {siteCodeToFlag(row.site)} {row.site}
-        </span>
-      ),
+      render: (_, row) => <SiteCodeLabel code={row.site} />,
     },
     {
       title: '分组',
