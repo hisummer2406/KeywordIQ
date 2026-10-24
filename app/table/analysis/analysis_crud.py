@@ -147,7 +147,7 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     return any(
         v is not None
         for v in (
-            req.keyword, req.asin, req.product_title,
+            req.keyword, req.asins, req.product_title,
             req.brands or None, req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
             req.conversion_share_min, req.conversion_share_max, req.first_listed or None,
@@ -509,15 +509,21 @@ def _apply_filters(
                 )
                 .exists()
             )
-    # ASIN 是精确码，**等值匹配**：先解析出单个 product_id（走 `uq_dim_product_asin`
-    # 唯一索引），再对三个商品槽位做 OR——之前只匹配 top1，把一个实际排第二、第三名次
-    # 的 ASIN 粘进搜索框会查不到任何结果，这个限制对用户不可见（issue #56 P2）。
-    # 大小写与空白已由请求模型规范化（见 AnalysisSearchRequest._normalise_asin），
+    # ASIN 是精确码，**集合等值匹配**：先解析出 product_id 集合（走 `uq_dim_product_asin`
+    # 唯一索引，最多 100 个点查），再对三个商品槽位做 OR——之前只匹配 top1，把一个实际排
+    # 第二、第三名次的 ASIN 粘进搜索框会查不到任何结果，这个限制对用户不可见（issue #56 P2）。
+    # 每个关键词在切片里只有一行，命中几个槽位、几个 ASIN 都不会产生重复行（#150）；
+    # 未收录的 ASIN 在子查询里没有 product_id，不影响其余 ASIN。
+    # 大小写、空白与去重已由请求模型规范化（见 AnalysisSearchRequest._normalise_asins），
     # 这里不再兜一遍——两处各规范一次，改动时漏掉一处就会静默分叉。
-    if req.asin:
-        pid = select(DimProduct.product_id).where(DimProduct.asin == req.asin).scalar_subquery()
+    if req.asins:
+        pids = select(DimProduct.product_id).where(DimProduct.asin.in_(req.asins))
         stmt = stmt.where(
-            or_(fact.top1_product_id == pid, fact.top2_product_id == pid, fact.top3_product_id == pid)
+            or_(
+                fact.top1_product_id.in_(pids),
+                fact.top2_product_id.in_(pids),
+                fact.top3_product_id.in_(pids),
+            )
         )
     if req.product_title:
         stmt = stmt.where(DimProduct.title.ilike(f"%{req.product_title}%"))

@@ -83,7 +83,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
 
-    await user.type(screen.getByPlaceholderText(/输入 ASIN 或关键词/), 'coffee');
+    await user.type(screen.getByLabelText('搜索内容'), 'coffee');
     await user.click(screen.getByRole('button', { name: '1~100' }));
     await user.click(screen.getByRole('checkbox', { name: /Electronics/ }));
     await settle();
@@ -207,30 +207,42 @@ describe('分析查询屏 · 作用域与筛选', () => {
     expect(searchAnalysis.mock.calls[1][0].categories).toBeUndefined();
   });
 
-  it('检索框按输入格式判定检索目标并回显', async () => {
+  it('检索目标由所选搜索方式决定，切换后另一目标不残留', async () => {
     await renderSettled();
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
-    const box = screen.getByPlaceholderText(/输入 ASIN 或关键词/);
+    const box = screen.getByLabelText('搜索内容');
+    const pickMode = async (label: string) => {
+      fireEvent.mouseDown(document.querySelector('.scope-bar__mode .ant-select-selector')!);
+      fireEvent.click(await screen.findByText(label, { selector: '.ant-select-item-option-content' }));
+    };
 
+    // 关键词方式下形如 ASIN 的输入仍按关键词查
     await user.type(box, 'B07Z82895W');
-    expect(screen.getByText('按 ASIN 检索')).toBeInTheDocument();
     await act(async () => {
       await user.click(submit());
     });
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
-    expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ asin: 'B07Z82895W' });
-    expect(searchAnalysis.mock.calls[1][0].keyword).toBeUndefined();
+    expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ keyword: 'B07Z82895W', keyword_mode: 'ALL_TERMS' });
+    expect(searchAnalysis.mock.calls[1][0].asins).toBeUndefined();
 
+    await pickMode('ASIN · 批量');
+    await user.clear(box);
+    await user.type(box, 'b07z82895w, 3161484100{Enter}');
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
+    expect(searchAnalysis.mock.calls[2][0]).toMatchObject({ asins: ['B07Z82895W', '3161484100'] });
+    expect(searchAnalysis.mock.calls[2][0].keyword).toBeUndefined();
+    expect(searchAnalysis.mock.calls[2][0].keyword_mode).toBeUndefined();
+
+    await pickMode('关键词 · 词组');
     await user.clear(box);
     await user.type(box, 'coffee maker');
-    expect(screen.getByText('按关键词检索')).toBeInTheDocument();
     await act(async () => {
       await user.click(submit());
     });
-    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
-    expect(searchAnalysis.mock.calls[2][0]).toMatchObject({ keyword: 'coffee maker' });
-    expect(searchAnalysis.mock.calls[2][0].asin).toBeUndefined();
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(4));
+    expect(searchAnalysis.mock.calls[3][0]).toMatchObject({ keyword: 'coffee maker', keyword_mode: 'PHRASE' });
+    expect(searchAnalysis.mock.calls[3][0].asins).toBeUndefined();
   });
 
   /**
@@ -243,7 +255,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
 
-    await user.type(screen.getByPlaceholderText(/输入 ASIN 或关键词/), 'coffee maker');
+    await user.type(screen.getByLabelText('搜索内容'), 'coffee maker');
     await act(async () => {
       await user.click(submit());
     });
@@ -251,7 +263,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ keyword_mode: 'ALL_TERMS' });
 
     fireEvent.mouseDown(document.querySelector('.scope-bar__mode .ant-select-selector')!);
-    fireEvent.click(await screen.findByText('连续词组', { selector: '.ant-select-item-option-content' }));
+    fireEvent.click(await screen.findByText('关键词 · 词组', { selector: '.ant-select-item-option-content' }));
     await act(async () => {
       await user.click(submit());
     });

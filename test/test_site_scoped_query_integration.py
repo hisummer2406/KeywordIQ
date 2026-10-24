@@ -516,8 +516,8 @@ async def test_brand_filter_matches_any_of_top_three(db):
 async def test_asin_filter_is_exact_not_substring(db):
     """ASIN 按等值匹配，片段不再命中。
 
-    这是一次**有意的能力收窄**（issue #49）：ASIN 只能从顶部检索框输入，而那里只有整串
-    匹配 ``^B0[A-Z0-9]{8}$`` 才会路由到这个字段——片段本来就到不了后端。换来的是
+    这是一次**有意的能力收窄**（issue #49）：ASIN 只在检索框选了「ASIN · 批量」时才发出，
+    按整个编号匹配，片段不当作 ASIN（#150 前是按 ``^B0…`` 格式路由，同样到不了后端）。换来的是
     ``dim_product`` 上 409 MB 的 asin GIN trgm 索引可以删掉；它由每次导入的每一行写入
     维护，而等值匹配走 ``uq_dim_product_asin`` 唯一索引就够。
 
@@ -527,11 +527,11 @@ async def test_asin_filter_is_exact_not_substring(db):
     await db.run_sync(_seed)
     kids = await db.run_sync(_seed_top_slots)
 
-    hit, resp = await _row_for(db, kids["kw-full"], asin="B0SLOT00001")
+    hit, resp = await _row_for(db, kids["kw-full"], asins=["B0SLOT00001"])
     assert hit is not None
     assert resp.total == 2  # kw-full 与 kw-partial 共用同一个第一名商品
 
-    miss, resp = await _row_for(db, kids["kw-full"], asin="SLOT0000")
+    miss, resp = await _row_for(db, kids["kw-full"], asins=["SLOT0000"])
     assert miss is None
     assert resp.total == 0
 
@@ -539,14 +539,14 @@ async def test_asin_filter_is_exact_not_substring(db):
 async def test_asin_filter_accepts_lower_case_input(db):
     """小写输入照样命中——规范化在请求模型里做。
 
-    检索框的判定正则带 ``/i``，小写整串同样被路由到 asin 字段，而等值匹配区分大小写。
+    用户常粘贴小写编号，而等值匹配区分大小写。
     漏掉规范化的表现是「明明是正确的 ASIN 却查不到」，而界面上没有任何东西提示大小写
     要紧——旧的 ``ILIKE`` 把这件事隐含地办了。
     """
     await db.run_sync(_seed)
     kids = await db.run_sync(_seed_top_slots)
 
-    hit, _ = await _row_for(db, kids["kw-full"], asin="b0slot00001")
+    hit, _ = await _row_for(db, kids["kw-full"], asins=["b0slot00001"])
     assert hit is not None
 
 
@@ -561,9 +561,53 @@ async def test_asin_filter_hits_second_and_third_slot(db):
     kids = await db.run_sync(_seed_top_slots)
 
     for asin in ("B0SLOT00001", "B0SLOT00002", "B0SLOT00003"):
-        hit, resp = await _row_for(db, kids["kw-full"], asin=asin)
+        hit, resp = await _row_for(db, kids["kw-full"], asins=[asin])
         assert hit is not None, f"{asin} 在前三商品槽位里，应当命中"
         assert resp.total >= 1
+
+
+async def test_asin_batch_hits_any_slot_once_and_ignores_unknown(db):
+    """**批量任意命中**（#150）：同一关键词被两个 ASIN、两个槽位同时命中只出一行、只计一次；
+    未收录的编号不影响其余编号。
+
+    kw-full 三槽位齐全、kw-partial 只有前两个。用第一名与第三名查：kw-full 两个槽位都中，
+    kw-partial 只中第一名——两个词各一行，总数 2，而不是按命中次数算出的 3。
+    """
+    await db.run_sync(_seed)
+    kids = await db.run_sync(_seed_top_slots)
+
+    resp = await service.search(
+        db,
+        AnalysisSearchRequest(
+            site=SITE, view="DAY", date=D3, perPage=100,
+            asins=["B0SLOT00001", "b0slot00003", "B0NOTEXIST", "B0SLOT00001"],
+        ),
+        user_id=USER_ID,
+    )
+    ids = [r["keyword_id"] for r in resp.data]
+    assert sorted(ids) == sorted([kids["kw-full"], kids["kw-partial"]])
+    assert resp.total == 2
+
+    # 只用第三名查：kw-partial 没有第三名，不该被带出来
+    hit, resp = await _row_for(db, kids["kw-partial"], asins=["B0SLOT00003", "B0NOTEXIST"])
+    assert hit is None
+    assert resp.total == 1
+
+
+async def test_asin_batch_combines_with_other_filters(db):
+    """ASIN 集合与其余筛选按 AND 组合：ASIN 命中两个词，排名区间排除掉其中全部时结果为空。"""
+    await db.run_sync(_seed)
+    await db.run_sync(_seed_top_slots)
+
+    resp = await service.search(
+        db,
+        AnalysisSearchRequest(
+            site=SITE, view="DAY", date=D3, perPage=100,
+            asins=["B0SLOT00001", "B0SLOT00002"], ranking_max=10,
+        ),
+        user_id=USER_ID,
+    )
+    assert resp.total == 0  # 两个词的当期排名都是 30
 
 
 async def test_share_filter_only_considers_first_slot(db):
