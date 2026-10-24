@@ -16,7 +16,7 @@
 - [x] 3.2 不需要：3.1 已证明首选成立，备选（归还连接前 `pg_cancel_backend`）不实现
 - [x] 3.3 后端断开监听（`receive()` 上的 `http.disconnect`），核对与 `RequestLoggingMiddleware` 的兼容；开关 `ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED`；配置同步 `.env.example`。`app/common/disconnect.py` + `search_data` 接线 + 异步引擎 `client_connection_check_interval` + 摘要 `client_disconnected`；`test/test_cancel_on_disconnect.py` 8 例（单元 6、真库 2），经真实 ASGI 调用验证中间件透传断开；负对照：间隔设 0 时真库用例失败（语句仍在执行），1000 时通过
 - [x] 3.4 多用户回归：A 断开不影响 B；已完成请求断开不误伤后续使用者。真库用例中被取消语句停止的同时，同池并发的另一会话正常完成、池可继续使用；请求先完成时断开监听被取消、查询结果原样返回（单元用例），不会对连接发出任何取消
-- [ ] 3.5 前端：`searchAnalysis` 支持 `AbortSignal`，切换条件中止旧请求、被中止不进错误态；补前端测试（由用户运行）
+- [x] 3.5 前端：`searchAnalysis` 支持 `AbortSignal`，切换条件中止旧请求、被中止不进错误态；补前端测试（由用户运行）。`useAnalysisQuery` 每次调用先中止上一次在飞的请求；被中止的调用等最新一次结束后以 `success: false` 收尾（ProTable 不采用、不报错，也不会在新请求在飞时提前关掉加载态）；全局 `errorHandler` 对 `ERR_CANCELED` 不弹提示。补 `app.test.ts`、`requestFailure.test.tsx` 各 1 例。卸载页面时不中止在飞请求（会话快照仍需它落地），不在本项范围
 - [ ] 3.6 生产链路验证（发布后、用户授权）：经 nginx 中止请求，确认后端检测到断开且数据库停止
 
 ## 4. 阶段二：请求去重（闸门：2.2 指纹统计 + 1.2）

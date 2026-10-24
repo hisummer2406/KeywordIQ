@@ -210,6 +210,12 @@ export const request: RequestConfig = {
   ],
   errorConfig: {
     errorHandler(error: any) {
+      // 调用方主动中止的请求（如分析查询切换条件时中止旧请求，#154）不是失败：axios 的
+      // CanceledError 带着 `request` 却没有 `response`，不先拦住会落进下面的「服务器无响应」。
+      // 照常抛回，由调用方按中止处理。
+      if (error?.code === 'ERR_CANCELED') {
+        throw error;
+      }
       const status = error?.response?.status;
       const body: ApiErrorBody | undefined = error?.response?.data;
 

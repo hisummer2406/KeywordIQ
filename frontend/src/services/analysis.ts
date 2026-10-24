@@ -152,8 +152,16 @@ export interface CategoryOption {
   count: number;
 }
 
-export async function searchAnalysis(body: SearchBody) {
-  return request<SearchResponse>('/api/analysis/search', { method: 'POST', data: body });
+/**
+ * `signal` 中止后浏览器断开连接，后端据此取消查询、数据库停止执行（#154）；
+ * 被中止的调用以 axios 的 `CanceledError` 拒绝，全局错误处理不为它弹提示。
+ */
+export async function searchAnalysis(body: SearchBody, options?: { signal?: AbortSignal }) {
+  return request<SearchResponse>('/api/analysis/search', {
+    method: 'POST',
+    data: body,
+    signal: options?.signal,
+  });
 }
 
 /**

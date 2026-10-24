@@ -161,6 +161,14 @@ describe('全局 errorHandler', () => {
     expect(() => handler({ request: {} })).toThrow();
     expect(messageError).toHaveBeenCalledWith('服务器无响应，请稍后重试');
   });
+
+  it('调用方主动中止的请求照常抛回，不弹任何提示（#154）', () => {
+    // axios 的 CanceledError 带 request、没有 response，形状上与「网络不通」只差 code
+    const canceled = { code: 'ERR_CANCELED', name: 'CanceledError', request: {} };
+    expect(() => handler(canceled)).toThrow();
+    expect(messageError).not.toHaveBeenCalled();
+    expect(messageWarning).not.toHaveBeenCalled();
+  });
 });
 
 /**

@@ -198,6 +198,7 @@ describe('分析查询屏 · 工具栏、总数与导出', () => {
     await waitFor(() =>
       expect(searchAnalysis).toHaveBeenLastCalledWith(
         expect.objectContaining({ orderBy: 'top1_click_share', orderDir: 'desc' }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       ),
     );
 
