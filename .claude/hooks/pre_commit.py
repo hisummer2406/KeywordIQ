@@ -21,6 +21,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # 后端改动的判定路径。alembic/ 也算：迁移写错会让整个部署起不来。
 BACKEND_PREFIXES = ("app/", "scripts/", "test/", "alembic/")
@@ -208,7 +209,11 @@ def _commits_all(command: str) -> bool:
     return False
 
 
-def _port_open(host: str = "localhost", port: int = 5432) -> bool:
+def _port_open() -> bool:
+    # 主机与端口取自 TEST_DB_URL，不另写默认值：曾默认 5432，测试库挪到 5433 后，5432 上
+    # 别的项目的 PG 一停，这里就判「没起库」，集成测试又整片静默跳过（PR #157 Codex 复审）。
+    url = urlsplit(TEST_DB_URL)
+    host, port = url.hostname or "localhost", url.port or 5432
     try:
         with socket.create_connection((host, port), timeout=0.4):
             return True
