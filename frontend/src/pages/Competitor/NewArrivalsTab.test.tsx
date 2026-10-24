@@ -1,7 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
 
 const { listNewArrivals, getProductHistory, getAsinDetail } = vi.hoisted(() => ({
   listNewArrivals: vi.fn(),
@@ -118,8 +117,8 @@ describe('同一 seller_id 跨站点卖同一 ASIN', () => {
 
     // 两行都渲染出来了（没有因为 rowKey 撞车而互相顶掉）
     expect((await screen.findAllByText('A1TZ946F8HZTNY')).length).toBe(2);
-    expect(screen.getByText(siteCodeToFlag('US'))).toBeTruthy();
-    expect(screen.getByText(siteCodeToFlag('GB'))).toBeTruthy();
+    expect(screen.getByText('US')).toBeTruthy();
+    expect(screen.getByText('GB')).toBeTruthy();
   });
 });
 
