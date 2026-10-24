@@ -126,7 +126,12 @@ export default function ImportHistoryPage() {
       valueType: 'select',
       valueEnum: STATUS_ENUM,
       render: (_, row) => (
-        <ImportStatusCell status={row.status} errorMessage={row.error_message} ellipsisRows={2} />
+        <ImportStatusCell
+          status={row.status}
+          errorMessage={row.error_message}
+          statsStatus={row.stats_status}
+          ellipsisRows={2}
+        />
       ),
     },
     {

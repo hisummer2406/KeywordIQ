@@ -191,7 +191,11 @@ export default function UploadPage() {
                 title: '状态',
                 dataIndex: 'status',
                 render: (_: unknown, row: ImportStatusItem) => (
-                  <ImportStatusCell status={row.status} errorMessage={row.error_message} />
+                  <ImportStatusCell
+                    status={row.status}
+                    errorMessage={row.error_message}
+                    statsStatus={row.stats_status}
+                  />
                 ),
               },
             ]}

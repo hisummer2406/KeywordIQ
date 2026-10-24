@@ -45,6 +45,7 @@ def _batch(**overrides):
         error_message="COPY 中断",
         created_at=datetime(2026, 7, 13, 3, 0, 0),
         completed_at=None,
+        stats_status=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -164,6 +165,14 @@ def test_list_row_marks_local_import_as_not_retained(monkeypatch):
     client = TestClient(_build_app(monkeypatch, rows=[_batch(object_key="")]))
     r = client.get("/api/upload/batches")
     assert r.json()["data"][0]["source_retained"] is False
+
+
+def test_list_row_carries_query_stats_status(monkeypatch):
+    """界面据此在「已完成」下提示查询可能较慢；null（旧批次）原样回 null，不伪装成就绪。"""
+    rows = [_batch(id=1, status="COMPLETED", stats_status="PENDING"), _batch(id=2)]
+    client = TestClient(_build_app(monkeypatch, rows=rows))
+    data = client.get("/api/upload/batches").json()["data"]
+    assert [d["stats_status"] for d in data] == ["PENDING", None]
 
 
 def test_list_rejects_per_page_over_cap(monkeypatch):

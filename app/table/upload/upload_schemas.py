@@ -99,6 +99,9 @@ class ImportBatchRow(BaseModel):
     source_retained: bool = Field(
         ..., description="原始文件是否仍可据以重导（本地退路导入的批次为 false）"
     )
+    stats_status: str | None = Field(
+        None, description="查询统计状态 PENDING/READY/FAILED；null 为不适用（旧批次或未成功导入）"
+    )
 
     @classmethod
     def from_batch(cls, batch) -> "ImportBatchRow":
@@ -117,4 +120,5 @@ class ImportBatchRow(BaseModel):
             created_at=batch.created_at,
             completed_at=batch.completed_at,
             source_retained=bool(batch.object_key),
+            stats_status=batch.stats_status,
         )
