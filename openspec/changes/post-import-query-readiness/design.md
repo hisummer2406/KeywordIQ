@@ -56,7 +56,9 @@ R2 关键节点：`fact_daily_2026_05_us` 估计 1 行、实际 377,060 行，�
 
 中途退出（PR #149 Codex 复审 P2）：事实与 `PENDING` 同一事务提交之后、批次置 `COMPLETED` 之前进程退出，批次会停在 `PROCESSING`。排队接手只看 `QUEUED`、上传回收只看 `UPLOADING`，没有别的东西回头看它，这一期事实已入库却永远不可见。
 
-- 判据：持有 `import_lock` 时（`PROCESSING` 只在持锁时写入），`PROCESSING` 且 `stats_status` 非空的批次就是收尾中断留下的；`stats_status` 为空的 `PROCESSING` 没有已提交的事实，不碰（那是事实事务内中断，已整体回滚）。
+- 判据：持有 `import_lock` 时（`PROCESSING` 只在 `_execute_locked` 持锁时写入，全仓唯一写入点），任何 `PROCESSING` 都是中断留下的。`stats_status` 非空：事实已提交、退在收尾，补完。为空：退在事实事务里、已整体回滚，判 `FAILED`（「导入进程中断，导入未完成；请重导该批次」）。
+- 判失败而不是放着：否则记录永远显示处理中、不能重导（重导只收 `FAILED`），ops-bot 也把它当作在跑的导入（`ops_bot/checks/import_status.py`），重启与发布一直被挡。
+- 迁移前就停在 `PROCESSING` 的旧批次 `stats_status` 也为空，部署后第一轮同样被判失败。旧代码无从区分事实是否已提交，所以提示语不写「数据未入库」。判失败只改批次记录，不动事实；重导先删切片再写。
 - 补完：同一个维护 job 先处理这类批次，再重试 `COMPLETED + PENDING`。正常收尾与补完共用 `_finish_committed_import`（刷新统计 → `site_data_stats` → 筛选统计 → `COMPLETED`），已 `READY` 的不再重复 `ANALYZE`。
 - 计数：在榜行数、源文件行数与跳过说明随事实同一事务落到批次上（供历史展示）。补完时发布的在榜、掉榜行数一律取切片现状 `count(*)`，不取批次上的值：退出到接手之间，同一期可能已被排在前面的排队接手或直接提交重导，分区也可能已被保留清理移除（PR #149 Codex 第二轮复审）。
 - 数据已不在：切片在榜行数为 0 而批次当初写过行，不发布 `site_data_stats`，批次判 `FAILED` 并写明原因。

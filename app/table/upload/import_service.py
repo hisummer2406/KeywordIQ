@@ -154,18 +154,26 @@ def _refresh_batch_query_stats(session: Session, batch: ImportBatch) -> bool:
     return False
 
 
+_INTERRUPTED_BEFORE_COMMIT = "导入进程中断，导入未完成；请重导该批次"
+"""迁移前就停在 PROCESSING 的旧批次也落在这一类：旧代码没有 stats_status，无从区分事实
+是否已提交，所以不写「数据未入库」。判失败不动任何数据，重导会先删该切片再写。"""
+
+
 def retry_pending_query_stats(
     *, session_factory: sessionmaker = SessionFactory, limit: int = 10
 ) -> int:
     """补完中断的导入收尾，再重试查询统计待更新的已完成批次；返回本轮处理的批次数。
 
     先非阻塞地拿导入串行锁：拿到说明此刻没有导入在跑——``PROCESSING`` 只在持锁时写入，
-    此时还停在 ``PROCESSING`` 且 ``stats_status`` 非空（事实已提交）的批次，只可能是
-    进程在收尾中途退出留下的；``PENDING`` 同理只可能是刷新失败或中途退出。拿不到就跳过
-    本轮——不等锁，也不和导入抢 IO。``limit`` 让每类的工作量有界，积压的留给下一轮。
+    此时还停在 ``PROCESSING`` 的批次都是进程中途退出留下的：``stats_status`` 非空说明
+    事实已提交、退在收尾，补完收尾；为空说明退在事实事务里（已整体回滚），判失败。
+    ``PENDING`` 同理只可能是刷新失败或中途退出。拿不到就跳过本轮——不等锁，也不和导入
+    抢 IO。``limit`` 让每类的工作量有界，积压的留给下一轮。
 
-    中断的收尾必须由这里接手：排队接手只看 ``QUEUED``、上传回收只看 ``UPLOADING``，
-    没有别的东西会回头看 ``PROCESSING``，不补的话这一期事实已入库却永远不可见。
+    中断的批次必须由这里接手：排队接手只看 ``QUEUED``、上传回收只看 ``UPLOADING``，
+    没有别的东西会回头看 ``PROCESSING``。不接手的话，退在收尾的那一期事实已入库却永远
+    不可见；退在事实事务里的那条记录永远显示「处理中」、不能重导（重导只收 ``FAILED``），
+    还让 ops-bot 一直以为有导入在跑，重启与发布被它挡住。
 
     同一期被重导过的旧批次不特殊处理：它分析的是同一组分区，结果同样有效。
     """
@@ -176,15 +184,16 @@ def retry_pending_query_stats(
                 return 0
             interrupted = session.scalars(
                 select(ImportBatch)
-                .where(
-                    ImportBatch.status == STATUS_PROCESSING,
-                    ImportBatch.stats_status.is_not(None),
-                )
+                .where(ImportBatch.status == STATUS_PROCESSING)
                 .order_by(ImportBatch.id)
                 .limit(limit)
             ).all()
             for batch in interrupted:
-                _resume_interrupted_finish(session, batch)
+                if batch.stats_status is None:
+                    logger.warning("导入进程中断，判为失败：批次 #%s %s", batch.id, batch.file_name)
+                    _record_import_failure(session, batch, _INTERRUPTED_BEFORE_COMMIT)
+                else:
+                    _resume_interrupted_finish(session, batch)
 
             pending = session.scalars(
                 select(ImportBatch)
