@@ -244,3 +244,28 @@ async def test_search_applies_and_then_clears_its_deadline(gate, fresh_async_eng
         await gate.search(db, AnalysisSearchRequest(site="US", view="DAY"), 1, deadline=deadline)
     assert seen and set(seen) == {deadline}
     assert gate._search_deadline.get() is None
+
+
+@needs_db
+async def test_waiting_for_a_pool_connection_counts_against_the_request_deadline(gate):
+    """取连接（排队 / 新建）也在预算内：池被占满时到点就超时，不等满 pool_timeout，
+    也不拿过期的剩余时间去执行业务查询（PR #149 Codex 复审）。"""
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+    url = os.environ.get("DATABASE_URL_ASYNC") or TEST_URL.replace("postgresql://", "postgresql+asyncpg://")
+    engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_timeout=5)
+    try:
+        async with engine.connect() as holder:  # 占住唯一一条连接
+            await holder.execute(text("SELECT 1"))
+            async with AsyncSession(engine) as db:
+                token = gate._search_deadline.set(time.monotonic() + 0.3)
+                started = time.monotonic()
+                try:
+                    with pytest.raises(gate.AnalysisTimeoutError):
+                        await gate._timed_execute(db, text("SELECT 1"), [])
+                finally:
+                    gate._search_deadline.reset(token)
+                assert time.monotonic() - started < 2
+        assert engine.pool.checkedout() == 0
+    finally:
+        await engine.dispose()

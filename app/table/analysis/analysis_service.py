@@ -109,7 +109,20 @@ async def _bound_statement_to_deadline(db: AsyncSession, deadline: float) -> Non
     等待，服务端语句照跑到结束——实测 ``pg_sleep(8)`` 在客户端取消后仍执行满 8 s（#148
     design D3「完整请求预算」）。``set_config(..., true)`` 即 ``SET LOCAL``，只作用于本事务；
     不超过引擎级的交互预算。剩余预算已用尽就不再发起查询。
+
+    **取连接也在预算内，且取到之后再算剩余**（PR #149 Codex 复审）：排队前已把连接还回池，
+    第一条语句要重新 checkout，可能排队到 ``pool_timeout`` 或新建连接；先算剩余再取连接，
+    这段等待既不受截止约束，取到后装上的还是过期的超时。等连接只是客户端在等，放弃它
+    不会留下服务端工作，所以这里用 ``asyncio.timeout`` 即可。
     """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AnalysisTimeoutError()
+    try:
+        async with asyncio.timeout(remaining):
+            await db.connection()
+    except TimeoutError:
+        raise AnalysisTimeoutError() from None
     remaining_ms = int((deadline - time.monotonic()) * 1000)
     if remaining_ms <= 0:
         raise AnalysisTimeoutError()
