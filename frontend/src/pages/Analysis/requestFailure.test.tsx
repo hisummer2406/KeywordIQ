@@ -54,6 +54,38 @@ describe('分析查询屏 · 请求失败', () => {
     window.localStorage.clear();
   });
 
+  it('再次查询时中止上一次在飞的请求，被中止的那次不算失败（#154）', async () => {
+    await renderSettled(false);
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
+
+    // 第二次请求卡在网络上，直到被中止——按 axios 的形状以 CanceledError 拒绝
+    searchAnalysis.mockImplementationOnce(
+      (_body: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          options?.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' })),
+          );
+        }),
+    );
+    await act(async () => {
+      fireEvent.click(submit());
+    });
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
+    const pendingSignal: AbortSignal = searchAnalysis.mock.calls[1][1].signal;
+    expect(pendingSignal.aborted).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(submit());
+    });
+    await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
+    expect(pendingSignal.aborted).toBe(true);
+    expect(searchAnalysis.mock.calls[2][1].signal.aborted).toBe(false);
+
+    // 最新那次成功落地：结果照常显示，被中止的那次没有留下失败提示
+    expect(await screen.findByText(/搜索结果：/)).toBeInTheDocument();
+    expect(screen.queryByText(FAILURE_NOTICE)).not.toBeInTheDocument();
+  });
+
   it('首次查询就失败：不显示「搜索结果：0」，改为常驻的失败提示', async () => {
     searchAnalysis.mockRejectedValue(new Error('Network Error'));
 

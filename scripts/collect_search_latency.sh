@@ -63,7 +63,7 @@ summary() {
 
 echo
 echo "== 1. POST /api/analysis/search 完整请求耗时（预算：日 p95≤3s、周 p95≤5s、单请求≤25s）"
-echo "   注：请求摘要不带视图，此处为日周合计；视图拆分见第 3 节慢诊断。"
+echo "   注：此处为日周合计；按视图见 1.1（#154 之前的日志不带视图，记为 ?）。"
 summary "POST /api/analysis/search " | awk '{print $1, $2}' | python3 -c "$PCT_PY"
 summary "POST /api/analysis/search " | python3 -c '
 import os, sys, collections
@@ -74,6 +74,68 @@ for line in sys.stdin:
     if day >= since:
         st[status] += 1; oc[outcome] += 1
 print("status", dict(st)); print("outcome", dict(oc))
+'
+
+
+echo
+echo "== 1.1 按视图分布与重复率估算（#154 design D5：摘要带 view 与 result_key_fp）"
+echo "   并发重复：同进程内同指纹且执行区间重叠（去重只在进程内合并，其潜在收益）。"
+echo "   窗口内重复：开始前 N 秒内已有同指纹请求成功完成（status=200 completed，缓存的潜在命中）；"
+echo "   重叠、失败或断开的前序不计。缓存每个 worker 一份，闸门看「同进程」；「跨进程」仅作上限参考。"
+echo "   指纹不含用户（非私有条件跨用户相同），可直接估算跨用户合并与缓存的潜在命中。"
+zgrep -h "请求摘要 POST /api/analysis/search " $LOGS 2>/dev/null | python3 -c '
+import os, re, sys, collections
+from datetime import datetime
+since = os.environ.get("SINCE") or ""
+rows = []
+for line in sys.stdin:
+    m = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),(\d{3})", line)
+    ms = re.search(r" duration_ms=(\d+)", line)
+    if not m or not ms or m.group(1)[:10] < since:
+        continue
+    end = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp() + int(m.group(2)) / 1000
+    view = (re.search(r" view=(\S+)", line) or [None, "?"])[1]
+    fp = (re.search(r" result_key_fp=(\S+)", line) or [None, None])[1]
+    pid = (re.search(r" - pid=(\d+) - ", line) or [None, "?"])[1]
+    ok = " status=200 " in line and " outcome=completed " in line
+    rows.append((end - int(ms.group(1)) / 1000, end, int(ms.group(1)), view, fp, pid, ok))
+def pct(v, p):
+    v = sorted(v); return v[min(len(v) - 1, int(round(p / 100.0 * (len(v) - 1))))]
+print("view n p50 p90 p95 p99 max (ms)")
+byv = collections.defaultdict(list)
+for r in rows:
+    byv[r[3]].append(r[2])
+for v in sorted(byv):
+    x = byv[v]; print(v, len(x), *[pct(x, p) for p in (50, 90, 95, 99)], max(x))
+withfp = [r for r in rows if r[4]]
+print("带指纹的请求", len(withfp), "/", len(rows))
+if withfp:
+    byfp = collections.defaultdict(list)
+    for r in withfp:
+        byfp[r[4]].append(r)
+    concurrent = 0
+    within = {(w, scope): 0 for w in (60, 600) for scope in ("同进程", "跨进程")}
+    for reqs in byfp.values():
+        reqs.sort()
+        for i, (start, end, _ms, _v, _fp, pid, _ok) in enumerate(reqs):
+            # 去重只在同一个 worker 进程内合并（design D1），跨进程的重叠合并不了
+            if any(o[5] == pid and o[0] < end and start < o[1] for j, o in enumerate(reqs) if j != i):
+                concurrent += 1
+            # 可命中缓存的前序：本请求开始前已经**成功完成**的同指纹请求。重叠的到达时还没有
+            # 结果；失败、断开的没有可缓存的结果——都不算，否则故障期间反而让缓存闸门误过。
+            # 缓存每个 worker 一份（design D3），闸门看同进程；跨进程只作共享缓存的上限参考。
+            for scope in ("同进程", "跨进程"):
+                done = [o[1] for o in reqs if o[6] and o[1] <= start and (scope == "跨进程" or o[5] == pid)]
+                if done:
+                    gap = start - max(done)
+                    for w in (60, 600):
+                        if gap <= w:
+                            within[(w, scope)] += 1
+    n = len(withfp)
+    print("  并发重复（同进程） %d (%.1f%%)" % (concurrent, 100.0 * concurrent / n))
+    for (w, scope), c in within.items():
+        print("  %ds 内重复（%s） %d (%.1f%%)" % (w, scope, c, 100.0 * c / n))
+    print("  不同指纹 %d" % len(byfp))
 '
 
 echo

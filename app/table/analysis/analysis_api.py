@@ -22,13 +22,14 @@ import logging
 from datetime import date as _Date
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW, COMPETITOR_VIEW
 from app.auth.simple_auth import simple_auth
+from app.common.disconnect import cancel_on_disconnect
 from app.table.analysis import analysis_service as service
 from app.table.analysis import topslot_history_service
 from app.table.analysis.topslot_history_schemas import TopslotHistoryResponse, TopslotKind
@@ -40,6 +41,7 @@ from app.table.search.search_schemas import (
     FirstListedSummary,
     ScopeInfo,
 )
+from config import settings
 from database import get_async_db, get_db
 
 logger = logging.getLogger(__name__)
@@ -52,9 +54,10 @@ _View = Literal["DAY", "WEEK"]
 @analysis_router.post("/search", response_model=AnalysisSearchResponse)
 async def search_data(
     req: AnalysisSearchRequest,
+    request: Request,
     db: AsyncSession = Depends(get_async_db),
     user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
-) -> AnalysisSearchResponse:
+) -> AnalysisSearchResponse | Response:
     """作用域内分页查询。
 
     作用域非法时抛 `ScopeError` → 422。此前是返 HTTP 200 + `success:false`，
@@ -67,11 +70,20 @@ async def search_data(
     """
     if req.competitor_new:
         simple_auth.check_permission(user, COMPETITOR_VIEW)
+    # 请求摘要带视图与结果键指纹，重采可分日周统计、估算重复率（由请求日志中间件输出）。
+    request.state.summary_fields = service.search_summary_fields(req, user.id)
     # 完整请求预算从排队之前起算，排队等待也计入（超出 503 db.query_timeout）。
     deadline = service.request_deadline()
-    # 并发有上限、排队有界（排不上 503 analysis.busy），排队前释放鉴权占的连接，见 service.search_slot。
-    async with service.search_slot(db):
-        return await service.search(db, req, user.id, deadline=deadline)
+
+    async def run() -> AnalysisSearchResponse:
+        # 并发有上限、排队有界（排不上 503 analysis.busy），排队前释放鉴权占的连接，见 service.search_slot。
+        async with service.search_slot(db):
+            return await service.search(db, req, user.id, deadline=deadline)
+
+    if not settings.ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED:
+        return await run()
+    # 客户端断开（含前端切换条件中止旧请求）即取消查询，数据库侧随之停止；断开时返回 499，见 cancel_on_disconnect。
+    return await cancel_on_disconnect(request, run())
 
 
 @analysis_router.post("/export")
