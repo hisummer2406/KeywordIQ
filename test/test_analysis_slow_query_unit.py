@@ -75,7 +75,7 @@ async def test_slow_request_emits_diagnostic_with_whitelisted_fields(monkeypatch
 
     monkeypatch.setattr(service, "_fetch_trends", _slow_fetch_trends)
 
-    req = _req(keyword="anker太阳能充电宝", asin="B0EXAMPLE1", categories=["Electronics", "Pet"], competitor_new=True)
+    req = _req(keyword="anker太阳能充电宝", asins=["B0EXAMPLE1"], categories=["Electronics", "Pet"], competitor_new=True)
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         await service.search(_FakeSession(), req, user_id=1)
@@ -86,7 +86,7 @@ async def test_slow_request_emits_diagnostic_with_whitelisted_fields(monkeypatch
     assert records[0].levelno == logging.WARNING
     assert "site=US" in msg and "view=DAY" in msg
     assert "trend_ms" in msg
-    assert "categories_count" in msg and "has_asin_filter" in msg
+    assert "categories_count" in msg and "asins_count" in msg
     # 不泄漏检索词或 ASIN 原文
     assert "anker太阳能充电宝" not in msg
     assert "B0EXAMPLE1" not in msg

@@ -15,6 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.table.analysis.keyword_match import MAX_TERMS, tokenize
 
+#: 一次 ASIN 批量检索的上限（去重后）。与 brands/categories 的 IN 列表上限同值。
+MAX_ASINS = 100
+
 View = Literal["DAY", "WEEK"]
 Include = Literal["ALL", "LISTED", "DROPPED"]
 
@@ -66,18 +69,21 @@ class AnalysisSearchRequest(BaseModel):
     )
     product_title: str | None = Field(None, description="标题子串（top1 商品）")
 
-    # **ASIN 是精确码，等值匹配**（不是子串筛选）。界面上它只能从顶部检索框输入，而那里
-    # 只有整串匹配 `^B0[A-Z0-9]{8}$` 才路由到这个字段——片段本来就到不了后端。据此
-    # `dim_product` 上的 asin GIN trgm 索引（生产 409 MB，每次导入的每一行写入都要维护）
-    # 已删除，等值匹配走 `uq_dim_product_asin` 唯一索引。见 issue #49。
+    # **ASIN 是精确码，逐个等值匹配**（不是子串筛选）。界面上只有用户显式选了「ASIN · 批量」
+    # 才会发这个字段，片段不会被当成 ASIN。据此 `dim_product` 上的 asin GIN trgm 索引
+    # （生产 409 MB，每次导入的每一行写入都要维护）已删除，等值匹配走 `uq_dim_product_asin`
+    # 唯一索引。见 issue #49。
     #
     # **不校验格式，只规范化。** ASIN 并非一律 `B0` 开头——德国站的图书 ASIN 就是 ISBN-10
-    # （见前端 productImage.ts 的实测注释）。前端那条正则是「走哪个字段」的路由启发式，
-    # 不是合法性规则；拿它当校验会把真实存在的商品拒在门外，而查不到的正确表现是零行。
+    # （见前端 productImage.ts 的实测注释）。拿格式当校验会把真实存在的商品拒在门外，
+    # 而查不到的正确表现是零行。
     #
-    # **命中三个商品槽位任一个，不只 top1。** 此前只匹配 top1，把一个实际排第二、第三
-    # 名次的 ASIN 粘进搜索框会查不到任何结果，而这个限制对用户不可见（见 issue #56 P2）。
-    asin: str | None = Field(None, description="ASIN 精确码，命中三个商品槽位任一个，大小写不敏感")
+    # **集合任意命中，三个商品槽位任一个，不只 top1**（issue #56 P2、#150）。上限 100 在
+    # 去重之后判定，所以不用 `max_length`（那会先于去重计数），见 `_normalise_asins`。
+    asins: list[str] | None = Field(
+        None,
+        description="ASIN 精确码集合（去重后最多 100 个），前三商品槽位任一命中任一个，大小写不敏感",
+    )
 
     # 品牌与类目：**精确多选，前三任一命中**。语义是「这个词的前三品牌里有 X」。
     #
@@ -155,22 +161,27 @@ class AnalysisSearchRequest(BaseModel):
             raise ValueError(f"关键词最多支持 {MAX_TERMS} 个词，请缩短检索词")
         return self
 
-    @field_validator("asin")
+    @field_validator("asins")
     @classmethod
-    def _normalise_asin(cls, v: str | None) -> str | None:
-        """去空白、转大写；全空白视同没填。
+    def _normalise_asins(cls, v: list[str] | None) -> list[str] | None:
+        """逐项去空白、转大写、丢空项、保序去重；去重后超过上限拒绝，空集合视同没填。
 
         放在请求模型而不是 CRUD 里，是为了让 ``/search`` 与 ``/export`` 共用同一份口径
         ——两处用不同规则匹配同一个 ASIN，表现是「导出的行数与表里看到的不一样」，
         没人会想到去查大小写。
 
-        全空白必须落回 ``None``：等值匹配下空串一行都不命中，而旧的 ``ILIKE '%%'``
-        匹配所有行。原样传下去用户会得到一张空表，且看不出是自己少填了什么。
+        空集合必须落回 ``None``：否则 ``request_has_filters`` 会把它计为带筛选，而
+        ``IN ()`` 一行都不命中——用户会得到一张空表，且看不出是自己少填了什么。
+
+        **不在这里按分隔符拆分**：拆分是界面输入的事（前端 filters.ts），接口收的已经是
+        列表；两处各拆一遍就是两份口径。
         """
         if v is None:
             return None
-        cleaned = v.strip().upper()
-        return cleaned or None
+        asins = list(dict.fromkeys(a.strip().upper() for a in v if a.strip()))
+        if len(asins) > MAX_ASINS:
+            raise ValueError(f"ASIN 最多支持 {MAX_ASINS} 个（去重后），请分批查询")
+        return asins or None
 
 
 class FactRowBase(BaseModel):

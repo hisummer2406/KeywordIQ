@@ -50,7 +50,7 @@ def test_category_exact_is_gone():
 
 
 # --------------------------------------------------------------------------
-# ASIN 是精确码：等值匹配 + 规范化（issue #49）
+# ASIN 是精确码：集合等值匹配 + 规范化（issue #49、#150）
 # --------------------------------------------------------------------------
 
 
@@ -58,21 +58,43 @@ def test_category_exact_is_gone():
 def test_asin_is_normalised_to_upper(given):
     """大小写与首尾空白在请求模型里抹平。
 
-    等值匹配区分大小写，而检索框的判定正则带 ``/i``、用户还常从别处粘贴带空格的串。
+    等值匹配区分大小写，而用户常从别处粘贴小写或带空格的串。
     规范化放在模型里而不是 CRUD 里，是为了让 ``/search`` 与 ``/export`` 共用同一份
     ——导出与列表用不同口径匹配同一个 ASIN，是那种没人会想到去查的错。
     """
-    assert _req(asin=given).asin == "B0SLOT00001"
+    assert _req(asins=[given]).asins == ["B0SLOT00001"]
 
 
-def test_blank_asin_is_dropped():
-    """全空白视同没填。
+@pytest.mark.parametrize("given", [[], ["   ", ""]])
+def test_blank_asins_are_dropped(given):
+    """空集合与全空白项视同没填。
 
-    旧的 ``ILIKE '%%'`` 对空串匹配所有行，等值匹配则一行都不命中——空串若原样传下去，
-    用户会得到一张空表且看不出是自己少填了什么。
+    空集合若原样传下去，``IN ()`` 一行都不命中，用户会得到一张空表且看不出是自己少填了
+    什么；``request_has_filters`` 也会把它误计为带筛选。
     """
-    assert _req(asin="   ").asin is None
-    assert request_has_filters(_req(asin="   ")) is False
+    assert _req(asins=given).asins is None
+    assert request_has_filters(_req(asins=given)) is False
+
+
+def test_asins_dedup_case_insensitively_and_keep_order():
+    """大小写不同的同一编号只算一个，保留首次出现的顺序。"""
+    req = _req(asins=[" b0aaaaaaa1 ", "B0BBBBBBB2", "B0AAAAAAA1", ""])
+    assert req.asins == ["B0AAAAAAA1", "B0BBBBBBB2"]
+    assert request_has_filters(req) is True
+
+
+def test_asins_accept_non_b0_codes():
+    """不按格式校验：德国站图书 ASIN 就是 ISBN-10。"""
+    assert _req(asins=["3161484100"]).asins == ["3161484100"]
+
+
+def test_asins_cap_counts_after_dedup():
+    """上限 100 按去重后计数：200 项里只有 100 个不同编号时接受，101 个不同编号时拒绝。"""
+    distinct = [f"B0CAP{i:05d}" for i in range(100)]
+    assert len(_req(asins=distinct + [a.lower() for a in distinct]).asins) == 100
+
+    with pytest.raises(ValidationError, match="100"):
+        _req(asins=distinct + ["B0CAP99999"])
 
 
 # --------------------------------------------------------------------------
@@ -90,10 +112,18 @@ def _compiled_sql(req: AnalysisSearchRequest) -> str:
 
 def test_asin_filter_hits_all_three_product_slots():
     """此前只匹配 top1，一个实际排第二、第三名次的 ASIN 会查不到任何结果，且对用户不可见。"""
-    sql = _compiled_sql(_req(asin="B0SLOT00001"))
+    sql = _compiled_sql(_req(asins=["B0SLOT00001", "B0SLOT00002"]))
     assert "top1_product_id" in sql
     assert "top2_product_id" in sql
     assert "top3_product_id" in sql
+
+
+def test_asin_filter_hits_all_three_slots_in_week_view():
+    """周视图走另一张事实表，同一条筛选也要覆盖三个槽位。"""
+    stmt = search_stmt("GB", "WEEK", date(2026, 7, 18), _req(asins=["3161484100"]), user_id=7)
+    sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "fact_weekly" in sql
+    assert all(f"top{n}_product_id IN" in sql for n in (1, 2, 3))
 
 
 def test_competitor_new_filter_joins_watch_and_asin_and_hits_three_slots():

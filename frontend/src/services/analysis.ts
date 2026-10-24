@@ -83,7 +83,8 @@ export interface SearchBody {
   brands?: string[];
   /** 类目精确匹配集合，命中其一即可；空集合不传（视同不筛） */
   categories?: string[];
-  asin?: string;
+  /** ASIN 精确码集合（去重后最多 100 个），前三商品槽位任一命中任一个；空集合不传 */
+  asins?: string[];
   product_title?: string;
   ranking_min?: number;
   ranking_max?: number;

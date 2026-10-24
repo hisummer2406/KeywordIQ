@@ -166,7 +166,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
     const clickIsNew = (value: 'all' | 'true') =>
       fireEvent.click(isNewOption(value));
 
-    const searchBox = () => screen.getByPlaceholderText(/输入 ASIN 或关键词/);
+    const searchBox = () => screen.getByLabelText('搜索内容');
 
     it('首屏首次入榜控件就显示为「只看首次入榜」', async () => {
       await renderSettled();
@@ -427,7 +427,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
       // 改草稿但不点「开始筛选」
-      fireEvent.change(screen.getByPlaceholderText(/输入 ASIN 或关键词/), {
+      fireEvent.change(screen.getByLabelText('搜索内容'), {
         target: { value: 'coffee' },
       });
       await act(async () => {

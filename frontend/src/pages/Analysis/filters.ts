@@ -3,7 +3,7 @@ import type { Include, KeywordMode, SearchBody, View } from '@/services/analysis
 /**
  * 分析查询屏的条件模型与转换。
  *
- * 这里是整块改造中唯一有分支逻辑的部分（检索目标判定、档位映射、空值裁剪），
+ * 这里是整块改造中唯一有分支逻辑的部分（检索方式路由、ASIN 拆分、档位映射、空值裁剪），
  * 做成纯函数好让它能被直接测——不用挂 DOM、不用 mock 请求。组件那边只剩渲染
  * 与事件传递。
  */
@@ -28,13 +28,14 @@ export interface Range {
  * 两处填了不同的值，用户无从判断哪一处生效。
  */
 export interface FilterDraft {
-  /** 单一检索框的原文，目标字段由 detectSearchKind 判定 */
+  /** 单一检索框的原文，目标字段由 qMode 决定 */
   q: string;
   /**
-   * 关键词匹配方式，只作用于检索框里被判为「关键词」的输入（ASIN 是等值匹配，没有模式）。
-   * 缺省视同 ALL_TERMS。不入库（保存的条件不含检索词，模式单独存没有意义）。
+   * 搜索方式：两种关键词匹配方式，或 ASIN 批量。**检索目标只由它决定**，不看输入长什么样
+   * （#150：按 `B0…` 格式推断查不了 ISBN-10、也会把 10 位英文词误判成 ASIN）。
+   * 缺省视同 ALL_TERMS。不入库（保存的条件不含检索词，方式单独存没有意义）。
    */
-  qMode?: KeywordMode;
+  qMode?: SearchMode;
   categories: string[];
   ranking: Range;
   change: Range;
@@ -105,31 +106,34 @@ export function sanitizeCompetitorNew(
 }
 
 // --------------------------------------------------------------------------
-// 检索目标判定
+// 检索方式与 ASIN 批量输入
 // --------------------------------------------------------------------------
 
-export type SearchKind = 'asin' | 'keyword' | 'none';
+/** 检索框的搜索方式：关键词的两种匹配方式，或 ASIN 批量。 */
+export type SearchMode = KeywordMode | 'ASIN';
 
-/** 现役 ASIN 形如 B0 + 8 位字母数字。 */
-const ASIN_RE = /^B0[A-Z0-9]{8}$/i;
+/** 一次 ASIN 批量检索的上限（去重后），与后端 `MAX_ASINS` 同值。 */
+export const MAX_ASINS = 100;
 
 /**
- * 单一检索框输入 → 检索目标。
+ * ASIN 批量输入 → 去重后的编号列表。
  *
- * 不走后端 `keyword ILIKE ... OR asin = ...`：OR 跨两张维度表的两条不同索引，计划器
- * 通常退化为全切片扫描。格式判定在这里一行正则解决。
- *
- * 这条正则同时决定后端用哪种匹配：关键词是子串 ILIKE（走 dim_keyword 的 trgm），
- * **ASIN 是等值匹配**（走唯一索引，asin 上没有 trgm）。放宽这里去接受 ASIN 片段，
- * 片段会被当成整串去等值匹配，结果是零行——不会报错，只是查不到。
- *
- * 判定结果必须回显到界面上——自动判定一旦不可见，用户搜不到东西时无从知道
- * 系统搜的是哪个字段。
+ * 空格、逗号、中文逗号、分号、换行与制表符（Excel 多单元格）都是分隔符；空项丢弃，转大写后
+ * 保序去重。**不校验格式**：德国站图书 ASIN 就是 ISBN-10，查不到的正确表现是零行。
  */
-export function detectSearchKind(input: string): SearchKind {
-  const v = input.trim();
-  if (!v) return 'none';
-  return ASIN_RE.test(v) ? 'asin' : 'keyword';
+export function splitAsins(input: string): string[] {
+  return [...new Set(input.toUpperCase().split(/[\s,，;；]+/).filter(Boolean))];
+}
+
+/**
+ * 检索框当前输入不可提交的原因；可提交时为 `undefined`。
+ *
+ * 超上限必须拦在提交前并说清楚，不静默截断——截掉的那部分编号用户以为查过了。
+ */
+export function searchInputError(q: string, mode: SearchMode | undefined): string | undefined {
+  if (mode !== 'ASIN') return undefined;
+  const n = splitAsins(q).length;
+  return n > MAX_ASINS ? `ASIN 最多 ${MAX_ASINS} 个，当前 ${n} 个` : undefined;
 }
 
 // --------------------------------------------------------------------------
@@ -191,8 +195,11 @@ const trimmed = (s: string) => (s.trim() ? s.trim() : undefined);
  * 不含分页与排序：导出直接复用它，导的是整个作用域下的这组条件而非当前页。
  */
 export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBody {
-  const kind = detectSearchKind(filters.q);
+  const mode = filters.qMode ?? 'ALL_TERMS';
   const q = filters.q.trim();
+  const asins = mode === 'ASIN' ? splitAsins(q) : [];
+  // 关键词与 ASIN 只发所选方式那一个，切换方式后另一个不残留
+  const keywordMode = mode === 'ASIN' || !q ? undefined : mode;
 
   // 「仅掉榜」时不带任何其余筛选。筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行
   // 可匹配——带上去的必然结果是一张空表，且用户看不出是哪一步造成的。界面上这些控件
@@ -205,10 +212,9 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     view: scope.view,
     date: scope.date ?? undefined,
     include: filters.include && filters.include !== 'ALL' ? filters.include : undefined,
-    keyword: !onlyDropped && kind === 'keyword' ? q : undefined,
-    keyword_mode:
-      !onlyDropped && kind === 'keyword' ? (filters.qMode ?? 'ALL_TERMS') : undefined,
-    asin: !onlyDropped && kind === 'asin' ? q : undefined,
+    keyword: !onlyDropped && keywordMode ? q : undefined,
+    keyword_mode: !onlyDropped ? keywordMode : undefined,
+    asins: !onlyDropped && asins.length ? asins : undefined,
     brands: !onlyDropped && filters.brands.length ? filters.brands : undefined,
     product_title: onlyDropped ? undefined : trimmed(filters.productTitle),
     categories: !onlyDropped && filters.categories.length ? filters.categories : undefined,
