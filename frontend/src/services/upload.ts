@@ -38,6 +38,12 @@ export interface ImportTriggered {
 /** 批次状态码。中文文案由界面负责，接口只回状态码。 */
 export type ImportStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
 
+/**
+ * 导入后查询统计状态。null 为不适用（迁移前的旧批次、未成功导入的批次）。
+ * 待更新/失败时数据照常可查，只是可能暂时较慢——界面要说出来，否则用户会以为没导进去。
+ */
+export type ImportStatsStatus = 'PENDING' | 'READY' | 'FAILED' | null;
+
 export interface ImportStatusItem {
   batch_name: string;
   progress_percent: number;
@@ -45,6 +51,7 @@ export interface ImportStatusItem {
   status: ImportStatus | string;
   /** 失败原因，或成功时的备注（跳过行数等）。无则为空串。 */
   error_message?: string;
+  stats_status?: ImportStatsStatus;
 }
 
 /** 文件名解析出的归属三元组。判定不出的项为 null，并列在 needs 里。 */
@@ -131,6 +138,7 @@ export interface ImportBatchRow {
   completed_at: string | null;
   /** 原始文件是否仍可据以重导（本地退路导入的批次为 false）。 */
   source_retained: boolean;
+  stats_status?: ImportStatsStatus;
 }
 
 /** ProTable request：拉分页的导入历史（`{data,total,success}`）。 */

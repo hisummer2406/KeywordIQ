@@ -194,4 +194,26 @@ describe('最近导入状态', () => {
     expect(within((await screen.findByText('d.csv')).closest('tr')!).getByText('处理中'))
       .toBeInTheDocument();
   });
+
+  it('已完成但查询统计待更新/失败时说明可能较慢；就绪与旧批次不打扰', async () => {
+    getProcessingStatus.mockResolvedValue({
+      items: [
+        { batch_name: 'p.csv', progress_percent: 100, total_records: 1, status: 'COMPLETED',
+          error_message: '', stats_status: 'PENDING' },
+        { batch_name: 'f.csv', progress_percent: 100, total_records: 1, status: 'COMPLETED',
+          error_message: '', stats_status: 'FAILED' },
+        { batch_name: 'r.csv', progress_percent: 100, total_records: 1, status: 'COMPLETED',
+          error_message: '', stats_status: 'READY' },
+        { batch_name: 'o.csv', progress_percent: 100, total_records: 1, status: 'COMPLETED',
+          error_message: '', stats_status: null },
+      ],
+    });
+    await renderSettled();
+
+    const row = async (name: string) => (await screen.findByText(name)).closest('tr')!;
+    expect(within(await row('p.csv')).getByText(/查询统计待更新/)).toBeInTheDocument();
+    expect(within(await row('f.csv')).getByText(/请联系管理员/)).toBeInTheDocument();
+    expect(within(await row('r.csv')).queryByText(/查询统计/)).not.toBeInTheDocument();
+    expect(within(await row('o.csv')).queryByText(/查询统计/)).not.toBeInTheDocument();
+  });
 });

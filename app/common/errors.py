@@ -141,6 +141,7 @@ CODE_RESOURCE_CONFLICT: Final = "resource.conflict"
 # 分析查询
 CODE_ANALYSIS_SCOPE_INVALID: Final = "analysis.scope_invalid"
 CODE_ANALYSIS_EXPORT_TOO_LARGE: Final = "analysis.export_too_large"
+CODE_ANALYSIS_BUSY: Final = "analysis.busy"                 # 并发上限排队超时（503）
 
 # ASIN/品牌悬浮历史（issue #96）
 CODE_ANALYSIS_TOPSLOT_NOT_FOUND: Final = "analysis.topslot_keyword_not_found"
@@ -199,4 +200,5 @@ CODE_SSO_DISABLED: Final = "sso.disabled"
 # 基础设施与兜底
 CODE_DB_UNAVAILABLE: Final = "db.unavailable"
 CODE_DB_ERROR: Final = "db.error"
+CODE_DB_QUERY_TIMEOUT: Final = "db.query_timeout"           # 交互查询超出执行预算（503）
 CODE_INTERNAL_UNHANDLED: Final = "internal.unhandled"

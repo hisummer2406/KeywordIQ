@@ -133,15 +133,32 @@ async def http_exception_handler(request, exc: StarletteHTTPException) -> JSONRe
     return response
 
 
+# PostgreSQL 的 query_canceled。asyncpg 经 SQLAlchemy 包装后是 DBAPIError（不是
+# OperationalError），orig 上带 sqlstate；psycopg2 叫 pgcode。实测见 #148 tasks 3.2。
+_SQLSTATE_QUERY_CANCELED = "57014"
+
+
+def _is_query_canceled(exc: SQLAlchemyError) -> bool:
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    return code == _SQLSTATE_QUERY_CANCELED
+
+
 async def sqlalchemy_exception_handler(request, exc: SQLAlchemyError) -> JSONResponse:
     """数据库异常 → 与业务 500 分开（design 决策 10）。
 
     ``OperationalError`` 是连接/超时/池耗尽一类，语义上是「服务暂时不可用」，客户端重试有意义
-    → 503。其余（约束冲突、编程错误等）是服务端缺陷 → 500。
+    → 503。语句被取消（交互执行预算到点）同属可重试 → 503 ``db.query_timeout``。其余
+    （约束冲突、编程错误等）是服务端缺陷 → 500。
 
     分开的实际意义：已知的「导入期半开连接把 worker 挂死」正属前者，混在业务 500 里就等于
     失去了最该被盯住的信号。
     """
+    if _is_query_canceled(exc):
+        # 交互预算（INTERACTIVE_STATEMENT_TIMEOUT_MS）到点由数据库取消：是预期内的保护，
+        # 不是缺陷，WARNING 不打栈；慢在哪由 search 的慢请求诊断与 SQL 级慢日志说明。
+        logger.warning("查询超出执行预算被取消 %s %s", request.method, request.url.path)
+        return json_error(503, errors.CODE_DB_QUERY_TIMEOUT, "查询超时，请缩小筛选范围后重试")
     if isinstance(exc, OperationalError):
         logger.exception("数据库连接异常 %s %s", request.method, request.url.path)
         return json_error(503, errors.CODE_DB_UNAVAILABLE, "服务暂时不可用，请稍后重试")

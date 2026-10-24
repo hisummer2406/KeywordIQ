@@ -22,6 +22,13 @@ class _StubUser:
         self.id = id
 
 
+class _StubAsyncSession:
+    """/search 的并发闸排队前会 ``close()`` 请求会话，其余不碰。"""
+
+    async def close(self) -> None:
+        pass
+
+
 def _must_not_be_called(*_args, **_kwargs):
     raise AssertionError("service 层不该被调用——权限检查必须在它之前拦住")
 
@@ -38,7 +45,7 @@ def _build_app(monkeypatch, *, user):
     register_error_handlers(app)
     app.include_router(api_mod.analysis_router, prefix="/api/analysis")
     app.dependency_overrides[get_db] = lambda: None
-    app.dependency_overrides[get_async_db] = lambda: None
+    app.dependency_overrides[get_async_db] = _StubAsyncSession
     app.dependency_overrides[simple_auth.get_current_user] = lambda: user
     return app
 

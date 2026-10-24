@@ -350,6 +350,7 @@ async def get_processing_status(
             "total_records": r.total_rows,
             "status": r.status,
             "error_message": r.error_message,
+            "stats_status": r.stats_status,
         }
         for r in records
     ]

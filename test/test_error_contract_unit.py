@@ -111,7 +111,7 @@ def test_nested_field_validation_error_keeps_path(client):
 def probe_app(client):
     """在真实 app 上临时挂几个专门抛异常的探针路由，用后即摘。"""
     from fastapi import APIRouter
-    from sqlalchemy.exc import OperationalError, ProgrammingError
+    from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
     from app.common.errors import ConflictError, ServiceUnavailableError
 
@@ -132,6 +132,22 @@ def probe_app(client):
     @router.get("/db-other")
     def _db_other():
         raise ProgrammingError("SELECT bad FROM analysis.dim_keyword", {}, Exception("boom"))
+
+    class _Canceled(Exception):
+        """asyncpg 适配层的错误带 ``sqlstate``；psycopg2 的叫 ``pgcode``。"""
+
+        def __init__(self, **attrs):
+            super().__init__("canceling statement due to statement timeout")
+            self.__dict__.update(attrs)
+
+    @router.get("/db-canceled-asyncpg")
+    def _canceled_asyncpg():
+        # 实测：asyncpg 的语句超时经 SQLAlchemy 包装后是 DBAPIError，不是 OperationalError
+        raise DBAPIError("SELECT * FROM analysis.fact_daily", {}, _Canceled(sqlstate="57014"))
+
+    @router.get("/db-canceled-psycopg")
+    def _canceled_psycopg():
+        raise OperationalError("SELECT * FROM analysis.fact_daily", {}, _Canceled(pgcode="57014"))
 
     @router.get("/unhandled")
     def _boom():
@@ -180,8 +196,18 @@ def test_other_sqlalchemy_error_is_500(probe_app):
     _assert_unified(r.json(), code="db.error")
 
 
+def test_query_canceled_by_statement_timeout_is_503_query_timeout(probe_app):
+    """交互执行预算到点（SQLSTATE 57014）：可重试 → 503，且与「连不上库」分开计码。"""
+    for path in ("/__probe/db-canceled-asyncpg", "/__probe/db-canceled-psycopg"):
+        r = probe_app.get(path)
+        assert r.status_code == 503
+        _assert_unified(r.json(), code="db.query_timeout")
+        assert "缩小筛选" in r.json()["message"]
+
+
 def test_db_errors_do_not_leak_sql(probe_app):
-    for path in ("/__probe/db-operational", "/__probe/db-other"):
+    for path in ("/__probe/db-operational", "/__probe/db-other",
+                 "/__probe/db-canceled-asyncpg", "/__probe/db-canceled-psycopg"):
         r = probe_app.get(path)
         assert "dim_keyword" not in r.text
         assert "SELECT" not in r.text

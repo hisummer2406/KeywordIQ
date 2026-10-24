@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     # 各阶段耗时，不新增查询次数。
     ANALYSIS_SLOW_QUERY_THRESHOLD_MS: int = 1000
 
+    # 交互查询的执行预算（#148，async-request-execution）。写进异步引擎的 statement_timeout，
+    # 由数据库在超时后取消语句、释放连接——DB_POOL_TIMEOUT 只管「等连接」，管不了「执行」，
+    # 没有它，一条坏计划会无限期占着连接，异步池耗尽后其他页面一起失去响应。导入/导出/迁移
+    # 走同步引擎，不受影响。实测 ANALYZE 后最慢的分析查询约 1.3 s，30 s 留足余量。
+    INTERACTIVE_STATEMENT_TIMEOUT_MS: int = 30000
+    # 分析查询每个 worker 同时执行的上限与排队等待上限。异步池每 worker 8+8，分析查询
+    # 最多占 4 条，余下留给鉴权/作用域/词库等轻量请求；等不到的返回 503，不无限排队。
+    ANALYSIS_MAX_CONCURRENT_SEARCHES: int = 4
+    ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS: float = 5.0
+    # /api/analysis/search 的完整请求预算（秒，含排队）。每条语句的 statement_timeout 收紧到
+    # 剩余预算，到点由数据库取消——只在应用层放弃等待的话，服务端语句会照跑到结束。
+    # 低于 INTERACTIVE_STATEMENT_TIMEOUT_MS 留出余量；预算口径见 #148 design「性能预算」。
+    ANALYSIS_REQUEST_TIMEOUT_SECONDS: float = 25.0
+
     # 持续增长市场（工具箱）的判定口径。三项都在**日报导入收尾时**参与算定，命中结果写进
     # analysis.fact_growth；查询侧只读，不重算。
     #
@@ -110,6 +124,10 @@ class Settings(BaseSettings):
     # 多久才轮到下一个」，30 秒是延迟与空转之间的折中。设 0 关闭接手（此时排队批次
     # 不会自动开始，需要人工重导——只在排障时这么做）。
     IMPORT_QUEUE_POLL_SECONDS: int = 30
+
+    # 导入后刷新查询统计（ANALYZE 本次写入的叶子分区）的执行上限（秒）。实测单期 <1 s；
+    # 超时不回滚数据，批次标记查询统计待更新，由同一个导入轮询在空闲时重试。
+    IMPORT_ANALYZE_TIMEOUT_SECONDS: int = 300
 
     # 对象存储（OSS）配置：表格文件先前端直传 OSS，再由后端凭 object key 从 OSS 拉取导入。
     # 服务端凭证（AK/SK 或 RAM 角色）只在这里持有，前端只拿短时 STS 临时凭证。
@@ -424,6 +442,21 @@ class Settings(BaseSettings):
     def _validate_analysis_slow_query_threshold(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("ANALYSIS_SLOW_QUERY_THRESHOLD_MS 必须为正数（配成 0 或负数会让每次查询都输出诊断日志）")
+        return value
+
+    @field_validator(
+        "INTERACTIVE_STATEMENT_TIMEOUT_MS",
+        "ANALYSIS_MAX_CONCURRENT_SEARCHES",
+        "ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS",
+        "ANALYSIS_REQUEST_TIMEOUT_SECONDS",
+        "IMPORT_ANALYZE_TIMEOUT_SECONDS",
+    )
+    @classmethod
+    def _validate_query_budgets(cls, value):
+        # PostgreSQL 的 statement_timeout=0 表示「不限」，并发上限 0 表示「永远排不上」——
+        # 两种都与字面意思相反，且只会在出事时才被发现。
+        if value <= 0:
+            raise ValueError("查询预算/并发上限必须为正数（0 在 PostgreSQL 里是「不限时」，与本意相反）")
         return value
 
     @field_validator("HOT_WINDOW_MONTHS")

@@ -514,3 +514,346 @@ def test_retry_creates_a_new_batch_and_leaves_the_failed_one_intact(factory, tmp
             "SELECT count(*) FROM analysis.fact_daily "
             " WHERE site='US' AND report_date='2026-07-15'"
         )).scalar() == 2
+
+
+# ---------------------------------------------------------------------------
+# 导入后查询统计（#148，openspec/changes/post-import-query-readiness）
+#
+# 新期次不在叶子分区统计里时规划器把整期估成 1 行，查询退化到十几秒乃至超时。导入必须在
+# 期次可见（写 site_data_stats）之前 ANALYZE 写入的叶子分区；失败不回滚、可见、可重试。
+# ---------------------------------------------------------------------------
+
+def _stats_mention(session, leaf: str, column: str, value: str) -> bool:
+    """叶子分区的统计（MCV 或直方图）里是否已出现该日期——即规划器是否「认识」这一期。"""
+    row = session.execute(text(
+        "SELECT coalesce(most_common_vals::text, '') || coalesce(histogram_bounds::text, '') "
+        "  FROM pg_stats WHERE schemaname='analysis' AND tablename=:t AND attname=:c"
+    ), {"t": leaf, "c": column}).scalar()
+    return bool(row) and value in row
+
+
+def _batch_stats(factory, batch_id):
+    with factory() as s:
+        return s.execute(text(
+            "SELECT status, stats_status, stats_attempts FROM analysis.import_batch WHERE id=:i"
+        ), {"i": batch_id}).one()
+
+
+def _three_rows():
+    # 每期多行同一日期，ANALYZE 才会把它记进 MCV
+    return [_row(1, "a"), _row(2, "b"), _row(3, "c")]
+
+
+def test_query_stats_cover_new_period_before_it_becomes_visible(factory, tmp_path, monkeypatch):
+    """第二天导入进**已有统计**的同月分区：写 site_data_stats 那一刻，统计里必须已有这一天。
+
+    这正是 #148 实测最慢的形态（统计存在但不含新期，估 1 行、实际 37 万行）。
+    """
+    import app.table.upload.import_service as svc
+
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    seen_at_visibility: list[bool] = []
+    original = svc._update_site_data_stats
+
+    def spy(session, **kw):
+        if kw["report_date"] == date(2026, 7, 16):
+            seen_at_visibility.append(
+                _stats_mention(session, "fact_daily_2026_07_us", "report_date", "2026-07-16")
+            )
+        return original(session, **kw)
+
+    monkeypatch.setattr(svc, "_update_site_data_stats", spy)
+    _import_day(factory, tmp_path, "2026-07-16", _three_rows())
+
+    assert seen_at_visibility == [True]
+    with factory() as s:
+        status, stats_status = s.execute(text(
+            "SELECT status, stats_status FROM analysis.import_batch "
+            " WHERE site='US' AND report_date='2026-07-16'"
+        )).one()
+    assert (status, stats_status) == ("COMPLETED", "READY")
+
+
+def test_query_stats_refresh_covers_written_leaves_for_week_and_reimport(factory, tmp_path):
+    """周报分析周报叶子与掉榜分区（没有增长分区）；同一期重导同样刷新。"""
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+    from app.table.upload.importer import written_leaf_partitions
+
+    assert written_leaf_partitions("US", "WEEK", date(2026, 7, 12)) == [
+        "fact_weekly_2026_07_us", "fact_dropped_2026_07",
+    ]
+    assert written_leaf_partitions("gb", "DAY", date(2026, 7, 12)) == [
+        "fact_daily_2026_07_gb", "fact_dropped_2026_07", "fact_growth_2026_07",
+    ]
+
+    for _ in range(2):  # 第二次是同一期重导
+        path = _write_csv(tmp_path, "US_Week_2026_07_12.csv", _three_rows())
+        batch = run_import(site="US", period="WEEK", report_date=date(2026, 7, 12),
+                           source=LocalFileSource(path), original_filename="US_Week_2026_07_12.csv",
+                           session_factory=factory)
+        assert (batch.status, batch.stats_status) == ("COMPLETED", "READY")
+
+    with factory() as s:
+        assert _stats_mention(s, "fact_weekly_2026_07_us", "report_date_week", "2026-07-12")
+        analyzed = s.execute(text(
+            "SELECT relname FROM pg_stat_user_tables "
+            " WHERE schemaname='analysis' AND last_analyze IS NOT NULL "
+            "   AND relname IN ('fact_weekly_2026_07_us', 'fact_dropped_2026_07')"
+        )).scalars().all()
+    assert sorted(analyzed) == ["fact_dropped_2026_07", "fact_weekly_2026_07_us"]
+
+
+def test_query_stats_failure_keeps_data_visible_and_pending(factory, tmp_path, monkeypatch):
+    """刷新失败不回滚、不隐藏：批次照常完成、期次可选，只是查询统计待更新。"""
+    import app.table.upload.import_service as svc
+
+    def boom(*_a, **_k):
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(svc, "refresh_query_stats", boom)
+    path = _write_csv(tmp_path, "US_Day_2026_07_15.csv", _three_rows())
+    from app.table.upload.import_source import LocalFileSource
+    batch = svc.run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                           source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
+                           session_factory=factory)
+
+    assert _batch_stats(factory, batch.id) == ("COMPLETED", "PENDING", 1)
+    with factory() as s:
+        assert s.execute(text(
+            "SELECT row_count FROM analysis.site_data_stats "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'"
+        )).scalar() == 3
+
+
+def test_retry_turns_pending_into_ready_when_idle(factory, tmp_path, monkeypatch):
+    import app.table.upload.import_service as svc
+
+    real = svc.refresh_query_stats
+    monkeypatch.setattr(svc, "refresh_query_stats", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    monkeypatch.setattr(svc, "refresh_query_stats", real)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+        assert _stats_mention(s, "fact_daily_2026_07_us", "report_date", "2026-07-15")
+    assert _batch_stats(factory, batch_id) == ("COMPLETED", "READY", 1)
+    # 没有待更新的了：下一轮什么也不做
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_retry_gives_up_after_max_attempts(factory, tmp_path, monkeypatch):
+    import app.table.upload.import_service as svc
+    from app.table.upload.import_batch_model import STATS_MAX_ATTEMPTS
+
+    monkeypatch.setattr(svc, "refresh_query_stats", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())  # 第 1 次失败
+
+    for _ in range(STATS_MAX_ATTEMPTS - 1):
+        assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("COMPLETED", "FAILED", STATS_MAX_ATTEMPTS)
+    # 用尽后不再重试
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_retry_skips_while_an_import_holds_the_lock(factory, tmp_path, monkeypatch):
+    import app.table.upload.import_service as svc
+
+    monkeypatch.setattr(svc, "refresh_query_stats", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    engine = create_engine(TEST_URL)
+    from app.table.upload.import_service import IMPORT_LOCK_KEY
+    with engine.connect() as holder:
+        holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY})
+        try:
+            assert svc.retry_pending_query_stats(session_factory=factory) == 0
+        finally:
+            holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY})
+    engine.dispose()
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("COMPLETED", "PENDING", 1)
+
+
+def test_import_failing_after_facts_commit_has_no_query_stats_status(factory, tmp_path, monkeypatch):
+    """事实已提交（PENDING 随之落库）但收尾失败：批次判失败，查询统计「不适用」，
+    否则界面会在一个失败批次上提示「统计待更新」，重试任务也会去碰它。"""
+    import app.table.upload.import_service as svc
+
+    def boom(*_a, **_k):
+        raise RuntimeError("site_data_stats 写入失败")
+
+    monkeypatch.setattr(svc, "_update_site_data_stats", boom)
+    path = _write_csv(tmp_path, "US_Day_2026_07_15.csv", _three_rows())
+    from app.table.upload.import_source import LocalFileSource
+    batch = svc.run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                           source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
+                           session_factory=factory)
+    assert _batch_stats(factory, batch.id) == ("FAILED", None, 0)
+
+
+def _crash(*_a, **_k):
+    # 进程退出不是 Exception：导入的 except 分支拦不住，批次就停在中途的状态
+    raise SystemExit("worker killed")
+
+
+@pytest.mark.parametrize(
+    ("crash_point", "stats_at_crash"),
+    [("refresh_query_stats", "PENDING"), ("_update_site_data_stats", "READY")],
+)
+def test_retry_finishes_import_interrupted_after_facts_commit(
+    factory, tmp_path, monkeypatch, crash_point, stats_at_crash
+):
+    """事实已提交、收尾中途进程退出：批次停在 PROCESSING，这一期不可见。空闲时的恢复任务
+    要把收尾补完——统计、site_data_stats（含掉榜数）、完成状态（PR #149 Codex 复审 P2）。"""
+    import app.table.upload.import_service as svc
+
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    with monkeypatch.context() as m:
+        m.setattr(svc, crash_point, _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-16", [_row(1, "a"), _row(2, "b")])
+
+    with factory() as s:
+        batch_id = s.execute(text(
+            "SELECT id FROM analysis.import_batch WHERE report_date='2026-07-16'"
+        )).scalar()
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-16'"
+        )).scalar() == 0
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", stats_at_crash, 0)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+
+    assert _batch_stats(factory, batch_id) == ("COMPLETED", "READY", 0)
+    with factory() as s:
+        assert _stats_mention(s, "fact_daily_2026_07_us", "report_date", "2026-07-16")
+        assert s.execute(text(
+            "SELECT row_count, dropped_count FROM analysis.site_data_stats "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-16'"
+        )).one() == (2, 1)
+        assert s.execute(text(
+            "SELECT written_rows, completed_at IS NOT NULL FROM analysis.import_batch WHERE id=:i"
+        ), {"i": batch_id}).one() == (2, True)
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_interrupted_finish_that_fails_again_is_marked_failed(factory, tmp_path, monkeypatch):
+    """补完收尾再失败，与正常导入收尾失败同样判失败——不无限重试、不留「统计待更新」。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "refresh_query_stats", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    def boom(*_a, **_k):
+        raise RuntimeError("site_data_stats 写入失败")
+
+    monkeypatch.setattr(svc, "_update_site_data_stats", boom)
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("FAILED", None, 0)
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_import_interrupted_before_facts_commit_is_marked_failed(factory, tmp_path, monkeypatch):
+    """退在事实事务里（stats_status 为空）：没有可补的收尾，判失败——否则记录永远「处理中」、
+    不能重导，ops-bot 也一直以为有导入在跑。不发布期次、不动任何数据。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "import_report", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", None, 0)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    assert _batch_stats(factory, batch_id) == ("FAILED", None, 0)
+    with factory() as s:
+        assert "导入进程中断" in s.execute(text(
+            "SELECT error_message FROM analysis.import_batch WHERE id=:i"
+        ), {"i": batch_id}).scalar()
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-15'"
+        )).scalar() == 0
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_processing_batch_of_a_running_import_is_not_touched(factory, tmp_path, monkeypatch):
+    """导入正持锁时 PROCESSING 是真的在跑：恢复任务拿不到锁，跳过本轮，不碰它。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "import_report", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    engine = create_engine(TEST_URL)
+    from app.table.upload.import_service import IMPORT_LOCK_KEY
+    with engine.connect() as holder:
+        holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY})
+        try:
+            assert svc.retry_pending_query_stats(session_factory=factory) == 0
+        finally:
+            holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY})
+    engine.dispose()
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", None, 0)
+
+
+def test_recovery_uses_current_slice_after_the_period_was_reimported(factory, tmp_path, monkeypatch):
+    """收尾中断后同一期先被重导（排队接手排在恢复之前）：恢复不能拿旧批次的行数覆盖
+    新导入写好的 site_data_stats，否则分页总数与在榜/掉榜分界错位（PR #149 Codex 复审）。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "refresh_query_stats", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a"), _row(2, "b")])
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    with factory() as s:
+        assert s.execute(text(
+            "SELECT row_count FROM analysis.site_data_stats "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'"
+        )).scalar() == 2
+        statuses = s.execute(text(
+            "SELECT status FROM analysis.import_batch ORDER BY id"
+        )).scalars().all()
+    assert statuses == ["COMPLETED", "COMPLETED"]
+
+
+def test_recovery_does_not_republish_a_period_whose_facts_are_gone(factory, tmp_path, monkeypatch):
+    """收尾中断后保留清理先移除了这一期：恢复不能凭批次上记的行数重新发布它
+    （那会让已删掉的期次带着正数总数出现在日期选择器里，PR #149 Codex 复审）。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "_update_site_data_stats", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    with factory() as s:  # 模拟保留清理已移除该期的事实与掉榜
+        s.execute(text("DELETE FROM analysis.fact_daily WHERE site='US' AND report_date='2026-07-15'"))
+        s.execute(text("DELETE FROM analysis.fact_dropped WHERE site='US' AND anchor_date='2026-07-15'"))
+        s.commit()
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", "READY", 0)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    assert _batch_stats(factory, batch_id) == ("FAILED", None, 0)
+    with factory() as s:
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-15'"
+        )).scalar() == 0
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
