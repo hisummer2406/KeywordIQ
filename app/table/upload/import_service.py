@@ -42,7 +42,7 @@ from app.table.upload.import_batch_model import (
     ImportBatch,
 )
 from app.table.upload.import_source import ImportSource
-from app.table.upload.importer import ImportResult, import_report, written_leaf_partitions
+from app.table.upload.importer import import_report, written_leaf_partitions
 from config import settings
 from database import SessionFactory
 
@@ -74,10 +74,13 @@ class ImportRejected(ConflictError):
     message = "已有导入正在进行，请稍后重试"
 
 
-def _update_site_data_stats(session: Session, result: ImportResult) -> None:
+def _update_site_data_stats(
+    session: Session, *, site: str, period: str, report_date: date,
+    written_rows: int, dropped_rows: int,
+) -> None:
     """按 (site, period, report_date) 记录在榜与掉榜行数，供分页总数与日期选择器读取。
 
-    两个计数与事实/掉榜写入在**同一事务**内提交。不一致的后果不是"数字略有偏差"——
+    两个计数必须与已提交的事实/掉榜切片一致。不一致的后果不是"数字略有偏差"——
     分页把这两个数当作两段行集合的分界线，边界错位会让某一行出现两次或整行消失。
     """
     session.execute(
@@ -92,8 +95,8 @@ def _update_site_data_stats(session: Session, result: ImportResult) -> None:
                           updated_at = now()
             """
         ),
-        {"site": result.site, "period": result.period, "rdate": result.report_date,
-         "n": result.written_rows, "d": result.dropped_rows},
+        {"site": site, "period": period, "rdate": report_date,
+         "n": written_rows, "d": dropped_rows},
     )
 
 
@@ -150,11 +153,15 @@ def _refresh_batch_query_stats(session: Session, batch: ImportBatch) -> bool:
 def retry_pending_query_stats(
     *, session_factory: sessionmaker = SessionFactory, limit: int = 10
 ) -> int:
-    """重试查询统计待更新的已完成批次，返回本轮尝试的批次数。
+    """补完中断的导入收尾，再重试查询统计待更新的已完成批次；返回本轮处理的批次数。
 
-    先非阻塞地拿导入串行锁：拿到说明此刻没有导入在跑，``PENDING`` 只可能是刷新失败或
-    导入进程中途退出留下的；拿不到就跳过本轮——不等锁，也不和导入抢 IO。``limit`` 让
-    一轮的工作量有界，积压的留给下一轮。
+    先非阻塞地拿导入串行锁：拿到说明此刻没有导入在跑——``PROCESSING`` 只在持锁时写入，
+    此时还停在 ``PROCESSING`` 且 ``stats_status`` 非空（事实已提交）的批次，只可能是
+    进程在收尾中途退出留下的；``PENDING`` 同理只可能是刷新失败或中途退出。拿不到就跳过
+    本轮——不等锁，也不和导入抢 IO。``limit`` 让每类的工作量有界，积压的留给下一轮。
+
+    中断的收尾必须由这里接手：排队接手只看 ``QUEUED``、上传回收只看 ``UPLOADING``，
+    没有别的东西会回头看 ``PROCESSING``，不补的话这一期事实已入库却永远不可见。
 
     同一期被重导过的旧批次不特殊处理：它分析的是同一组分区，结果同样有效。
     """
@@ -163,7 +170,19 @@ def retry_pending_query_stats(
         with import_lock(session) as got_lock:
             if not got_lock:
                 return 0
-            batches = session.scalars(
+            interrupted = session.scalars(
+                select(ImportBatch)
+                .where(
+                    ImportBatch.status == STATUS_PROCESSING,
+                    ImportBatch.stats_status.is_not(None),
+                )
+                .order_by(ImportBatch.id)
+                .limit(limit)
+            ).all()
+            for batch in interrupted:
+                _resume_interrupted_finish(session, batch)
+
+            pending = session.scalars(
                 select(ImportBatch)
                 .where(
                     ImportBatch.status == STATUS_COMPLETED,
@@ -172,23 +191,77 @@ def retry_pending_query_stats(
                 .order_by(ImportBatch.id)
                 .limit(limit)
             ).all()
-            for batch in batches:
+            for batch in pending:
                 if _refresh_batch_query_stats(session, batch):
                     logger.info("查询统计重试成功，批次 #%s %s", batch.id, batch.file_name)
-            return len(batches)
+            return len(interrupted) + len(pending)
     finally:
         session.close()
 
 
-def _rebuild_filter_stats(session: Session, result: ImportResult) -> None:
-    """重算筛选下拉的统计——**只算刚导入的这一个切片**。
+def _resume_interrupted_finish(session: Session, batch: ImportBatch) -> None:
+    """接手进程在收尾中途退出的批次：事实已提交，从刷新统计起把收尾补完。
 
-    实现在 `app.table.analysis.filter_stats`：演示/合成数据脚本要写同样的两张表，
-    统计口径只能有一处定义。漏改其中一份的表现是"下拉里的数字对不上"。
+    在榜行数在事实提交时已随批次落库；掉榜行数没有落库，从已提交的掉榜切片数——它就是
+    那次写入的结果（同一期重导先删切片再写）。收尾再失败就与正常导入同样判失败，不无限重试。
     """
-    rebuild_filter_stats(
-        session, site=result.site, period=result.period, report_date=result.report_date
+    logger.warning("导入收尾中断，补完收尾：批次 #%s %s", batch.id, batch.file_name)
+    try:
+        dropped_rows = session.execute(
+            text(
+                "SELECT count(*) FROM analysis.fact_dropped "
+                " WHERE site = :site AND period_type = :period AND anchor_date = :anchor"
+            ),
+            {"site": batch.site, "period": batch.period_type, "anchor": batch.report_date},
+        ).scalar_one()
+        _finish_committed_import(session, batch, dropped_rows=dropped_rows)
+        session.commit()
+    except Exception as exc:
+        logger.exception("补完导入收尾失败，批次 #%s %s", batch.id, batch.file_name)
+        session.rollback()
+        _record_import_failure(session, batch, exc)
+
+
+def _finish_committed_import(session: Session, batch: ImportBatch, *, dropped_rows: int) -> None:
+    """事实提交之后的收尾：刷新查询统计 → 写 site_data_stats（期次可见）→ 重算筛选统计 →
+    标记完成（最后这步不提交，由调用方连同耗时等字段一起提交）。
+
+    正常导入与接手中断收尾共用这一段——两边各写一份的话，哪天收尾多一步只补了一边，
+    被接手的那一期就会少一样东西。异常向上抛，由调用方判失败。
+    """
+    # 刷新查询统计必须在 site_data_stats 之前——写入它的那一刻新期次就出现在日期选择器
+    # 里，用户第一次能选到这一期时计划就该是对的。失败不抛，见该函数说明。中途退出时若
+    # 已刷新成功（READY 已提交）就不必再刷。
+    if batch.stats_status != STATS_READY:
+        _refresh_batch_query_stats(session, batch)
+
+    site, period, report_date = batch.site, batch.period_type, batch.report_date
+    _update_site_data_stats(
+        session, site=site, period=period, report_date=report_date,
+        written_rows=batch.written_rows, dropped_rows=dropped_rows,
     )
+    session.commit()
+    # 筛选下拉统计只算这一个切片。实现在 `app.table.analysis.filter_stats`：演示/合成数据
+    # 脚本要写同样的两张表，统计口径只能有一处定义。
+    rebuild_filter_stats(session, site=site, period=period, report_date=report_date)
+    session.commit()
+
+    batch.status = STATUS_COMPLETED
+    batch.completed_at = datetime.now()
+
+
+def _record_import_failure(session: Session, batch: ImportBatch, exc: Exception) -> None:
+    """把批次落成失败。调用方须已回滚。"""
+    try:
+        batch.status = STATUS_FAILED
+        batch.error_message = str(exc)[:2000]
+        # 未成功的批次查询统计「不适用」：它可能已提交过 PENDING，不清掉的话界面会
+        # 在一个失败批次上提示「统计待更新」。
+        batch.stats_status = None
+        session.commit()
+    except Exception:
+        logger.exception("写入失败状态时再次出错，批次记录可能停留在 PROCESSING")
+        session.rollback()
 
 
 @contextmanager
@@ -331,27 +404,11 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
             session, site=batch.site, period=batch.period_type,
             report_date=batch.report_date, source=source,
         )
-        # PENDING 与事实同一事务提交：进程若在下面刷新统计之前退出，重试任务仍能接手。
+        # PENDING 与本次计数随事实同一事务提交：进程若在收尾中途退出，
+        # retry_pending_query_stats 凭它们就能把收尾补完。
         batch.stats_status = STATS_PENDING
-        session.commit()
-
-        # 刷新查询统计必须在 site_data_stats 之前——写入它的那一刻新期次就出现在日期选择器
-        # 里，用户第一次能选到这一期时计划就该是对的。失败不抛，见该函数说明。
-        _refresh_batch_query_stats(session, batch)
-
-        # 导入后处理：两类统计回写，在事实事务之外。都只涉及刚导入的那个切片。
-        _update_site_data_stats(session, result)
-        session.commit()
-        _rebuild_filter_stats(session, result)
-        session.commit()
-
-        # OSS-first：原始文件在入口即持久化于 OSS，OSS 对象即归档，不再做导入后本地归档。
-
-        batch.status = STATUS_COMPLETED
         batch.total_rows = result.total_data_rows
         batch.written_rows = result.written_rows
-        batch.processing_seconds = int(time.monotonic() - started)
-        batch.completed_at = datetime.now()
         notes = []
         if result.skipped_rows:
             notes.append(f"跳过 {result.skipped_rows} 行（列数不符或搜索词为空）")
@@ -359,6 +416,11 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
             notes.append(result.date_warning)
         if notes:
             batch.error_message = "；".join(notes)
+        session.commit()
+
+        # OSS-first：原始文件在入口即持久化于 OSS，OSS 对象即归档，不再做导入后本地归档。
+        _finish_committed_import(session, batch, dropped_rows=result.dropped_rows)
+        batch.processing_seconds = int(time.monotonic() - started)
         session.commit()
 
         logger.info(
@@ -371,17 +433,8 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
         # BackgroundTasks，栈是这条路径唯一的线索来源。
         logger.exception("导入失败 %s", batch.file_name)
         session.rollback()
-        try:
-            batch.status = STATUS_FAILED
-            batch.error_message = str(exc)[:2000]
-            batch.processing_seconds = int(time.monotonic() - started)
-            # 未成功的批次查询统计「不适用」：它可能已提交过 PENDING，不清掉的话界面会
-            # 在一个失败批次上提示「统计待更新」。
-            batch.stats_status = None
-            session.commit()
-        except Exception:
-            logger.exception("写入失败状态时再次出错，批次记录可能停留在 PROCESSING")
-            session.rollback()
+        batch.processing_seconds = int(time.monotonic() - started)
+        _record_import_failure(session, batch, exc)
         # 失败无碍原始文件留存：OSS 对象仍在，可据 object key 重导排查。
         return batch
 
