@@ -70,6 +70,8 @@ async def search_data(
     """
     if req.competitor_new:
         simple_auth.check_permission(user, COMPETITOR_VIEW)
+    # 请求摘要带视图与结果键指纹，重采可分日周统计、估算重复率（由请求日志中间件输出）。
+    request.state.summary_fields = service.search_summary_fields(req, user.id)
     # 完整请求预算从排队之前起算，排队等待也计入（超出 503 db.query_timeout）。
     deadline = service.request_deadline()
 

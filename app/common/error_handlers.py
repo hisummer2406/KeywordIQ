@@ -24,6 +24,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.common import errors
 from app.common.errors import APIError
+from app.common.log_limiter import diagnostic_limiter, suppressed_note
 from app.common.request_context import REQUEST_ID_HEADER, get_request_id
 
 logger = logging.getLogger(__name__)
@@ -74,9 +75,18 @@ async def api_error_handler(request, exc: APIError) -> JSONResponse:
     """业务异常 → 其声明的状态码与错误码。
 
     4xx 是客户端问题，WARNING 级、不带栈、不该触发告警；极少数 5xx 的 APIError 才带栈。
+    声明了 ``log_deduped`` 的保护性拒绝（排队超时、执行预算到点）例外：WARNING 不打栈，按窗口去重。
     """
     detail = getattr(exc, "log_detail", None)
-    if exc.http_status >= 500:
+    if exc.log_deduped:
+        # 保护性拒绝是预期内的：拥堵时逐请求出现，打栈只会让日志随拥堵放大（#154 design D6）
+        suppressed = diagnostic_limiter.admit((exc.code, request.url.path))
+        if suppressed is not None:
+            logger.warning(
+                "可重试的保护性拒绝 %s %s: %s %s%s",
+                request.method, request.url.path, exc.code, detail or "", suppressed_note(suppressed),
+            )
+    elif exc.http_status >= 500:
         logger.exception(
             "业务异常(5xx) %s %s: %s %s", request.method, request.url.path, exc.code, detail or ""
         )
@@ -157,7 +167,11 @@ async def sqlalchemy_exception_handler(request, exc: SQLAlchemyError) -> JSONRes
     if _is_query_canceled(exc):
         # 交互预算（INTERACTIVE_STATEMENT_TIMEOUT_MS）到点由数据库取消：是预期内的保护，
         # 不是缺陷，WARNING 不打栈；慢在哪由 search 的慢请求诊断与 SQL 级慢日志说明。
-        logger.warning("查询超出执行预算被取消 %s %s", request.method, request.url.path)
+        suppressed = diagnostic_limiter.admit((errors.CODE_DB_QUERY_TIMEOUT, request.url.path))
+        if suppressed is not None:
+            logger.warning(
+                "查询超出执行预算被取消 %s %s%s", request.method, request.url.path, suppressed_note(suppressed)
+            )
         return json_error(503, errors.CODE_DB_QUERY_TIMEOUT, "查询超时，请缩小筛选范围后重试")
     if isinstance(exc, OperationalError):
         logger.exception("数据库连接异常 %s %s", request.method, request.url.path)

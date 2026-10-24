@@ -23,6 +23,20 @@ logger = logging.getLogger(__name__)
 _SKIP_PATHS = frozenset({"/health"})
 
 
+def _summary_extra(scope) -> str:
+    """处理函数经 ``request.state.summary_fields`` 附加的摘要字段（如分析查询的视图与结果键
+    指纹，#154 design D5），拼在同一条摘要末尾，不新增日志行。
+
+    用 ``scope["state"]`` 而不是 contextvar：处理函数可能在子任务里运行（见
+    ``app/common/disconnect.py``），子任务里设的 contextvar 传不回这一层。只收简单的
+    ``str``/``int`` 值且去掉空白，保证摘要仍可按空格切分。
+    """
+    fields = (scope.get("state") or {}).get("summary_fields") or {}
+    return "".join(
+        f" {k}={str(v).replace(' ', '_')}" for k, v in fields.items() if isinstance(v, (str, int))
+    )
+
+
 class RequestLoggingMiddleware:
     """必须在 ``RequestIdMiddleware`` 之前调用 ``add_middleware``（因此比它更内层）：
     本仓库"后添加的中间件在更外层"，``RequestIdMiddleware`` 要留在最外层才能保证它
@@ -113,8 +127,8 @@ class RequestLoggingMiddleware:
             duration_ms = int((time.monotonic() - started) * 1000)
             outcome = "cancelled"
             logger.warning(
-                "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
-                method, path, state["status"], duration_ms, outcome, get_request_id(),
+                "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s%s",
+                method, path, state["status"], duration_ms, outcome, get_request_id(), _summary_extra(scope),
             )
             raise
         except Exception:
@@ -129,8 +143,8 @@ class RequestLoggingMiddleware:
                 outcome = "error_before_response"
                 status = 500
             logger.exception(
-                "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
-                method, path, status, duration_ms, outcome, get_request_id(),
+                "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s%s",
+                method, path, status, duration_ms, outcome, get_request_id(), _summary_extra(scope),
             )
             raise
         else:
@@ -138,18 +152,18 @@ class RequestLoggingMiddleware:
             if state["disconnected_before_response"]:
                 outcome = "client_disconnected"
                 logger.info(
-                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
-                    method, path, state["status"], duration_ms, outcome, get_request_id(),
+                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s%s",
+                    method, path, state["status"], duration_ms, outcome, get_request_id(), _summary_extra(scope),
                 )
             elif state["response_started"] and not state["body_completed"]:
                 outcome = "interrupted"
                 logger.warning(
-                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
-                    method, path, state["status"], duration_ms, outcome, get_request_id(),
+                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s%s",
+                    method, path, state["status"], duration_ms, outcome, get_request_id(), _summary_extra(scope),
                 )
             else:
                 outcome = "completed"
                 logger.info(
-                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
-                    method, path, state["status"], duration_ms, outcome, get_request_id(),
+                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s%s",
+                    method, path, state["status"], duration_ms, outcome, get_request_id(), _summary_extra(scope),
                 )

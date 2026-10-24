@@ -33,8 +33,10 @@ from app.common.errors import (
     ServiceUnavailableError,
     UnprocessableError,
 )
+from app.common.log_limiter import diagnostic_limiter, suppressed_note
 from app.site_registry import UnknownSiteError, normalize_site_code
 from app.table.analysis import analysis_crud as crud
+from app.table.analysis.result_key import result_key
 from app.table.analysis.row_segments import (
     INCLUDE_ALL,
     INCLUDE_DROPPED,
@@ -80,12 +82,16 @@ class ExportTooLargeError(PayloadTooLargeError):
 class AnalysisBusyError(ServiceUnavailableError):
     """分析查询并发已满且排队超时 → 503，稍后重试有意义。"""
 
+    log_deduped = True
+
     code = CODE_ANALYSIS_BUSY
     message = "查询繁忙，请稍后重试"
 
 
 class AnalysisTimeoutError(ServiceUnavailableError):
     """完整请求预算用尽 → 503。与语句被数据库取消同一个码与文案：对用户是同一件事。"""
+
+    log_deduped = True
 
     code = CODE_DB_QUERY_TIMEOUT
     message = "查询超时，请缩小筛选范围后重试"
@@ -171,8 +177,10 @@ async def search_slot(db: AsyncSession) -> AsyncIterator[None]:
             async with asyncio.timeout(settings.ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS):
                 acquired = await semaphore.acquire()
         except TimeoutError:
-            logger.warning("分析查询排队超时，返回繁忙（并发上限 %d）",
-                           settings.ANALYSIS_MAX_CONCURRENT_SEARCHES)
+            suppressed = diagnostic_limiter.admit("analysis.search_queue_timeout")
+            if suppressed is not None:
+                logger.warning("分析查询排队超时，返回繁忙（并发上限 %d）%s",
+                               settings.ANALYSIS_MAX_CONCURRENT_SEARCHES, suppressed_note(suppressed))
             raise AnalysisBusyError() from None
         yield
     finally:
@@ -241,6 +249,18 @@ def _resolve_site(site: str | None) -> str:
         return normalize_site_code(site)
     except UnknownSiteError as exc:
         raise ScopeError(str(exc)) from exc
+
+
+def search_summary_fields(req: AnalysisSearchRequest, user_id: int) -> dict[str, str]:
+    """请求摘要附加的视图与结果键指纹（#154 design D5），供重采分日周统计并估算重复率。
+
+    站点非法时只给视图：``search()`` 随后会以 422 拒绝这个请求，没有结果可言。
+    """
+    try:
+        site = _resolve_site(req.site)
+    except ScopeError:
+        return {"view": req.view}
+    return {"view": req.view, "result_key_fp": result_key(req, site=site, user_id=user_id).fingerprint()}
 
 
 def _resolve_date(

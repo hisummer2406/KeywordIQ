@@ -133,13 +133,19 @@
 
 ### D5 测量维度
 
-- 请求摘要（`request_logging.py`）对 `/api/analysis/search` 额外带 `view` 与 `result_key_fp`（结果键的 SHA-256 前 16 位）。处理函数把它们放进请求上下文，由中间件输出，不新增日志行。
+- 请求摘要（`request_logging.py`）对 `/api/analysis/search` 额外带 `view` 与 `result_key_fp`（结果键的 SHA-256 前 16 位）。处理函数写 `request.state.summary_fields`，中间件从 `scope["state"]` 读出拼在同一条摘要末尾，不新增日志行。不用 contextvar：查询在子任务里执行（D2），子任务里设的 contextvar 传不回中间件。站点非法时只带视图（请求随后 422）。
 - 指纹不可逆、不含原始条件；私有请求的指纹包含用户标识的哈希，不暴露用户。
 - `scripts/collect_search_latency.sh` 增加按视图分组与按指纹估算重复率（并发重复、TTL 窗口内重复）的输出。
 
 ### D6 诊断去重
 
-排队超时、语句/请求超时、断开取消、统计 `PENDING/FAILED` 的 WARNING 按 `(类型, site, view)` 在 60 s 窗口内去重：窗口内首条照常输出，其余只计数，窗口结束输出一条汇总（含次数）。窗口表有上限，超限时按最旧淘汰。用户侧文案沿用既有 503 文案，不新增弹窗。
+`app/common/log_limiter.py` 的 `WindowedLogLimiter`（60 s 窗口、最多 256 个键、超限淘汰最久未出现的键），进程内一份 `diagnostic_limiter`：
+
+- 每个键在窗口内放行首条，其余计数；下一次放行时在日志末尾报出上个窗口省略的次数。不用后台定时器补发汇总——同类不再出现时，次数仍可从逐请求的摘要得到。
+- **键是 `(错误码, 路径)` 而不是 `(类型, site, view)`**：繁忙拒绝发生在排队阶段、`search()` 解析站点之前，拿不到站点；视图已随请求摘要逐条记录。
+- 覆盖：`AnalysisBusyError`、`AnalysisTimeoutError`（`APIError.log_deduped = True`，改为 WARNING 不打栈——此前走 5xx 分支，每次 `logger.exception` 带完整栈，拥堵时逐请求刷栈）；语句超时（SQLSTATE 57014）的 WARNING；`search_slot` 的排队超时 WARNING。
+- 不覆盖：其余 5xx（如 SSO 提供方不可用）照旧带栈；断开取消只记 INFO 摘要，不产生 WARNING；查询统计失败按批次最多重试 3 次，本身有界。
+- 用户侧文案沿用既有 503 文案，不新增弹窗。
 
 ### D7 拥堵时保护轻量功能（闸门）
 
