@@ -215,3 +215,26 @@ async def test_non_http_scope_passed_through_without_logging(caplog):
 
     assert called is True
     assert not any("请求摘要" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_after_response_started_is_not_client_disconnected(caplog):
+    """只有响应开始之前的断开记 client_disconnected：正常发完后 Starlette 断开监听收到的
+    http.disconnect（uvicorn 在响应完成后对 receive 一律返回断开）不能把完成的请求改判。"""
+
+    async def downstream(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+        assert (await receive())["type"] == "http.disconnect"
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        pass
+
+    with caplog.at_level(logging.INFO, logger="app.common.request_logging"):
+        await RequestLoggingMiddleware(downstream)(_scope(), receive, send)
+
+    records = [r.message for r in caplog.records if "请求摘要" in r.message]
+    assert len(records) == 1 and "outcome=completed" in records[0]

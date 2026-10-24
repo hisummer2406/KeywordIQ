@@ -90,6 +90,14 @@
 
 无论用哪种，完整请求预算（D3 of #148）都继续作为最后兜底。开关：`ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED`，默认开。
 
+#### 实现（tasks 3.3）
+
+- `app/common/disconnect.py` 的 `cancel_on_disconnect`：查询放进子任务，同时在 `receive()` 上等 `http.disconnect`，先到者胜。断开时取消子任务并**等它退出**再返回，保证并发位释放、截止时刻还原、连接作废都发生在请求结束之前；外层被取消（优雅关闭）时子任务一并取消。
+- 断开后返回 499 而不是抛异常：客户端收不到任何响应，uvicorn 对已断连接的 `send` 直接忽略；抛异常会让 uvicorn 记「Exception in ASGI application」错误栈，而断开是常态（前端每次切换条件都会中止旧请求）。
+- `RequestLoggingMiddleware` 包装 `receive`：响应开始之前收到 `http.disconnect` 记 `outcome=client_disconnected`（INFO）。只认响应开始之前，流式导出中途断开仍是 `interrupted`，正常发完后 Starlette 断开监听收到的 `http.disconnect` 不计入。
+- 接线在 `search_data`：鉴权与截止时刻在前，`search_slot` + `search` 作为子任务；开关关闭时直接执行，行为与第一阶段相同。
+- `client_connection_check_interval` 写进异步引擎 `server_settings`，取 `INTERACTIVE_CLIENT_CHECK_INTERVAL_MS`（默认 1000，0 关闭）；同步引擎不设。
+
 **反向代理**：nginx 默认 `proxy_ignore_client_abort off`，客户端中止时会关闭到上游的连接；需在生产链路验证（tasks 3.5），验证前不把它当作已成立。
 
 ### D3 结果缓存（闸门，默认关）

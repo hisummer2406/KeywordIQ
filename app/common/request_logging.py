@@ -58,6 +58,12 @@ class RequestLoggingMiddleware:
       ``None`` 会被读成"连响应都没发"，而客户端实际收到的是确定的 500
       （Codex 复审 PR #98 P2）。这个假设耦合着 error_handlers.py 仍然给 `Exception`
       注册兜底处理器；那条注册若被移除，这里要一并回来重新核实。
+    - ``client_disconnected``：无异常，但响应头发出之前下游已从 ``receive`` 收到
+      ``http.disconnect``——客户端在拿到响应前就走了（如前端切换条件中止旧请求，
+      ``app/common/disconnect.py`` 据此取消查询并返回 499）。这时发出的响应 uvicorn
+      直接丢弃，记成 completed 会伪造一次正常完成。只认「响应开始之前」：流式导出在
+      响应开始后才断开属于 ``interrupted``，正常发完后 Starlette 的断开监听也会收到
+      ``http.disconnect``，都不归这一档。客户端主动离开是常态，记 INFO。
     - ``cancelled``：``asyncio.CancelledError`` 传播到了这里——它继承自
       ``BaseException`` 而不是 ``Exception``（3.8+），普通的 ``except Exception``
       捕不到它。Uvicorn 的优雅关闭超时、上游任务级超时等都是通过取消这个请求的
@@ -80,7 +86,16 @@ class RequestLoggingMiddleware:
 
         method = scope.get("method", "-")
         path = scope.get("path", "-")
-        state = {"status": None, "response_started": False, "body_completed": False}
+        state = {
+            "status": None, "response_started": False, "body_completed": False,
+            "disconnected_before_response": False,
+        }
+
+        async def receive_wrapper():
+            message = await receive()
+            if message["type"] == "http.disconnect" and not state["response_started"]:
+                state["disconnected_before_response"] = True
+            return message
 
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
@@ -93,7 +108,7 @@ class RequestLoggingMiddleware:
 
         started = time.monotonic()
         try:
-            await self.app(scope, receive, send_wrapper)
+            await self.app(scope, receive_wrapper, send_wrapper)
         except asyncio.CancelledError:
             duration_ms = int((time.monotonic() - started) * 1000)
             outcome = "cancelled"
@@ -120,7 +135,13 @@ class RequestLoggingMiddleware:
             raise
         else:
             duration_ms = int((time.monotonic() - started) * 1000)
-            if state["response_started"] and not state["body_completed"]:
+            if state["disconnected_before_response"]:
+                outcome = "client_disconnected"
+                logger.info(
+                    "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
+                    method, path, state["status"], duration_ms, outcome, get_request_id(),
+                )
+            elif state["response_started"] and not state["body_completed"]:
                 outcome = "interrupted"
                 logger.warning(
                     "请求摘要 %s %s status=%s duration_ms=%d outcome=%s request_id=%s",
