@@ -215,3 +215,44 @@ async def test_non_http_scope_passed_through_without_logging(caplog):
 
     assert called is True
     assert not any("请求摘要" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_after_response_started_is_not_client_disconnected(caplog):
+    """只有响应开始之前的断开记 client_disconnected：正常发完后 Starlette 断开监听收到的
+    http.disconnect（uvicorn 在响应完成后对 receive 一律返回断开）不能把完成的请求改判。"""
+
+    async def downstream(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+        assert (await receive())["type"] == "http.disconnect"
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        pass
+
+    with caplog.at_level(logging.INFO, logger="app.common.request_logging"):
+        await RequestLoggingMiddleware(downstream)(_scope(), receive, send)
+
+    records = [r.message for r in caplog.records if "请求摘要" in r.message]
+    assert len(records) == 1 and "outcome=completed" in records[0]
+
+
+@pytest.mark.asyncio
+async def test_handler_summary_fields_are_appended_without_spaces(caplog):
+    """处理函数经 scope state 附加的字段拼在摘要末尾；值里的空白替换掉，非简单类型丢弃。"""
+
+    async def downstream(scope, receive, send):
+        scope.setdefault("state", {})["summary_fields"] = {
+            "view": "WEEK", "result_key_fp": "abc", "note": "a b", "obj": {"x": 1},
+        }
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    with caplog.at_level(logging.INFO, logger="app.common.request_logging"):
+        await _run(downstream, _scope())
+
+    message = next(r.message for r in caplog.records if "请求摘要" in r.message)
+    assert message.endswith(" view=WEEK result_key_fp=abc note=a_b")

@@ -350,6 +350,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await waitFor(() =>
       expect(searchAnalysis).toHaveBeenLastCalledWith(
         expect.objectContaining({ categories: ['Electronics'] }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       ),
     );
 

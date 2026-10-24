@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     # 剩余预算，到点由数据库取消——只在应用层放弃等待的话，服务端语句会照跑到结束。
     # 低于 INTERACTIVE_STATEMENT_TIMEOUT_MS 留出余量；预算口径见 #148 design「性能预算」。
     ANALYSIS_REQUEST_TIMEOUT_SECONDS: float = 25.0
+    # 客户端断开后让数据库停下（#154，async-request-execution）。取消协程只放弃等待，服务端语句
+    # 照跑；SQLAlchemy 在取消时作废连接，数据库要靠这个间隔轮询套接字才发现客户端已断。实测
+    # 1000 ms 时 0.5–0.65 s 停止（design D2「机制验证结果」）。0 关闭轮询；PG14+、Linux 有效。
+    INTERACTIVE_CLIENT_CHECK_INTERVAL_MS: int = 1000
+    # /api/analysis/search 监听客户端断开并取消查询；关掉则断开的查询跑到完整请求预算为止。
+    ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED: bool = True
 
     # 持续增长市场（工具箱）的判定口径。三项都在**日报导入收尾时**参与算定，命中结果写进
     # analysis.fact_growth；查询侧只读，不重算。
