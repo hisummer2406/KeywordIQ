@@ -79,7 +79,8 @@ print("status", dict(st)); print("outcome", dict(oc))
 
 echo
 echo "== 1.1 按视图分布与重复率估算（#154 design D5：摘要带 view 与 result_key_fp）"
-echo "   并发重复：同指纹且执行区间重叠；窗口内重复：同指纹在前一次结束后 N 秒内再次到达。"
+echo "   并发重复：同指纹且执行区间重叠（去重的潜在收益）。"
+echo "   窗口内重复：开始前 N 秒内已有同指纹请求完成（缓存的潜在命中）；重叠而无已完成前序的不计。"
 echo "   指纹不含用户（非私有条件跨用户相同），可直接估算跨用户合并与缓存的潜在命中。"
 zgrep -h "请求摘要 POST /api/analysis/search " $LOGS 2>/dev/null | python3 -c '
 import os, re, sys, collections
@@ -115,8 +116,11 @@ if withfp:
         for i, (start, end, _ms, _v, _fp) in enumerate(reqs):
             if any(o[0] < end and start < o[1] for j, o in enumerate(reqs) if j != i):
                 concurrent += 1
-            if i > 0:
-                gap = start - max(o[1] for o in reqs[:i])
+            # 只认本请求开始前已经完成的同指纹请求：重叠的请求到达时还没有结果可缓存，
+            # 那是并发重复（去重的收益），算进这里会把两项混在一起、让缓存闸门误过。
+            done_before = [o[1] for o in reqs if o[1] <= start]
+            if done_before:
+                gap = start - max(done_before)
                 for w in within:
                     if gap <= w:
                         within[w] += 1
