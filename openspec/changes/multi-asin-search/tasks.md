@@ -19,11 +19,12 @@
 - [x] 3.2 `filters.ts`：`SearchMode`、`splitAsins`、`searchInputError`、`MAX_ASINS`；删除 `detectSearchKind`；`toSearchBody` 只按方式路由
 - [x] 3.3 `ScopeBar.tsx/.less`：搜索方式为输入框前的独立 Select；ASIN 方式下显示个数、超限禁用提交与回车；粘贴时把换行和制表符转为空格
 - [x] 3.4 `useAnalysisQuery.ts`：`FILTER_KEYS`、`submitScope`/`submitFilters` 改为 `asins`，`submitScope` 超限不提交；`stateCache.ts` 的 `CACHE_VERSION` 3→4
-- [x] 3.5 测试：`filters.test.ts`、`ScopeBar.test.tsx`、`scopeAndFilters.test.tsx`、`defaultsAndFirstPaint.test.tsx` 已按新行为更新——**未由 Claude 运行**，由用户执行 `pnpm lint && pnpm tsc && pnpm test`
+- [x] 3.5 测试：`filters.test.ts`、`ScopeBar.test.tsx`、`scopeAndFilters.test.tsx`、`defaultsAndFirstPaint.test.tsx` 已按新行为更新，由提交门禁执行（见 4.3）
 
 ## 4. 验证
 
 - [x] 4.1 后端：`uv run ruff check .` 通过。在 `keywordiq_test`（pgbase，经宿主 5433 端口）上运行定向 pytest（site_scoped_query、export、filters、slow_query、export_unit、request_logging、error_contract），133 passed。注：该库 alembic 版本为 v2 不认识的 `8f2a6c4e1b93`（他人分支的迁移），本变更无迁移，未处理
 - [x] 4.2 性能：在本地 `keywordiq_exp148`（US 日报 2026-05-03 约 47 万行）上只读执行。精确计数：1 个 ASIN 185ms，100 个 ASIN 289ms；首页：1 个 148ms，100 个 48ms。计划为同一分区的 Bitmap 扫描加 hashed SubPlan，没有退化为嵌套循环
-- [ ] 4.3 前端 lint/tsc/vitest——用户执行
+- [x] 4.3 提交门禁（a02cf15）：ruff、全量 pytest、`pnpm lint`、`pnpm tsc`、`pnpm test` 全部通过。门禁写死的测试库地址指向 localhost:5432，不可达，因此 356 个集成测试在门禁中跳过；真库结果以 4.1 为准。首轮门禁拦下两处测试写法错误：`onChange` 第二参数、一条旧断言仍按格式推断，修正后通过。
+  worktree 的 `.env` 已从 `localhost:5432` 改为 pgbase 的 `5433/keywordiq_test`：5432 现被 `yeweiyi-postgres` 占用，`test_database.py` 连错实例导致失败。主仓 `.env` 存在同样问题，未改动。
 - [ ] 4.4 浏览器实测与截图（两种方式下一行等高、菜单可选不截断、Excel 粘贴、101 个提示、三站点日/周）——用户执行，截图附 PR
