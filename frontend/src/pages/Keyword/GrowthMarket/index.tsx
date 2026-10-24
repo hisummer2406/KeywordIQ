@@ -3,7 +3,7 @@ import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { Alert, Button, Card, Select, Space, Tag, Typography } from 'antd';
 import { useEffect, useRef, useState } from 'react';
-import { formatSiteLabel } from '@/pages/Analysis/siteLabel';
+import { toSiteSelectOptions } from '@/pages/Analysis/siteLabel';
 import {
   getGrowthScope,
   searchGrowth,
@@ -99,7 +99,7 @@ export default function GrowthMarketPage() {
             value={draft.site}
             placeholder="站点"
             onChange={onSiteChange}
-            options={sites.map((site) => ({ label: formatSiteLabel(site), value: site.code }))}
+            options={toSiteSelectOptions(sites)}
           />
           <Select
             style={{ width: 160 }}

@@ -210,9 +210,9 @@ describe('持续增长市场', () => {
     await waitFor(() => expect(searchGrowth).toHaveBeenCalledTimes(1));
     getGrowthScope.mockResolvedValue({ ...SCOPE, site: 'DE', available_dates: ['2026-08-13'], latest_date: '2026-08-13' });
 
-    fireEvent.mouseDown(screen.getByTitle('🇺🇸 美国站（US）'));
+    fireEvent.mouseDown(screen.getByTitle('美国站（US）'));
     await act(async () => {
-      fireEvent.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      fireEvent.click(await screen.findByTitle('德国站（DE）'));
     });
     await settle();
 
