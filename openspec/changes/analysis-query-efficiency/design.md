@@ -135,7 +135,7 @@
 
 - 请求摘要（`request_logging.py`）对 `/api/analysis/search` 额外带 `view` 与 `result_key_fp`（结果键的 SHA-256 前 16 位）。处理函数写 `request.state.summary_fields`，中间件从 `scope["state"]` 读出拼在同一条摘要末尾，不新增日志行。不用 contextvar：查询在子任务里执行（D2），子任务里设的 contextvar 传不回中间件。站点非法时只带视图（请求随后 422）。
 - 指纹不可逆、不含原始条件；私有请求的指纹包含用户标识的哈希，不暴露用户。
-- `scripts/collect_search_latency.sh` 增加按视图分组与按指纹估算重复率（并发重复、TTL 窗口内重复）的输出。
+- `scripts/collect_search_latency.sh` 增加按视图分组与按指纹估算重复率的输出：并发重复按「进程号 + 指纹」统计（去重只在进程内合并）；窗口内重复只认开始前已成功完成（`status=200 outcome=completed`）的同指纹请求，分「同进程」（缓存每 worker 一份，闸门依据）与「跨进程」（上限参考）。
 
 ### D6 诊断去重
 
