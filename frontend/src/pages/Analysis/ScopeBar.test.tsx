@@ -21,7 +21,7 @@ describe('ScopeBar', () => {
 
     const query = container.querySelector('.scope-bar__query')!;
     expect(query).toBeInTheDocument();
-    expect(container).toHaveTextContent('🇺🇸 美国站（US）');
+    expect(container).toHaveTextContent('美国站（US）');
     expect(container).toHaveTextContent('2026年07月18日');
     // 顺序：站点、视图、期次、搜索方式、检索框、立即查询——都在同一个 Compact 里
     const order = [...query.children].map((el) =>

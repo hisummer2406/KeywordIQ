@@ -1,7 +1,7 @@
 import { Button, Input, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import type { SiteOption } from '@/services/upload';
 import { searchInputError, splitAsins, type ScopeDraft, type SearchMode } from './filters';
-import { formatSiteLabel } from './siteLabel';
+import { toSiteSelectOptions } from './siteLabel';
 import { formatScopeDateLabel } from './scopeDateLabel';
 import './ScopeBar.less';
 
@@ -88,7 +88,7 @@ export default function ScopeBar({
           value={scope.site}
           placeholder="站点"
           onChange={(site) => onScopeChange({ ...scope, site })}
-          options={sites.map((site) => ({ label: formatSiteLabel(site), value: site.code }))}
+          options={toSiteSelectOptions(sites)}
         />
         <Select
           className="scope-bar__view"

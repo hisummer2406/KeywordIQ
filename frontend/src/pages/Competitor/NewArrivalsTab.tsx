@@ -2,7 +2,7 @@ import { ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { Alert, Segmented, Space, Tag, Tooltip, Typography } from 'antd';
 import { useRef, useState } from 'react';
-import { siteCodeToFlag } from '@/pages/Analysis/siteLabel';
+import { SiteCodeLabel } from '@/pages/Analysis/siteLabel';
 import { listNewArrivals, type NewArrivalRow } from '@/services/competitor';
 import AsinDetailDrawer from './AsinDetailDrawer';
 import ProductDetailDrawer from './ProductDetailDrawer';
@@ -109,7 +109,7 @@ export default function NewArrivalsTab() {
             ellipsis: true,
             render: (_, row) => (
               <Space size={4}>
-                {row.site ? <span>{siteCodeToFlag(row.site)}</span> : null}
+                {row.site ? <SiteCodeLabel code={row.site} /> : null}
                 <span>{row.source_name || row.source_key}</span>
               </Space>
             ),

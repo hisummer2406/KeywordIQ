@@ -283,9 +283,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
     getCategories.mockClear();
     const user = userEvent.setup();
 
-    await user.click(screen.getByText('🇺🇸 美国站（US）'));
+    await user.click(screen.getByText('美国站（US）'));
     await act(async () => {
-      await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      await user.click(await screen.findByTitle('德国站（DE）'));
     });
 
     // 第三个参数是 { skipErrorHandler }，只在首屏按保存的站点乐观请求时才为真，
@@ -327,9 +327,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await user.click(electronics);
     expect(electronics).toBeChecked();
 
-    await user.click(screen.getByText('🇺🇸 美国站（US）'));
+    await user.click(screen.getByText('美国站（US）'));
     await act(async () => {
-      await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      await user.click(await screen.findByTitle('德国站（DE）'));
     });
 
     await waitFor(() =>
@@ -354,9 +354,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
     );
 
     // 切到 DE：界面上的勾选被清掉
-    await user.click(screen.getByText('🇺🇸 美国站（US）'));
+    await user.click(screen.getByText('美国站（US）'));
     await act(async () => {
-      await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+      await user.click(await screen.findByTitle('德国站（DE）'));
     });
     expect(screen.getByRole('checkbox', { name: /Electronics/ })).not.toBeChecked();
 
@@ -395,9 +395,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
 
       const user = userEvent.setup();
-      await user.click(screen.getByText('🇺🇸 美国站（US）'));
+      await user.click(screen.getByText('美国站（US）'));
       await act(async () => {
-        await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+        await user.click(await screen.findByTitle('德国站（DE）'));
       });
 
       // 卡住切到 DE 后「立即查询」触发的第二次 searchAnalysis，制造"appliedRef 已经是
@@ -460,9 +460,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
       const user = userEvent.setup();
       searchAnalysis.mockReturnValueOnce(new Promise(() => {})); // DE 请求永不落地
 
-      await user.click(screen.getByText('🇺🇸 美国站（US）'));
+      await user.click(screen.getByText('美国站（US）'));
       await act(async () => {
-        await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+        await user.click(await screen.findByTitle('德国站（DE）'));
       });
       await act(async () => {
         fireEvent.click(submit());
@@ -504,9 +504,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
       });
       searchAnalysis.mockReturnValueOnce(olderCall);
 
-      await user.click(screen.getByText('🇺🇸 美国站（US）'));
+      await user.click(screen.getByText('美国站（US）'));
       await act(async () => {
-        await user.click(await screen.findByTitle('🇩🇪 德国站（DE）'));
+        await user.click(await screen.findByTitle('德国站（DE）'));
       });
       await act(async () => {
         fireEvent.click(submit());
@@ -516,13 +516,13 @@ describe('分析查询屏 · 作用域与筛选', () => {
       // 再切回 US 并立即查询：这次（较新发出）用默认 mock，立即落地
       // 用 site 选择器自己范围内的当前选中值来开下拉——这是本文件唯一一处切换两次的
       // 用例：第一次切换后 rc-select 的下拉选项列表仍挂在 DOM 里（关闭态但未卸载），
-      // 裸 `getByText('🇩🇪 德国站（DE）')` 会同时命中"当前选中值"与那份残留列表项，
+      // 裸 `getByText('德国站（DE）')` 会同时命中"当前选中值"与那份残留列表项，
       // 报"找到多个元素"。
       const siteSelectValue = () =>
         document.querySelector('.scope-bar__site .ant-select-selection-item') as HTMLElement;
       await user.click(siteSelectValue());
       await act(async () => {
-        await user.click(await screen.findByTitle('🇺🇸 美国站（US）'));
+        await user.click(await screen.findByTitle('美国站（US）'));
       });
       await act(async () => {
         fireEvent.click(submit());

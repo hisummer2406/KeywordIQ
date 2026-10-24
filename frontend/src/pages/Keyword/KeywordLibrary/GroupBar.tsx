@@ -1,7 +1,7 @@
 import { MoreOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Card, Dropdown, Input, Modal, Radio, Select, Space, Tag, Typography } from 'antd';
 import { useState } from 'react';
-import { formatSiteLabel } from '@/pages/Analysis/siteLabel';
+import { toSiteSelectOptions } from '@/pages/Analysis/siteLabel';
 import type { KeywordGroup } from '@/services/library';
 import type { SiteOption } from '@/services/upload';
 
@@ -163,7 +163,7 @@ export default function GroupBar({
               style={{ width: '100%', marginBottom: 8 }}
               value={draft.site}
               onChange={(site) => setDraft({ ...draft, site })}
-              options={sites.map((s) => ({ label: formatSiteLabel(s), value: s.code }))}
+              options={toSiteSelectOptions(sites)}
             />
             <Typography.Paragraph type="secondary">
               分组绑定站点，<strong>建后不可修改站点</strong>；同一批词要盯多个站点就各建一个分组。
