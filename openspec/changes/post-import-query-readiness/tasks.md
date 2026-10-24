@@ -47,3 +47,11 @@
 - [x] 6.3 真库（keywordiq_test@pgbase:5433）跑 `test/` 全部：1307 passed / 1 skipped（OSS 实链）/ 3 failed → 其中 2 例是 `test_analysis_competitor_permission_unit.py` 的会话替身为 None，已改替身后 4 passed；剩 `test_v2_integration::test_models_match_migrated_schema` 因共享测试库被其他分支迁移改过（缺 `is_new` 列、`first_seen_basis` 注释不同），与本变更无关
 - [x] 6.4 第二轮复审两条 P2（重导后恢复用旧行数覆盖 site_data_stats；保留清理移除后恢复把期次重新发布）：`importer.committed_slice_counts` 取切片现状，切片已空且批次写过行时判 FAILED 不发布（site-scoped-import「补完时按切片现状发布」；design D2）。新增两例，去掉修复后两例失败；导入/上传/保留/OSS 定向真库回归通过
 - [x] 6.5 事实提交前中断的 PROCESSING 批次（复审汇总中列为既有问题，用户要求一并处理）：恢复 job 持锁时判 FAILED，可重导、不再挡 ops-bot（site-scoped-import「未提交事实的中断批次判为失败」；design D2）。`test_import_interrupted_before_facts_commit_is_marked_failed`（去掉判失败后失败）+ 持锁时不碰真在跑的 PROCESSING。**部署后迁移前遗留的 PROCESSING 批次也会被判失败**，生产是否存在此类批次未核对
+
+## 7. 第一阶段剩余验收
+
+- [x] 7.1 生产只读基线（用户授权，2026-10-24）与性能预算写入 design「生产基线」「性能预算」：修复前 search p95 1343 s，10-22 首次入榜 + 排除品牌词单请求最长 7884 s，轻量接口 p99 30 s；生产无遗留 PROCESSING 批次
+- [ ] 7.2 完整请求预算（单请求上限 25 s）：实现、测试与真库验证
+- [ ] 7.3 连续两期回归（日报）：本地用现有 6 份 US 日报；生产规模差 10 倍，只证机制
+- [ ] 7.4 周报：本机无样本，用户决定暂缓；部署后按同口径采集，需先让请求摘要能区分视图
+- [ ] 7.5 部署后按 design「性能预算」口径重采，对比基线
