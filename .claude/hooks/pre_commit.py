@@ -30,7 +30,9 @@ FRONTEND_PREFIX = "frontend/"
 # 判据与 frontend/ 同构——改动范围含这个前缀就跑（issue #56 P3a）。
 EXTENSION_PREFIX = "extension/"
 
-TEST_DB_URL = "postgresql://postgres:pwd123@localhost/keywordiq_test"
+# 本机测试库在 pgbase 容器，映射到 5433；5432 被别的项目的 PostgreSQL 占着。端口写错时探测连不上、
+# 集成测试整片静默跳过（曾跳过 378 个而门禁照样放行），所以端口必须显式写出，不能靠默认 5432。
+TEST_DB_URL = "postgresql://postgres:pwd123@localhost:5433/keywordiq_test"
 
 # 单条检查的超时上限。后端全量约 5 秒、前端约 15 秒，给到分钟级只为兜住"卡死"这一种
 # 情况——正常慢一点不该被误杀，真卡住则必须有个头。
