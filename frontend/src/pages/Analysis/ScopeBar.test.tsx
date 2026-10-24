@@ -19,7 +19,7 @@ describe('ScopeBar', () => {
     );
 
     expect(container.querySelector('.scope-bar__query')).toBeInTheDocument();
-    expect(container).toHaveTextContent('🇺🇸 美国站（US）');
+    expect(container).toHaveTextContent('美国站（US）');
     expect(container).toHaveTextContent('2026年07月18日');
     expect(
       screen.getByPlaceholderText('输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger'),

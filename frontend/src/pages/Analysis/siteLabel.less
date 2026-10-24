@@ -1,0 +1,19 @@
+// 4:3 统一裁切（flag-icons 的 4x3 版本是裁切不是拉伸），三国同尺寸。
+.site-flag {
+  flex: none;
+  width: 16px;
+  height: 12px;
+  border-radius: 2px;
+  // 白底国旗边缘在白色背景上会消失，补一圈极淡的描边
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  vertical-align: middle;
+}
+
+// 下拉里 vertical-align: top 让外框贴住行盒顶部、高度等于行高，
+// 国旗再由 align-items 在整行高度内居中，不受中文字体基线影响。
+.site-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: top;
+}

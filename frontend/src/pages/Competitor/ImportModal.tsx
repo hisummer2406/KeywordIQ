@@ -27,7 +27,7 @@ import {
   type PreviewResponse,
 } from '@/services/competitor';
 import type { SiteOption } from '@/services/upload';
-import { formatSiteLabel } from '@/pages/Analysis/siteLabel';
+import { toSiteSelectOptions } from '@/pages/Analysis/siteLabel';
 
 /**
  * 添加卖家的唯一入口:粘贴文本 或 导入书签,两条路径共用同一个预览→确认流程
@@ -213,7 +213,7 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
               placeholder="不设默认站点"
               value={fallbackSite}
               onChange={setFallbackSite}
-              options={sites.map((s) => ({ label: formatSiteLabel(s), value: s.code }))}
+              options={toSiteSelectOptions(sites)}
             />
           </Space>
         </>
