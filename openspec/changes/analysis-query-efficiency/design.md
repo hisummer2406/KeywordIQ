@@ -58,6 +58,8 @@
 
 **前端**：`searchAnalysis` 接受 `AbortSignal`；`useAnalysisQuery` 发起新请求前中止上一个，被中止的请求不进错误态；保留 `requestSeqRef` 作二次保护。
 
+前端实现要点（tasks 3.5）：axios 中止时抛 `CanceledError`（`code: ERR_CANCELED`），它带 `request` 没有 `response`，不拦会被全局 `errorHandler` 当成「服务器无响应」提示，所以 `errorHandler` 先放行它。ProTable 对每次 `request` 调用结束都会执行收尾、关掉加载态；被中止的调用若立即结束，新请求还在飞时加载态就没了，所以它等最新一次结束后再以 `success: false` 收尾（ProTable 对 `success: false` 既不写数据也不走 `onRequestError`）。
+
 **断开检测**：处理函数里起一个监听任务循环 `receive()`，收到 `http.disconnect` 即取消请求任务（或在去重下递减引用计数）。FastAPI 已读完请求体，后续 `receive()` 只会返回断开消息。需要核对 `RequestLoggingMiddleware` 包装 `receive` 后此路径仍然成立。
 
 **数据库侧停止——首选：数据库自己检测断开。** 在异步引擎 `server_settings` 加 `client_connection_check_interval`（PG14+，Linux 有效；生产和本地 Docker 都是 Linux）。请求任务被取消时，若 SQLAlchemy/asyncpg 关闭或作废了该连接的套接字，后端会在检测间隔内发现客户端已断并中止语句。

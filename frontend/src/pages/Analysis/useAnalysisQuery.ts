@@ -112,6 +112,12 @@ export function useAnalysisQuery(options: {
    * （PR #87 第五轮 P2）。
    */
   const requestSeqRef = useRef(0);
+  /**
+   * 最新一次在飞的 search 请求：下一次调用发出前中止它，浏览器断开连接，后端取消查询、
+   * 数据库停止执行（#154 async-request-execution）。序号守卫仍保留——中止只省掉服务端的
+   * 白工，「旧响应不覆盖新结果」不依赖它。
+   */
+  const inflightRef = useRef<{ controller: AbortController; settled: Promise<void> } | null>(null);
 
   /** 本次进屏是否确实按保存的条件初始化了——「我的默认」标记的判据。 */
   const [savedApplied, setSavedApplied] = useState(saved !== null);
@@ -373,12 +379,24 @@ export function useAnalysisQuery(options: {
     }
   };
 
-  const runRequest = async (params: { current?: number; pageSize?: number }) => {
-    const body = appliedRef.current;
-    if (!body?.date) return { data: [] as AnalysisRow[], total: 0, success: true };
-    // 序号在函数入口就占位（早于任何 await），保证同一时刻发出的多次调用各自持有
-    // 严格递增、互不相同的号——谁的响应最后落地都能准确判断自己是否已经过期。
-    const seq = (requestSeqRef.current += 1);
+  /**
+   * 被更晚的调用中止后，等在飞的最新一次结束再收尾。立刻结束的话，ProTable 会对这次调用
+   * 执行收尾（`requestFinally`），在新请求还在飞时就关掉加载态；更晚的那次若也被中止，
+   * 它自己也在等，逐个等到最后一次即可。
+   */
+  const waitForLatest = async (self: { settled: Promise<void> }) => {
+    while (inflightRef.current && inflightRef.current !== self) {
+      await inflightRef.current.settled;
+    }
+  };
+
+  /** 一次 search 调用的主体；`runRequest` 负责序号、中止上一次与登记在飞请求。 */
+  const runSearch = async (
+    params: { current?: number; pageSize?: number },
+    body: SearchBody,
+    seq: number,
+    inflight: { controller: AbortController; settled: Promise<void> },
+  ) => {
     const key: RequestKey = {
       body,
       orderBy: appliedSortRef.current.field,
@@ -413,14 +431,17 @@ export function useAnalysisQuery(options: {
     // 会吞掉 request 里抛出的**一切**异常（不只是网络失败），响应处理段里的 bug 若落在 try
     // 之外，就是「界面显示旧条数 + 旧行 + 没有任何输出」的静默失败。
     try {
-      const res = await searchAnalysis({
-        ...body,
-        orderBy: appliedSortRef.current.field,
-        orderDir: appliedSortRef.current.dir,
-        page: params.current,
-        perPage: params.pageSize,
-        include_total: wantTotal,
-      });
+      const res = await searchAnalysis(
+        {
+          ...body,
+          orderBy: appliedSortRef.current.field,
+          orderDir: appliedSortRef.current.dir,
+          page: params.current,
+          perPage: params.pageSize,
+          include_total: wantTotal,
+        },
+        { signal: inflight.controller.signal },
+      );
       if (wantTotal) needsTotalRef.current = false;
       // total 为 null 表示"本次没算"，沿用缓存；0 是真的没有命中行，必须照收
       const total = res.total ?? totalRef.current;
@@ -447,11 +468,41 @@ export function useAnalysisQuery(options: {
       markDataReady();
       return { data: rows, total, success: res.success !== false };
     } catch (e) {
+      // 被更晚的调用中止：不是失败，不标失败、不抛给 ProTable（否则走 onRequestError）。
+      // `success: false` 让 ProTable 既不采用这份空数据，也不把它当错误。
+      if (inflight.controller.signal.aborted) {
+        await waitForLatest(inflight);
+        return { data: [] as AnalysisRow[], total: totalRef.current, success: false };
+      }
       // 网络/服务端失败的提示由全局 errorHandler 负责（这个调用没有 skipErrorHandler）；
       // 这里只记一笔结局，好让界面不再把这份表格当成当前条件的结果。**只认最新发出的那次**：
       // 更早发出的旧请求晚失败，不该把已经成功的新结果标成失败。异常照常抛回给 ProTable。
       if (seq === requestSeqRef.current) setRequestFailed(true);
       throw e;
+    }
+  };
+
+  const runRequest = async (params: { current?: number; pageSize?: number }) => {
+    const body = appliedRef.current;
+    if (!body?.date) return { data: [] as AnalysisRow[], total: 0, success: true };
+    // 序号在函数入口就占位（早于任何 await），保证同一时刻发出的多次调用各自持有
+    // 严格递增、互不相同的号——谁的响应最后落地都能准确判断自己是否已经过期。
+    const seq = (requestSeqRef.current += 1);
+    // 同样在任何 await 之前：中止上一次在飞的请求，登记自己为最新一次。
+    inflightRef.current?.controller.abort();
+    let markSettled: () => void = () => {};
+    const inflight = {
+      controller: new AbortController(),
+      settled: new Promise<void>((resolve) => {
+        markSettled = resolve;
+      }),
+    };
+    inflightRef.current = inflight;
+    try {
+      return await runSearch(params, body, seq, inflight);
+    } finally {
+      markSettled();
+      if (inflightRef.current === inflight) inflightRef.current = null;
     }
   };
 
