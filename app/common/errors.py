@@ -23,6 +23,9 @@ class APIError(Exception):
     http_status: int = 500
     code: str = "internal.error"
     message: str = "服务器内部错误"
+    #: 预期内、可重试的保护性拒绝（如分析查询排队超时、执行预算到点）：拥堵时逐请求出现，
+    #: 记 WARNING 不打栈，且按窗口去重（``app/common/log_limiter.py``）。真正的故障保持 False。
+    log_deduped: bool = False
 
     def __init__(
         self,

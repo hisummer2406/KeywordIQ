@@ -180,6 +180,8 @@ async def test_search_endpoint_cancels_query_on_disconnect(monkeypatch, caplog):
     # 请求摘要不把断开伪造成正常完成
     summary = [r.message for r in caplog.records if "请求摘要" in r.message]
     assert len(summary) == 1 and "outcome=client_disconnected" in summary[0]
+    # 处理函数在子任务里运行，附加的视图与结果键指纹仍经 scope state 进到摘要（#154 design D5）
+    assert " view=DAY result_key_fp=" in summary[0]
 
 
 async def test_search_endpoint_runs_to_completion_when_switch_is_off(monkeypatch):
