@@ -66,6 +66,26 @@
 - 代价：执行中的后端每个间隔做一次套接字轮询，开销很小；间隔建议 1000 ms，可配 `INTERACTIVE_CLIENT_CHECK_INTERVAL_MS`，0 表示关闭。
 - 前提需真库验证（tasks 3.1）：取消后该连接确实被作废（而不是等语句结束后归还池），`pg_stat_activity` 在间隔内不再显示该语句。
 
+#### 机制验证结果（2026-10-25，tasks 3.1）
+
+环境：本地 pgbase（PG 15.19，Docker/Linux），库 `keywordiq_test`，开测时无其他会话；只执行 `pg_sleep` 与读 `pg_stat_activity`，不写表。引擎与 `database.py` 的异步引擎同形（`pool_pre_ping`、`server_settings` 含 `statement_timeout=30000`）。语句为 `pg_sleep(6)`，执行 0.5 s 后取消，另起一条 asyncpg 连接每 0.1 s 轮询 `pg_stat_activity`。
+
+| 取消方式 | `client_connection_check_interval` | 客户端返回 | 服务端语句消失 | 被取消的连接 |
+|---|---|---|---|---|
+| `task.cancel()` | 未设（0） | 立即 | 5.58 s 后（跑满） | 作废，不回池 |
+| `asyncio.timeout(0.5)` | 未设（0） | 0.5 s | 5.62 s 后（跑满） | 作废，不回池 |
+| `task.cancel()` | 1000 ms | 立即 | 0.63 s 后 | 作废，不回池 |
+| `asyncio.timeout(0.5)` | 1000 ms | 0.5 s | 0.53 s 后 | 作废，不回池 |
+| `task.cancel()`，同时另一会话跑 `pg_sleep(3)` | 1000 ms | 立即 | 5 次重复：0.54–0.65 s | 作废；另一会话正常完成 |
+
+结论：
+
+- **首选机制成立。** SQLAlchemy/asyncpg 在任务取消时作废连接（关闭套接字），而不是等语句结束后归还；数据库默认要到写结果时才发现，加上检测间隔后在一个间隔内中止。复现了 #148 的「跑满」现象，也确认差别只在这个参数。
+- **不误伤。** 只有被取消请求自己的后端停止；同池并发的另一条语句正常完成，取消后池可继续取连接执行 `SELECT 1`。
+- **权限。** `pg_settings.context = user`，普通应用角色可经 `server_settings` 设置，不需要超级用户。
+- **备选不需要实现**（tasks 3.2 关闭）。生产是 PG 15.8 / Linux 容器，参数自 PG 14 起提供；仍以发布后的生产链路验证（tasks 3.6）为准。
+- 被作废的连接会让池少一条，下次按需新建；这是取消路径的代价，频率受断开次数约束，不影响正常路径。
+
 **备选（仅当首选不成立）**：取消时**在归还连接之前**由辅助连接对本连接的后端进程发 `pg_cancel_backend`，并等待语句结束再释放连接。连接在取消完成前一直归本请求所有，进程号不会被他人复用，不需要也不允许「先查 `pg_stat_activity` 再取消」的两步核对。辅助连接单独 1 条、有短超时，不占业务异步池。
 
 无论用哪种，完整请求预算（D3 of #148）都继续作为最后兜底。开关：`ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED`，默认开。
