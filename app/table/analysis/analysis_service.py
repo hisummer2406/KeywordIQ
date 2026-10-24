@@ -17,8 +17,10 @@ import logging
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import date
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -26,6 +28,7 @@ from app.common.errors import (
     CODE_ANALYSIS_BUSY,
     CODE_ANALYSIS_EXPORT_TOO_LARGE,
     CODE_ANALYSIS_SCOPE_INVALID,
+    CODE_DB_QUERY_TIMEOUT,
     PayloadTooLargeError,
     ServiceUnavailableError,
     UnprocessableError,
@@ -79,6 +82,41 @@ class AnalysisBusyError(ServiceUnavailableError):
 
     code = CODE_ANALYSIS_BUSY
     message = "查询繁忙，请稍后重试"
+
+
+class AnalysisTimeoutError(ServiceUnavailableError):
+    """完整请求预算用尽 → 503。与语句被数据库取消同一个码与文案：对用户是同一件事。"""
+
+    code = CODE_DB_QUERY_TIMEOUT
+    message = "查询超时，请缩小筛选范围后重试"
+
+
+# 本次 search 的截止时刻（``time.monotonic()``），由 :func:`search` 设置、``_timed_execute``
+# 读取。用 ContextVar 而不是层层传参：search 里每条语句都经 ``_timed_execute``，而它的
+# 调用点分散在好几个辅助函数里；不在 search 内的调用（如 ``get_scope``）读到 None，不受约束。
+_search_deadline: ContextVar[float | None] = ContextVar("_search_deadline", default=None)
+
+
+def request_deadline() -> float:
+    """从现在起算的完整请求截止时刻。API 层在排队之前取，排队等待也计入预算。"""
+    return time.monotonic() + settings.ANALYSIS_REQUEST_TIMEOUT_SECONDS
+
+
+async def _bound_statement_to_deadline(db: AsyncSession, deadline: float) -> None:
+    """把下一条语句的 ``statement_timeout`` 收紧到剩余预算，到点由**数据库**取消。
+
+    不能只在应用层 ``asyncio.timeout``：经 SQLAlchemy 的 asyncpg 适配层取消协程只放弃了
+    等待，服务端语句照跑到结束——实测 ``pg_sleep(8)`` 在客户端取消后仍执行满 8 s（#148
+    design D3「完整请求预算」）。``set_config(..., true)`` 即 ``SET LOCAL``，只作用于本事务；
+    不超过引擎级的交互预算。剩余预算已用尽就不再发起查询。
+    """
+    remaining_ms = int((deadline - time.monotonic()) * 1000)
+    if remaining_ms <= 0:
+        raise AnalysisTimeoutError()
+    await db.execute(
+        text("SELECT set_config('statement_timeout', :ms, true)"),
+        {"ms": str(min(remaining_ms, settings.INTERACTIVE_STATEMENT_TIMEOUT_MS))},
+    )
 
 
 # 分析查询的并发闸（#148，design D4）：每个 worker 一把，绑定在创建它的事件循环上——
@@ -215,10 +253,15 @@ async def _timed_execute(db: AsyncSession, stmt, db_ms: list[int] | None):
     耗时——恰恰是最该被诊断出来的一类失败（Codex 复审 PR #98 P2）。不吞异常，只是
     在传播前把已经等待的时间计进去。
     """
+    deadline = _search_deadline.get()
     if db_ms is None:
+        if deadline is not None:
+            await _bound_statement_to_deadline(db, deadline)
         return await db.execute(stmt)
     t0 = time.monotonic()
     try:
+        if deadline is not None:
+            await _bound_statement_to_deadline(db, deadline)
         return await db.execute(stmt)
     finally:
         db_ms.append(int((time.monotonic() - t0) * 1000))
@@ -320,11 +363,16 @@ def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
     }
 
 
-async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> AnalysisSearchResponse:
+async def search(
+    db: AsyncSession, req: AnalysisSearchRequest, user_id: int, *, deadline: float | None = None
+) -> AnalysisSearchResponse:
     """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。
 
     ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新发现」筛选判定关注
     关系，MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
+
+    ``deadline`` 是完整请求的截止时刻（:func:`request_deadline`）；给了就让每条语句在剩余
+    预算内由数据库取消，用尽返回 503 ``db.query_timeout``。不给则只受引擎级语句超时约束。
 
     **慢请求诊断**（design.md 决策 D 第二层）：围绕既有阶段用 ``time.monotonic()`` 打点，
     总耗时超过 ``settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS`` 才在结尾输出一条 WARNING，
@@ -380,6 +428,9 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
             db_total_ms, max(total_ms - db_total_ms, 0), total_ms,
         )
 
+    # 完整请求预算：本次调用内的每条语句都收紧到剩余预算（见 _bound_statement_to_deadline），
+    # 退出时还原，不影响同一任务里之后的查询。
+    deadline_token = _search_deadline.set(deadline)
     try:
         dates = await _available_dates(db, site, view, db_ms=db_ms)
         on = _resolve_date(req.date, dates)
@@ -483,6 +534,8 @@ async def search(db: AsyncSession, req: AnalysisSearchRequest, user_id: int) -> 
         if total_ms > settings.ANALYSIS_SLOW_QUERY_THRESHOLD_MS:
             _log_slow_diagnostic(total_ms, failed=True)
         raise
+    finally:
+        _search_deadline.reset(deadline_token)
 
 
 def resolve_export_scope(

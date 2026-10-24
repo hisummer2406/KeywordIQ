@@ -170,3 +170,77 @@ async def test_waiting_for_a_slot_does_not_hold_a_pool_connection(gate, fresh_as
     finally:
         leave.set()
         await holder
+
+
+# ---------------------------------------------------------------------------
+# 完整请求预算（#148 design D3「完整请求预算」）：每条语句收紧到剩余预算，由数据库到点取消。
+# ---------------------------------------------------------------------------
+
+async def test_exhausted_request_budget_fails_without_querying(gate):
+    """预算已用尽：不再发起查询，直接 503 db.query_timeout（与语句被取消同一个码）。"""
+    token = gate._search_deadline.set(time.monotonic() - 1)
+    try:
+        with pytest.raises(gate.AnalysisTimeoutError) as info:
+            await gate._timed_execute(_IdleSession(), text("SELECT 1"), [])
+    finally:
+        gate._search_deadline.reset(token)
+    assert (info.value.http_status, info.value.code) == (503, "db.query_timeout")
+
+
+@needs_db
+async def test_statement_is_canceled_by_the_database_at_the_request_deadline(gate, fresh_async_engine):
+    """到点的是数据库侧取消，不是客户端放弃等待：语句真的停了、连接可继续用。
+
+    只在应用层 asyncio.timeout 不够——经 SQLAlchemy 的 asyncpg 适配层取消协程后，服务端的
+    pg_sleep 仍会跑到结束（实测 8 s 的语句在客户端取消后执行满 8 s）。
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.common.error_handlers import _is_query_canceled
+
+    async with AsyncSession(fresh_async_engine) as db:
+        token = gate._search_deadline.set(time.monotonic() + 0.3)
+        started = time.monotonic()
+        try:
+            with pytest.raises(DBAPIError) as info:
+                await gate._timed_execute(db, text("SELECT pg_sleep(5) /* kiq-deadline */"), [])
+        finally:
+            gate._search_deadline.reset(token)
+        assert time.monotonic() - started < 2
+        assert _is_query_canceled(info.value)
+
+        await db.rollback()
+        assert (await db.execute(text("SELECT 1"))).scalar() == 1
+        lingering = (await db.execute(text(
+            "SELECT count(*) FROM pg_stat_activity "
+            " WHERE state = 'active' AND query LIKE '%kiq-deadline%' AND pid <> pg_backend_pid()"
+        ))).scalar()
+        assert lingering == 0
+        # SET LOCAL 只作用于那个事务：之后回到引擎级的交互预算
+        assert (await db.execute(text("SHOW statement_timeout"))).scalar() == (
+            f"{settings.INTERACTIVE_STATEMENT_TIMEOUT_MS // 1000}s"
+            if settings.INTERACTIVE_STATEMENT_TIMEOUT_MS % 1000 == 0
+            else f"{settings.INTERACTIVE_STATEMENT_TIMEOUT_MS}ms"
+        )
+
+
+@needs_db
+async def test_search_applies_and_then_clears_its_deadline(gate, fresh_async_engine, monkeypatch):
+    """search 内的语句受预算约束；返回后同一任务里的查询不再受约束（get_scope 等不受影响）。"""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.table.search.search_schemas import AnalysisSearchRequest
+
+    seen: list[float | None] = []
+    real = gate._bound_statement_to_deadline
+
+    async def spy(db, deadline):
+        seen.append(deadline)
+        return await real(db, deadline)
+
+    monkeypatch.setattr(gate, "_bound_statement_to_deadline", spy)
+    deadline = time.monotonic() + 10
+    async with AsyncSession(fresh_async_engine) as db:
+        await gate.search(db, AnalysisSearchRequest(site="US", view="DAY"), 1, deadline=deadline)
+    assert seen and set(seen) == {deadline}
+    assert gate._search_deadline.get() is None
