@@ -180,6 +180,31 @@ def written_leaf_partitions(site: str, period: str, report_date: date) -> list[s
     return [leaf_partition_name(t, site, report_date) for t in written_fact_tables(period)]
 
 
+def committed_slice_counts(
+    session: Session, site: str, period: str, report_date: date
+) -> tuple[int, int]:
+    """库里此刻 (site, period, report_date) 切片的在榜行数与掉榜行数。只读。
+
+    给接手中断收尾用：那时批次上记的计数可能已经不是切片的现状——同一期可能已被重导，
+    分区也可能已被保留清理移除。
+    """
+    site = normalize_site_code(site)
+    table, date_col, *_ = _validate_period(period)
+    params = {"site": site, "period": period, "d": report_date}
+    written = session.execute(
+        text(f"SELECT count(*) FROM analysis.{table} WHERE site = :site AND {date_col} = :d"),
+        params,
+    ).scalar_one()
+    dropped = session.execute(
+        text(
+            "SELECT count(*) FROM analysis.fact_dropped "
+            " WHERE site = :site AND period_type = :period AND anchor_date = :d"
+        ),
+        params,
+    ).scalar_one()
+    return written, dropped
+
+
 def _raw_cursor(session: Session):
     """取底层 psycopg2 游标用于 COPY。"""
     return session.connection().connection.cursor()

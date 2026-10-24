@@ -775,3 +775,51 @@ def test_retry_leaves_processing_without_committed_facts_alone(factory, tmp_path
     with factory() as s:
         batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
     assert _batch_stats(factory, batch_id) == ("PROCESSING", None, 0)
+
+
+def test_recovery_uses_current_slice_after_the_period_was_reimported(factory, tmp_path, monkeypatch):
+    """收尾中断后同一期先被重导（排队接手排在恢复之前）：恢复不能拿旧批次的行数覆盖
+    新导入写好的 site_data_stats，否则分页总数与在榜/掉榜分界错位（PR #149 Codex 复审）。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "refresh_query_stats", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    _import_day(factory, tmp_path, "2026-07-15", [_row(1, "a"), _row(2, "b")])
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    with factory() as s:
+        assert s.execute(text(
+            "SELECT row_count FROM analysis.site_data_stats "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-15'"
+        )).scalar() == 2
+        statuses = s.execute(text(
+            "SELECT status FROM analysis.import_batch ORDER BY id"
+        )).scalars().all()
+    assert statuses == ["COMPLETED", "COMPLETED"]
+
+
+def test_recovery_does_not_republish_a_period_whose_facts_are_gone(factory, tmp_path, monkeypatch):
+    """收尾中断后保留清理先移除了这一期：恢复不能凭批次上记的行数重新发布它
+    （那会让已删掉的期次带着正数总数出现在日期选择器里，PR #149 Codex 复审）。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "_update_site_data_stats", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    with factory() as s:  # 模拟保留清理已移除该期的事实与掉榜
+        s.execute(text("DELETE FROM analysis.fact_daily WHERE site='US' AND report_date='2026-07-15'"))
+        s.execute(text("DELETE FROM analysis.fact_dropped WHERE site='US' AND anchor_date='2026-07-15'"))
+        s.commit()
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", "READY", 0)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    assert _batch_stats(factory, batch_id) == ("FAILED", None, 0)
+    with factory() as s:
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-15'"
+        )).scalar() == 0
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0

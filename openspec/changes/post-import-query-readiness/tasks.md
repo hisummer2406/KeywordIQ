@@ -45,3 +45,4 @@
 - [x] 6.1 P1 排队者攥着鉴权连接（async-request-execution「排队中的分析查询不占连接」；design D4）：`search_slot(db)` 排队前 `close()` 请求会话；`test_waiting_for_a_slot_does_not_hold_a_pool_connection` 真库断言排队期间池占用为 0；去掉 `close()` 后该例失败
 - [x] 6.2 P2 收尾中途退出卡在 PROCESSING（site-scoped-import「收尾中途退出后自动补完」「未提交事实的中断批次不被补完」；design D2「中途退出」）：计数随事实落批次，`_finish_committed_import` 供正常收尾与 `_resume_interrupted_finish` 共用；`test_import_service_integration.py` 三例（两个中断点补完、补完再失败判 FAILED、无事实的 PROCESSING 不碰）；去掉补完调用后 3 例失败
 - [x] 6.3 真库（keywordiq_test@pgbase:5433）跑 `test/` 全部：1307 passed / 1 skipped（OSS 实链）/ 3 failed → 其中 2 例是 `test_analysis_competitor_permission_unit.py` 的会话替身为 None，已改替身后 4 passed；剩 `test_v2_integration::test_models_match_migrated_schema` 因共享测试库被其他分支迁移改过（缺 `is_new` 列、`first_seen_basis` 注释不同），与本变更无关
+- [x] 6.4 第二轮复审两条 P2（重导后恢复用旧行数覆盖 site_data_stats；保留清理移除后恢复把期次重新发布）：`importer.committed_slice_counts` 取切片现状，切片已空且批次写过行时判 FAILED 不发布（site-scoped-import「补完时按切片现状发布」；design D2）。新增两例，去掉修复后两例失败；导入/上传/保留/OSS 定向真库回归通过

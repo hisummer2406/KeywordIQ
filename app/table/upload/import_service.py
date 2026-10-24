@@ -42,7 +42,11 @@ from app.table.upload.import_batch_model import (
     ImportBatch,
 )
 from app.table.upload.import_source import ImportSource
-from app.table.upload.importer import import_report, written_leaf_partitions
+from app.table.upload.importer import (
+    committed_slice_counts,
+    import_report,
+    written_leaf_partitions,
+)
 from config import settings
 from database import SessionFactory
 
@@ -202,19 +206,27 @@ def retry_pending_query_stats(
 def _resume_interrupted_finish(session: Session, batch: ImportBatch) -> None:
     """接手进程在收尾中途退出的批次：事实已提交，从刷新统计起把收尾补完。
 
-    在榜行数在事实提交时已随批次落库；掉榜行数没有落库，从已提交的掉榜切片数——它就是
-    那次写入的结果（同一期重导先删切片再写）。收尾再失败就与正常导入同样判失败，不无限重试。
+    **计数取切片现状，不取批次上记的值**（PR #149 Codex 复审）：从退出到接手之间，
+    排在前面的排队接手或直接提交可能已把同一期重导，切片换成了新数据；保留清理也可能
+    已把整个分区移除。用旧值会把新导入写好的 site_data_stats 覆盖错，或把一个已删掉的
+    期次重新发布成「有数据」。切片已空而这个批次当初写过行，说明数据已不在，不发布、判失败。
+    收尾再失败也与正常导入同样判失败，不无限重试。
     """
     logger.warning("导入收尾中断，补完收尾：批次 #%s %s", batch.id, batch.file_name)
     try:
-        dropped_rows = session.execute(
-            text(
-                "SELECT count(*) FROM analysis.fact_dropped "
-                " WHERE site = :site AND period_type = :period AND anchor_date = :anchor"
-            ),
-            {"site": batch.site, "period": batch.period_type, "anchor": batch.report_date},
-        ).scalar_one()
-        _finish_committed_import(session, batch, dropped_rows=dropped_rows)
+        written_rows, dropped_rows = committed_slice_counts(
+            session, batch.site, batch.period_type, batch.report_date
+        )
+        if written_rows == 0 and batch.written_rows > 0:
+            logger.warning("中断批次 #%s 的期次数据已不存在，不再发布", batch.id)
+            session.rollback()
+            _record_import_failure(
+                session, batch, "导入收尾中断，接手时该期次数据已不存在（已被保留清理移除或重导），未发布"
+            )
+            return
+        _finish_committed_import(
+            session, batch, written_rows=written_rows, dropped_rows=dropped_rows
+        )
         session.commit()
     except Exception as exc:
         logger.exception("补完导入收尾失败，批次 #%s %s", batch.id, batch.file_name)
@@ -222,7 +234,9 @@ def _resume_interrupted_finish(session: Session, batch: ImportBatch) -> None:
         _record_import_failure(session, batch, exc)
 
 
-def _finish_committed_import(session: Session, batch: ImportBatch, *, dropped_rows: int) -> None:
+def _finish_committed_import(
+    session: Session, batch: ImportBatch, *, written_rows: int, dropped_rows: int
+) -> None:
     """事实提交之后的收尾：刷新查询统计 → 写 site_data_stats（期次可见）→ 重算筛选统计 →
     标记完成（最后这步不提交，由调用方连同耗时等字段一起提交）。
 
@@ -238,7 +252,7 @@ def _finish_committed_import(session: Session, batch: ImportBatch, *, dropped_ro
     site, period, report_date = batch.site, batch.period_type, batch.report_date
     _update_site_data_stats(
         session, site=site, period=period, report_date=report_date,
-        written_rows=batch.written_rows, dropped_rows=dropped_rows,
+        written_rows=written_rows, dropped_rows=dropped_rows,
     )
     session.commit()
     # 筛选下拉统计只算这一个切片。实现在 `app.table.analysis.filter_stats`：演示/合成数据
@@ -250,11 +264,11 @@ def _finish_committed_import(session: Session, batch: ImportBatch, *, dropped_ro
     batch.completed_at = datetime.now()
 
 
-def _record_import_failure(session: Session, batch: ImportBatch, exc: Exception) -> None:
+def _record_import_failure(session: Session, batch: ImportBatch, reason: Exception | str) -> None:
     """把批次落成失败。调用方须已回滚。"""
     try:
         batch.status = STATUS_FAILED
-        batch.error_message = str(exc)[:2000]
+        batch.error_message = str(reason)[:2000]
         # 未成功的批次查询统计「不适用」：它可能已提交过 PENDING，不清掉的话界面会
         # 在一个失败批次上提示「统计待更新」。
         batch.stats_status = None
@@ -419,7 +433,9 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
         session.commit()
 
         # OSS-first：原始文件在入口即持久化于 OSS，OSS 对象即归档，不再做导入后本地归档。
-        _finish_committed_import(session, batch, dropped_rows=result.dropped_rows)
+        _finish_committed_import(
+            session, batch, written_rows=result.written_rows, dropped_rows=result.dropped_rows
+        )
         batch.processing_seconds = int(time.monotonic() - started)
         session.commit()
 
