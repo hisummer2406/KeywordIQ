@@ -39,3 +39,9 @@
 - [x] 5.3 `openspec validate --strict --all`：40 passed
 - [ ] 5.4 PR（base v2，Refs #148），列出 spec delta 与实际验证；浏览器验收交给用户（导入历史提示、查询超时文案）
 - [ ] 5.5 #148「后续」部分另开 Issue（去重/取消/缓存/计数优化/分阶段预算）
+
+## 6. PR #149 Codex 复审修复（2026-10-24 Claude Opus）
+
+- [x] 6.1 P1 排队者攥着鉴权连接（async-request-execution「排队中的分析查询不占连接」；design D4）：`search_slot(db)` 排队前 `close()` 请求会话；`test_waiting_for_a_slot_does_not_hold_a_pool_connection` 真库断言排队期间池占用为 0；去掉 `close()` 后该例失败
+- [x] 6.2 P2 收尾中途退出卡在 PROCESSING（site-scoped-import「收尾中途退出后自动补完」「未提交事实的中断批次不被补完」；design D2「中途退出」）：计数随事实落批次，`_finish_committed_import` 供正常收尾与 `_resume_interrupted_finish` 共用；`test_import_service_integration.py` 三例（两个中断点补完、补完再失败判 FAILED、无事实的 PROCESSING 不碰）；去掉补完调用后 3 例失败
+- [x] 6.3 真库（keywordiq_test@pgbase:5433）跑 `test/` 全部：1307 passed / 1 skipped（OSS 实链）/ 3 failed → 其中 2 例是 `test_analysis_competitor_permission_unit.py` 的会话替身为 None，已改替身后 4 passed；剩 `test_v2_integration::test_models_match_migrated_schema` 因共享测试库被其他分支迁移改过（缺 `is_new` 列、`first_seen_basis` 注释不同），与本变更无关

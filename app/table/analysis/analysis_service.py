@@ -96,17 +96,23 @@ def _search_semaphore() -> asyncio.Semaphore:
 
 
 @asynccontextmanager
-async def search_slot() -> AsyncIterator[None]:
+async def search_slot(db: AsyncSession) -> AsyncIterator[None]:
     """占一个分析查询并发位，排队超过上限抛 :class:`AnalysisBusyError`。
 
     一次 search 顺序发 4–6 条 SQL、全程占一条异步连接；不设上限时一批慢查询能把异步池
     （每 worker 8+8）占满，鉴权、作用域这些轻量请求跟着拿不到连接。排队也必须有界——无界
-    等待只是把「池耗尽」换成「请求堆积」。连接是第一次 execute 时才取的，所以排队中的请求
-    不占连接。
+    等待只是把「池耗尽」换成「请求堆积」。
+
+    **排队前先把 ``db`` 的连接还回池**：鉴权依赖用的是同一个请求会话，它的查询留下一个
+    未结束的事务、攥着一条连接直到请求结束。不还的话每个排队者都占一条连接，4 个在跑
+    加 12 个在排就耗尽 8+8 的池，闸反而保护不了轻量请求（PR #149 Codex 复审 P1）。
+    ``close()`` 与请求结束时的收尾等价（只读、不提交）；会话关闭后可继续使用，已载入的
+    用户对象不过期。鉴权仍在闸之前：未登录请求不该占排队位。
 
     用 ``asyncio.timeout`` 而不是 ``wait_for``：3.11 的 ``wait_for`` 在「刚拿到许可就超时」
     时会丢掉这个许可，闸就此永久少一格。``acquired`` 记下是否真的拿到，``finally`` 只还拿到的。
     """
+    await db.close()
     semaphore = _search_semaphore()
     acquired = False
     try:

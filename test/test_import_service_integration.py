@@ -556,12 +556,12 @@ def test_query_stats_cover_new_period_before_it_becomes_visible(factory, tmp_pat
     seen_at_visibility: list[bool] = []
     original = svc._update_site_data_stats
 
-    def spy(session, result):
-        if result.report_date == date(2026, 7, 16):
+    def spy(session, **kw):
+        if kw["report_date"] == date(2026, 7, 16):
             seen_at_visibility.append(
                 _stats_mention(session, "fact_daily_2026_07_us", "report_date", "2026-07-16")
             )
-        return original(session, result)
+        return original(session, **kw)
 
     monkeypatch.setattr(svc, "_update_site_data_stats", spy)
     _import_day(factory, tmp_path, "2026-07-16", _three_rows())
@@ -695,3 +695,83 @@ def test_import_failing_after_facts_commit_has_no_query_stats_status(factory, tm
                            source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
                            session_factory=factory)
     assert _batch_stats(factory, batch.id) == ("FAILED", None, 0)
+
+
+def _crash(*_a, **_k):
+    # 进程退出不是 Exception：导入的 except 分支拦不住，批次就停在中途的状态
+    raise SystemExit("worker killed")
+
+
+@pytest.mark.parametrize(
+    ("crash_point", "stats_at_crash"),
+    [("refresh_query_stats", "PENDING"), ("_update_site_data_stats", "READY")],
+)
+def test_retry_finishes_import_interrupted_after_facts_commit(
+    factory, tmp_path, monkeypatch, crash_point, stats_at_crash
+):
+    """事实已提交、收尾中途进程退出：批次停在 PROCESSING，这一期不可见。空闲时的恢复任务
+    要把收尾补完——统计、site_data_stats（含掉榜数）、完成状态（PR #149 Codex 复审 P2）。"""
+    import app.table.upload.import_service as svc
+
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    with monkeypatch.context() as m:
+        m.setattr(svc, crash_point, _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-16", [_row(1, "a"), _row(2, "b")])
+
+    with factory() as s:
+        batch_id = s.execute(text(
+            "SELECT id FROM analysis.import_batch WHERE report_date='2026-07-16'"
+        )).scalar()
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-16'"
+        )).scalar() == 0
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", stats_at_crash, 0)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+
+    assert _batch_stats(factory, batch_id) == ("COMPLETED", "READY", 0)
+    with factory() as s:
+        assert _stats_mention(s, "fact_daily_2026_07_us", "report_date", "2026-07-16")
+        assert s.execute(text(
+            "SELECT row_count, dropped_count FROM analysis.site_data_stats "
+            " WHERE site='US' AND period_type='DAY' AND report_date='2026-07-16'"
+        )).one() == (2, 1)
+        assert s.execute(text(
+            "SELECT written_rows, completed_at IS NOT NULL FROM analysis.import_batch WHERE id=:i"
+        ), {"i": batch_id}).one() == (2, True)
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_interrupted_finish_that_fails_again_is_marked_failed(factory, tmp_path, monkeypatch):
+    """补完收尾再失败，与正常导入收尾失败同样判失败——不无限重试、不留「统计待更新」。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "refresh_query_stats", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    def boom(*_a, **_k):
+        raise RuntimeError("site_data_stats 写入失败")
+
+    monkeypatch.setattr(svc, "_update_site_data_stats", boom)
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("FAILED", None, 0)
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_retry_leaves_processing_without_committed_facts_alone(factory, tmp_path, monkeypatch):
+    """stats_status 为空的 PROCESSING 没有已提交的事实，没有可补的收尾，恢复任务不碰它。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "import_report", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    assert svc.retry_pending_query_stats(session_factory=factory) == 0
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", None, 0)

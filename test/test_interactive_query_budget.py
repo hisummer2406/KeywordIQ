@@ -31,8 +31,15 @@ def gate(monkeypatch):
     return svc
 
 
+class _IdleSession:
+    """单元用例里的请求会话替身：闸只会在排队前 ``close()`` 它。"""
+
+    async def close(self) -> None:
+        pass
+
+
 async def _hold(svc, entered: asyncio.Event, leave: asyncio.Event):
-    async with svc.search_slot():
+    async with svc.search_slot(_IdleSession()):
         entered.set()
         await leave.wait()
 
@@ -43,14 +50,14 @@ async def test_search_slot_rejects_when_full_then_recovers(gate):
     await entered.wait()
 
     with pytest.raises(gate.AnalysisBusyError) as info:
-        async with gate.search_slot():
+        async with gate.search_slot(_IdleSession()):
             pytest.fail("闸已满时不该进入")
     assert info.value.http_status == 503
     assert info.value.code == "analysis.busy"
 
     leave.set()
     await holder
-    async with gate.search_slot():
+    async with gate.search_slot(_IdleSession()):
         pass
     # 超时放弃的那次没有吞掉许可：闸回到满额
     assert gate._search_semaphore()._value == 1
@@ -63,7 +70,7 @@ async def test_waiter_gets_slot_if_released_within_queue_timeout(gate, monkeypat
     await entered.wait()
 
     asyncio.get_running_loop().call_later(0.05, leave.set)
-    async with gate.search_slot():
+    async with gate.search_slot(_IdleSession()):
         pass
     await holder
     assert gate._search_semaphore()._value == 1
@@ -71,7 +78,7 @@ async def test_waiter_gets_slot_if_released_within_queue_timeout(gate, monkeypat
 
 async def test_slot_is_released_when_the_search_raises(gate):
     with pytest.raises(RuntimeError):
-        async with gate.search_slot():
+        async with gate.search_slot(_IdleSession()):
             raise RuntimeError("查询失败")
     assert gate._search_semaphore()._value == 1
 
@@ -125,3 +132,41 @@ async def test_statement_over_budget_is_canceled_and_connection_reused(fresh_asy
             " WHERE state = 'active' AND query LIKE 'SELECT pg_sleep(5)%'"
         ))).scalar()
         assert lingering == 0
+
+
+@needs_db
+async def test_waiting_for_a_slot_does_not_hold_a_pool_connection(gate, fresh_async_engine):
+    """排队者不能攥着鉴权留下的连接（PR #149 Codex 复审 P1）。
+
+    鉴权依赖与 search 共用一个请求会话，鉴权查询留下的事务会占着一条连接直到请求结束；
+    排队时若不先还回去，一批排队者就能耗尽异步池，闸要保护的轻量请求照样拿不到连接。
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    pool = fresh_async_engine.pool
+    entered, leave = asyncio.Event(), asyncio.Event()
+    holder = asyncio.create_task(_hold(gate, entered, leave))
+    await entered.wait()
+    try:
+        async with AsyncSession(fresh_async_engine, expire_on_commit=False) as db:
+            await db.execute(text("SELECT 1"))  # 模拟鉴权查询
+            assert pool.checkedout() == 1
+
+            waited: list[int] = []
+
+            async def probe():
+                await asyncio.sleep(0.02)  # 此时闸已满、本请求正在排队
+                waited.append(pool.checkedout())
+
+            probing = asyncio.create_task(probe())
+            with pytest.raises(gate.AnalysisBusyError):
+                async with gate.search_slot(db):
+                    pytest.fail("闸已满时不该进入")
+            await probing
+            assert waited == [0]
+
+            # 会话关闭后仍可继续用（拿到并发位之后的查询照常执行）
+            assert (await db.execute(text("SELECT 1"))).scalar() == 1
+    finally:
+        leave.set()
+        await holder

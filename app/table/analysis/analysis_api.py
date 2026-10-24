@@ -67,8 +67,8 @@ async def search_data(
     """
     if req.competitor_new:
         simple_auth.check_permission(user, COMPETITOR_VIEW)
-    # 并发有上限、排队有界（排不上 503 analysis.busy），见 service.search_slot。
-    async with service.search_slot():
+    # 并发有上限、排队有界（排不上 503 analysis.busy），排队前释放鉴权占的连接，见 service.search_slot。
+    async with service.search_slot(db):
         return await service.search(db, req, user.id)
 
 
