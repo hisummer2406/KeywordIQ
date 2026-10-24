@@ -763,15 +763,49 @@ def test_interrupted_finish_that_fails_again_is_marked_failed(factory, tmp_path,
     assert svc.retry_pending_query_stats(session_factory=factory) == 0
 
 
-def test_retry_leaves_processing_without_committed_facts_alone(factory, tmp_path, monkeypatch):
-    """stats_status 为空的 PROCESSING 没有已提交的事实，没有可补的收尾，恢复任务不碰它。"""
+def test_import_interrupted_before_facts_commit_is_marked_failed(factory, tmp_path, monkeypatch):
+    """退在事实事务里（stats_status 为空）：没有可补的收尾，判失败——否则记录永远「处理中」、
+    不能重导，ops-bot 也一直以为有导入在跑。不发布期次、不动任何数据。"""
     import app.table.upload.import_service as svc
 
     with monkeypatch.context() as m:
         m.setattr(svc, "import_report", _crash)
         with pytest.raises(SystemExit):
             _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+    with factory() as s:
+        batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+    assert _batch_stats(factory, batch_id) == ("PROCESSING", None, 0)
+
+    assert svc.retry_pending_query_stats(session_factory=factory) == 1
+    assert _batch_stats(factory, batch_id) == ("FAILED", None, 0)
+    with factory() as s:
+        assert "导入进程中断" in s.execute(text(
+            "SELECT error_message FROM analysis.import_batch WHERE id=:i"
+        ), {"i": batch_id}).scalar()
+        assert s.execute(text(
+            "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-15'"
+        )).scalar() == 0
     assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_processing_batch_of_a_running_import_is_not_touched(factory, tmp_path, monkeypatch):
+    """导入正持锁时 PROCESSING 是真的在跑：恢复任务拿不到锁，跳过本轮，不碰它。"""
+    import app.table.upload.import_service as svc
+
+    with monkeypatch.context() as m:
+        m.setattr(svc, "import_report", _crash)
+        with pytest.raises(SystemExit):
+            _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    engine = create_engine(TEST_URL)
+    from app.table.upload.import_service import IMPORT_LOCK_KEY
+    with engine.connect() as holder:
+        holder.execute(text("SELECT pg_advisory_lock(:k)"), {"k": IMPORT_LOCK_KEY})
+        try:
+            assert svc.retry_pending_query_stats(session_factory=factory) == 0
+        finally:
+            holder.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": IMPORT_LOCK_KEY})
+    engine.dispose()
     with factory() as s:
         batch_id = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
     assert _batch_stats(factory, batch_id) == ("PROCESSING", None, 0)
