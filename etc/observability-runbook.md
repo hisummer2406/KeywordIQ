@@ -141,3 +141,23 @@ error_before_response|cancelled`），以及（如果失败）`error_handlers.py
 这不是本次改动的缺陷，是"事后日志"这种手段的固有边界：它能告诉你**已经发生并且走完
 了流程的事情**是什么样，不能替代对**还没走完流程、卡在半路**的现场取证（见第 3 节）。
 换句话说：日志能确认"发生过卡死"，不能替代抓栈/查连接状态去确认"卡在哪里"。
+
+## 5. 采集分析查询的耗时分布（基线 / 发布后对比）
+
+要回答「分析查询现在有多慢、发布后有没有变好」，用 `scripts/collect_search_latency.sh`。
+它只读：只读应用日志，SQL 在只读会话里执行。输出包括：
+- `/api/analysis/search` 按日与合计的完整请求耗时分位数，以及超过 3 s / 5 s / 25 s 预算的比例；
+- 轻量接口（`/api/auth/me`、`/api/analysis/scope`）作对照；
+- 慢请求诊断的视图拆分与最慢 25 条；
+- 数据规模与统计新鲜度。
+
+```bash
+# 在本机执行，脚本经 stdin 传到 ECS（访问方式与授权每次另行确认）
+ssh <user>@<host> 'bash -s' < scripts/collect_search_latency.sh > baseline.txt
+# 只看发布之后：SINCE 为日志日期下限
+ssh <user>@<host> 'SINCE=2026-11-01 bash -s' < scripts/collect_search_latency.sh > after.txt
+```
+
+- **口径**：应用日志「请求摘要」里的 `duration_ms`。V2 的 nginx 用默认 combined 格式，不记耗时，不能作为来源。请求摘要不带视图，所以第 1 节是日报、周报合计；要按视图拆，看第 3 节的慢诊断。
+- **日志文件名**：V2 应用日志按 `app.log-YYYYMMDD(.gz)` 轮转，当天的是 `app.log`，与第 1 节示例中的 `.1/.N.gz` 不同。脚本用 `logs/app.log*` 一并读取。
+- **修复前基线**与**性能预算**（日报 p95 ≤ 3 s、周报 p95 ≤ 5 s、单请求 ≤ 25 s）记录在 `openspec/changes/archive/2026-10-24-post-import-query-readiness/design.md`，见其中「生产基线」「性能预算」。
