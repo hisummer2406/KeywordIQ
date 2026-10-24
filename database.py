@@ -72,6 +72,9 @@ async_engine = create_async_engine(
             # 管不了执行——没有它，一条坏计划会无限期占着连接，池耗尽后所有页面一起卡住。
             # 只设在异步引擎上：导入 / 导出 / 迁移走同步引擎，是合法的长语句。
             "statement_timeout": str(settings.INTERACTIVE_STATEMENT_TIMEOUT_MS),
+            # 请求被取消时 SQLAlchemy 作废连接，但数据库要到写结果时才发现客户端已断，语句照跑
+            # 到底；按间隔轮询套接字后约一个间隔内停止，且只作用于这条连接（#154 design D2）。
+            "client_connection_check_interval": str(settings.INTERACTIVE_CLIENT_CHECK_INTERVAL_MS),
         }
     }
 )
