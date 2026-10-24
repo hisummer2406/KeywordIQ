@@ -12,8 +12,8 @@
 
 ## 3. 阶段一：取消传播（不依赖基线）
 
-- [ ] 3.1 机制验证（真库）：任务取消后连接是否作废；开启 `client_connection_check_interval` 后语句是否在间隔内停止、`pg_stat_activity` 无残留、池恢复容量；结论写入 design D2
-- [ ] 3.2 若 3.1 不成立：实现备选（归还连接前 `pg_cancel_backend` 并等待结束），真库验证同上；仍不成立则记录并只保留完整请求预算兜底
+- [x] 3.1 机制验证（真库）：任务取消后连接是否作废；开启 `client_connection_check_interval` 后语句是否在间隔内停止、`pg_stat_activity` 无残留、池恢复容量；结论写入 design D2。2026-10-25 本地 pgbase PG 15.19：未设时服务端跑满 6 s，设 1000 ms 后 0.53–0.65 s 停止（重复 5 次），被取消的连接作废不回池，并发的另一会话正常完成；首选成立。验证脚本未入库，正式回归测试随 3.3 加入
+- [x] 3.2 不需要：3.1 已证明首选成立，备选（归还连接前 `pg_cancel_backend`）不实现
 - [ ] 3.3 后端断开监听（`receive()` 上的 `http.disconnect`），核对与 `RequestLoggingMiddleware` 的兼容；开关 `ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED`；配置同步 `.env.example`
 - [ ] 3.4 多用户回归：A 断开不影响 B；已完成请求断开不误伤后续使用者
 - [ ] 3.5 前端：`searchAnalysis` 支持 `AbortSignal`，切换条件中止旧请求、被中止不进错误态；补前端测试（由用户运行）
