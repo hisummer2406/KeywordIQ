@@ -117,6 +117,18 @@ R2 关键节点：`fact_daily_2026_05_us` 估计 1 行、实际 377,060 行，�
 - 服务端超时会取消执行并释放该连接上的工作；而 `pool_timeout` 只限制等待连接的时间。
 - 超时的 SQLSTATE 是 57014，映射为 503 `db.query_timeout`「查询超时，请缩小筛选范围后重试」，记 WARNING，不打栈。其余 `OperationalError` 仍按原逻辑处理。asyncpg 经 SQLAlchemy 包装后的异常类型以真库测试为准。
 
+#### 完整请求预算（第一阶段剩余验收 7.2）
+
+`/api/analysis/search` 的完整请求预算由 `ANALYSIS_REQUEST_TIMEOUT_SECONDS` 设定，默认 25 s，见「性能预算」。预算从处理函数入口、排队之前起算，排队等待也计入；鉴权依赖在它之前执行，不计入。
+
+- **不能只在应用层放弃等待。** 实测经 SQLAlchemy 的 asyncpg 适配层用 `asyncio.timeout` 取消协程后，客户端立刻返回，连接也离开了池，但服务端的 `pg_sleep(8)` 仍执行满 8 s。也就是说，这种做法只是把请求和连接还给了应用，数据库照样在跑，上限仍然只有引擎级的 30 s。
+- **做法：每条语句由数据库按剩余预算取消。** search 内的每条语句都经过 `_timed_execute`，执行前先发 `set_config('statement_timeout', 剩余毫秒, true)`（即 `SET LOCAL`，只作用于本事务，且不超过引擎级的 30 s），到点由数据库取消。
+- **预算用尽的处理。** 执行前发现预算已用尽，就不再发起查询，直接抛 `AnalysisTimeoutError`。
+- **对外表现。** 两种情况都返回 503 `db.query_timeout`。对用户来说，语句超时和请求超时是同一件事，所以用同一个码和同一段文案。
+- **截止时间的传递。** 截止时刻放在 ContextVar 里，由 `search()` 设置，退出时还原。`get_scope` 等不在 search 内的查询读到 None，不受约束。
+- **代价。** 每条语句多一次 `set_config` 往返，一个请求 4–6 条语句；应用与数据库同机，这次往返相对查询本身可以忽略。
+- **测试覆盖。** 真库测试验证三点：到点由数据库取消（SQLSTATE 57014）、服务端没有残留语句、连接可以继续使用，事务结束后 `statement_timeout` 回到引擎级的值。
+
 ### D4 分析查询并发上限
 
 `/api/analysis/search` 用进程级 `asyncio.Semaphore(ANALYSIS_MAX_CONCURRENT_SEARCHES=4)`，获取等待 `ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS=5`。等不到返回 503 `analysis.busy`「查询繁忙，请稍后重试」。

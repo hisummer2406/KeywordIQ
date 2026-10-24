@@ -51,7 +51,7 @@
 ## 7. 第一阶段剩余验收
 
 - [x] 7.1 生产只读基线（用户授权，2026-10-24）与性能预算写入 design「生产基线」「性能预算」：修复前 search p95 1343 s，10-22 首次入榜 + 排除品牌词单请求最长 7884 s，轻量接口 p99 30 s；生产无遗留 PROCESSING 批次
-- [ ] 7.2 完整请求预算（单请求上限 25 s）：实现、测试与真库验证
+- [x] 7.2 完整请求预算（async-request-execution「完整请求预算到点由数据库停止执行」；design D3「完整请求预算」）：`ANALYSIS_REQUEST_TIMEOUT_SECONDS=25`（config/.env.example），API 排队前取截止时刻，`_timed_execute` 逐条 `SET LOCAL statement_timeout` 到剩余预算，用尽抛 `AnalysisTimeoutError`。先实测 asyncio 取消不停服务端语句（pg_sleep(8) 跑满 8 s）。`test_interactive_query_budget.py` 新增三例，真库验证数据库取消、无残留、连接可复用；去掉收紧后两例失败。定向回归 128 passed，另有 1 例失败（`test_models_match_migrated_schema`，共享测试库被其他分支迁移改过，与本变更无关）
 - [ ] 7.3 连续两期回归（日报）：本地用现有 6 份 US 日报；生产规模差 10 倍，只证机制
 - [ ] 7.4 周报：本机无样本，用户决定暂缓；部署后按同口径采集，需先让请求摘要能区分视图
 - [ ] 7.5 部署后按 design「性能预算」口径重采，对比基线

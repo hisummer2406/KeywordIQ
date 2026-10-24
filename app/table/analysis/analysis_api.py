@@ -67,9 +67,11 @@ async def search_data(
     """
     if req.competitor_new:
         simple_auth.check_permission(user, COMPETITOR_VIEW)
+    # 完整请求预算从排队之前起算，排队等待也计入（超出 503 db.query_timeout）。
+    deadline = service.request_deadline()
     # 并发有上限、排队有界（排不上 503 analysis.busy），排队前释放鉴权占的连接，见 service.search_slot。
     async with service.search_slot(db):
-        return await service.search(db, req, user.id)
+        return await service.search(db, req, user.id, deadline=deadline)
 
 
 @analysis_router.post("/export")

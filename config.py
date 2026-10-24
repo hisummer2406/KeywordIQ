@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # 最多占 4 条，余下留给鉴权/作用域/词库等轻量请求；等不到的返回 503，不无限排队。
     ANALYSIS_MAX_CONCURRENT_SEARCHES: int = 4
     ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS: float = 5.0
+    # /api/analysis/search 的完整请求预算（秒，含排队）。每条语句的 statement_timeout 收紧到
+    # 剩余预算，到点由数据库取消——只在应用层放弃等待的话，服务端语句会照跑到结束。
+    # 低于 INTERACTIVE_STATEMENT_TIMEOUT_MS 留出余量；预算口径见 #148 design「性能预算」。
+    ANALYSIS_REQUEST_TIMEOUT_SECONDS: float = 25.0
 
     # 持续增长市场（工具箱）的判定口径。三项都在**日报导入收尾时**参与算定，命中结果写进
     # analysis.fact_growth；查询侧只读，不重算。
@@ -444,6 +448,7 @@ class Settings(BaseSettings):
         "INTERACTIVE_STATEMENT_TIMEOUT_MS",
         "ANALYSIS_MAX_CONCURRENT_SEARCHES",
         "ANALYSIS_SEARCH_QUEUE_TIMEOUT_SECONDS",
+        "ANALYSIS_REQUEST_TIMEOUT_SECONDS",
         "IMPORT_ANALYZE_TIMEOUT_SECONDS",
     )
     @classmethod
