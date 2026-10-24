@@ -252,7 +252,7 @@ def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
     原文，与「校验错误不回显请求内容」是同一条纪律在诊断日志上的延伸。"""
     return {
         "has_keyword_search": bool(req.keyword or req.product_title),
-        "has_asin_filter": bool(req.asin),
+        "asins_count": len(req.asins) if req.asins else 0,
         "categories_count": len(req.categories) if req.categories else 0,
         "brands_count": len(req.brands) if req.brands else 0,
         "first_listed": req.first_listed,

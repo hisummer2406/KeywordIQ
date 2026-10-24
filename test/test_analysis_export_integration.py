@@ -22,6 +22,7 @@ from test.test_site_scoped_query_integration import (
     USER_ID,
     _ensure_partitions_sync,
     _seed,
+    _seed_top_slots,
 )
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
@@ -106,6 +107,22 @@ def test_iter_export_rows_applies_filters(db):
         for r in chunk
     ]
     assert [r["keyword"] for r in rows] == ["kw-two"]
+
+
+def test_export_asin_batch_matches_search_rows(db):
+    """ASIN 批量筛选在导出与精确计数上与列表同口径（#150）：同一关键词多槽位命中只导出一行。"""
+    _seed(db)
+    kids = _seed_top_slots(db)
+    req = _req(asins=["B0SLOT00001", "B0SLOT00003", "B0NOTEXIST"])
+
+    rows = [
+        r
+        for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, req, limit=100, user_id=USER_ID)
+        for r in chunk
+    ]
+    assert sorted(r["keyword_id"] for r in rows) == sorted(kids.values())
+    counted = db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req, USER_ID)).scalar_one()
+    assert counted == len(rows) == 2
 
 
 def test_count_capped_stops_at_cap(db):

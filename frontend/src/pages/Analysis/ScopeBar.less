@@ -55,9 +55,21 @@
   min-width: 150px;
 }
 
+// 搜索方式是与站点/期次同级的独立控件（#150），不再嵌在输入框里：嵌在 suffix 时 Input 外壳
+// 的 click 会把焦点抢回输入框，下拉刚展开就收起（#146）。宽度同样按内容自适应。
+.scope-bar__mode {
+  width: auto;
+  flex: none;
+}
+
 .scope-bar__search {
   min-width: 260px;
   flex: 1;
+}
+
+.scope-bar__count {
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .scope-bar__submit {
@@ -95,6 +107,7 @@
   .scope-bar__site,
   .scope-bar__view,
   .scope-bar__date,
+  .scope-bar__mode,
   .scope-bar__search,
   .scope-bar__submit {
     width: 100%;
