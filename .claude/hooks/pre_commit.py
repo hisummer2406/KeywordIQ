@@ -21,6 +21,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # 后端改动的判定路径。alembic/ 也算：迁移写错会让整个部署起不来。
 BACKEND_PREFIXES = ("app/", "scripts/", "test/", "alembic/")
@@ -30,7 +31,9 @@ FRONTEND_PREFIX = "frontend/"
 # 判据与 frontend/ 同构——改动范围含这个前缀就跑（issue #56 P3a）。
 EXTENSION_PREFIX = "extension/"
 
-TEST_DB_URL = "postgresql://postgres:pwd123@localhost/keywordiq_test"
+# 本机测试库在 pgbase 容器，映射到 5433；5432 被别的项目的 PostgreSQL 占着。端口写错时探测连不上、
+# 集成测试整片静默跳过（曾跳过 378 个而门禁照样放行），所以端口必须显式写出，不能靠默认 5432。
+TEST_DB_URL = "postgresql://postgres:pwd123@localhost:5433/keywordiq_test"
 
 # 单条检查的超时上限。后端全量约 5 秒、前端约 15 秒，给到分钟级只为兜住"卡死"这一种
 # 情况——正常慢一点不该被误杀，真卡住则必须有个头。
@@ -206,7 +209,11 @@ def _commits_all(command: str) -> bool:
     return False
 
 
-def _port_open(host: str = "localhost", port: int = 5432) -> bool:
+def _port_open() -> bool:
+    # 主机与端口取自 TEST_DB_URL，不另写默认值：曾默认 5432，测试库挪到 5433 后，5432 上
+    # 别的项目的 PG 一停，这里就判「没起库」，集成测试又整片静默跳过（PR #157 Codex 复审）。
+    url = urlsplit(TEST_DB_URL)
+    host, port = url.hostname or "localhost", url.port or 5432
     try:
         with socket.create_connection((host, port), timeout=0.4):
             return True
