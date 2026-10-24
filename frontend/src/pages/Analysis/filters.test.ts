@@ -1,44 +1,84 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_ASINS,
   RANGE_PRESETS,
-  detectSearchKind,
   defaultFilters,
   matchedPreset,
   sanitizeCompetitorNew,
+  searchInputError,
+  splitAsins,
   toSearchBody,
   type ScopeDraft,
 } from './filters';
 
 const scope: ScopeDraft = { site: 'US', view: 'DAY', date: '2026-07-18' };
 
-describe('detectSearchKind', () => {
-  it('把 B0 + 8 位的输入判为 ASIN', () => {
-    expect(detectSearchKind('B07Z82895W')).toBe('asin');
-    expect(detectSearchKind('b06xztz7gb')).toBe('asin'); // 大小写不敏感
-    expect(detectSearchKind('  B00RQHBZVS  ')).toBe('asin'); // 前后空白不影响判定
+describe('splitAsins', () => {
+  it('空格、逗号、中文逗号、分号、换行与制表符都是分隔符', () => {
+    expect(splitAsins('B0AAAAAAA1 B0BBBBBBB2,B0CCCCCCC3，B0DDDDDDD4;B0EEEEEEE5；B0FFFFFFF6')).toEqual([
+      'B0AAAAAAA1',
+      'B0BBBBBBB2',
+      'B0CCCCCCC3',
+      'B0DDDDDDD4',
+      'B0EEEEEEE5',
+      'B0FFFFFFF6',
+    ]);
+    // Excel 多行多单元格：\r\n 分行、\t 分列
+    expect(splitAsins('B0AAAAAAA1\tB0BBBBBBB2\r\nB0CCCCCCC3\n')).toEqual([
+      'B0AAAAAAA1',
+      'B0BBBBBBB2',
+      'B0CCCCCCC3',
+    ]);
   });
 
-  it('其余非空输入判为关键词', () => {
-    expect(detectSearchKind('screen protector')).toBe('keyword');
-    expect(detectSearchKind('B0')).toBe('keyword'); // 位数不够，不是 ASIN
-    expect(detectSearchKind('B07Z82895W7')).toBe('keyword'); // 多一位，不是 ASIN
+  it('忽略空项与首尾空白，大小写不敏感地去重并保序', () => {
+    expect(splitAsins('  b0aaaaaaa1 ,, B0AAAAAAA1 ;  b0bbbbbbb2  ')).toEqual(['B0AAAAAAA1', 'B0BBBBBBB2']);
+    expect(splitAsins('   ')).toEqual([]);
   });
 
-  it('空输入不检索', () => {
-    expect(detectSearchKind('')).toBe('none');
-    expect(detectSearchKind('   ')).toBe('none');
+  it('不按 B0 格式过滤：ISBN-10 等编号原样保留', () => {
+    expect(splitAsins('3161484100 B0AAAAAAA1')).toEqual(['3161484100', 'B0AAAAAAA1']);
+  });
+});
+
+describe('searchInputError', () => {
+  const asins = (n: number) => Array.from({ length: n }, (_, i) => `B0X${String(i).padStart(7, '0')}`);
+
+  it('去重后恰好 100 个可提交，101 个给出原因', () => {
+    expect(searchInputError(asins(MAX_ASINS).join(' '), 'ASIN')).toBeUndefined();
+    // 重复项不计数
+    expect(searchInputError([...asins(MAX_ASINS), ...asins(MAX_ASINS)].join(','), 'ASIN')).toBeUndefined();
+    expect(searchInputError(asins(MAX_ASINS + 1).join(' '), 'ASIN')).toMatch(/最多 100 个，当前 101 个/);
+  });
+
+  it('关键词方式不做 ASIN 计数', () => {
+    expect(searchInputError(asins(MAX_ASINS + 1).join(' '), 'ALL_TERMS')).toBeUndefined();
   });
 });
 
 describe('toSearchBody', () => {
-  it('检索框按判定结果落到 keyword 或 asin，另一个不传', () => {
-    const asAsin = toSearchBody(scope, { ...defaultFilters(), q: 'B07Z82895W' });
-    expect(asAsin.asin).toBe('B07Z82895W');
+  it('检索目标只由搜索方式决定，另一个不传', () => {
+    const asAsin = toSearchBody(scope, { ...defaultFilters(), q: 'b07z82895w, 3161484100', qMode: 'ASIN' });
+    expect(asAsin.asins).toEqual(['B07Z82895W', '3161484100']);
     expect(asAsin.keyword).toBeUndefined();
+    expect(asAsin.keyword_mode).toBeUndefined();
 
-    const asKeyword = toSearchBody(scope, { ...defaultFilters(), q: 'screen protector' });
-    expect(asKeyword.keyword).toBe('screen protector');
-    expect(asKeyword.asin).toBeUndefined();
+    // 形如 ASIN 的输入在关键词方式下仍按关键词查——不再按格式推断
+    const asKeyword = toSearchBody(scope, { ...defaultFilters(), q: 'B07Z82895W' });
+    expect(asKeyword.keyword).toBe('B07Z82895W');
+    expect(asKeyword.keyword_mode).toBe('ALL_TERMS');
+    expect(asKeyword.asins).toBeUndefined();
+
+    // 10 位英文词不会被当成 ASIN
+    const word = toSearchBody(scope, { ...defaultFilters(), q: 'headphones', qMode: 'PHRASE' });
+    expect(word).toMatchObject({ keyword: 'headphones', keyword_mode: 'PHRASE' });
+    expect(word.asins).toBeUndefined();
+  });
+
+  it('ASIN 方式下空输入不带任何检索条件', () => {
+    const body = toSearchBody(scope, { ...defaultFilters(), q: ' ,; ', qMode: 'ASIN' });
+    expect(body.asins).toBeUndefined();
+    expect(body.keyword).toBeUndefined();
   });
 
   it('空条件只带作用域，其余字段一律 undefined', () => {
@@ -260,7 +300,7 @@ describe('行集合开关', () => {
     });
     expect(body.include).toBe('DROPPED');
     expect(body.keyword).toBeUndefined();
-    expect(body.asin).toBeUndefined();
+    expect(body.asins).toBeUndefined();
     expect(body.brands).toBeUndefined();
     expect(body.categories).toBeUndefined();
     expect(body.product_title).toBeUndefined();
@@ -308,7 +348,7 @@ describe('关键词匹配方式 qMode', () => {
   });
 
   it('ASIN、空输入、仅掉榜时不带 keyword_mode', () => {
-    expect(toSearchBody(scope, { ...defaultFilters(), q: 'B07Z82895W' }).keyword_mode).toBeUndefined();
+    expect(toSearchBody(scope, { ...defaultFilters(), q: 'B07Z82895W', qMode: 'ASIN' }).keyword_mode).toBeUndefined();
     expect(toSearchBody(scope, { ...defaultFilters(), q: '' }).keyword_mode).toBeUndefined();
     expect(
       toSearchBody(scope, { ...defaultFilters(), q: 'rug', include: 'DROPPED' }).keyword_mode,

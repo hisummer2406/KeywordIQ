@@ -22,7 +22,9 @@ import type { FilterDraft, ScopeDraft } from './filters';
  * 开发期热更新后会话里可能残留旧形状的快照，字段以 `undefined` 渗进 UI，表现为
  * 零散的空白控件，极难归因；版本号让这种情况退化成「走一次正常初始化」。
  */
-export const CACHE_VERSION = 3;
+// 4：`filters.qMode` 增加 'ASIN'，检索目标改由它决定（#150）。旧快照里 `q='B0…'` +
+// `qMode='ALL_TERMS'` 在新语义下会被当成关键词查询，与用户当初看到的不一致，直接丢弃。
+export const CACHE_VERSION = 4;
 
 /** 走 `useCachedState` 的那些值。键是字面量联合类型——写错 key 即 TypeScript 报错。 */
 export interface CachedValues {

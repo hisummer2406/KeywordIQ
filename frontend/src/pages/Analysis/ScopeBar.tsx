@@ -1,26 +1,38 @@
 import { Button, Input, Select, Space, Tag, Tooltip, Typography } from 'antd';
-import type { KeywordMode } from '@/services/analysis';
 import type { SiteOption } from '@/services/upload';
-import { detectSearchKind, type ScopeDraft } from './filters';
+import { searchInputError, splitAsins, type ScopeDraft, type SearchMode } from './filters';
 import { formatSiteLabel } from './siteLabel';
 import { formatScopeDateLabel } from './scopeDateLabel';
 import './ScopeBar.less';
 
 /**
- * 作用域栏：站点 / 视图 / 日期 / 单一检索框 / 立即查询。
+ * 作用域栏：站点 / 视图 / 日期 / 搜索方式 / 检索框 / 立即查询，桌面宽度下同一行。
  *
  * 这一行决定「查哪一份数据切片」，与下面的过滤区（「筛哪些行」）性质不同。
  * 受控组件：自身不持状态、不发请求。
  */
 
-const KIND_LABEL = {
-  asin: '按 ASIN 检索',
-  keyword: '按关键词检索',
-  none: '',
-} as const;
+// 选项文案即说明：方式是显式选的（#150），用户必须一眼看出当前搜的是哪个字段
+const MODE_OPTIONS: { label: string; value: SearchMode; title: string }[] = [
+  {
+    label: '关键词 · 全部词',
+    value: 'ALL_TERMS',
+    title:
+      '输入的每个词都要作为完整单词出现，顺序不限、可夹其他词，英语常规单复数（rug/rugs、berry/berries）互通，不含不规则变化',
+  },
+  { label: '关键词 · 词组', value: 'PHRASE', title: '关键词中按原样连续包含输入文本' },
+  {
+    label: 'ASIN · 批量',
+    value: 'ASIN',
+    title: '最多 100 个，空格/逗号/分号/换行分隔，可直接从 Excel 粘贴；前三商品任一命中即展示',
+  },
+];
 
-const MODE_HINT =
-  '全部词：输入的每个词都要作为完整单词出现，顺序不限、可夹其他词，英语常规单复数（rug/rugs、berry/berries）互通，不含不规则变化。连续词组：关键词中按原样连续包含输入文本（子串）。';
+const PLACEHOLDER: Record<SearchMode, string> = {
+  ALL_TERMS: '输入关键词，如 iphone charger',
+  PHRASE: '输入关键词，如 iphone charger',
+  ASIN: '输入或粘贴 ASIN，空格/逗号/换行分隔，最多 100 个',
+};
 
 export interface ScopeBarProps {
   sites: SiteOption[];
@@ -28,8 +40,8 @@ export interface ScopeBarProps {
   scope: ScopeDraft;
   /** 检索框原文（属于过滤草稿，但输入位置在这一行） */
   q: string;
-  /** 关键词匹配方式（草稿） */
-  qMode?: KeywordMode;
+  /** 搜索方式（草稿），决定检索框内容按关键词还是 ASIN 查 */
+  qMode?: SearchMode;
   /** 草稿与生效条件不一致——存在未生效的改动 */
   dirty: boolean;
   /**
@@ -42,7 +54,7 @@ export interface ScopeBarProps {
   loading?: boolean;
   onScopeChange: (next: ScopeDraft) => void;
   onQChange: (next: string) => void;
-  onQModeChange: (next: KeywordMode) => void;
+  onQModeChange: (next: SearchMode) => void;
   onSubmit: () => void;
 }
 
@@ -60,7 +72,11 @@ export default function ScopeBar({
   onQModeChange,
   onSubmit,
 }: ScopeBarProps) {
-  const kind = detectSearchKind(q);
+  const inputError = searchInputError(q, qMode);
+  const asinCount = qMode === 'ASIN' ? splitAsins(q).length : 0;
+  const submit = () => {
+    if (!inputError) onSubmit();
+  };
 
   return (
     <div className="scope-bar">
@@ -97,49 +113,55 @@ export default function ScopeBar({
           }))}
           notFoundContent="该站点该视图暂无数据"
         />
+        <Select
+          className="scope-bar__mode"
+          aria-label="搜索方式"
+          // 下拉按选项内容定宽，触发器收窄后选项文字不被截断
+          popupMatchSelectWidth={false}
+          value={qMode}
+          onChange={onQModeChange}
+          options={MODE_OPTIONS}
+        />
         <Input
           className="scope-bar__search"
+          aria-label="搜索内容"
           allowClear
+          status={inputError ? 'error' : undefined}
           value={q}
-          placeholder="输入 ASIN 或关键词，如 B07Z82895W 或 iphone charger"
+          placeholder={PLACEHOLDER[qMode]}
           onChange={(e) => onQChange(e.target.value)}
-          onPressEnter={onSubmit}
-          // 判定是自动的，但不能是不可见的：搜不到东西时用户需要知道系统搜的是哪个字段
+          onPressEnter={submit}
+          onPaste={(e) => {
+            // 单行 input 粘贴时会直接删掉换行，Excel 多行就粘成了一个长串。ASIN 方式下先把
+            // 换行/制表符换成空格再插入，保住编号边界；关键词方式不拦，保持原生行为。
+            if (qMode !== 'ASIN') return;
+            const pasted = e.clipboardData.getData('text');
+            if (!/[\r\n\t]/.test(pasted)) return;
+            e.preventDefault();
+            const input = e.currentTarget;
+            const start = input.selectionStart ?? q.length;
+            const end = input.selectionEnd ?? q.length;
+            const cleaned = pasted.replace(/[\r\n\t]+/g, ' ').trim();
+            onQChange([q.slice(0, start), cleaned, q.slice(end)].filter(Boolean).join(' '));
+          }}
           suffix={
-            kind === 'asin' ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                {KIND_LABEL.asin}
+            qMode === 'ASIN' && asinCount > 0 ? (
+              <Typography.Text
+                className="scope-bar__count"
+                type={inputError ? 'danger' : 'secondary'}
+              >
+                {inputError ?? `${asinCount} 个`}
               </Typography.Text>
-            ) : (
-              // ASIN 是等值匹配、没有模式；其余输入（含还没输入）都显示模式选择。
-              // 「按关键词检索」的回显照旧保留——自动判定必须可见。
-              // 拦住 click 冒泡：Input 外壳的 onClick 会把焦点抢回输入框，下拉刚展开就被 blur 收起，
-              // 表现为模式选不动。jsdom 里 fireEvent 不走这条冒泡，测试覆盖不到，别删。
-              <Space size={4} onClick={(e) => e.stopPropagation()}>
-                {kind === 'keyword' && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                    {KIND_LABEL.keyword}
-                  </Typography.Text>
-                )}
-              <Tooltip title={MODE_HINT}>
-                <Select
-                  className="scope-bar__mode"
-                  size="small"
-                  variant="borderless"
-                  popupMatchSelectWidth={false}
-                  value={qMode}
-                  onChange={onQModeChange}
-                  options={[
-                    { label: '全部词', value: 'ALL_TERMS' },
-                    { label: '连续词组', value: 'PHRASE' },
-                  ]}
-                />
-              </Tooltip>
-              </Space>
-            )
+            ) : undefined
           }
         />
-        <Button className="scope-bar__submit" type="primary" loading={loading} onClick={onSubmit}>
+        <Button
+          className="scope-bar__submit"
+          type="primary"
+          loading={loading}
+          disabled={!!inputError}
+          onClick={submit}
+        >
           立即查询
         </Button>
       </Space.Compact>

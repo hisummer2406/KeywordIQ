@@ -11,6 +11,7 @@ import {
 import {
   defaultFilters,
   sanitizeCompetitorNew,
+  searchInputError,
   toSearchBody,
   type FilterDraft,
   type ScopeDraft,
@@ -34,7 +35,7 @@ import { useCachedState } from './useCachedState';
 
 /** SearchBody 里属于「筛选」的字段。行集合开关（include）不在其中——它是行集合维度。 */
 const FILTER_KEYS = [
-  'keyword', 'asin', 'product_title', 'brands', 'categories',
+  'keyword', 'asins', 'product_title', 'brands', 'categories',
   'ranking_min', 'ranking_max', 'change_min', 'change_max',
   'click_share_min', 'click_share_max', 'conversion_share_min', 'conversion_share_max',
   'first_listed', 'competitor_new', 'exclude_brand_in_keyword',
@@ -237,6 +238,8 @@ export function useAnalysisQuery(options: {
    * 并非与默认值无关的调用点，改默认值时这条路径跟着变。
    */
   const submitScope = () => {
+    // 超上限的 ASIN 批量不提交：界面已提示原因，静默截断会让用户以为截掉的那部分也查过了
+    if (searchInputError(filters.q, filters.qMode)) return;
     const scopeOnly = toSearchBody(scope, { ...defaultFilters(), q: filters.q, qMode: filters.qMode });
     const body: SearchBody = {
       ...(appliedRef.current ?? scopeOnly),
@@ -245,7 +248,7 @@ export function useAnalysisQuery(options: {
       date: scopeOnly.date,
       keyword: scopeOnly.keyword,
       keyword_mode: scopeOnly.keyword_mode,
-      asin: scopeOnly.asin,
+      asins: scopeOnly.asins,
     };
     apply(body);
   };
@@ -259,7 +262,7 @@ export function useAnalysisQuery(options: {
       date: current.date,
       keyword: current.keyword,
       keyword_mode: current.keyword_mode,
-      asin: current.asin,
+      asins: current.asins,
     };
     apply(body);
   };
