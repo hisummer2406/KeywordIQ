@@ -203,3 +203,32 @@ def test_fact_rewrite_alone_invalidates_ready_slice(tmp_path):
         trans.rollback()
         conn.close()
         engine.dispose()
+
+
+async def test_stale_ready_hint_still_excludes_new_pairs(db):
+    """竞态（Codex 评审 PR #162 P2）：调用方读到「就绪」后，重导提交了新事实并置假，新出现的对
+    还没算。语句按调用方给的旧判断走命中表，也必须在自己的快照里发现未就绪、补做逐行判定。"""
+    await db.run_sync(_seed)
+    await db.run_sync(lambda s: rebuild_slice(s, site=SITE, period="DAY", report_date=D3))
+    await db.run_sync(lambda s: invalidate_slice(s, site=SITE, period="DAY", report_date=D3))
+    await db.run_sync(lambda s: s.execute(text(
+        "WITH k AS (INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,'bosch saw') "
+        "           RETURNING keyword_id) "
+        "INSERT INTO analysis.fact_daily(site,report_date,keyword_id,current_ranking,top1_brand_id) "
+        "SELECT :s, :d, k.keyword_id, 99, b.brand_id FROM k, analysis.dim_brand b WHERE b.name = 'bosch'"
+    ), {"s": SITE, "d": D3}))
+    req = AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=200, exclude_brand_in_keyword=True)
+
+    def run(ready_hint):
+        async def go():
+            count = (await db.execute(crud.count_filtered_stmt(
+                SITE, "DAY", D3, req, USER_ID, brand_hits_ready=ready_hint))).scalar_one()
+            rows = (await db.execute(crud.search_stmt(
+                SITE, "DAY", D3, req, user_id=USER_ID, brand_hits_ready=ready_hint))).all()
+            return count, sorted(r.keyword for r in rows)
+        return go()
+
+    stale = await run(True)
+    assert "bosch saw" not in stale[1]
+    assert stale == await run(False)
+    assert stale[0] == len(stale[1])

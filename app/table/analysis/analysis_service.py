@@ -333,8 +333,9 @@ async def _brand_hits_ready(
 ) -> bool:
     """排除品牌词时，该切片能否走预算命中对（``brand_hits`` 模块）。不筛品牌词时不查。
 
-    计数与取行各用一次这里的结果；即便两条语句之间导入翻转了标记也无妨——两条路的判定是同一个
-    表达式，行集合相同。
+    这里读到的只决定执行形状（就绪时计数不必关联关键词表）。正确性不依赖它：两次读之间重导
+    可能已提交新事实并置假，所以走命中表的语句会在自己的快照里再核对一次就绪，未就绪就补做
+    逐行判定（``analysis_crud._apply_filters``，Codex 评审 PR #162 P2）。
     """
     if not req.exclude_brand_in_keyword:
         return False
