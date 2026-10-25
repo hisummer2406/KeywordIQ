@@ -103,6 +103,7 @@ def test_failed_import_preserves_file_and_marks_failed(factory, tmp_path):
                        session_factory=factory)
     # 结构不符 → 失败，原始文件保留（不归档）供排查
     assert batch.status == "FAILED"
+    assert batch.completed_at is not None  # ops-bot 失败通知按它取
     assert batch.error_message
     assert Path(bad).exists()
 
@@ -194,6 +195,7 @@ def test_local_fallback_fails_fast_when_ops_action_holds_the_lock(
         session_factory=factory,
     )
     assert batch.status == "FAILED"
+    assert batch.completed_at is not None  # ops-bot 失败通知按它取
     assert "重新上传" in batch.error_message
 
 
@@ -358,6 +360,7 @@ def test_lock_is_released_after_import_fails(factory, tmp_path):
                        source=LocalFileSource("/nonexistent/nope.csv"),
                        original_filename="nope.csv", session_factory=factory)
     assert batch.status == "FAILED"
+    assert batch.completed_at is not None  # ops-bot 失败通知按它取
     assert _lock_is_free(), "导入失败后咨询锁仍被占着"
 
 
@@ -857,3 +860,40 @@ def test_recovery_does_not_republish_a_period_whose_facts_are_gone(factory, tmp_
             "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-15'"
         )).scalar() == 0
     assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_completed_at_is_true_instant_when_process_tz_differs_from_session_tz(tmp_path, monkeypatch):
+    """生产形态：容器本地时区 UTC、引擎会话时区 Asia/Shanghai（database.py）。裸 datetime.now()
+    的 UTC 墙钟会被会话当成北京时间写入，完成时间比真实时刻早 8 小时，ops-bot 的导入通知
+    窗口永远扫不到它。"""
+    import time
+
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    engine = create_engine(TEST_URL, connect_args={"options": "-c timezone=Asia/Shanghai"})
+    sf = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        path = _write_csv(tmp_path, "US_Day_2026_07_15.csv", [_row(1, "a")])
+        batch = run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                           source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
+                           session_factory=sf)
+        assert batch.status == "COMPLETED"
+        with sf() as s:
+            lag = s.execute(text(
+                "SELECT extract(epoch FROM now() - completed_at), "
+                "       extract(epoch FROM completed_at - created_at) "
+                "  FROM analysis.import_batch WHERE id = :i"
+            ), {"i": batch.id}).one()
+        assert 0 <= lag[0] < 60
+        assert lag[1] >= 0
+    finally:
+        with engine.begin() as c:
+            c.execute(text("TRUNCATE analysis.fact_daily, analysis.fact_weekly, analysis.fact_dropped, "
+                           "analysis.dim_keyword, analysis.dim_product, analysis.site_data_stats, "
+                           "analysis.import_batch RESTART IDENTITY CASCADE"))
+        engine.dispose()
+        monkeypatch.delenv("TZ")
+        time.tzset()

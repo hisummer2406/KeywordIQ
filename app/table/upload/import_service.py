@@ -270,14 +270,28 @@ def _finish_committed_import(
     session.commit()
 
     batch.status = STATUS_COMPLETED
-    batch.completed_at = datetime.now()
+    # 必须带时区：引擎会话时区是 Asia/Shanghai（database.py），生产容器的本地时区是 UTC。
+    # 裸 datetime.now() 是不带时区的 UTC 墙钟，被会话当成北京时间写入，比真实时刻早 8 小时
+    # ——导入历史的完成时间因此错位，ops-bot 按 completed_at 取「新完成」的窗口也永远扫不到。
+    batch.completed_at = datetime.now(UTC)
+
+
+def _mark_failed(batch: ImportBatch, reason: Exception | str) -> None:
+    """批次判失败的唯一写法：状态、原因与结束时刻一起写。不提交。
+
+    ``completed_at`` 对失败批次是「进入终态的时刻」。ops-bot 的导入通知按
+    ``completed_at > 水位线`` 取新进入终态的批次（``ops_bot/checks/import_status.py``），
+    失败批次不写它，失败通知就永远不会发。
+    """
+    batch.status = STATUS_FAILED
+    batch.error_message = str(reason)[:2000]
+    batch.completed_at = datetime.now(UTC)
 
 
 def _record_import_failure(session: Session, batch: ImportBatch, reason: Exception | str) -> None:
     """把批次落成失败。调用方须已回滚。"""
     try:
-        batch.status = STATUS_FAILED
-        batch.error_message = str(reason)[:2000]
+        _mark_failed(batch, reason)
         # 未成功的批次查询统计「不适用」：它可能已提交过 PENDING，不清掉的话界面会
         # 在一个失败批次上提示「统计待更新」。
         batch.stats_status = None
@@ -416,8 +430,7 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
         else:
             # 本地退路没有 object_key，批次记录里没有任何能重建数据源的东西，
             # 留在 QUEUED 就是撒谎——与 _mark_not_started 同一条纪律。
-            batch.status = STATUS_FAILED
-            batch.error_message = "运维动作（重启/发布）执行期间无法认领导入，请重新上传"
+            _mark_failed(batch, "运维动作（重启/发布）执行期间无法认领导入，请重新上传")
         session.commit()
         return batch
 
@@ -530,8 +543,7 @@ def _mark_not_started(session: Session, batch: ImportBatch) -> None:
         logger.warning("已有导入在进行，本次排队等待接手: %s", batch.file_name)
     else:
         logger.warning("已有导入在进行，本地退路无法自动重排，判为失败: %s", batch.file_name)
-        batch.status = STATUS_FAILED
-        batch.error_message = "已有导入正在进行；本地上传无法自动重排，请稍后重新上传"
+        _mark_failed(batch, "已有导入正在进行；本地上传无法自动重排，请稍后重新上传")
     session.commit()
 
 
@@ -666,30 +678,27 @@ def _reap_one(
     """
     if not batch.object_key:
         # 理论上不会有：UPLOADING 只由 create_upload_batch 产生，那里 object_key 必填。
-        batch.status = STATUS_FAILED
-        batch.error_message = "上传未完成且没有可溯源的对象，请重新上传"
+        _mark_failed(batch, "上传未完成且没有可溯源的对象，请重新上传")
         return
 
     try:
         size = object_size(batch.object_key)
     except Exception as exc:
         logger.exception("回收直传批次 #%s 时无法确认对象状态", batch.id)
-        batch.status = STATUS_FAILED
-        batch.error_message = f"无法确认上传结果，请重新上传：{exc}"[:2000]
+        _mark_failed(batch, f"无法确认上传结果，请重新上传：{exc}")
         return
 
     if size is None:
         logger.info("直传批次 #%s 超时且对象不存在，判为失败: %s", batch.id, batch.file_name)
-        batch.status = STATUS_FAILED
-        batch.error_message = "上传未完成或已中断，请重新上传"
+        _mark_failed(batch, "上传未完成或已中断，请重新上传")
         return
 
     if size > max_file_size:
         logger.warning("直传批次 #%s 的对象超过大小上限，拒绝导入: %s", batch.id, batch.file_name)
-        batch.status = STATUS_FAILED
-        batch.error_message = (
+        _mark_failed(
+            batch,
             f"文件超过上限（{size / 1024 ** 3:.2f} GB > "
-            f"{max_file_size / 1024 ** 3:.2f} GB），请拆分后再导入"
+            f"{max_file_size / 1024 ** 3:.2f} GB），请拆分后再导入",
         )
         return
 
@@ -742,8 +751,7 @@ def drain_import_queue(
                 # 源重建不出来（对象被删、配置变更……）。锁由 import_lock 负责还，
                 # 这里只负责把批次判死，别让它继续假装在排队。
                 logger.exception("排队批次的数据源重建失败 %s", batch.file_name)
-                batch.status = STATUS_FAILED
-                batch.error_message = f"排队后无法重建数据源，请重新上传：{exc}"[:2000]
+                _mark_failed(batch, f"排队后无法重建数据源，请重新上传：{exc}")
                 session.commit()
                 return batch
 
