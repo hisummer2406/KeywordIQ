@@ -28,7 +28,7 @@
     uv run python scripts/backfill_first_seen.py --replay --yes --sample 20
 
     # 撤销某次回填
-    uv run python scripts/backfill_first_seen.py --undo bak_first_seen_20261025t120000 --yes
+    uv run python scripts/backfill_first_seen.py --undo bak_first_seen_20261025t120000_123456 --yes
 
 脚本持有导入的咨询锁：回填与导入互斥，避免与导入同时全库扫描抢 IO（PostgreSQL 与应用同机）；
 拿不到锁（有导入在跑）就退出，不排队。
@@ -49,6 +49,12 @@ logger = logging.getLogger("backfill_first_seen")
 
 _TABLES = {"DAY": ("fact_daily", "report_date"), "WEEK": ("fact_weekly", "report_date_week")}
 _BACKUP_NAME = re.compile(r"^bak_first_seen_[a-z0-9_]+$")
+_BACKUP_RETURNING = (
+    "RETURNING k.keyword_id, k.site, o.first_seen_date AS old_date,"
+    " o.first_seen_period_type AS old_period, o.first_seen_basis AS old_basis,"
+    " k.first_seen_date AS new_date, k.first_seen_period_type AS new_period,"
+    " k.first_seen_basis AS new_basis"
+)
 
 
 def _rank() -> dict[str, int]:
@@ -123,7 +129,8 @@ def _brief(dates: list[date]) -> str:
 
 
 def new_backup_name() -> str:
-    return "bak_first_seen_" + datetime.now().strftime("%Y%m%dt%H%M%S")
+    # 精确到微秒：同一秒内的两次运行共用一张表，撤销会把前一次的改动一起恢复。
+    return "bak_first_seen_" + datetime.now().strftime("%Y%m%dt%H%M%S_%f")
 
 
 def ensure_backup_table(session, name: str) -> None:
@@ -151,11 +158,17 @@ def _check_backup_name(name: str) -> None:
 def backfill_period(
     session, site: str, period: str, report_date: date, *, backup: str, b0: date | None = None
 ) -> int:
-    """把一期的事实数据当作证据推进首次记录，返回被修改的词数。不提交。
+    """把一期的事实数据当作证据推进首次记录，返回改动的行次（同一词在本期被两条语句各改一次
+    计两次，见下）。不提交。
 
     ``b0`` 给出时是证据重放：``UNKNOWN`` 词在 B0 那天见到记最早可观测，晚于 B0 记导入创建。
+    已是最早可观测的词（先跑过常规回填，或迁移后被导入见到）日期往往已等于证据、第一条语句
+    不会碰它，所以重放再补一条只改来源的语句：首次记录正是晚于 B0 的本期、本期确有事实的
+    最早可观测词升为导入创建（Codex 评审 PR #158 P2）。按期次升序推进时，更早的期次已处理完，
+    此时首次记录等于本期就是它真正的第一次出现。导入创建不降级，与导入一致。
+
     改动的词把**原状态**（``o`` 是语句开始时的快照）与新状态一并记进回滚表；同一个词被多期
-    改动时保留最初的原状态、更新为最后的新状态。
+    或多条语句改动时保留最初的原状态、更新为最后的新状态。
     """
     from sqlalchemy import text
 
@@ -167,33 +180,41 @@ def backfill_period(
         " THEN 'EARLIEST_OBSERVED' ELSE 'IMPORTED' END"
         if b0 is not None else "'EARLIEST_OBSERVED'"
     )
-    update = first_seen_advance_sql(
-        f"analysis.{table} f JOIN analysis.dim_keyword o ON o.keyword_id = f.keyword_id",
-        f"f.site = :site AND f.{date_col} = :rdate AND k.keyword_id = f.keyword_id"
-        " AND o.keyword_id = k.keyword_id",
-        unknown_basis=unknown_basis,
-        returning="RETURNING k.keyword_id, k.site, o.first_seen_date AS old_date,"
-                  " o.first_seen_period_type AS old_period, o.first_seen_basis AS old_basis,"
-                  " k.first_seen_date AS new_date, k.first_seen_period_type AS new_period,"
-                  " k.first_seen_basis AS new_basis",
-    )
+    source = f"analysis.{table} f JOIN analysis.dim_keyword o ON o.keyword_id = f.keyword_id"
+    match = (f"f.site = :site AND f.{date_col} = :rdate AND k.keyword_id = f.keyword_id"
+             " AND o.keyword_id = k.keyword_id")
+    params = {"site": site, "period": period, "rdate": report_date, "rank": _rank()[period], "b0": b0}
+    statements = [first_seen_advance_sql(source, match, unknown_basis=unknown_basis,
+                                         returning=_BACKUP_RETURNING)]
+    if b0 is not None and report_date > b0:
+        statements.append(f"""
+            UPDATE analysis.dim_keyword k
+               SET first_seen_basis = 'IMPORTED'
+              FROM {source}
+             WHERE k.site = :site AND {match}
+               AND k.first_seen_basis = 'EARLIEST_OBSERVED'
+               AND k.first_seen_date = CAST(:rdate AS date) AND k.first_seen_period_type = :period
+            {_BACKUP_RETURNING}
+        """)
     _check_backup_name(backup)
-    result = session.execute(
-        text(
-            f"""
-            WITH changed AS ({update})
-            INSERT INTO analysis.{backup}
-                   (keyword_id, site, old_date, old_period, old_basis, new_date, new_period, new_basis)
-            SELECT keyword_id, site, old_date, old_period, old_basis, new_date, new_period, new_basis
-              FROM changed
-            ON CONFLICT (keyword_id) DO UPDATE
-               SET new_date = EXCLUDED.new_date, new_period = EXCLUDED.new_period,
-                   new_basis = EXCLUDED.new_basis
-            """
-        ),
-        {"site": site, "period": period, "rdate": report_date, "rank": _rank()[period], "b0": b0},
-    )
-    return result.rowcount
+    changed = 0
+    for update in statements:
+        changed += session.execute(
+            text(
+                f"""
+                WITH changed AS ({update})
+                INSERT INTO analysis.{backup}
+                       (keyword_id, site, old_date, old_period, old_basis, new_date, new_period, new_basis)
+                SELECT keyword_id, site, old_date, old_period, old_basis, new_date, new_period, new_basis
+                  FROM changed
+                ON CONFLICT (keyword_id) DO UPDATE
+                   SET new_date = EXCLUDED.new_date, new_period = EXCLUDED.new_period,
+                       new_basis = EXCLUDED.new_basis
+                """
+            ),
+            params,
+        ).rowcount
+    return changed
 
 
 def basis_counts(session, site: str) -> dict[str, int]:

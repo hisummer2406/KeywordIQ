@@ -250,3 +250,44 @@ def test_backup_name_rejects_injection():
 
     with pytest.raises(ValueError):
         bf.undo(None, "bak_first_seen_x; DROP TABLE analysis.dim_keyword")
+
+
+def test_replay_after_ordinary_backfill_equals_direct_replay(session, tmp_path):
+    """先跑过常规回填（全是最早可观测、日期已等于证据），再重放的结果必须与直接重放相同
+    （Codex 评审 PR #158 P2：只改来源的词曾被第一条语句跳过，重放零更新）。"""
+    _import_history(session, tmp_path)
+    _reset_to_legacy(session)
+    bf.backfill_site(session, "US", dry_run=False, replay=True)
+    direct = _snapshot(session)
+
+    _reset_to_legacy(session)
+    bf.backfill_site(session, "US", dry_run=False)
+    assert set(v[2] for v in _snapshot(session).values()) == {"EARLIEST_OBSERVED"}
+    stats = bf.backfill_site(session, "US", dry_run=False, replay=True)
+
+    assert _snapshot(session) == direct
+    assert stats["updated"] == 4  # c d e f 只改来源
+    assert bf.backfill_site(session, "US", dry_run=False, replay=True)["updated"] == 0
+
+    assert bf.undo(session, stats["backup"]) == 4
+    assert set(v[2] for v in _snapshot(session).values()) == {"EARLIEST_OBSERVED"}
+
+
+def test_replay_promotes_legacy_word_seen_by_post_migration_import(session, tmp_path):
+    """迁移后导入见到的存量词被记成最早可观测；重放按证据把晚于 B0 的升为导入创建，
+    B0 当期的保持最早可观测。"""
+    _imp(session, tmp_path, "a", ["x"], D(2026, 7, 10))
+    _reset_to_legacy(session)
+    _imp(session, tmp_path, "b", ["x", "y"], D(2026, 7, 11))   # y 是新词：IMPORTED
+    session.execute(text(
+        "UPDATE analysis.dim_keyword SET first_seen_basis = 'UNKNOWN', first_seen_date = NULL, "
+        "first_seen_period_type = NULL WHERE keyword = 'y'"
+    ))
+    _imp(session, tmp_path, "c", ["y"], D(2026, 7, 12))        # 存量 y 被导入见到 → 最早可观测 7-12
+    _imp(session, tmp_path, "d", ["y"], D(2026, 7, 11))        # 补导更早一期 → 7-11 仍最早可观测
+    assert _fs(session, "y") == (D(2026, 7, 11), "DAY", "EARLIEST_OBSERVED")
+
+    bf.backfill_site(session, "US", dry_run=False, replay=True)
+
+    assert _fs(session, "x") == (D(2026, 7, 10), "DAY", "EARLIEST_OBSERVED")
+    assert _fs(session, "y") == (D(2026, 7, 11), "DAY", "IMPORTED")
