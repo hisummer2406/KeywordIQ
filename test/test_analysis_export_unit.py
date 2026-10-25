@@ -58,10 +58,10 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
     monkeypatch.setattr(service.crud, "scope_row_count", lambda db, s, v, on: total)
     monkeypatch.setattr(
         service.crud, "count_capped",
-        lambda db, s, v, on, req, cap, user_id: min(total, cap),
+        lambda db, s, v, on, req, cap, user_id, **_kw: min(total, cap),
     )
     monkeypatch.setattr(service.crud, "iter_export_rows",
-                        lambda db, s, v, on, req, limit, user_id: iter([rows]))
+                        lambda db, s, v, on, req, limit, user_id, **_kw: iter([rows]))
     # 掉榜段：默认为空，故这些用例断言的仍是原来那份在榜行为
     monkeypatch.setattr(service.crud, "scope_dropped_count", lambda db, s, v, on: dropped)
     monkeypatch.setattr(service.crud, "iter_export_dropped_rows",
@@ -304,7 +304,7 @@ def test_stream_interruption_is_logged_with_stack(monkeypatch, caplog):
 
     from app.table.analysis import analysis_service as svc
 
-    def _boom(db, s, v, on, req, limit, user_id):
+    def _boom(db, s, v, on, req, limit, user_id, **_kw):
         yield [_row(1, "kettle", 1)]
         raise RuntimeError("cursor died mid-stream")
 

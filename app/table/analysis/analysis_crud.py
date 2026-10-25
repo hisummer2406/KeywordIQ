@@ -17,6 +17,7 @@ from app.table.analysis.dimension_model import (
     DimCategory,
     DimKeyword,
     DimProduct,
+    KeywordBrandHit,
 )
 from app.table.analysis.fact_model import (
     FactDaily,
@@ -196,6 +197,15 @@ def scope_row_count_stmt(site: str, view: str, on: date):
     )
 
 
+def brand_hits_ready_stmt(site: str, view: str, on: date):
+    """切片的品牌命中对是否就绪（``brand_hits`` 模块）。切片没有统计行时返回空，按未就绪处理。"""
+    return select(SiteDataStats.brand_hits_ready).where(
+        SiteDataStats.site == site,
+        SiteDataStats.period_type == view,
+        SiteDataStats.report_date == on,
+    )
+
+
 def scope_dropped_count_stmt(site: str, view: str, on: date):
     """作用域内的掉榜行数：读 site_data_stats.dropped_count（O(1)）。
 
@@ -360,14 +370,16 @@ def _base_query(site: str, view: str, on: date):
     return exclude_hidden_categories(stmt, fact), fact
 
 
-def _count_joins(req: AnalysisSearchRequest) -> dict[str, bool]:
+def _count_joins(req: AnalysisSearchRequest, *, brand_hits_ready: bool = False) -> dict[str, bool]:
     """计数要关联哪些维度：只关联筛选条件真正引用到的（``_apply_filters`` 的对照表）。
 
-    - ``DimKeyword``：关键词检索、排除品牌词（比的是关键词文本）、首次入榜（首次记录在它上面）。
+    - ``DimKeyword``：关键词检索、首次入榜（首次记录在它上面）；排除品牌词只在切片的命中对
+      未就绪、要逐行比关键词文本时才需要。
     - ``DimProduct``（top1）：只有标题筛选借用它。
     """
+    by_text = bool(req.exclude_brand_in_keyword) and not brand_hits_ready
     return {
-        "keyword": bool(req.keyword or req.exclude_brand_in_keyword or req.first_listed),
+        "keyword": bool(req.keyword or req.first_listed or by_text),
         "product": bool(req.product_title),
     }
 
@@ -476,7 +488,8 @@ def keyword_conditions(keyword: str, mode: str) -> list:
 
 
 def _apply_filters(
-    stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int, view: str, on: date
+    stmt, fact, req: AnalysisSearchRequest, *, site: str, user_id: int, view: str, on: date,
+    brand_hits_ready: bool = False,
 ):
     """在 base query 上 AND 叠加筛选。不触碰站点/日期边界。
 
@@ -510,9 +523,22 @@ def _apply_filters(
             or_(fact.top1_category_id.in_(ids), fact.top2_category_id.in_(ids),
                 fact.top3_category_id.in_(ids))
         )
-    # 关键词含自己前三品牌之一就排除。三个槽位各一个相关 EXISTS（走 dim_brand 主键）；
-    # 品牌为 NULL 时 EXISTS 为假，该槽位不排除任何词。
-    if req.exclude_brand_in_keyword:
+    # 关键词含自己前三品牌之一就排除。切片的命中对已就绪（``brand_hits`` 模块）时按主键反
+    # 连接预算好的 ``keyword_brand_hit``；未就绪时三个槽位各一个相关 EXISTS 逐行判定。两条路
+    # 的判定是同一个 ``brand_in_keyword``，结果相同。品牌为 NULL 的槽位不排除任何词（IN 遇
+    # NULL 不成立；EXISTS 关联不到品牌行）。
+    if req.exclude_brand_in_keyword and brand_hits_ready:
+        stmt = stmt.where(
+            ~select(1)
+            .where(
+                KeywordBrandHit.keyword_id == fact.keyword_id,
+                KeywordBrandHit.brand_id.in_(
+                    [fact.top1_brand_id, fact.top2_brand_id, fact.top3_brand_id]
+                ),
+            )
+            .exists()
+        )
+    elif req.exclude_brand_in_keyword:
         for n in (1, 2, 3):
             b = aliased(DimBrand)
             stmt = stmt.where(
@@ -616,6 +642,7 @@ def _apply_order(stmt, fact, req: AnalysisSearchRequest):
 def search_stmt(
     site: str, view: str, on: date, req: AnalysisSearchRequest,
     *, offset: int | None = None, limit: int | None = None, user_id: int,
+    brand_hits_ready: bool = False,
 ):
     """在榜段的一页（含筛选/排序/分页）。
 
@@ -624,7 +651,8 @@ def search_stmt(
     算出，不能再从页码反推。``user_id`` 只给「竞对新发现」筛选用，见 ``_apply_filters``。
     """
     stmt, fact = _base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on,
+                          brand_hits_ready=brand_hits_ready)
     stmt = _apply_order(stmt, fact, req)
     if offset is None:
         offset = (req.page - 1) * req.perPage
@@ -635,6 +663,7 @@ def search_stmt(
 
 def count_capped_stmt(
     site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int, user_id: int,
+    *, brand_hits_ready: bool = False,
 ):
     """作用域内筛选后的行数，最多数到 ``cap``（数满即返回 cap，不再往下扫）。
 
@@ -642,24 +671,32 @@ def count_capped_stmt(
     ——一个是非题，数满即可停；答案也只用于决定放行还是 413，不会作为数字呈现给用户。
     列表总数是另一回事，必须精确，见 :func:`count_filtered_stmt`。
     """
-    stmt, fact = _count_base_query(site, view, on, **_count_joins(req))
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
+    stmt, fact = _count_base_query(site, view, on, **_count_joins(req, brand_hits_ready=brand_hits_ready))
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on,
+                          brand_hits_ready=brand_hits_ready)
     capped = stmt.limit(cap).subquery()
     return select(func.count()).select_from(capped)
 
 
-def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, user_id: int):
+def count_filtered_stmt(
+    site: str, view: str, on: date, req: AnalysisSearchRequest, user_id: int,
+    *, brand_hits_ready: bool = False,
+):
     """有筛选时的列表总数：**精确计数，不封顶**（理由见文件头 FILTERED_COUNT_CAP 的墓志铭）。
 
     代价由切片大小决定、不随保留窗口增长；实测热缓存下日报 168ms、周报 242–375ms。
     换来的是 total 可以被当成真数使用——翻页器据此算页数，用户才够得着全部命中行。
     """
-    stmt, fact = _count_base_query(site, view, on, **_count_joins(req))
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
+    stmt, fact = _count_base_query(site, view, on, **_count_joins(req, brand_hits_ready=brand_hits_ready))
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on,
+                          brand_hits_ready=brand_hits_ready)
     return select(func.count()).select_from(stmt.subquery())
 
 
-def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int, user_id: int):
+def export_stmt(
+    site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int, user_id: int,
+    *, brand_hits_ready: bool = False,
+):
     """导出用语句：按作用域与筛选取行，带服务端游标的执行选项。
 
     ``yield_per`` 触发 ``stream_results``，内存与块大小同阶、不随结果集增长——GB 级
@@ -667,7 +704,8 @@ def export_stmt(site: str, view: str, on: date, req: AnalysisSearchRequest, limi
     好让上层能按块批量补齐当前视图的搜索趋势。
     """
     stmt, fact = _base_query(site, view, on)
-    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
+    stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on,
+                          brand_hits_ready=brand_hits_ready)
     stmt = _apply_order(stmt, fact, req)
     return stmt.limit(limit).execution_options(yield_per=EXPORT_CHUNK_SIZE)
 
@@ -896,8 +934,11 @@ def search_rows(
 
 def count_capped(
     db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, cap: int, user_id: int,
+    *, brand_hits_ready: bool = False,
 ) -> int:
-    return db.execute(count_capped_stmt(site, view, on, req, cap, user_id)).scalar_one()
+    return db.execute(
+        count_capped_stmt(site, view, on, req, cap, user_id, brand_hits_ready=brand_hits_ready)
+    ).scalar_one()
 
 
 def count_filtered(
@@ -912,9 +953,10 @@ def scope_dropped_count(db: Session, site: str, view: str, on: date) -> int:
 
 def iter_export_rows(
     db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest, limit: int, user_id: int,
+    *, brand_hits_ready: bool = False,
 ):
     """导出：分块产出（每块一个 dict 列表）。保持同步——服务端游标 + 自建会话。"""
-    result = db.execute(export_stmt(site, view, on, req, limit, user_id))
+    result = db.execute(export_stmt(site, view, on, req, limit, user_id, brand_hits_ready=brand_hits_ready))
     for partition in result.partitions():
         yield shape_rows(partition)
 

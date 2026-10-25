@@ -34,6 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.site_registry import normalize_site_code
+from app.table.analysis.brand_hits import invalidate_slice as invalidate_brand_hits
 from app.table.analysis.partitioning import ensure_fact_partitions, leaf_partition_name
 from app.table.upload.import_source import ImportSource
 from config import settings
@@ -425,6 +426,9 @@ def _load_facts(session: Session, site: str, period: str, report_date: date) -> 
         text(f"DELETE FROM analysis.{table} WHERE site = :site AND {date_col} = :rdate"),
         {"site": site, "rdate": report_date},
     )
+    # 切片内容要换了，它的品牌命中对就不再算「都判定过」：同一事务里置假，排除品牌词在收尾
+    # 重算完之前退回逐行判定，不会漏掉新出现的 (关键词, 品牌) 对（brand_hits 模块）。
+    invalidate_brand_hits(session, site=site, period=period, report_date=report_date)
 
     # 派生值一次算出：
     # - previous_ranking = 上一期同 (site,keyword) 的 current_ranking，无则 0

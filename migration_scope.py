@@ -24,6 +24,9 @@ V2_TABLES = frozenset(
         "dim_product",
         "dim_brand",
         "dim_category",
+        # 普通表，不登记进 partitioning.PARTITIONED_TABLES：命中对是 (关键词, 品牌) 的永久属性，
+        # 与维度同寿，按月 DROP 会让还在保留窗口内的切片丢掉命中而不自知。
+        "keyword_brand_hit",
         "fact_daily",
         "fact_weekly",
         "fact_dropped",

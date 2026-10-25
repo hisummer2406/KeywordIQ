@@ -70,6 +70,7 @@ _TABLES_WITH_LATEST_COL = (
     ("dim_product", None),
     ("dim_brand", None),
     ("dim_category", None),
+    ("keyword_brand_hit", None),
     ("site_data_stats", None),
     ("user_center", None),
     ("keyword_group", None),
