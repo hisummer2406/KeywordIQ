@@ -103,6 +103,7 @@ def test_failed_import_preserves_file_and_marks_failed(factory, tmp_path):
                        session_factory=factory)
     # 结构不符 → 失败，原始文件保留（不归档）供排查
     assert batch.status == "FAILED"
+    assert batch.completed_at is not None  # ops-bot 失败通知按它取
     assert batch.error_message
     assert Path(bad).exists()
 
@@ -194,6 +195,7 @@ def test_local_fallback_fails_fast_when_ops_action_holds_the_lock(
         session_factory=factory,
     )
     assert batch.status == "FAILED"
+    assert batch.completed_at is not None  # ops-bot 失败通知按它取
     assert "重新上传" in batch.error_message
 
 
@@ -358,6 +360,7 @@ def test_lock_is_released_after_import_fails(factory, tmp_path):
                        source=LocalFileSource("/nonexistent/nope.csv"),
                        original_filename="nope.csv", session_factory=factory)
     assert batch.status == "FAILED"
+    assert batch.completed_at is not None  # ops-bot 失败通知按它取
     assert _lock_is_free(), "导入失败后咨询锁仍被占着"
 
 
