@@ -66,14 +66,19 @@ rm -f "$tmp_logrotate"
 
 仓库的 `etc/keywordiq-v2-nginx.conf` 与 V2 默认部署值配套：它为
 `key.liangtong.online` 提供 HTTPS、将 `/api/` 与 `/health` 反代至 8001，并从
-`/var/www/keywordiq-web` 托管 SPA。首次安装或核对时：
+`/var/www/keywordiq-web` 托管 SPA。**发布工作流不会安装它**（只跑 `nginx -t`），模板改动合并后
+须手工安装；#135 的压缩与缓存曾因此合并五天未生效（#136）。首次安装或核对时：
 
 ```bash
 cd /var/www/keywordiq
+sudo cp -p /etc/nginx/conf.d/key.liangtong.online_80.conf /etc/nginx/key.liangtong.online_80.conf.bak-$(date +%Y%m%d)
 sudo install -o root -g root -m 0644 etc/keywordiq-v2-nginx.conf \
-  /etc/nginx/conf.d/key.liangtong.online.conf
+  /etc/nginx/conf.d/key.liangtong.online_80.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+线上生效的文件名是 `key.liangtong.online_80.conf`；装成别的名字会多出一份同名 `server_name`
+与 `upstream`，`nginx -t` 报重复定义。备份放在 `conf.d` 之外，否则也会被 include。
 
 证书文件须已位于 `/etc/nginx/ssl/key.liangtong.online/fullchain.crt` 与
 `/etc/nginx/ssl/key.liangtong.online/privkey.key`，与已上线的 V2 站点一致。
