@@ -155,6 +155,29 @@ class DimBrand(Base):
     )
 
 
+class KeywordBrandHit(Base):
+    """「关键词把这个品牌名作为完整单词包含」成立的 (关键词, 品牌) 对，供排除品牌词筛选。
+
+    判定（``analysis_crud.brand_in_keyword``）只取决于关键词文本与品牌名，两者在各自维度上
+    都不会改，所以结果是这一对的永久属性，与期次无关：导入时对本切片前三品牌槽位出现的对算
+    一次（``app.table.analysis.brand_hits``），之后查询按主键反连接，不再对几十万行逐行跑
+    子串与正则（#154 阶段二 D4：US 周报 288 万行切片上这一步 14 s）。
+
+    **只存命中的对**：未命中不记，所以「某切片的对是否都算过」另由
+    ``site_data_stats.brand_hits_ready`` 回答，没算过的切片仍走逐行判定。与维度一样不参与
+    保留清理、只增不删；重导或乱序导入只会补进新的对，已有的对不会变。
+    """
+
+    __tablename__ = "keyword_brand_hit"
+
+    keyword_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="→ dim_keyword")
+    brand_id: Mapped[int] = mapped_column(Integer, primary_key=True, comment="→ dim_brand")
+
+    __table_args__ = (
+        {"comment": "关键词以完整单词包含该品牌名的 (关键词, 品牌) 对；排除品牌词筛选用。"},
+    )
+
+
 class DimCategory(Base):
     """类目维度。
 

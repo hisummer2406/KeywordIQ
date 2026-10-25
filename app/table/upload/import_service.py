@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.common.errors import CODE_UPLOAD_IMPORT_REJECTED, ConflictError
 from app.site_registry import normalize_site_code
+from app.table.analysis.brand_hits import rebuild_slice as rebuild_brand_hits
 from app.table.analysis.filter_stats import rebuild_filter_stats
 from app.table.upload.import_batch_model import (
     STATS_FAILED,
@@ -96,6 +97,7 @@ def _update_site_data_stats(
             ON CONFLICT (site, period_type, report_date)
             DO UPDATE SET row_count = EXCLUDED.row_count,
                           dropped_count = EXCLUDED.dropped_count,
+                          brand_hits_ready = false,
                           updated_at = now()
             """
         ),
@@ -268,12 +270,28 @@ def _finish_committed_import(
     # 脚本要写同样的两张表，统计口径只能有一处定义。
     rebuild_filter_stats(session, site=site, period=period, report_date=report_date)
     session.commit()
+    _rebuild_brand_hits(session, site=site, period=period, report_date=report_date)
 
     batch.status = STATUS_COMPLETED
     # 必须带时区：引擎会话时区是 Asia/Shanghai（database.py），生产容器的本地时区是 UTC。
     # 裸 datetime.now() 是不带时区的 UTC 墙钟，被会话当成北京时间写入，比真实时刻早 8 小时
     # ——导入历史的完成时间因此错位，ops-bot 按 completed_at 取「新完成」的窗口也永远扫不到。
     batch.completed_at = datetime.now(UTC)
+
+
+def _rebuild_brand_hits(session: Session, *, site: str, period: str, report_date: date) -> None:
+    """算本切片的品牌命中对并置就绪（``app.table.analysis.brand_hits``）。
+
+    失败不抛、不判导入失败：事实与可见性都已提交，就绪仍为假只意味着排除品牌词继续逐行判定，
+    结果相同、只是慢；之后可用 ``scripts/backfill_brand_hits.py`` 补。
+    """
+    try:
+        added = rebuild_brand_hits(session, site=site, period=period, report_date=report_date)
+        session.commit()
+        logger.info("品牌命中对已就绪 %s %s %s：新增 %d 对", site, period, report_date, added)
+    except Exception:
+        session.rollback()
+        logger.exception("品牌命中对计算失败，该期排除品牌词继续逐行判定 %s %s %s", site, period, report_date)
 
 
 def _mark_failed(batch: ImportBatch, reason: Exception | str) -> None:
