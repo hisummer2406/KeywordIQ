@@ -857,3 +857,40 @@ def test_recovery_does_not_republish_a_period_whose_facts_are_gone(factory, tmp_
             "SELECT count(*) FROM analysis.site_data_stats WHERE report_date='2026-07-15'"
         )).scalar() == 0
     assert svc.retry_pending_query_stats(session_factory=factory) == 0
+
+
+def test_completed_at_is_true_instant_when_process_tz_differs_from_session_tz(tmp_path, monkeypatch):
+    """生产形态：容器本地时区 UTC、引擎会话时区 Asia/Shanghai（database.py）。裸 datetime.now()
+    的 UTC 墙钟会被会话当成北京时间写入，完成时间比真实时刻早 8 小时，ops-bot 的导入通知
+    窗口永远扫不到它。"""
+    import time
+
+    from app.table.upload.import_service import run_import
+    from app.table.upload.import_source import LocalFileSource
+
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    engine = create_engine(TEST_URL, connect_args={"options": "-c timezone=Asia/Shanghai"})
+    sf = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        path = _write_csv(tmp_path, "US_Day_2026_07_15.csv", [_row(1, "a")])
+        batch = run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                           source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
+                           session_factory=sf)
+        assert batch.status == "COMPLETED"
+        with sf() as s:
+            lag = s.execute(text(
+                "SELECT extract(epoch FROM now() - completed_at), "
+                "       extract(epoch FROM completed_at - created_at) "
+                "  FROM analysis.import_batch WHERE id = :i"
+            ), {"i": batch.id}).one()
+        assert 0 <= lag[0] < 60
+        assert lag[1] >= 0
+    finally:
+        with engine.begin() as c:
+            c.execute(text("TRUNCATE analysis.fact_daily, analysis.fact_weekly, analysis.fact_dropped, "
+                           "analysis.dim_keyword, analysis.dim_product, analysis.site_data_stats, "
+                           "analysis.import_batch RESTART IDENTITY CASCADE"))
+        engine.dispose()
+        monkeypatch.delenv("TZ")
+        time.tzset()
