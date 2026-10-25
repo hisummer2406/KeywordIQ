@@ -528,6 +528,28 @@ def _apply_filters(
     # 的判定是同一个 ``brand_in_keyword``，结果相同。品牌为 NULL 的槽位不排除任何词（IN 遇
     # NULL 不成立；EXISTS 关联不到品牌行）。
     if req.exclude_brand_in_keyword and brand_hits_ready:
+        # ``brand_hits_ready`` 是调用方先读到的，只用来选执行形状；对不对由本语句自己的快照
+        # 决定（Codex 评审 PR #162 P2）：调用方读到真之后、本语句执行之前，重导可能已提交
+        # 新事实并置假，新出现的对还没算。所以除了按命中表反连接（命中表只含真命中，任何
+        # 时候排除它们都对），再加一个守卫——本语句看到的切片仍就绪才算完，否则对这些行
+        # 补做逐行判定。就绪是一次性子查询（InitPlan），为真时 OR 短路，逐行判定不会执行。
+        ready_now = (
+            select(SiteDataStats.brand_hits_ready)
+            .where(SiteDataStats.site == site, SiteDataStats.period_type == view,
+                   SiteDataStats.report_date == on)
+            .scalar_subquery()
+        )
+        k = aliased(DimKeyword)
+        by_row = [
+            ~select(1)
+            .where(
+                k.keyword_id == fact.keyword_id,
+                b.brand_id == getattr(fact, f"top{n}_brand_id"),
+                brand_in_keyword(k.keyword, b.name),
+            )
+            .exists()
+            for n, b in ((n, aliased(DimBrand)) for n in (1, 2, 3))
+        ]
         stmt = stmt.where(
             ~select(1)
             .where(
@@ -536,7 +558,8 @@ def _apply_filters(
                     [fact.top1_brand_id, fact.top2_brand_id, fact.top3_brand_id]
                 ),
             )
-            .exists()
+            .exists(),
+            or_(func.coalesce(ready_now, false()), and_(*by_row)),
         )
     elif req.exclude_brand_in_keyword:
         for n in (1, 2, 3):
