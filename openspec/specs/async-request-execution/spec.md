@@ -82,10 +82,10 @@ asyncpg 无功能等价的接口；这三条路径都是低并发长事务，异
 
 #### Scenario: 满载上限低于数据库允许值
 - **WHEN** 按 `引擎数 × (池 + 溢出) × worker 数` 计算满载连接上限
-- **THEN** 结果显著低于 RDS 的 `max_connections`（400），并留有管理连接余量
+- **THEN** 结果显著低于自建 PostgreSQL 的 `max_connections`（`docker-compose.yml` 的 `PG_MAX_CONNECTIONS`，启动时由 `config.py` 校验），并留有管理连接余量
 
 #### Scenario: 文档中的算式与实际引擎数一致
-- **WHEN** 对照配置注释、`.env.example` 与 CLAUDE.md 中的连接数算式
+- **WHEN** 对照配置注释、`.env.example` 与运维规则（`.claude/rules/operations.md`）中的连接数算式
 - **THEN** 三处一致，且算式中的引擎数与 `database.py` 实际创建的引擎数相符
 
 ### Requirement: 应用侧并发上限不超过可用连接

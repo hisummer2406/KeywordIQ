@@ -6,6 +6,13 @@ services:
       db:
         condition: service_healthy
     env_file: .env
+    environment:
+      # 与数据库会话时区（database.py 的 Asia/Shanghai）及宿主机一致。镜像默认 UTC 时：
+      # 日志时间比宿主机晚 8 小时，host 级 ops-bot 按本机时间取「近 N 分钟」的错误计数
+      # 永远数到 0；date.today() 在北京时间 0~8 点仍是前一天；裸 datetime.now() 被会话
+      # 当成北京时间写入，早 8 小时（PR #160 的根因）。写在这里而不是 .env：不是部署机密，
+      # 也不该随环境不同。
+      TZ: Asia/Shanghai
     ports:
       # 只绑本地回环——host nginx 反代到这个地址，不对公网暴露裸 uvicorn。
       - "127.0.0.1:8001:8000"
