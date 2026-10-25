@@ -1,6 +1,6 @@
 import logging
 import secrets
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
@@ -201,7 +201,7 @@ class UserCenterCRUD:
         for key, value in update_data.items():
             if hasattr(db_user, key):
                 setattr(db_user, key, value)
-        db_user.updated_at = datetime.now()
+        db_user.updated_at = datetime.now(UTC)  # 带时区，原因见 import_service 的 completed_at
 
         try:
             await self.db.commit()

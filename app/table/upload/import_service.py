@@ -270,7 +270,10 @@ def _finish_committed_import(
     session.commit()
 
     batch.status = STATUS_COMPLETED
-    batch.completed_at = datetime.now()
+    # 必须带时区：引擎会话时区是 Asia/Shanghai（database.py），生产容器的本地时区是 UTC。
+    # 裸 datetime.now() 是不带时区的 UTC 墙钟，被会话当成北京时间写入，比真实时刻早 8 小时
+    # ——导入历史的完成时间因此错位，ops-bot 按 completed_at 取「新完成」的窗口也永远扫不到。
+    batch.completed_at = datetime.now(UTC)
 
 
 def _record_import_failure(session: Session, batch: ImportBatch, reason: Exception | str) -> None:
