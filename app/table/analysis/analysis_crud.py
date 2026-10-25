@@ -173,7 +173,7 @@ def imported_since_stmt(site: str):
 def first_listed_count_stmt(site: str, view: str, on: date):
     """所选期次「首次入榜」的数量，**与「仅 first_listed 筛选」的列表总数同一口径**：
     走同一个计数 base query（含类目黑名单），数量与筛选结果因此不会各说各话。"""
-    stmt, _ = _count_base_query(site, view, on)
+    stmt, _ = _count_base_query(site, view, on, keyword=True, product=False)
     capped = stmt.where(first_listed_expr(site, view, on)).subquery()
     return select(func.count()).select_from(capped)
 
@@ -360,25 +360,39 @@ def _base_query(site: str, view: str, on: date):
     return exclude_hidden_categories(stmt, fact), fact
 
 
-def _count_base_query(site: str, view: str, on: date):
-    """计数专用 base query：只关联筛选真正用到的维度（关键词 + top1 商品）。
+def _count_joins(req: AnalysisSearchRequest) -> dict[str, bool]:
+    """计数要关联哪些维度：只关联筛选条件真正引用到的（``_apply_filters`` 的对照表）。
 
-    与 ``_base_query`` 分开，是因为计数要扫遍命中行（精确计数，不封顶），而 top2/top3
-    的关联对"有多少行"毫无贡献（LEFT JOIN 主键不改变行数），带上就是纯粹的开销。
-    筛选条件引用的维度在两条路径上完全一致，故 ``_apply_filters`` 两边通用。
+    - ``DimKeyword``：关键词检索、排除品牌词（比的是关键词文本）、首次入榜（首次记录在它上面）。
+    - ``DimProduct``（top1）：只有标题筛选借用它。
+    """
+    return {
+        "keyword": bool(req.keyword or req.exclude_brand_in_keyword or req.first_listed),
+        "product": bool(req.product_title),
+    }
 
-    **这个 ``DimProduct`` LEFT JOIN 不能删**：ASIN 与「竞对新发现」筛选已经改成不相关子
-    查询，不再依赖它，但 ``product_title`` 筛选仍然只作用于 top1、仍然借用这个别名
-    （issue #56 P2 design.md 决策 2）。
+
+def _count_base_query(site: str, view: str, on: date, *, keyword: bool = True, product: bool = True):
+    """计数专用 base query：只关联筛选真正用到的维度（调用方按 ``_count_joins`` 传）。
+
+    与 ``_base_query`` 分开，是因为计数要扫遍命中行（精确计数，不封顶），对"有多少行"没有
+    贡献的关联就是纯开销。生产实测（US 周报 288 万行切片，#154 阶段二）：
+    - ``DimKeyword`` 内连接：默认计数要整表扫一遍 555 万行的 ``dim_keyword`` 建哈希、溢写临时
+      文件。去掉它行数不变：事实行的 ``keyword_id`` 恒在 ``dim_keyword``（导入先写维度再写事实，
+      维度只增不删；生产核对过孤立事实为 0），与 ``_base_query`` 的内连接因此同一行集合。
+    - ``DimProduct`` 左连接：主键左连接不改变行数，计划器多数时候会自己去掉；但「首次入榜」
+      计数时没去掉，15 万次冷缓存主键探测占了 25 s 里的 24.6 s。
+
+    ``product`` 为真时这个左连接仍是 ``product_title`` 筛选借用的 top1 别名（issue #56 P2
+    design.md 决策 2），不能挪到别处。
     """
     fact, date_col = fact_and_datecol(view)
-    stmt = (
-        select(fact.keyword_id.label("keyword_id"))
-        .select_from(fact)
-        .join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
-        .join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
-        .where(fact.site == site, date_col == on)
-    )
+    stmt = select(fact.keyword_id.label("keyword_id")).select_from(fact)
+    if keyword:
+        stmt = stmt.join(DimKeyword, DimKeyword.keyword_id == fact.keyword_id)
+    if product:
+        stmt = stmt.join(DimProduct, DimProduct.product_id == fact.top1_product_id, isouter=True)
+    stmt = stmt.where(fact.site == site, date_col == on)
     return exclude_hidden_categories(stmt, fact), fact
 
 
@@ -628,7 +642,7 @@ def count_capped_stmt(
     ——一个是非题，数满即可停；答案也只用于决定放行还是 413，不会作为数字呈现给用户。
     列表总数是另一回事，必须精确，见 :func:`count_filtered_stmt`。
     """
-    stmt, fact = _count_base_query(site, view, on)
+    stmt, fact = _count_base_query(site, view, on, **_count_joins(req))
     stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
     capped = stmt.limit(cap).subquery()
     return select(func.count()).select_from(capped)
@@ -640,7 +654,7 @@ def count_filtered_stmt(site: str, view: str, on: date, req: AnalysisSearchReque
     代价由切片大小决定、不随保留窗口增长；实测热缓存下日报 168ms、周报 242–375ms。
     换来的是 total 可以被当成真数使用——翻页器据此算页数，用户才够得着全部命中行。
     """
-    stmt, fact = _count_base_query(site, view, on)
+    stmt, fact = _count_base_query(site, view, on, **_count_joins(req))
     stmt = _apply_filters(stmt, fact, req, site=site, user_id=user_id, view=view, on=on)
     return select(func.count()).select_from(stmt.subquery())
 
