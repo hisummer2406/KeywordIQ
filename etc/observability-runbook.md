@@ -158,6 +158,9 @@ ssh <user>@<host> 'bash -s' < scripts/collect_search_latency.sh > baseline.txt
 ssh <user>@<host> 'SINCE=2026-11-01 bash -s' < scripts/collect_search_latency.sh > after.txt
 ```
 
+应用日志时间是北京时间（Compose 给 app 设了 `TZ=Asia/Shanghai`）；在此之前的日志是 UTC，跨这个
+发布点按日期切分时边界相差 8 小时。
+
 - **口径**：应用日志「请求摘要」里的 `duration_ms`。V2 的 nginx 用默认 combined 格式，不记耗时，不能作为来源。请求摘要不带视图，所以第 1 节是日报、周报合计；要按视图拆，看第 3 节的慢诊断。
 - **日志文件名**：V2 应用日志按 `app.log-YYYYMMDD(.gz)` 轮转，当天的是 `app.log`，与第 1 节示例中的 `.1/.N.gz` 不同。脚本用 `logs/app.log*` 一并读取。
 - **修复前基线**与**性能预算**（日报 p95 ≤ 3 s、周报 p95 ≤ 5 s、单请求 ≤ 25 s）记录在 `openspec/changes/archive/2026-10-24-post-import-query-readiness/design.md`，见其中「生产基线」「性能预算」。
