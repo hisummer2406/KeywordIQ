@@ -12,5 +12,5 @@ Refs #143。#141 把“首次入榜”改为查询时对 `dim_keyword` 永久记
 ## Impact
 
 - spec：`keyword-first-seen`（MODIFIED 三条 Requirement）。
-- 代码：`scripts/backfill_first_seen.py` 尚按旧口径（永不写 `IMPORTED`），本变更不改代码，见 tasks。
+- 代码：`scripts/backfill_first_seen.py` 增加证据重放、完整性校验、回滚表与撤销；导入与回填共用 `importer.first_seen_advance_sql` 比较键（导入行为不变）。
 - 数据：2026-10-22 已在生产库用手工 SQL 完成一次重放，结果记录见 tasks。

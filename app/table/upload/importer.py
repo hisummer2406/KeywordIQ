@@ -61,6 +61,32 @@ _PERIOD_CONFIG: dict[str, tuple[str, str, int, int]] = {
 FIRST_SEEN_PERIOD_RANK = {"DAY": 0, "WEEK": 1}
 
 
+def first_seen_advance_sql(
+    source: str, match: str, *, unknown_basis: str = "'EARLIEST_OBSERVED'", returning: str = ""
+) -> str:
+    """「证据更早才向前修正」首次记录的 UPDATE，导入与回填（``scripts/backfill_first_seen.py``）
+    共用这一份，比较键只有一处。
+
+    ``k`` 是 ``dim_keyword``；``source`` 是 FROM 子句（证据来源），``match`` 把它连到 ``k``。
+    参数 ``:site`` ``:rdate`` ``:period`` ``:rank``。``unknown_basis`` 是 ``UNKNOWN`` 词见到
+    证据后的来源：导入与常规回填恒为最早可观测，只有证据重放回填会按期次给出导入创建。
+    """
+    return f"""
+        UPDATE analysis.dim_keyword k
+           SET first_seen_date = CAST(:rdate AS date),
+               first_seen_period_type = :period,
+               first_seen_basis = CASE WHEN k.first_seen_basis = 'UNKNOWN'
+                                       THEN {unknown_basis} ELSE k.first_seen_basis END
+          FROM {source}
+         WHERE k.site = :site AND {match}
+           AND (k.first_seen_date IS NULL
+                OR (CAST(:rdate AS date), CAST(:rank AS int))
+                   < (k.first_seen_date,
+                      CASE k.first_seen_period_type WHEN 'DAY' THEN 0 ELSE 1 END))
+        {returning}
+    """
+
+
 class ImportError_(Exception):
     """导入过程中的可预期错误（结构不符、周期非法等）。"""
 
@@ -292,20 +318,11 @@ def _upsert_keywords(session: Session, site: str, period: str, report_date: date
     )
     session.execute(
         text(
-            """
-            UPDATE analysis.dim_keyword k
-               SET first_seen_date = CAST(:rdate AS date),
-                   first_seen_period_type = :period,
-                   first_seen_basis = CASE WHEN k.first_seen_basis = 'UNKNOWN'
-                                           THEN 'EARLIEST_OBSERVED' ELSE k.first_seen_basis END
-              FROM (SELECT DISTINCT c1 FROM analysis._import_staging
-                     WHERE NULLIF(c1, '') IS NOT NULL) s
-             WHERE k.site = :site AND k.keyword = s.c1
-               AND (k.first_seen_date IS NULL
-                    OR (CAST(:rdate AS date), CAST(:rank AS int))
-                       < (k.first_seen_date,
-                          CASE k.first_seen_period_type WHEN 'DAY' THEN 0 ELSE 1 END))
-            """
+            first_seen_advance_sql(
+                "(SELECT DISTINCT c1 FROM analysis._import_staging"
+                " WHERE NULLIF(c1, '') IS NOT NULL) s",
+                "k.keyword = s.c1",
+            )
         ),
         params,
     )
