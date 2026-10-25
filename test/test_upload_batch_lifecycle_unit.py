@@ -107,6 +107,7 @@ class TestReapStaleUploads:
 
         assert handled == [batch]
         assert batch.status == STATUS_FAILED
+        assert batch.completed_at is not None  # ops-bot 失败通知按它取
         assert "重新上传" in batch.error_message
         assert session.commits == 1
 
@@ -136,6 +137,7 @@ class TestReapStaleUploads:
 
         assert handled == [batch]
         assert batch.status == STATUS_FAILED
+        assert batch.completed_at is not None  # ops-bot 失败通知按它取
         assert "上限" in batch.error_message
 
     def test_size_lookup_failure_does_not_stop_the_round(self):
@@ -159,6 +161,7 @@ class TestReapStaleUploads:
 
         assert handled == [boom, ok]
         assert boom.status == STATUS_FAILED
+        assert boom.completed_at is not None  # ops-bot 失败通知按它取
         assert "无法确认" in boom.error_message
         assert ok.status == STATUS_QUEUED, "前一条出错不该影响后面的批次"
 
@@ -169,6 +172,7 @@ class TestReapStaleUploads:
 
         assert handled == [batch]
         assert batch.status == STATUS_FAILED
+        assert batch.completed_at is not None  # ops-bot 失败通知按它取
 
     def test_nothing_to_reap_does_not_commit(self):
         """没有超时批次时不该白提交一次事务。"""
