@@ -378,6 +378,12 @@ class SiteDataStats(Base):
         BigInteger, nullable=False, default=0, server_default=text("0"),
         comment="该期的掉榜词数（见 fact_dropped）",
     )
+    # 本切片前三品牌槽位的 (关键词, 品牌) 对是否都已判定进 keyword_brand_hit。为假时排除品牌词
+    # 走逐行判定（结果相同、更慢）；重写切片的事务里先置假，算完再置真（brand_hits 模块）。
+    brand_hits_ready: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"),
+        comment="本切片的品牌命中对是否已算入 keyword_brand_hit；为假时排除品牌词逐行判定",
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
