@@ -35,8 +35,11 @@
 
 ## 6. 阶段二：品牌词与计数优化（闸门：1.2）
 
-- [ ] 6.1 按重采的 `stage_ms` 判断是否超预算及主导阶段，选定候选并更新 design D4
+- [x] 6.1 按重采的 `stage_ms` 判断是否超预算及主导阶段，选定候选并更新 design D4（2026-10-26：生产一次性服务层采样 + `EXPLAIN ANALYZE`，结果记在 #148 评论与 design D4「实测与选择」；正式请求分布仍待 1.2 重采）
 - [ ] 6.2 实现并做等价性回归：总数、分页边界、黑名单、首次入榜、掉榜、导出一致，日报与周报
+  - [x] 6.2a 计数只关联用到的维度（`_count_joins`）；`test/test_analysis_count_joins_integration.py` 11 个筛选组合对照旧写法计数与列表实际行数，另加守卫确认每个组合确实筛掉了行；把排除品牌词/首次入榜改成不关联关键词表时 5 例失败
+  - [x] 6.2b 排除品牌词：`keyword_brand_hit` + `site_data_stats.brand_hits_ready`（迁移 `b7d1e4a9c2f3`）、`app/table/analysis/brand_hits.py`、导入置假/收尾重算、`scripts/backfill_brand_hits.py`；`test/test_brand_hits_integration.py` 8 例（就绪与逐行判定结果逐一相等，含元字符、过短品牌、第三槽位、子串非整词、大小写、空槽位与组合筛选；导入置就绪、单独事实写入置假、回填只处理未就绪）。三处反向变异（只比第一槽位 / 导入不置假 / 命中改用子串）对应用例均失败
+  - [ ] 6.2c 发布后回填存量切片（`scripts/backfill_brand_hits.py`，持导入锁、可分批）并核对就绪切片与逐行判定结果一致
 - [ ] 6.3 日报、周报、冷热场景前后对比
 
 ## 7. 阶段二：轻量接口保护（闸门：1.2）

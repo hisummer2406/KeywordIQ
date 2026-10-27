@@ -327,10 +327,33 @@ async def _fetch_trends(
     )
 
 
+async def _brand_hits_ready(
+    db: AsyncSession, site: str, view: str, on: date, req: AnalysisSearchRequest,
+    db_ms: list[int] | None = None,
+) -> bool:
+    """排除品牌词时，该切片能否走预算命中对（``brand_hits`` 模块）。不筛品牌词时不查。
+
+    这里读到的只决定执行形状（就绪时计数不必关联关键词表）。正确性不依赖它：两次读之间重导
+    可能已提交新事实并置假，所以走命中表的语句会在自己的快照里再核对一次就绪，未就绪就补做
+    逐行判定（``analysis_crud._apply_filters``，Codex 评审 PR #162 P2）。
+    """
+    if not req.exclude_brand_in_keyword:
+        return False
+    result = await _timed_execute(db, crud.brand_hits_ready_stmt(site, view, on), db_ms)
+    return bool(result.scalar_one_or_none())
+
+
+def _brand_hits_ready_sync(db: Session, site: str, view: str, on: date, req: AnalysisSearchRequest) -> bool:
+    """导出（同步会话）版本，口径同 ``_brand_hits_ready``。"""
+    if not req.exclude_brand_in_keyword:
+        return False
+    return bool(db.execute(crud.brand_hits_ready_stmt(site, view, on)).scalar_one_or_none())
+
+
 async def _listed_total(
     db: AsyncSession, site: str, view: str, on: date,
     req: AnalysisSearchRequest, has_filters: bool, user_id: int,
-    db_ms: list[int] | None = None,
+    db_ms: list[int] | None = None, *, brand_hits_ready: bool = False,
 ) -> int:
     """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
 
@@ -339,7 +362,10 @@ async def _listed_total(
     切片的预存值，不扣黑名单类目（``HIDDEN_CATEGORY_NAMES``），拿它当分界线会比实际可
     翻的行数多，末页出现空页。``has_filters`` 仍管掉榜段是否显示，与这里无关。
     """
-    result = await _timed_execute(db, crud.count_filtered_stmt(site, view, on, req, user_id), db_ms)
+    result = await _timed_execute(
+        db, crud.count_filtered_stmt(site, view, on, req, user_id, brand_hits_ready=brand_hits_ready),
+        db_ms,
+    )
     return result.scalar_one()
 
 
@@ -484,7 +510,10 @@ async def search(
         # 须明示。
         has_filters = crud.request_has_filters(req)
 
-        listed_total = await _listed_total(db, site, view, on, req, has_filters, user_id, db_ms=db_ms)
+        brand_ready = await _brand_hits_ready(db, site, view, on, req, db_ms=db_ms)
+        listed_total = await _listed_total(
+            db, site, view, on, req, has_filters, user_id, db_ms=db_ms, brand_hits_ready=brand_ready,
+        )
         dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on, db_ms=db_ms)
         _stage("count_ms")
 
@@ -502,7 +531,10 @@ async def search(
                 (
                     await _timed_execute(
                         db,
-                        crud.search_stmt(site, view, on, req, offset=offset, limit=limit, user_id=user_id),
+                        crud.search_stmt(
+                            site, view, on, req, offset=offset, limit=limit, user_id=user_id,
+                            brand_hits_ready=brand_ready,
+                        ),
                         db_ms,
                     )
                 ).all()
@@ -593,7 +625,10 @@ def resolve_export_scope(
     listed = 0
     if wants_listed(req.include):
         # 无筛选也实算：预存的 row_count 不扣黑名单类目，会高估（见 ``_listed_total``）。
-        listed = crud.count_capped(db, site, req.view, on, req, cap + 1, user_id)
+        listed = crud.count_capped(
+            db, site, req.view, on, req, cap + 1, user_id,
+            brand_hits_ready=_brand_hits_ready_sync(db, site, req.view, on, req),
+        )
     # 带筛选时掉榜段恒为空：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配。
     dropped = (
         crud.scope_dropped_count(db, site, req.view, on)
@@ -649,7 +684,8 @@ def iter_export_csv(
 
         if wants_listed(req.include):
             for rows in crud.iter_export_rows(
-                db, site, view, on, req, settings.EXPORT_ROW_CAP, user_id
+                db, site, view, on, req, settings.EXPORT_ROW_CAP, user_id,
+                brand_hits_ready=_brand_hits_ready_sync(db, site, view, on, req),
             ):
                 yield _emit(rows)
 

@@ -45,7 +45,7 @@ async def _fast_available_dates(_db, _site, _view, db_ms=None):
     return [date(2026, 1, 1)]
 
 
-async def _fast_listed_total(_db, _site, _view, _on, _req, _has_filters, _user_id, db_ms=None):
+async def _fast_listed_total(_db, _site, _view, _on, _req, _has_filters, _user_id, db_ms=None, **_kw):
     return 0
 
 
