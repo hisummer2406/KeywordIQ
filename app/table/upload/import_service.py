@@ -114,7 +114,11 @@ def refresh_query_stats(session: Session, *, site: str, period: str, report_date
     只 ANALYZE 叶子分区（<1 s）就回到 1.3 s 以内。而自动分析要求改动超过分区行数的
     10%，月中单日导入达不到，统计会滞后好几期。
 
-    只分析叶子：查询按 (site, 日期) 裁剪到叶子，用的就是叶子的统计；维度表实测不需要。
+    叶子分区之外还分析 ``dim_keyword``（#154）：「首次入榜」按 ``first_seen_date`` 筛选，
+    新期次的首次日期同样不在它的统计里，被估成 1 行。生产实测 US 周报首次入榜取第一页时，
+    规划器先把 19 万行全部关联完商品/品牌/类目再排序，次次 25 s 超时；ANALYZE（0.8 s）后
+    1.8 s。它 580 万行，自动分析要等 58 万行改动，约两周一次。其余维度表不参与按期筛选，不需要。
+
     ``ANALYZE`` 只取 ShareUpdateExclusive 锁，不阻塞读写。``set_config(..., true)`` 即
     ``SET LOCAL``，超时只作用于本事务。表名来自分区注册表白名单，可以安全拼进语句。
     """
@@ -125,6 +129,7 @@ def refresh_query_stats(session: Session, *, site: str, period: str, report_date
     schema = settings.DATABASE_SCHEMA
     for leaf in written_leaf_partitions(site, period, report_date):
         session.execute(text(f'ANALYZE "{schema}"."{leaf}"'))
+    session.execute(text(f'ANALYZE "{schema}"."dim_keyword"'))
 
 
 def _refresh_batch_query_stats(session: Session, batch: ImportBatch) -> bool:

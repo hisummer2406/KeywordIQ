@@ -578,6 +578,32 @@ def test_query_stats_cover_new_period_before_it_becomes_visible(factory, tmp_pat
     assert (status, stats_status) == ("COMPLETED", "READY")
 
 
+def test_query_stats_cover_new_first_seen_date_before_it_becomes_visible(factory, tmp_path, monkeypatch):
+    """「首次入榜」按 dim_keyword.first_seen_date 筛选：新期次的首次日期也要在期次可见前进统计。
+
+    #154 生产实测：dim_keyword 统计停在旧期次时，新期首次日期被估成 1 行，US 周报首次入榜取页
+    次次超时。第二天全是新词，首次日期 = 2026-07-16。
+    """
+    import app.table.upload.import_service as svc
+
+    _import_day(factory, tmp_path, "2026-07-15", _three_rows())
+
+    seen_at_visibility: list[bool] = []
+    original = svc._update_site_data_stats
+
+    def spy(session, **kw):
+        if kw["report_date"] == date(2026, 7, 16):
+            seen_at_visibility.append(
+                _stats_mention(session, "dim_keyword", "first_seen_date", "2026-07-16")
+            )
+        return original(session, **kw)
+
+    monkeypatch.setattr(svc, "_update_site_data_stats", spy)
+    _import_day(factory, tmp_path, "2026-07-16", [_row(1, "d"), _row(2, "e"), _row(3, "f")])
+
+    assert seen_at_visibility == [True]
+
+
 def test_query_stats_refresh_covers_written_leaves_for_week_and_reimport(factory, tmp_path):
     """周报分析周报叶子与掉榜分区（没有增长分区）；同一期重导同样刷新。"""
     from app.table.upload.import_service import run_import
