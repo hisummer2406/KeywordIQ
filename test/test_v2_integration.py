@@ -115,11 +115,15 @@ def test_ensure_partition_is_idempotent(conn):
 
 
 def test_cross_month_auto_creates_partition(conn):
-    """报告日期落在新月份时，分区被自动创建——跨月首次导入不能因分区缺失而失败。"""
-    _ensure(conn, "fact_daily", "US", date(2026, 7, 15))
-    assert "fact_daily_2026_08" not in _leaf_partitions(conn, "fact_daily")
-    _ensure(conn, "fact_daily", "US", date(2026, 8, 3))  # 跨到 8 月
-    assert "fact_daily_2026_08" in _leaf_partitions(conn, "fact_daily")
+    """报告日期落在新月份时，分区被自动创建——跨月首次导入不能因分区缺失而失败。
+
+    用远期月份：共享测试库里别的测试会按「今天往前推」建分区并提交（如
+    test_topslot_history_integration 的保留下界前一期），写死近期月份会随日期推移撞上。
+    """
+    _ensure(conn, "fact_daily", "US", date(2035, 7, 15))
+    assert "fact_daily_2035_08" not in _leaf_partitions(conn, "fact_daily")
+    _ensure(conn, "fact_daily", "US", date(2035, 8, 3))  # 跨到 8 月
+    assert "fact_daily_2035_08" in _leaf_partitions(conn, "fact_daily")
 
 
 def test_unique_constraint_blocks_duplicate(conn):

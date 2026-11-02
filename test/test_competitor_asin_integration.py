@@ -38,6 +38,13 @@ pytestmark = pytest.mark.skipif(
 
 _SELLER = "AS2G99DA1EUF"
 _SITE = "US"
+# 上新流按「最近 N 天」取数：测试时刻原先写死成 2026-08 的日历日期，2026-11-02 起超出 90 天
+# 窗口，5 例同时失败。改为相对当前时刻：_day(D) 是 30 天前那天起的第 D 天（原「8 月 D 日」）。
+_DAY_BASE = (datetime.now(UTC) - timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _day(day: int, hour: int = 0, minute: int = 0) -> datetime:
+    return _DAY_BASE + timedelta(days=day - 1, hours=hour, minutes=minute)
 
 
 def _async_url(url: str) -> str:
@@ -596,7 +603,7 @@ async def test_跨事务下第二次上报的新品晚于基线(committing_db):
 
 async def _seed_dtc(db, user_id, *, domain="mixed-shop.com", n=3):
     """一个已建基线的独立站 + n 个基线之后上架的商品。"""
-    base = datetime(2026, 8, 1, tzinfo=UTC)
+    base = _day(1)
     await db.execute(
         text(
             "INSERT INTO analysis.competitor_store(domain,name,first_fetch_at,currency) "
@@ -628,7 +635,7 @@ async def _seed_amazon_arrivals(db, user_id, *, n=3):
     直接写表而不走 service：这里要控制 `first_seen_at` 的具体取值来验排序与翻页，
     而 service 一律用服务端事务时间（那是对的，见 test_captured_at偏移不影响判定）。
     """
-    base = datetime(2026, 8, 1, tzinfo=UTC)
+    base = _day(1)
     await db.execute(
         text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
         {"t": base, "s": _SELLER},
@@ -650,7 +657,7 @@ async def test_同一seller_id跨站点卖同一asin两行都保留不冲突(db)
     撞成同一行，翻页时互相顶替。这里用完全相同的 first_seen_at 制造平局，同时验证
     site 参与了次级排序键。"""
     seed = await db.run_sync(_seed)
-    same_at = datetime(2026, 8, 2, 12, tzinfo=UTC)
+    same_at = _day(2, 12)
     await _seed_amazon_arrivals(db, seed["owner"], n=1)  # US: B0MIX00000 @ same_at
 
     gb_site = "GB"
@@ -659,7 +666,7 @@ async def test_同一seller_id跨站点卖同一asin两行都保留不冲突(db)
             "INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
             "VALUES (:s,:t,:b)"
         ),
-        {"s": _SELLER, "t": gb_site, "b": datetime(2026, 8, 1, tzinfo=UTC)},
+        {"s": _SELLER, "t": gb_site, "b": _day(1)},
     )
     await db.execute(
         text(
@@ -769,13 +776,13 @@ async def test_时间相同的多条也能翻完(db):
     `test_competitor_asin_unit.py::test_上新流排序带次级键` 结构性地钉住。
     """
     seed = await db.run_sync(_seed)
-    same = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+    same = _day(5, 10, 0)
     await db.execute(
         text(
             "INSERT INTO analysis.competitor_store(domain,name,first_fetch_at,currency) "
             "VALUES ('tie-shop.com','平局店',:t,'USD')"
         ),
-        {"t": datetime(2026, 8, 1, tzinfo=UTC)},
+        {"t": _day(1)},
     )
     await db.execute(
         text("INSERT INTO analysis.user_store_watch(user_id,domain) VALUES (:u,'tie-shop.com')"),
@@ -792,7 +799,7 @@ async def test_时间相同的多条也能翻完(db):
         )
     await db.execute(
         text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
-        {"t": datetime(2026, 8, 1, tzinfo=UTC), "s": _SELLER},
+        {"t": _day(1), "s": _SELLER},
     )
     for i in range(2):
         await db.execute(
@@ -844,14 +851,14 @@ async def test_没有标题的asin用asin兜底(db):
     seed = await db.run_sync(_seed)
     await db.execute(
         text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
-        {"t": datetime(2026, 8, 1, tzinfo=UTC), "s": _SELLER},
+        {"t": _day(1), "s": _SELLER},
     )
     await db.execute(
         text(
             "INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
             "VALUES (:s,:t,'B0NOTITLE1',:at)"
         ),
-        {"s": _SELLER, "t": _SITE, "at": datetime(2026, 8, 5, tzinfo=UTC)},
+        {"s": _SELLER, "t": _SITE, "at": _day(5)},
     )
     feed = await service_store.new_arrivals(
         db, seed["owner"], NewArrivalRequest(days=90, per_page=50)
