@@ -34,5 +34,5 @@
 - [x] 6.1 `openspec validate --strict --all`
 - [x] 6.2 后端：`uv run ruff check .`、`uv run pytest test/ -q`（`TEST_DATABASE_URL` 指向 5433 的 `keywordiq_test`）（2026-11-03：ruff 通过；1402 passed / 1 skipped；openspec 40 项全部通过）
 - [x] 6.3 前端：`pnpm lint && pnpm tsc && pnpm test`（2026-11-03 由提交门禁在 1cafbb4 上执行并通过：eslint、tsc、vitest；同一次门禁另跑了 ruff 与真库 pytest）
-- [ ] 6.4 PR（`--base v2`，Refs #120）写明：生产 `.env` 的 `DTC_REQUEST_DELAY_MS=400` 需改为 2000；迁移含不可逆数据修复、库无自动备份；发布后上新流会清空重新累积
-- [ ] 6.5 发布后（用户授权）24–48 小时只读复核：完整目录站点数、429 误判是否归零、上新流条数与上架时间分布、限流等待日志
+- [x] 6.4 PR #164（`--base v2`，Refs #120；Codex 评审 8646fdb 无意见，合并为 66fa062，2026-11-04 发布成功）写明：生产 `.env` 的 `DTC_REQUEST_DELAY_MS=400` 需改为 2000；迁移含不可逆数据修复、库无自动备份；发布后上新流会清空重新累积
+- [ ] 6.5 发布后（用户授权）24–48 小时只读复核：完整目录站点数、429 误判是否归零、上新流条数与上架时间分布、限流等待日志（2026-11-04 发布 66fa062 后未到复核时点，已转入 #120 评论 https://github.com/hisummer2406/KeywordIQ/issues/120#issuecomment-6608955412 跟踪）
