@@ -83,6 +83,7 @@ _TABLES_WITH_LATEST_COL = (
     ("competitor_store_product", None),
     ("competitor_store_price", None),
     ("competitor_store_rank", None),
+    ("competitor_store_product_event", None),
     ("user_seller_group", None),
     ("user_seller_watch", None),
     ("user_store_watch", None),

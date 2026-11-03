@@ -211,7 +211,8 @@ export interface StoreRow {
   rank_ok: boolean;
   consecutive_failures: number;
   last_fetch_at: string | null;
-  first_fetch_at: string | null;
+  /** 上新基线：首次完整拿到目录的时刻；为空表示还没完整拉取过，此时该站不产生上新 */
+  baseline_at: string | null;
   product_count: number;
   /** 近 7 日上架数，按数据源给的 published_at 算——首刷当天即准确 */
   new_in_7d: number;

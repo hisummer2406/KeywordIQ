@@ -41,7 +41,7 @@ function store(overrides: Record<string, unknown> = {}) {
     rank_ok: true,
     consecutive_failures: 0,
     last_fetch_at: '2026-09-01T02:00:00Z',
-    first_fetch_at: '2026-08-30T02:00:00Z',
+    baseline_at: '2026-08-30T02:00:00Z',
     product_count: 120,
     new_in_7d: 0,
     ...overrides,
