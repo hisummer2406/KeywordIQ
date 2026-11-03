@@ -1,6 +1,6 @@
 """独立站监控：站点主体 + 商品 + 价格变更日志 + 畅销名次日快照 + 私有关注关系。
 
-**五张普通表，MUST NOT 登记进 ``app.table.analysis.partitioning.PARTITIONED_TABLES``。**
+**六张普通表，MUST NOT 登记进 ``app.table.analysis.partitioning.PARTITIONED_TABLES``。**
 登记即被保留清理按 ``HOT_WINDOW_MONTHS``（默认 3 个月）整分区 DROP，而价格与名次的历史
 越长越值钱——「这个品半年来降过三次价」正是要看的东西。那个三个月窗口是为八亿行的 ABA
 事实表设定的，与本模块的量级（估算约 110 万行/年）无关。
@@ -116,14 +116,17 @@ class CompetitorStore(Base):
         nullable=True,
         comment="上次拉取**尝试**的时刻（不是上次成功）。「到点了没」的唯一判据，NULL 表示从未拉取",
     )
-    first_fetch_at: Mapped[datetime | None] = mapped_column(
+    baseline_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         comment=(
-            "首刷时刻。**上新流的判据**：first_seen_at > first_fetch_at 才是上新——"
-            "首刷那批商品是「我们刚开始看」不是「今天上新」，没有这一列就无从区分"
+            "上新基线：首次**完整**拿到目录的时刻，落定后不再改。上新流判据为 "
+            "first_seen_at > baseline_at；NULL 表示尚未完整拉取过，此时不产生任何上新"
         ),
     )
+    # 原名 first_fetch_at、在首次**尝试**时就落定（不论完整与否），首刷只拿到 1 页或直接
+    # 失败的站点，之后补齐的存量商品全被当成上新：生产 41,105 个商品受影响
+    # （change fix-dtc-catalog-collection）。更名是为了不让下一个人照旧名理解成「第一次尝试」。
     catalog_complete: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -323,6 +326,51 @@ class CompetitorStoreRank(Base):
         # 「某商品的名次走势」按 (站点, 商品) 取，主键按名次排列起不到这个作用。
         Index("idx_competitor_store_rank_product", "domain", "product_id", "captured_on"),
         {"comment": "独立站畅销名次日快照：只存前 N 名；相对名次，数据源不提供绝对销量。"},
+    )
+
+
+class CompetitorStoreProductEvent(Base):
+    """商品目录事件：下架、重新出现。只追加，不改不删。
+
+    ``competitor_store_product.delisted_at`` 只表示**当前**是否下架，重新出现时被清空——
+    没有这张表，「这个品下架过又回来」就无从查起。两者分工：当前状态看商品表，历史看这里。
+
+    只在**实际改了商品行**时写（``UPDATE … RETURNING``），同一次拉取不会写重复事件。
+    """
+
+    __tablename__ = "competitor_store_product_event"
+
+    domain: Mapped[str] = mapped_column(String(255), primary_key=True, comment=DOMAIN_COMMENT)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, comment="→ competitor_store_product.product_id"
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True, comment="判定发生的时刻（即那次拉取的时刻）"
+    )
+    kind: Mapped[str] = mapped_column(
+        String(16),
+        primary_key=True,
+        comment="DELISTED = 完整拉取中消失被判下架；RELISTED = 已下架商品再次出现",
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "domain", "product_id", "occurred_at", "kind", name="pk_competitor_store_product_event"
+        ),
+        ForeignKeyConstraint(
+            ["domain"],
+            [f"{_SCHEMA}.competitor_store.domain"],
+            name="fk_competitor_store_product_event_store",
+            ondelete="CASCADE",
+        ),
+        # 「某段时间里哪些商品下架/回来了」按 (站点, 时间) 取。
+        Index("idx_competitor_store_product_event_time", "domain", "occurred_at"),
+        {
+            "comment": (
+                "独立站商品目录事件：下架与重新出现，只追加；"
+                "当前状态见 competitor_store_product.delisted_at。"
+            )
+        },
     )
 
 

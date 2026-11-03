@@ -29,10 +29,14 @@ from app.table.competitor.store_model import (
     CompetitorStore,
     CompetitorStorePrice,
     CompetitorStoreProduct,
+    CompetitorStoreProductEvent,
     CompetitorStoreRank,
     UserStoreWatch,
 )
 from app.table.competitor.watch_model import UserSellerGroup, UserSellerWatch
+
+EVENT_DELISTED = "DELISTED"
+EVENT_RELISTED = "RELISTED"
 
 
 class PriceSnapshot(NamedTuple):
@@ -102,12 +106,12 @@ def update_store_status(
     rank_ok: bool,
     error: str | None,
     failed: bool,
-    first_fetch_at: datetime | None = None,
+    baseline_at: datetime | None = None,
 ) -> None:
     """回写拉取状态。``consecutive_failures`` 累加或清零，界面据此说「连续 N 次失败」。
 
-    ``first_fetch_at`` 只在首刷时传，且用 ``COALESCE`` 保护——它一旦落定就不该被改动，
-    改了会让首刷那批商品突然涌进上新流。
+    ``baseline_at`` 只在**目录完整**时传（判定在 service 层），且用 ``COALESCE`` 保护——
+    它一旦落定就不该被改动，改了会让基线前那批商品突然涌进上新流。
     """
     values: dict[str, object] = {
         "last_fetch_status": status,
@@ -117,11 +121,18 @@ def update_store_status(
         "last_error": error,
         "consecutive_failures": (CompetitorStore.consecutive_failures + 1) if failed else 0,
     }
-    if first_fetch_at is not None:
-        values["first_fetch_at"] = func.coalesce(CompetitorStore.first_fetch_at, first_fetch_at)
+    if baseline_at is not None:
+        values["baseline_at"] = func.coalesce(CompetitorStore.baseline_at, baseline_at)
     session.execute(
         update(CompetitorStore).where(CompetitorStore.domain == domain).values(**values)
     )
+
+
+def store_baseline_at(session: Session, domain: str) -> datetime | None:
+    """站点的上新基线（首次完整目录时刻）；NULL 表示还没完整拉取过。"""
+    return session.execute(
+        select(CompetitorStore.baseline_at).where(CompetitorStore.domain == domain)
+    ).scalar_one_or_none()
 
 
 def existing_product_ids(session: Session, domain: str) -> set[int]:
@@ -215,38 +226,76 @@ def replace_ranks(
     )
 
 
-def mark_delisted(session: Session, domain: str, product_ids: set[int], *, at: datetime) -> None:
-    """把本次完整拉取中未见到的商品判为下架。
+def _insert_events(
+    session: Session, domain: str, product_ids: list[int], *, kind: str, at: datetime
+) -> None:
+    if not product_ids:
+        return
+    session.execute(
+        pg_insert(CompetitorStoreProductEvent)
+        .values(
+            [
+                {"domain": domain, "product_id": pid, "occurred_at": at, "kind": kind}
+                for pid in product_ids
+            ]
+        )
+        .on_conflict_do_nothing()
+    )
+
+
+def mark_delisted(session: Session, domain: str, product_ids: set[int], *, at: datetime) -> int:
+    """把本次完整拉取中未见到的商品判为下架，并为**实际被改的行**各写一条下架事件。
 
     **只有在整次目录拉取完整成功时才可调用本函数**（判定在 service 层，见
-    ``apply_fetch_result``）。带 ``delisted_at.is_(None)`` 是为了不覆盖首次判定的时刻。
+    ``apply_fetch_result``）。带 ``delisted_at.is_(None)`` 是为了不覆盖首次判定的时刻；
+    事件按 ``RETURNING`` 取，已下架的商品不会再写一条。返回实际判下架的数量。
     """
     if not product_ids:
-        return
-    session.execute(
-        update(CompetitorStoreProduct)
-        .where(
-            CompetitorStoreProduct.domain == domain,
-            CompetitorStoreProduct.product_id.in_(product_ids),
-            CompetitorStoreProduct.delisted_at.is_(None),
+        return 0
+    changed = (
+        session.execute(
+            update(CompetitorStoreProduct)
+            .where(
+                CompetitorStoreProduct.domain == domain,
+                CompetitorStoreProduct.product_id.in_(product_ids),
+                CompetitorStoreProduct.delisted_at.is_(None),
+            )
+            .values(delisted_at=at)
+            .returning(CompetitorStoreProduct.product_id)
         )
-        .values(delisted_at=at)
+        .scalars()
+        .all()
     )
+    _insert_events(session, domain, list(changed), kind=EVENT_DELISTED, at=at)
+    return len(changed)
 
 
-def clear_delisted(session: Session, domain: str, product_ids: set[int]) -> None:
-    """商品重新上架：清掉下架标记。条件更新，只碰真正需要改的那几行。"""
+def clear_delisted(
+    session: Session, domain: str, product_ids: set[int], *, at: datetime
+) -> int:
+    """商品重新出现：清掉下架标记，并为实际被改的行各写一条重新出现事件。
+
+    清掉 ``delisted_at`` 会丢掉「它曾下架」这件事——历史靠事件表保住，见
+    ``CompetitorStoreProductEvent``。返回实际重新出现的数量。
+    """
     if not product_ids:
-        return
-    session.execute(
-        update(CompetitorStoreProduct)
-        .where(
-            CompetitorStoreProduct.domain == domain,
-            CompetitorStoreProduct.product_id.in_(product_ids),
-            CompetitorStoreProduct.delisted_at.is_not(None),
+        return 0
+    changed = (
+        session.execute(
+            update(CompetitorStoreProduct)
+            .where(
+                CompetitorStoreProduct.domain == domain,
+                CompetitorStoreProduct.product_id.in_(product_ids),
+                CompetitorStoreProduct.delisted_at.is_not(None),
+            )
+            .values(delisted_at=None)
+            .returning(CompetitorStoreProduct.product_id)
         )
-        .values(delisted_at=None)
+        .scalars()
+        .all()
     )
+    _insert_events(session, domain, list(changed), kind=EVENT_RELISTED, at=at)
+    return len(changed)
 
 
 def listed_product_ids(session: Session, domain: str) -> set[int]:
@@ -331,28 +380,72 @@ def watched_domains_stmt(user_id: int):
 
 
 def _latest_price_stmt(domain: str):
-    """每个商品的当前价：取该商品所有变体里 ``observed_at`` 最大的那条。"""
-    return (
+    """每个商品的当前价与当前可购买。
+
+    - **价格**：该商品所有变体里 ``observed_at`` 最大的那条（口径未变；最低价/区间的
+      展示留给商品工作台那一步定）。
+    - **可购买**：先取每个变体的最新观测，再按商品 ``bool_or``——任一变体可买即可买。
+      原先直接取「最近变动的那一个变体」的 ``available``，一个变体售罄就把整个商品显示成
+      不可买（change fix-dtc-catalog-collection D5）。
+    """
+    per_variant = (
         select(
             CompetitorStorePrice.product_id,
+            CompetitorStorePrice.observed_at,
             CompetitorStorePrice.price,
             CompetitorStorePrice.compare_at_price,
             CompetitorStorePrice.available,
         )
         .where(CompetitorStorePrice.domain == domain)
-        .distinct(CompetitorStorePrice.product_id)
-        .order_by(CompetitorStorePrice.product_id, CompetitorStorePrice.observed_at.desc())
+        .distinct(CompetitorStorePrice.variant_id)
+        .order_by(CompetitorStorePrice.variant_id, CompetitorStorePrice.observed_at.desc())
+        .subquery()
+    )
+    latest = (
+        select(
+            per_variant.c.product_id,
+            per_variant.c.price,
+            per_variant.c.compare_at_price,
+        )
+        .distinct(per_variant.c.product_id)
+        .order_by(per_variant.c.product_id, per_variant.c.observed_at.desc())
+        .subquery()
+    )
+    available = (
+        select(
+            per_variant.c.product_id,
+            func.bool_or(per_variant.c.available).label("available"),
+        )
+        .group_by(per_variant.c.product_id)
+        .subquery()
+    )
+    return (
+        select(
+            latest.c.product_id,
+            latest.c.price,
+            latest.c.compare_at_price,
+            available.c.available,
+        )
+        .join(available, available.c.product_id == latest.c.product_id)
         .subquery()
     )
 
 
 def products_stmt(domain: str, *, include: str, new_only: bool, days: int = 7):
     price = _latest_price_stmt(domain)
+    # 当前名次**只取该站最新一次快照**。原先取「该商品最后一次上榜」的名次，两周前第 12、
+    # 此后天天不在榜的商品会一直显示第 12（change fix-dtc-catalog-collection D5）。
+    latest_day = (
+        select(func.max(CompetitorStoreRank.captured_on))
+        .where(CompetitorStoreRank.domain == domain)
+        .scalar_subquery()
+    )
     rank = (
         select(CompetitorStoreRank.product_id, CompetitorStoreRank.rank)
-        .where(CompetitorStoreRank.domain == domain)
-        .distinct(CompetitorStoreRank.product_id)
-        .order_by(CompetitorStoreRank.product_id, CompetitorStoreRank.captured_on.desc())
+        .where(
+            CompetitorStoreRank.domain == domain,
+            CompetitorStoreRank.captured_on == latest_day,
+        )
         .subquery()
     )
     stmt = (
@@ -385,8 +478,9 @@ def _window(days: int):
 def _dtc_arrivals_select(user_id: int, days: int):
     """独立站那一侧的统一投影。
 
-    **排除首刷那批**：判据是 ``first_seen_at > first_fetch_at``——首刷时两者相等，故首刷
-    那批天然被排除。没有 ``first_fetch_at`` 这一列就无从区分「刚开始看」与「今天上新」，
+    **排除基线前那批**：判据是 ``first_seen_at > baseline_at``，基线是首次**完整**拿到
+    目录的时刻——基线前（含落定那次）见到的商品都不算上新，哪怕它们分散在多次不完整
+    拉取里陆续出现。没有基线就无从区分「刚开始看」与「今天上新」，
     表现是新纳入一个站点当天涌出几百条假上新。
 
     时间取 ``published_at``（数据源给的真实上架时间），缺失才退回 ``first_seen_at``，
@@ -418,8 +512,8 @@ def _dtc_arrivals_select(user_id: int, days: int):
         .join(UserStoreWatch, UserStoreWatch.domain == CompetitorStoreProduct.domain)
         .where(
             UserStoreWatch.user_id == user_id,
-            CompetitorStore.first_fetch_at.is_not(None),
-            CompetitorStoreProduct.first_seen_at > CompetitorStore.first_fetch_at,
+            CompetitorStore.baseline_at.is_not(None),
+            CompetitorStoreProduct.first_seen_at > CompetitorStore.baseline_at,
             CompetitorStoreProduct.first_seen_at > _window(days),
         )
     )

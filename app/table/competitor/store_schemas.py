@@ -114,7 +114,9 @@ class StoreOut(BaseModel):
     rank_ok: bool
     consecutive_failures: int
     last_fetch_at: datetime | None
-    first_fetch_at: datetime | None
+    baseline_at: datetime | None = Field(
+        description="上新基线：首次完整拿到目录的时刻；为空表示还没完整拉取过，此时不产生上新"
+    )
 
     product_count: int = Field(description="在售商品数（未标记下架）")
     new_in_7d: int = Field(
