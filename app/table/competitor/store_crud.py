@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import NamedTuple
 
@@ -35,6 +35,12 @@ from app.table.competitor.store_model import (
 )
 from app.table.competitor.watch_model import UserSellerGroup, UserSellerWatch
 
+# 独立站认领专用的事务级咨询锁键（"KD"）。不与导入 0x4B49、运维动作 0x4B4F 共用。
+FETCH_CLAIM_LOCK_KEY = 0x4B44
+# 拉取租约时长。必须长于 service 层的单次拉取截止，否则租约过期时拉取可能还没结束，
+# 第二个站点就会并发开拉。
+FETCH_LEASE = timedelta(minutes=15)
+
 EVENT_DELISTED = "DELISTED"
 EVENT_RELISTED = "RELISTED"
 
@@ -50,14 +56,32 @@ class PriceSnapshot(NamedTuple):
 def claim_due_store(session: Session, *, interval_hours: int, now: datetime) -> str | None:
     """认领一个到期站点，并**当场把它的拉取时刻推到现在**。
 
-    ``FOR UPDATE SKIP LOCKED`` 是多 worker 安全的全部所需——不必像导入那样上全局咨询锁。
-    导入串行化是因为两个 GB 级导入会争抢 WAL 与索引构建；这里一次写入几千行、瓶颈在
-    网络，全局串行化只会让站点数增长时排队时间线性膨胀。
+    **全局同一时刻只认领一个站点**：存在未过期租约时返回 None。原设计只用
+    ``FOR UPDATE SKIP LOCKED``、刻意不全局串行（瓶颈在网络）；但目标站点按出口 IP 限流，
+    4 个 worker 并发只把请求速率放大 4 倍、一起被限流（2026-11-04 生产实测）。串行用租约 +
+    认领时的事务级咨询锁实现，**不**像导入那样用会话级锁包住整次工作——拉取是数分钟的
+    网络等待，不该为它独占一条数据库连接。
 
     **``last_fetch_at`` 记的是「上次尝试」不是「上次成功」，这是有意的。** 认领时就推进
     它，一个持续失败的站点才不会在每一轮轮询里被反复重抓——否则一个坏掉的站点会把整个
     轮询循环占满，其余站点永远轮不上。
     """
+    # **全局同一时刻只拉一个站点**（change serialize-dtc-fetch）。目标站点按出口 IP 限流，
+    # 4 个 worker 并发只会把请求速率放大 4 倍。「有无未过期租约」的判定与写入用事务级咨询锁
+    # 串行化——只靠 SKIP LOCKED，两个 worker 会同时看到「没有租约」并各认领一个不同站点。
+    # 锁随本事务提交释放，持有时长只是这一次认领查询；拉取全程不持有任何连接或锁。
+    if not session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": FETCH_CLAIM_LOCK_KEY}
+    ).scalar():
+        return None
+    leased = session.execute(
+        select(CompetitorStore.domain)
+        .where(CompetitorStore.fetch_lease_until > func.now())
+        .limit(1)
+    ).scalar_one_or_none()
+    if leased is not None:
+        return None
+
     stmt = (
         select(CompetitorStore.domain)
         .where(
@@ -75,9 +99,18 @@ def claim_due_store(session: Session, *, interval_hours: int, now: datetime) -> 
     session.execute(
         update(CompetitorStore)
         .where(CompetitorStore.domain == domain)
-        .values(last_fetch_at=now)
+        .values(last_fetch_at=now, fetch_lease_until=func.now() + FETCH_LEASE)
     )
     return domain
+
+
+def release_fetch_lease(session: Session, domain: str) -> None:
+    """清除租约。落库路径由 ``update_store_status`` 顺带清，这里供异常路径单独调用。"""
+    session.execute(
+        update(CompetitorStore)
+        .where(CompetitorStore.domain == domain)
+        .values(fetch_lease_until=None)
+    )
 
 
 def update_store_meta(session: Session, domain: str, meta: ParsedStoreMeta) -> None:
@@ -120,6 +153,8 @@ def update_store_status(
         "rank_ok": rank_ok,
         "last_error": error,
         "consecutive_failures": (CompetitorStore.consecutive_failures + 1) if failed else 0,
+        # 本次拉取到此结束，放下一个站点开拉。
+        "fetch_lease_until": None,
     }
     if baseline_at is not None:
         values["baseline_at"] = func.coalesce(CompetitorStore.baseline_at, baseline_at)

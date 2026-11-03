@@ -127,6 +127,17 @@ class CompetitorStore(Base):
     # 原名 first_fetch_at、在首次**尝试**时就落定（不论完整与否），首刷只拿到 1 页或直接
     # 失败的站点，之后补齐的存量商品全被当成上新：生产 41,105 个商品受影响
     # （change fix-dtc-catalog-collection）。更名是为了不让下一个人照旧名理解成「第一次尝试」。
+    fetch_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "拉取租约到期时刻：非空且晚于当前即「正在拉取」。全局同一时刻最多一个站点持有租约，"
+            "落库时清除；进程被杀留下的租约到期后自然失效"
+        ),
+    )
+    # 全局串行的理由：Shopify 对本服务出口按 IP 限流，4 个 worker 同时拉 4 个站点只把请求
+    # 速率放大 4 倍、四个一起被限流（2026-11-04 生产实测，change serialize-dtc-fetch）。
+    # 用租约而不是会话级咨询锁包住整次拉取：后者要为数分钟的网络拉取独占一条数据库连接。
     catalog_complete: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
