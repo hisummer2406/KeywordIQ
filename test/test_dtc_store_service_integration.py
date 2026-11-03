@@ -439,6 +439,113 @@ def test_认领只取到期站点且当场推进拉取时刻(db):
     now = datetime.now(UTC)
     assert store_crud.claim_due_store(db, interval_hours=24, now=now) == DOMAIN
     db.flush()
+    # 清掉租约，单看「到期」判据——否则下面那句是被租约挡住的，测不到它本来要测的东西
+    store_crud.release_fetch_lease(db, DOMAIN)
+    db.flush()
 
     # 刚认领过，24 小时内不该再被认领
     assert store_crud.claim_due_store(db, interval_hours=24, now=now) is None
+
+
+# ---------- 全局单站点拉取（change serialize-dtc-fetch） ----------
+
+OTHER = "dtc-test-store-2.example"
+
+
+def _add_store(db, domain):
+    db.execute(
+        text("INSERT INTO analysis.competitor_store(domain, platform) VALUES (:d, 'SHOPIFY')"),
+        {"d": domain},
+    )
+    db.flush()
+
+
+def _lease(db, domain):
+    return db.execute(
+        text("SELECT fetch_lease_until FROM analysis.competitor_store WHERE domain=:d"),
+        {"d": domain},
+    ).scalar()
+
+
+def test_有站点在拉取时不认领别的站点(db):
+    """目标站点按出口 IP 限流：4 个 worker 并发只会一起被限流（2026-11-04 生产实测）。"""
+    now = datetime.now(UTC)
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) == DOMAIN
+    assert _lease(db, DOMAIN) is not None
+    _add_store(db, OTHER)
+
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) is None
+
+
+def test_落库清租约后可认领下一个站点(db):
+    now = datetime.now(UTC)
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) == DOMAIN
+    _add_store(db, OTHER)
+
+    store_service.apply_fetch_result(db, DOMAIN, _outcome([_product(1)]), now=now)
+    db.flush()
+
+    assert _lease(db, DOMAIN) is None
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) == OTHER
+
+
+def test_进程被杀留下的租约过期后恢复认领(db):
+    now = datetime.now(UTC)
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) == DOMAIN
+    _add_store(db, OTHER)
+    db.execute(
+        text(
+            "UPDATE analysis.competitor_store SET fetch_lease_until = now() - interval '1 minute' "
+            "WHERE domain=:d"
+        ),
+        {"d": DOMAIN},
+    )
+    db.flush()
+
+    assert store_crud.claim_due_store(db, interval_hours=24, now=now) == OTHER
+
+
+def test_另一个worker正在认领时本轮不认领(db):
+    """「有无租约」的判定与写入由事务级咨询锁串行：只靠 SKIP LOCKED，两个 worker 会同时
+    看到「没有租约」并各认领一个不同站点。"""
+    engine = create_engine(TEST_URL, poolclass=NullPool)
+    with engine.connect() as other:
+        with other.begin():
+            assert other.execute(
+                text("SELECT pg_try_advisory_xact_lock(:k)"),
+                {"k": store_crud.FETCH_CLAIM_LOCK_KEY},
+            ).scalar()
+            assert store_crud.claim_due_store(db, interval_hours=24, now=datetime.now(UTC)) is None
+    engine.dispose()
+
+    assert store_crud.claim_due_store(db, interval_hours=24, now=datetime.now(UTC)) == DOMAIN
+
+
+def test_超时结果不写入任何数据且清租约(db):
+    _apply(db, _outcome([_product(1)], ranks=["p1"]))
+    before = {
+        t: _count(db, f"SELECT count(*) FROM analysis.{t} WHERE domain=:d")
+        for t in ("competitor_store_product", "competitor_store_price", "competitor_store_rank")
+    }
+    now = datetime.now(UTC)
+    store_crud.claim_due_store(db, interval_hours=0, now=now)
+
+    store_service.apply_fetch_result(
+        db, DOMAIN, store_service._timed_out_outcome(), now=NOW + timedelta(days=1)
+    )
+    db.flush()
+
+    after = {
+        t: _count(db, f"SELECT count(*) FROM analysis.{t} WHERE domain=:d") for t in before
+    }
+    assert after == before
+    row = db.execute(
+        text(
+            "SELECT last_fetch_status, last_error, fetch_lease_until "
+            "FROM analysis.competitor_store WHERE domain=:d"
+        ),
+        {"d": DOMAIN},
+    ).one()
+    assert row.last_fetch_status == "FAILED"
+    assert "拉取超时" in row.last_error
+    assert row.fetch_lease_until is None
