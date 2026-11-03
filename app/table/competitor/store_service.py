@@ -234,6 +234,37 @@ def _persist(domain: str, outcome: StoreFetchOutcome, now: datetime):
         return summary
 
 
+# 单次拉取的硬性截止。**必须短于 ``store_crud.FETCH_LEASE``**：租约过期而拉取还没结束，
+# 下一个站点就会并发开拉，全局串行随之失效。正常最坏约 8 分钟（限流预算 300 s + 大店 16 页
+# × 2 s 间隔与响应 + 畅销榜 5 页），留足余量。
+_FETCH_DEADLINE_SECONDS = 14 * 60
+assert _FETCH_DEADLINE_SECONDS < store_crud.FETCH_LEASE.total_seconds()
+
+
+def _timed_out_outcome() -> StoreFetchOutcome:
+    """拉取超过截止时的结果：**什么数据都不带**，只让落库路径回写失败状态并清租约。
+
+    本次已经拿到的部分一律丢弃——商品与价格只增，下次完整拉取会补上；不完整时本就不判
+    下架。写入半截名次反而会把没拉到的商品显示成「未上榜」。
+    """
+    return StoreFetchOutcome(
+        meta=None,
+        products=(),
+        catalog_complete=False,
+        products_json_ok=True,
+        rank_handles=(),
+        rank_ok=False,
+        status=FETCH_FAILED,
+        error=f"拉取超时：超过 {_FETCH_DEADLINE_SECONDS // 60} 分钟未完成，本次不写入任何数据",
+    )
+
+
+def _release_lease(domain: str) -> None:
+    with SessionFactory() as session:
+        store_crud.release_fetch_lease(session, domain)
+        session.commit()
+
+
 async def refresh_due_store() -> RefreshSummary | None:
     """认领并拉取一个到期站点。没有到期站点时返回 None。
 
@@ -248,18 +279,34 @@ async def refresh_due_store() -> RefreshSummary | None:
         return None
     domain = claimed
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(20.0), follow_redirects=True, headers={"User-Agent": _USER_AGENT}
-    ) as client:
-        outcome = await fetch_store(
-            client,
-            domain,
-            max_pages=settings.DTC_MAX_PAGES,
-            rank_top_n=settings.DTC_RANK_TOP_N,
-            delay_ms=settings.DTC_REQUEST_DELAY_MS,
-        )
+    try:
+        try:
+            async with asyncio.timeout(_FETCH_DEADLINE_SECONDS):
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(20.0),
+                    follow_redirects=True,
+                    headers={"User-Agent": _USER_AGENT},
+                ) as client:
+                    outcome = await fetch_store(
+                        client,
+                        domain,
+                        max_pages=settings.DTC_MAX_PAGES,
+                        rank_top_n=settings.DTC_RANK_TOP_N,
+                        delay_ms=settings.DTC_REQUEST_DELAY_MS,
+                    )
+        except TimeoutError:
+            outcome = _timed_out_outcome()
 
-    summary = await run_in_threadpool(_persist, domain, outcome, now)
+        # 落库同时清租约（``update_store_status``）。
+        summary = await run_in_threadpool(_persist, domain, outcome, now)
+    except Exception:
+        # 落库前后出了意外：尽力清租约，否则全局拉取要停到租约过期。清不掉就等过期。
+        # 只接 Exception：进程关停时的取消不在这里清，留给租约过期。
+        try:
+            await run_in_threadpool(_release_lease, domain)
+        except Exception:
+            logger.exception("独立站 %s 清除拉取租约失败，将等租约过期", domain)
+        raise
     if summary.status != FETCH_OK:
         logger.warning(
             "独立站 %s 拉取状态 %s：%s", domain, summary.status, outcome.error or "（无详情）"
