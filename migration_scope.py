@@ -55,6 +55,7 @@ V2_TABLES = frozenset(
         "competitor_store_product",
         "competitor_store_price",
         "competitor_store_rank",
+        "competitor_store_product_event",
         "user_store_watch",
     }
 )

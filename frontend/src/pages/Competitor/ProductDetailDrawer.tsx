@@ -107,11 +107,14 @@ export default function ProductDetailDrawer({ open, domain, productId, title, on
             render: (_, row) => (row.compare_at_price ? formatMoney(row.compare_at_price, currency) : '—'),
           },
           {
-            title: '在售',
+            title: '可购买',
             dataIndex: 'available',
-            width: 80,
+            width: 90,
             align: 'center',
-            render: (_, row) => (row.available ? <Tag color="green">在售</Tag> : <Tag>下架</Tag>),
+            // 变体的 available 只表示「此刻能不能买」，**不是下架**——下架是商品从目录里消失，
+            // 由目录事件表示。写成「下架」会让一次售罄被读成商品没了。
+            render: (_, row) =>
+              row.available ? <Tag color="green">可购买</Tag> : <Tag>不可购买</Tag>,
           },
         ]}
       />

@@ -117,7 +117,9 @@ class Settings(BaseSettings):
     # 畅销榜只存前 N 名：第 300 名与第 800 名的差别没有信息量，存全量会让名次表膨胀
     # 5~10 倍。实测每页 20 个商品，取前 100 名要翻 5 页。
     DTC_RANK_TOP_N: int = 100
-    DTC_REQUEST_DELAY_MS: int = 400      # 同一站点两次请求的最小间隔（毫秒）
+    # 同一站点两次请求的最小间隔（毫秒）。原为 400：生产上 Shopify 对 ECS 出口频繁 429，
+    # 89 站只有 26 站拿到完整目录；等满 Retry-After 后以 2 秒间隔连拉三页均为 200。
+    DTC_REQUEST_DELAY_MS: int = 2000
 
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"

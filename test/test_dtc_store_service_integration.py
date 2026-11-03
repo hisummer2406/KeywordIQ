@@ -24,6 +24,7 @@ from sqlalchemy.pool import NullPool
 
 from app.table.competitor import store_crud, store_service
 from app.table.competitor.store_fetcher import (
+    FETCH_FAILED,
     FETCH_INCOMPLETE,
     FETCH_OK,
     ParsedProduct,
@@ -108,10 +109,8 @@ def _outcome(products, *, complete=True, ranks=(), rank_ok=None, status=None, me
     )
 
 
-def _apply(db, outcome, *, first=False, now=NOW):
-    summary = store_service.apply_fetch_result(
-        db, DOMAIN, outcome, now=now, is_first_fetch=first
-    )
+def _apply(db, outcome, *, now=NOW):
+    summary = store_service.apply_fetch_result(db, DOMAIN, outcome, now=now)
     db.flush()
     return summary
 
@@ -125,7 +124,7 @@ def _count(db, sql: str) -> int:
 
 def test_首刷入库但不产生上新事件(db):
     """新纳入站点上个月发的商品不是「今天上新」，只是我们刚开始看。"""
-    summary = _apply(db, _outcome([_product(1), _product(2)]), first=True)
+    summary = _apply(db, _outcome([_product(1), _product(2)]))
 
     assert summary.new_products == 0
     assert _count(db, "SELECT count(*) FROM analysis.competitor_store_product WHERE domain=:d") == 2
@@ -134,7 +133,7 @@ def test_首刷入库但不产生上新事件(db):
 def test_首刷之后历史立即可查(db):
     """published_at 原样入库，所以「近 7 天上了什么」当场就能查——不用等一个周期建基线。"""
     recent = datetime(2026, 8, 30, tzinfo=UTC)
-    _apply(db, _outcome([_product(1, published=recent)]), first=True)
+    _apply(db, _outcome([_product(1, published=recent)]))
 
     stored = db.execute(
         text("SELECT published_at FROM analysis.competitor_store_product WHERE domain=:d"),
@@ -144,7 +143,7 @@ def test_首刷之后历史立即可查(db):
 
 
 def test_第二次拉取里的新商品才算上新(db):
-    _apply(db, _outcome([_product(1)]), first=True)
+    _apply(db, _outcome([_product(1)]))
     summary = _apply(db, _outcome([_product(1), _product(2)]))
 
     assert summary.new_products == 1
@@ -152,7 +151,7 @@ def test_第二次拉取里的新商品才算上新(db):
 
 def test_published_at_整体跳变不产生假上新(db):
     """商户批量重新发布会让 published_at 全部跳到当日。判据必须是「商品在不在库里」。"""
-    _apply(db, _outcome([_product(1), _product(2)]), first=True)
+    _apply(db, _outcome([_product(1), _product(2)]))
 
     republished = [_product(1, published=NOW), _product(2, published=NOW)]
     summary = _apply(db, _outcome(republished))
@@ -164,7 +163,7 @@ def test_published_at_整体跳变不产生假上新(db):
 
 
 def test_价格未变不写第二条(db):
-    _apply(db, _outcome([_product(1)]), first=True)
+    _apply(db, _outcome([_product(1)]))
     summary = _apply(db, _outcome([_product(1)]), now=NOW + timedelta(days=1))
 
     assert summary.price_changes == 0
@@ -172,7 +171,7 @@ def test_价格未变不写第二条(db):
 
 
 def test_价格变了才追加且保留历史(db):
-    _apply(db, _outcome([_product(1, variants=[_variant(10, "10.00")])]), first=True)
+    _apply(db, _outcome([_product(1, variants=[_variant(10, "10.00")])]))
     _apply(
         db,
         _outcome([_product(1, variants=[_variant(10, "8.50")])]),
@@ -190,7 +189,7 @@ def test_价格变了才追加且保留历史(db):
 
 
 def test_是否有货变化也算变化(db):
-    _apply(db, _outcome([_product(1, variants=[_variant(10, "10.00")])]), first=True)
+    _apply(db, _outcome([_product(1, variants=[_variant(10, "10.00")])]))
     summary = _apply(
         db,
         _outcome([_product(1, variants=[_variant(10, "10.00", available=False)])]),
@@ -205,7 +204,7 @@ def test_是否有货变化也算变化(db):
 
 def test_拉取不完整时绝不判下架(db):
     """一次网络抖动把整店判成清仓，是这条路唯一能造成大面积假数据的方式。"""
-    _apply(db, _outcome([_product(1), _product(2)]), first=True)
+    _apply(db, _outcome([_product(1), _product(2)]))
     summary = _apply(db, _outcome([_product(1)], complete=False), now=NOW + timedelta(days=1))
 
     assert summary.delisted == 0
@@ -217,14 +216,14 @@ def test_拉取不完整时绝不判下架(db):
 
 
 def test_完整拉取时缺席的商品判下架(db):
-    _apply(db, _outcome([_product(1), _product(2)]), first=True)
+    _apply(db, _outcome([_product(1), _product(2)]))
     summary = _apply(db, _outcome([_product(1)]), now=NOW + timedelta(days=1))
 
     assert summary.delisted == 1
 
 
 def test_重新上架清掉下架标记(db):
-    _apply(db, _outcome([_product(1), _product(2)]), first=True)
+    _apply(db, _outcome([_product(1), _product(2)]))
     _apply(db, _outcome([_product(1)]), now=NOW + timedelta(days=1))
     summary = _apply(db, _outcome([_product(1), _product(2)]), now=NOW + timedelta(days=2))
 
@@ -237,7 +236,7 @@ def test_重新上架清掉下架标记(db):
 
 
 def test_名次按出现顺序落库(db):
-    _apply(db, _outcome([_product(1), _product(2)], ranks=["p2", "p1"]), first=True)
+    _apply(db, _outcome([_product(1), _product(2)], ranks=["p2", "p1"]))
 
     rows = db.execute(
         text(
@@ -250,7 +249,7 @@ def test_名次按出现顺序落库(db):
 
 
 def test_同日重跑名次幂等(db):
-    _apply(db, _outcome([_product(1), _product(2)], ranks=["p1", "p2"]), first=True)
+    _apply(db, _outcome([_product(1), _product(2)], ranks=["p1", "p2"]))
     _apply(db, _outcome([_product(1), _product(2)], ranks=["p2", "p1"]))
 
     rows = db.execute(
@@ -265,7 +264,7 @@ def test_同日重跑名次幂等(db):
 
 def test_名次解析失败不影响商品与价格入库(db):
     summary = _apply(
-        db, _outcome([_product(1)], ranks=[], rank_ok=False), first=True
+        db, _outcome([_product(1)], ranks=[], rank_ok=False)
     )
 
     assert summary.ranks_written == 0
@@ -287,7 +286,7 @@ def test_meta_成功时回写店名与币种(db):
         published_products_count=1,
         ships_to_countries=("GB",),
     )
-    _apply(db, _outcome([_product(1)], meta=meta), first=True)
+    _apply(db, _outcome([_product(1)], meta=meta))
 
     row = db.execute(
         text("SELECT name, currency FROM analysis.competitor_store WHERE domain=:d"),
@@ -302,33 +301,127 @@ def test_meta_失败时不清空库里既有币种(db):
         text("UPDATE analysis.competitor_store SET currency='USD' WHERE domain=:d"),
         {"d": DOMAIN},
     )
-    _apply(db, _outcome([_product(1)], meta=None), first=True)
+    _apply(db, _outcome([_product(1)], meta=None))
 
     assert db.execute(
         text("SELECT currency FROM analysis.competitor_store WHERE domain=:d"), {"d": DOMAIN}
     ).scalar() == "USD"
 
 
-def test_首刷落定_first_fetch_at_且此后不再改动(db):
-    """上新流靠 first_fetch_at 把首刷那批排除在外，它一旦落定就不能被改。
-
-    改了的表现是首刷那批商品突然涌进上新流——几百条「今天上新」，而没有任何地方会报错。
-    """
-    _apply(db, _outcome([_product(1)]), first=True)
-    first = db.execute(
-        text("SELECT first_fetch_at FROM analysis.competitor_store WHERE domain=:d"),
+def _baseline(db):
+    return db.execute(
+        text("SELECT baseline_at FROM analysis.competitor_store WHERE domain=:d"),
         {"d": DOMAIN},
     ).scalar()
-    assert first == NOW
 
-    # 后续拉取不传 first_fetch_at；即使误传，COALESCE 也保住既有值
+
+def _arrival_ids(db, since: datetime) -> set[int]:
+    """上新流（独立站一侧）的判据原样复刻：first_seen_at > baseline_at。"""
+    return set(
+        db.execute(
+            text(
+                "SELECT p.product_id FROM analysis.competitor_store_product p "
+                "JOIN analysis.competitor_store s USING (domain) "
+                "WHERE p.domain=:d AND s.baseline_at IS NOT NULL "
+                "AND p.first_seen_at > s.baseline_at AND p.first_seen_at >= :since"
+            ),
+            {"d": DOMAIN, "since": since},
+        ).scalars()
+    )
+
+
+def test_完整拉取落定基线且此后不再改动(db):
+    """上新流靠 baseline_at 把基线前那批排除在外，它一旦落定就不能被改。
+
+    改了的表现是存量商品突然涌进上新流——几百条「今天上新」，而没有任何地方会报错。
+    """
+    _apply(db, _outcome([_product(1)]))
+    assert _baseline(db) == NOW
+
     _apply(db, _outcome([_product(1)]), now=NOW + timedelta(days=1))
-    _apply(db, _outcome([_product(1)]), first=True, now=NOW + timedelta(days=2))
+    _apply(db, _outcome([_product(1)]), now=NOW + timedelta(days=2))
 
-    assert db.execute(
-        text("SELECT first_fetch_at FROM analysis.competitor_store WHERE domain=:d"),
-        {"d": DOMAIN},
-    ).scalar() == NOW
+    assert _baseline(db) == NOW
+
+
+def test_不完整或失败的拉取不落定基线(db):
+    _apply(db, _outcome([_product(1)], complete=False))
+    assert _baseline(db) is None
+    _apply(db, _outcome([], complete=False, status=FETCH_FAILED), now=NOW + timedelta(hours=1))
+    assert _baseline(db) is None
+
+
+def test_首刷只拿到一页_之后补齐的存量不进上新流(db):
+    """生产实况：首刷只拿到第 1 页 250 个就被限流，次日完整拉到全部——原先其余全被报成上新。"""
+    _apply(db, _outcome([_product(1), _product(2)], complete=False))
+    day2 = NOW + timedelta(days=1)
+    summary = _apply(db, _outcome([_product(i) for i in range(1, 6)]), now=day2)
+
+    assert _baseline(db) == day2
+    assert summary.new_products == 0
+    assert _arrival_ids(db, NOW - timedelta(days=30)) == set()
+
+
+def test_首刷直接失败_之后整店存量不进上新流(db):
+    _apply(db, _outcome([], complete=False, status=FETCH_FAILED))
+    day2 = NOW + timedelta(days=1)
+    _apply(db, _outcome([_product(1), _product(2), _product(3)]), now=day2)
+
+    assert _baseline(db) == day2
+    assert _arrival_ids(db, NOW - timedelta(days=30)) == set()
+
+
+def test_基线之后不完整拉取里出现的新商品照样算上新(db):
+    _apply(db, _outcome([_product(1), _product(2)]))
+    day2 = NOW + timedelta(days=1)
+    summary = _apply(db, _outcome([_product(1), _product(9)], complete=False), now=day2)
+
+    assert summary.new_products == 1
+    assert _arrival_ids(db, NOW - timedelta(days=30)) == {9}
+
+
+# ---------- 下架与重新出现事件 ----------
+
+
+def _events(db) -> list[tuple[int, str, datetime]]:
+    return [
+        tuple(r)
+        for r in db.execute(
+            text(
+                "SELECT product_id, kind, occurred_at FROM analysis.competitor_store_product_event "
+                "WHERE domain=:d ORDER BY occurred_at, product_id, kind"
+            ),
+            {"d": DOMAIN},
+        )
+    ]
+
+
+def test_下架与重新出现各留一条事件且重新出现不算上新(db):
+    _apply(db, _outcome([_product(1), _product(2)]))
+    day2, day3 = NOW + timedelta(days=1), NOW + timedelta(days=2)
+    _apply(db, _outcome([_product(1)]), now=day2)
+    summary = _apply(db, _outcome([_product(1), _product(2)]), now=day3)
+
+    assert summary.relisted == 1
+    assert summary.new_products == 0
+    assert _events(db) == [(2, "DELISTED", day2), (2, "RELISTED", day3)]
+    assert _arrival_ids(db, NOW - timedelta(days=30)) == set()
+
+
+def test_已下架商品再次完整拉取不重复写下架事件(db):
+    _apply(db, _outcome([_product(1), _product(2)]))
+    day2 = NOW + timedelta(days=1)
+    _apply(db, _outcome([_product(1)]), now=day2)
+    _apply(db, _outcome([_product(1)]), now=day2 + timedelta(hours=6))
+
+    assert _events(db) == [(2, "DELISTED", day2)]
+
+
+def test_不完整拉取不写下架事件(db):
+    _apply(db, _outcome([_product(1), _product(2)]))
+    _apply(db, _outcome([_product(1)], complete=False), now=NOW + timedelta(days=1))
+
+    assert _events(db) == []
 
 
 def test_认领只取到期站点且当场推进拉取时刻(db):
