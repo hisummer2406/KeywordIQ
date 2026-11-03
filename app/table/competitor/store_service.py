@@ -30,6 +30,7 @@ from app.table.competitor.store_fetcher import (
     ParsedProduct,
     ParsedStoreMeta,
     StoreFetchOutcome,
+    ThrottledError,
     fetch_store,
     normalize_store_domain,
     probe_store_meta,
@@ -113,7 +114,6 @@ def apply_fetch_result(
     outcome: StoreFetchOutcome,
     *,
     now: datetime,
-    is_first_fetch: bool,
 ) -> RefreshSummary:
     """把一次拉取的产出落库。调用方负责 commit。
 
@@ -124,11 +124,14 @@ def apply_fetch_result(
        造成大面积假数据的方式。
     2. **新品看 ``product_id`` 在不在库里，不看 ``published_at``。** 商户批量重新发布会
        让后者整体跳到当日，据此判定会伪造出一批假上新。
-    3. **首刷不产生上新事件。** 新纳入站点上个月发的商品不是「今天上新」，只是我们刚
-       开始看。但它们照常入库且 ``published_at`` 原样保留，所以「近 7 天上了什么」当场
-       就能查——这正是与 Amazon 侧最大的差别，那边要等一个周期建基线。
+    3. **基线前不产生上新事件；基线 = 首次完整拿到目录的时刻。** 新纳入站点上个月发的
+       商品不是「今天上新」，只是我们刚开始看；首刷只拿到一页或直接失败时，之后补齐的
+       存量也不是。它们照常入库且 ``published_at`` 原样保留，「近 7 天上了什么」当场就能
+       查。原先基线在首次**尝试**时落定，生产因此有 41,105 个存量商品被报成上新。
     4. **价格只在变化时追加。** 见 ``_price_changed``。
+    5. **下架与重新出现各留一条事件**，``delisted_at`` 只表示当前状态。
     """
+    before_baseline = store_crud.store_baseline_at(session, domain) is None
     known_ids = store_crud.existing_product_ids(session, domain)
     seen_ids = {p.product_id for p in outcome.products}
     new_ids = seen_ids - known_ids
@@ -137,13 +140,13 @@ def apply_fetch_result(
 
     # 重新上架：本次见到、但库里标着下架的，清掉标记。条件更新，不碰其余行。
     listed_ids = store_crud.listed_product_ids(session, domain)
-    relisted = (seen_ids & known_ids) - listed_ids
-    store_crud.clear_delisted(session, domain, relisted)
+    relisted = store_crud.clear_delisted(
+        session, domain, (seen_ids & known_ids) - listed_ids, at=now
+    )
 
-    delisted: set[int] = set()
+    delisted = 0
     if outcome.catalog_complete:
-        delisted = listed_ids - seen_ids
-        store_crud.mark_delisted(session, domain, delisted, at=now)
+        delisted = store_crud.mark_delisted(session, domain, listed_ids - seen_ids, at=now)
 
     price_rows = _price_rows_to_write(session, domain, outcome.products, now=now)
     store_crud.insert_price_observations(session, price_rows)
@@ -171,19 +174,19 @@ def apply_fetch_result(
         rank_ok=outcome.rank_ok,
         error=outcome.error,
         failed=outcome.status in (FETCH_FAILED, FETCH_NO_CATALOG_API),
-        # 首刷时落定 first_fetch_at——上新流靠它把首刷那批排除在外。
-        first_fetch_at=now if is_first_fetch else None,
+        # **只有完整目录才落定基线**；不完整、失败、接口未开放都不动它。
+        baseline_at=now if outcome.catalog_complete else None,
     )
 
     return RefreshSummary(
         domain=domain,
         status=outcome.status,
-        # 首刷那批入库但不算「上新」，故这里报 0——报实际数量会让日志与上新流对不上。
-        new_products=0 if is_first_fetch else len(new_ids),
+        # 基线前那批入库但不算「上新」，故这里报 0——报实际数量会让日志与上新流对不上。
+        new_products=0 if before_baseline else len(new_ids),
         price_changes=len(price_rows),
         ranks_written=ranks_written,
-        delisted=len(delisted),
-        relisted=len(relisted),
+        delisted=delisted,
+        relisted=relisted,
         catalog_complete=outcome.catalog_complete,
         rank_ok=outcome.rank_ok,
     )
@@ -213,23 +216,20 @@ def _price_rows_to_write(
     return rows
 
 
-def _claim_due_store(interval_hours: int, now: datetime) -> tuple[str, bool] | None:
-    """认领一个到期站点，返回 (域名, 是否首刷)。自建会话，事务在本函数内闭合。"""
+def _claim_due_store(interval_hours: int, now: datetime) -> str | None:
+    """认领一个到期站点，返回域名。自建会话，事务在本函数内闭合。"""
     with SessionFactory() as session:
         domain = store_crud.claim_due_store(session, interval_hours=interval_hours, now=now)
         if domain is None:
             session.rollback()
             return None
-        is_first = not store_crud.existing_product_ids(session, domain)
         session.commit()
-        return domain, is_first
+        return domain
 
 
-def _persist(domain: str, outcome: StoreFetchOutcome, now: datetime, is_first: bool):
+def _persist(domain: str, outcome: StoreFetchOutcome, now: datetime):
     with SessionFactory() as session:
-        summary = apply_fetch_result(
-            session, domain, outcome, now=now, is_first_fetch=is_first
-        )
+        summary = apply_fetch_result(session, domain, outcome, now=now)
         session.commit()
         return summary
 
@@ -246,7 +246,7 @@ async def refresh_due_store() -> RefreshSummary | None:
     claimed = await run_in_threadpool(_claim_due_store, settings.DTC_FETCH_INTERVAL_HOURS, now)
     if claimed is None:
         return None
-    domain, is_first = claimed
+    domain = claimed
 
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(20.0), follow_redirects=True, headers={"User-Agent": _USER_AGENT}
@@ -259,7 +259,7 @@ async def refresh_due_store() -> RefreshSummary | None:
             delay_ms=settings.DTC_REQUEST_DELAY_MS,
         )
 
-    summary = await run_in_threadpool(_persist, domain, outcome, now, is_first)
+    summary = await run_in_threadpool(_persist, domain, outcome, now)
     if summary.status != FETCH_OK:
         logger.warning(
             "独立站 %s 拉取状态 %s：%s", domain, summary.status, outcome.error or "（无详情）"
@@ -298,6 +298,7 @@ STORE_NOT_WATCHED = "没有找到该独立站"
 STORE_ALREADY_WATCHED = "已经关注过这个独立站了"
 STORE_NOT_SHOPIFY = "这个站点不是 Shopify 建站，暂时无法监控"
 STORE_UNREACHABLE = "无法访问该站点，请确认域名是否正确、站点是否可以打开"
+STORE_THROTTLED = "该站点暂时限制了访问频率，请稍后再试"
 
 
 def _store_client() -> httpx.AsyncClient:
@@ -316,6 +317,12 @@ async def _probe_shopify(domain: str) -> ParsedStoreMeta:
     async with _store_client() as client:
         try:
             return await probe_store_meta(client, domain)
+        except ThrottledError as exc:
+            # 429 必须先于 HTTPStatusError 分支判定：被限流的站点归成「不是 Shopify」，用户
+            # 就再也不会加它了。加入是请求路径，不在这里等 Retry-After。
+            raise BadRequestError(
+                STORE_THROTTLED, log_detail=f"{domain} meta 探测被限流：{exc}"
+            ) from exc
         except (MetaParseError, httpx.HTTPStatusError) as exc:
             # **HTTPStatusError 归到「不是 Shopify」而不是「打不开」**：服务器答复了，
             # 只是那个路径上没有 meta——最典型的就是任何非 Shopify 站点对 /meta.json
@@ -501,6 +508,8 @@ async def _probe_many(domains: list[str]) -> dict[str, ParsedStoreMeta | str]:
             async with semaphore:
                 try:
                     return domain, await probe_store_meta(client, domain)
+                except ThrottledError:
+                    return domain, STORE_THROTTLED
                 except (MetaParseError, httpx.HTTPStatusError):
                     # 服务器答复了、只是没有 meta = 不是 Shopify。与单条路径同一分类，
                     # 两边分叉会让同一个站点在两条入口得到不同的拒绝理由。
@@ -542,7 +551,7 @@ async def list_stores(
             rank_ok=row[0].rank_ok,
             consecutive_failures=row[0].consecutive_failures,
             last_fetch_at=row[0].last_fetch_at,
-            first_fetch_at=row[0].first_fetch_at,
+            baseline_at=row[0].baseline_at,
             product_count=row.product_count,
             new_in_7d=row.new_in_7d,
         )

@@ -251,10 +251,10 @@ async def test_取关只删关注关系不删站点与数据(db):
 # ---------- 上新流与近 7 日 ----------
 
 
-async def _seed_products(db, *, first_fetch_at, rows):
+async def _seed_products(db, *, baseline_at, rows):
     await db.execute(
-        text("UPDATE analysis.competitor_store SET first_fetch_at=:f WHERE domain=:d"),
-        {"f": first_fetch_at, "d": DOMAIN},
+        text("UPDATE analysis.competitor_store SET baseline_at=:f WHERE domain=:d"),
+        {"f": baseline_at, "d": DOMAIN},
     )
     for pid, published, first_seen in rows:
         await db.execute(
@@ -268,14 +268,14 @@ async def _seed_products(db, *, first_fetch_at, rows):
         )
 
 
-async def test_上新流排除首刷那批(db):
-    """首刷那批是「我们刚开始看」不是「今天上新」。没有 first_fetch_at 就无从区分。"""
+async def test_上新流排除基线前那批(db):
+    """基线前那批是「我们刚开始看」不是「今天上新」。没有 baseline_at 就无从区分。"""
     users = await db.run_sync(_seed_users)
     await _add(db, users["owner"])
     baseline = datetime.now(UTC) - timedelta(days=1)
     await _seed_products(
         db,
-        first_fetch_at=baseline,
+        baseline_at=baseline,
         rows=[
             (1, baseline - timedelta(days=3), baseline),          # 首刷那批
             (2, baseline - timedelta(days=2), baseline),          # 首刷那批
@@ -299,7 +299,7 @@ async def test_近7日上新数按published_at算所以首刷当天即准确(db)
     now = datetime.now(UTC)
     await _seed_products(
         db,
-        first_fetch_at=now,
+        baseline_at=now,
         rows=[
             (1, now - timedelta(days=2), now),    # 近 7 日内上架
             (2, now - timedelta(days=40), now),   # 很久以前上架
@@ -317,7 +317,7 @@ async def test_商品清单带币种(db):
     users = await db.run_sync(_seed_users)
     await _add(db, users["owner"])
     await _seed_products(
-        db, first_fetch_at=datetime.now(UTC), rows=[(1, datetime.now(UTC), datetime.now(UTC))]
+        db, baseline_at=datetime.now(UTC), rows=[(1, datetime.now(UTC), datetime.now(UTC))]
     )
 
     result = await service.list_products(db, users["owner"], ProductListRequest(domain=DOMAIN))
@@ -330,7 +330,7 @@ async def test_商品清单的include是行集合维度(db):
     users = await db.run_sync(_seed_users)
     await _add(db, users["owner"])
     now = datetime.now(UTC)
-    await _seed_products(db, first_fetch_at=now, rows=[(1, now, now), (2, now, now)])
+    await _seed_products(db, baseline_at=now, rows=[(1, now, now), (2, now, now)])
     await db.execute(
         text(
             "UPDATE analysis.competitor_store_product SET delisted_at=now() "
@@ -359,7 +359,7 @@ async def test_商品详情的价格与名次历史按时间倒序(db):
     users = await db.run_sync(_seed_users)
     await _add(db, users["owner"])
     now = datetime.now(UTC)
-    await _seed_products(db, first_fetch_at=now, rows=[(1, now, now)])
+    await _seed_products(db, baseline_at=now, rows=[(1, now, now)])
 
     older = now - timedelta(days=2)
     newer = now - timedelta(hours=1)
@@ -598,3 +598,60 @@ async def test_真的够不着才报无法访问(db, stub_probe):
     result = await _batch(db, users["owner"], [DOMAIN])
 
     assert "无法访问" in result.rejected[0].reason
+
+
+# ---------- 商品当前状态口径（change fix-dtc-catalog-collection D5） ----------
+
+
+async def _price(db, *, variant_id, observed_at, available, product_id=1, price="9.99"):
+    await db.execute(
+        text(
+            "INSERT INTO analysis.competitor_store_price"
+            "(domain,variant_id,observed_at,product_id,sku,price,compare_at_price,available) "
+            "VALUES (:d,:v,:obs,:p,NULL,:price,NULL,:a)"
+        ),
+        {"d": DOMAIN, "v": variant_id, "obs": observed_at, "p": product_id, "price": price,
+         "a": available},
+    )
+
+
+async def test_一个变体售罄不让整个商品显示为不可购买(db):
+    """原先取「最近变动的那一个变体」的 available——偏偏最近变动的就是那个售罄的。"""
+    users = await db.run_sync(_seed_users)
+    await _add(db, users["owner"])
+    now = datetime.now(UTC)
+    await _seed_products(db, baseline_at=now, rows=[(1, now, now), (2, now, now)])
+    earlier = now - timedelta(days=3)
+    for vid in (11, 12, 13):
+        await _price(db, variant_id=vid, observed_at=earlier, available=True)
+    await _price(db, variant_id=13, observed_at=now, available=False)  # 最近一次变动：售罄
+    await _price(db, variant_id=21, observed_at=earlier, available=True, product_id=2)
+    await _price(db, variant_id=21, observed_at=now, available=False, product_id=2)
+
+    result = await service.list_products(db, users["owner"], ProductListRequest(domain=DOMAIN))
+    by_id = {p.product_id: p for p in result.data}
+
+    assert by_id[1].available is True
+    assert by_id[2].available is False
+
+
+async def test_当前名次只取最新快照_跌出榜单显示未上榜(db):
+    users = await db.run_sync(_seed_users)
+    await _add(db, users["owner"])
+    now = datetime.now(UTC)
+    await _seed_products(db, baseline_at=now, rows=[(1, now, now), (2, now, now)])
+    two_weeks_ago, today = (now - timedelta(days=14)).date(), now.date()
+    for captured_on, rank, pid in ((two_weeks_ago, 12, 1), (two_weeks_ago, 30, 2), (today, 5, 2)):
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_store_rank(domain,captured_on,rank,product_id) "
+                "VALUES (:d,:c,:r,:p)"
+            ),
+            {"d": DOMAIN, "c": captured_on, "r": rank, "p": pid},
+        )
+
+    result = await service.list_products(db, users["owner"], ProductListRequest(domain=DOMAIN))
+    by_id = {p.product_id: p for p in result.data}
+
+    assert by_id[1].latest_rank is None
+    assert by_id[2].latest_rank == 5

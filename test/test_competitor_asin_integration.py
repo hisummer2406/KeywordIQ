@@ -606,7 +606,7 @@ async def _seed_dtc(db, user_id, *, domain="mixed-shop.com", n=3):
     base = _day(1)
     await db.execute(
         text(
-            "INSERT INTO analysis.competitor_store(domain,name,first_fetch_at,currency) "
+            "INSERT INTO analysis.competitor_store(domain,name,baseline_at,currency) "
             "VALUES (:d,'混合店',:t,'USD')"
         ),
         {"d": domain, "t": base},
@@ -616,7 +616,7 @@ async def _seed_dtc(db, user_id, *, domain="mixed-shop.com", n=3):
         {"u": user_id, "d": domain},
     )
     for i in range(n):
-        # published_at 与 first_seen_at 都晚于 first_fetch_at，故进流。
+        # published_at 与 first_seen_at 都晚于 baseline_at，故进流。
         at = base + timedelta(days=i + 1)
         await db.execute(
             text(
@@ -779,7 +779,7 @@ async def test_时间相同的多条也能翻完(db):
     same = _day(5, 10, 0)
     await db.execute(
         text(
-            "INSERT INTO analysis.competitor_store(domain,name,first_fetch_at,currency) "
+            "INSERT INTO analysis.competitor_store(domain,name,baseline_at,currency) "
             "VALUES ('tie-shop.com','平局店',:t,'USD')"
         ),
         {"t": _day(1)},

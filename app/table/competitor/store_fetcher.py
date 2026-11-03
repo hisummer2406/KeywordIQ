@@ -367,6 +367,57 @@ _PAGE_SIZE = 250
 _RETRIES = 2
 _RETRY_BACKOFF_SECONDS = 1.5
 
+# 429 限流的等待参数（见 change fix-dtc-catalog-collection design D1）。
+# 生产实测 Shopify 对 ECS 出口返回 ``retry-after: 60``，等满后以 2 秒间隔连拉三页均为 200。
+_THROTTLE_DEFAULT_WAIT_SECONDS = 60.0  # 缺失或无法解析 Retry-After 时
+_THROTTLE_MAX_WAIT_SECONDS = 120.0  # 单次等待上限：防站点给出离谱的 Retry-After
+# 单次等待下限。**不可为 0**：``Retry-After: 0`` 时每次等待都不消耗预算，重试循环会对着
+# 站点无限连发——预算封顶正是靠「每次至少扣掉这么多」才成立的。
+_THROTTLE_MIN_WAIT_SECONDS = 5.0
+_THROTTLE_BUDGET_SECONDS = 300.0  # 一次站点拉取内的累计等待上限
+
+# 限流等待用的 sleep。单独一个名字，测试据此替换掉真实等待，而不影响请求间隔。
+_throttle_sleep = asyncio.sleep
+
+
+class ThrottledError(httpx.HTTPError):
+    """目标站点持续返回 429，等待预算耗尽。
+
+    **它是限流，不是「这个地址没有东西」**：等一会儿就能拿到。所以它刻意不是
+    ``HTTPStatusError``——后者的 4xx 在本模块被当作确定答复（第 1 页即判「未开放商品
+    接口」），而 22 个站点正是这样被误判、界面上告诉用户「重试也不会好」的。
+    """
+
+
+class ThrottleBudget:
+    """一次站点拉取共享的限流等待预算。
+
+    轮询 job 串行执行，等待会占住该 worker 的轮询循环（导入接手也在其中），所以总等待
+    必须封顶，最坏情况才可预期。
+    """
+
+    def __init__(self, seconds: float = _THROTTLE_BUDGET_SECONDS) -> None:
+        self.remaining = seconds
+
+    def take(self, wanted: float) -> float | None:
+        """申请等待 ``wanted`` 秒；预算不够时返回 None（调用方据此放弃）。"""
+        if wanted > self.remaining:
+            return None
+        self.remaining -= wanted
+        return wanted
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    raw = response.headers.get("retry-after")
+    try:
+        wait = float(raw) if raw is not None else _THROTTLE_DEFAULT_WAIT_SECONDS
+    except ValueError:
+        # HTTP 日期格式或垃圾值——不去解析日期，按默认值等。
+        wait = _THROTTLE_DEFAULT_WAIT_SECONDS
+    if wait < 0:
+        wait = _THROTTLE_DEFAULT_WAIT_SECONDS
+    return min(max(wait, _THROTTLE_MIN_WAIT_SECONDS), _THROTTLE_MAX_WAIT_SECONDS)
+
 
 @dataclass(frozen=True)
 class StoreFetchOutcome:
@@ -391,36 +442,58 @@ class StoreFetchOutcome:
 
 
 def _is_client_error(exc: Exception) -> bool:
-    """4xx —— 明确的「这个地址没有东西」，不是抖动。
+    """4xx（429 除外）—— 明确的「这个地址没有东西」，不是抖动。
 
     最常见的就是商户关掉 ``/products.json`` 之后的 404。重试它毫无意义（三次 404 还是
-    404），而且会把一次确定的答复拖成三倍的等待。
+    404），而且会把一次确定的答复拖成三倍的等待。429 不在此列：它由 ``_get_text``
+    按限流处理，最终以 ``ThrottledError`` 抛出。
     """
     return (
         isinstance(exc, httpx.HTTPStatusError)
         and 400 <= exc.response.status_code < 500
+        and exc.response.status_code != 429
     )
 
 
 async def _get_text(
-    client: httpx.AsyncClient, url: str, *, backoff_seconds: float = _RETRY_BACKOFF_SECONDS
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    backoff_seconds: float = _RETRY_BACKOFF_SECONDS,
+    throttle: ThrottleBudget | None = None,
 ) -> str:
     """取一个 URL，失败重试。重试耗尽时抛原始异常，由调用方转成拉取状态。
 
     **4xx 不重试**：它是确定的答复而非抖动，见 ``_is_client_error``。
+
+    **429 按限流处理**：有 ``throttle`` 预算时按 ``Retry-After`` 等待后重试同一 URL，
+    不占用上面那 2 次网络抖动重试；预算不够或没给预算（请求路径上的加入站点探测，不能让
+    用户干等一分钟）时抛 ``ThrottledError``。
     """
     last_exc: Exception | None = None
-    for attempt in range(_RETRIES + 1):
+    attempt = 0
+    while attempt <= _RETRIES:
         try:
             response = await client.get(url)
+            if response.status_code == 429:
+                wait = _retry_after_seconds(response)
+                granted = throttle.take(wait) if throttle is not None else None
+                if granted is None:
+                    raise ThrottledError(f"被目标站点限流（429），等待预算已用尽：{url}")
+                logger.info("独立站请求被限流，按 Retry-After 等待 %.0f 秒：%s", granted, url)
+                await _throttle_sleep(granted)
+                continue
             response.raise_for_status()
             return response.text
+        except ThrottledError:
+            raise
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
             last_exc = exc
             if _is_client_error(exc):
                 break
             if attempt < _RETRIES:
                 await asyncio.sleep(backoff_seconds * (attempt + 1))
+            attempt += 1
     assert last_exc is not None
     raise last_exc
 
@@ -452,6 +525,7 @@ async def fetch_store(
     rank_top_n: int,
     delay_ms: int,
     retry_backoff_seconds: float = _RETRY_BACKOFF_SECONDS,
+    throttle_budget_seconds: float = _THROTTLE_BUDGET_SECONDS,
 ) -> StoreFetchOutcome:
     """拉取一个站点的 meta、全量目录与畅销名次。
 
@@ -462,11 +536,16 @@ async def fetch_store(
     名次**只在目录非空时才拉**。这个不变量正是 ``RankParseError`` 能被当作「解析器坏了」
     的依据：目录里有商品、畅销榜却一个都提取不出来，只可能是页面结构变了。
     """
+    # 整次拉取（meta、目录各页、畅销榜各页）共享一份限流等待预算，见 ``ThrottleBudget``。
+    throttle = ThrottleBudget(throttle_budget_seconds)
     meta: ParsedStoreMeta | None = None
     try:
         meta = parse_store_meta(
             await _get_text(
-                client, f"https://{domain}/meta.json", backoff_seconds=retry_backoff_seconds
+                client,
+                f"https://{domain}/meta.json",
+                backoff_seconds=retry_backoff_seconds,
+                throttle=throttle,
             )
         )
     except (httpx.HTTPError, MetaParseError) as exc:
@@ -485,8 +564,12 @@ async def fetch_store(
     while page <= max_pages:
         url = f"https://{domain}/products.json?limit={_PAGE_SIZE}&page={page}"
         try:
-            text = await _get_text(client, url, backoff_seconds=retry_backoff_seconds)
+            text = await _get_text(
+                client, url, backoff_seconds=retry_backoff_seconds, throttle=throttle
+            )
         except httpx.HTTPError as exc:
+            # 限流（ThrottledError）不是 HTTPStatusError，``_is_client_error`` 为假，
+            # 任何页都落到下面的「抓取失败」——等一会儿就能拿到，不是商户关了接口。
             if page == 1 and _is_client_error(exc):
                 # **404 是商户关掉 /products.json 的最常见形态**，比「200 但返回 HTML」
                 # 常见得多。把它报成抓取失败，用户会看到「连续 N 次失败」并以为是暂时
@@ -538,6 +621,7 @@ async def fetch_store(
             rank_top_n=rank_top_n,
             delay_ms=delay_ms,
             retry_backoff_seconds=retry_backoff_seconds,
+            throttle=throttle,
         )
         if rank_error and error is None:
             error = rank_error
@@ -561,6 +645,7 @@ async def _fetch_rank(
     rank_top_n: int,
     delay_ms: int,
     retry_backoff_seconds: float = _RETRY_BACKOFF_SECONDS,
+    throttle: ThrottleBudget | None = None,
 ) -> tuple[tuple[str, ...], bool, str | None]:
     """拉畅销榜前 N 名。
 
@@ -574,8 +659,14 @@ async def _fetch_rank(
         url = f"https://{domain}/collections/all?sort_by=best-selling&page={page}"
         try:
             handles = parse_bestseller_html(
-                await _get_text(client, url, backoff_seconds=retry_backoff_seconds)
+                await _get_text(
+                    client, url, backoff_seconds=retry_backoff_seconds, throttle=throttle
+                )
             )
+        except ThrottledError as exc:
+            # **任何页**限流耗尽都作废本次名次：把截断的前几页当成完整榜单写进去，第 41 名
+            # 以后的商品会被显示成「未上榜」，比没有名次更误导。
+            return (), False, f"畅销榜第 {page} 页拉取失败：{exc}"
         except RankParseError as exc:
             if page == 1:
                 return (), False, f"畅销榜解析失败：{exc}"
