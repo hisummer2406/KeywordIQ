@@ -1,5 +1,5 @@
 > 来源：#166 第四节。本变更只做市场分析解耦；竞对模块重构另开变更。
-> 进度留痕：2026-11-04 提案并实现（Claude Code，worktree `~/.claude-worktrees/retire-analysis-competitor-filter`）。后端和文档已完成，前端检查与浏览器验收待用户执行；尚未提交。
+> 进度留痕：2026-11-04 提案并实现（Claude Code，worktree `~/.claude-worktrees/retire-analysis-competitor-filter`）。已提交 `088cb58` 并通过门禁；浏览器验收待用户执行。
 
 ## 1. 前置与依赖
 
@@ -26,7 +26,7 @@
 - [x] 4.1 `filters.ts` 删除 `competitorNew`、`sanitizeCompetitorNew` 和 `toSearchBody` 中的 `competitor_new`；`services/analysis.ts` 删除该字段类型
 - [x] 4.2 `FilterPanel.tsx` 删除开关、`COMPETITOR_NEW_HINT` 和 `canCompetitorNew` 属性；`index.tsx` 不再传 `access.canViewCompetitor`；`useAnalysisQuery.ts` 的 `FILTER_KEYS` 删除 `competitor_new`，删除 `canViewCompetitor` 参数和 `apply` 中的权限兜底
 - [x] 4.3 `savedMode.ts` 新增 `RETIRED_FILTER_KEYS` / `dropRetiredFilters`，`readSavedMode` 读取时剔除；`SAVED_MODE_VERSION` 不变。`savedMode.test.ts` 新增用例：旧 payload 带 `competitorNew: true`，读出结果与不带该字段的完全相等
-- [x] 4.4 已修改 `filters.test.ts`（新增「请求体不带 competitor_new」，删除 sanitize 用例）、`scopeAndFilters.test.tsx`（三例合并为「有 competitor:view 也没有开关、首屏不带该字段」）、`defaultsAndFirstPaint.test.tsx`（权限收回用例改为「旧保存条件开着它时其余条件照常恢复」）。**`pnpm lint && pnpm tsc && pnpm test` 尚未运行，由用户执行**
+- [x] 4.4 已修改 `filters.test.ts`（新增「请求体不带 competitor_new」，删除 sanitize 用例）、`scopeAndFilters.test.tsx`（三例合并为「有 competitor:view 也没有开关、首屏不带该字段」）、`defaultsAndFirstPaint.test.tsx`（权限收回用例改为「旧保存条件开着它时其余条件照常恢复」）。提交门禁在 `088cb58` 上运行 `pnpm lint && pnpm tsc && pnpm test`，全部通过。首次提交时 tsc 报出：删除 `sanitizeCompetitorNew` 后，恢复保存条件处的 `qMode: 'ALL_TERMS'` 被拓宽为 `string`，已改为 `as const`
 
 ## 5. 规则与文档
 
@@ -36,6 +36,6 @@
 
 ## 6. 验收
 
-- [ ] 6.1 提交时由门禁执行 `uv run ruff check .`、`uv run pytest test/ -q`（未提交，暂未运行）。2026-11-04 已手工运行：`uv run ruff check .` 通过，`openspec validate --strict --all` 40 项全部通过，`git diff --check` 通过
+- [x] 6.1 提交门禁在 `088cb58` 上执行 `uv run ruff check .`、`uv run pytest test/ -q`（`TEST_DATABASE_URL` 指向 5433 的 `keywordiq_test`），并执行前端三项检查，全部通过。首次提交被拦下两类问题：`test_interactive_query_budget.py` 有一处按位置传 `user_id`，报 TypeError，已修；另有 7 例连接失败，原因是 worktree 的 `.env` 复制自主仓、指向 5432 的其他实例，改指 5433 后通过。这属于环境问题，与本次代码无关。另手工运行 `openspec validate --strict --all`（40 项）与 `git diff --check`，均通过
 - [ ] 6.2 浏览器验收交给用户：分析查询屏没有「竞对新发现」开关；已保存的条件恢复后其余项不变；日/周视图的查询、数量和导出正常
 - [ ] 6.3 归档时：如果 `competitor-keyword-crosslink` 留下空规格，按 design D5 删除该目录
