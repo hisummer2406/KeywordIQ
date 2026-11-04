@@ -72,7 +72,7 @@
 - **单关键词历史查询走 `idx_fact_dropped_keyword_history`（`site, period_type, keyword_id, anchor_date`），不得走 `fact_dropped` 主键。** 主键把 `anchor_date` 排在 `keyword_id` 之前，range 查询下 `anchor_date` 是范围而非等值，`keyword_id` 退化成扫描内 filter，代价随该站点/视图窗口内的掉榜行数增长，不随目标关键词的历史行数增长。
 - **判定"报表已导入但未收录"前必须先排除 `report_date < retention_cutoff`，且不信任 `site_data_stats` 在保留下界之前的行。** 保留清理现在会同步清理 `site_data_stats`/`category_stats`/`brand_stats` 中报告日期早于保留下界的残留行（issue #100），但判定顺序仍不查 `site_data_stats`——这是双重保险，防的是清理调度尚未执行、或统计短暂残留的间隔；判定顺序反了会把早已被清理的月份误判成"这份数据还在，只是没收这个词"。
 - **来源锚点 `on` 必须是打开详情那一刻来源页面正在看的期次，不是"今天"**；切换日/周视图复用同一个 `on`，由后端统一解析映射（取 `<= on` 的最新一期，取不到退化为全局最新一期），不在前端重算。
-- **权限接受 `analysis:view` 或 `keyword:view` 任一，仅限"端点跨域共用且不携带任何域私有数据"这种情形。** 读取用户私有数据的筛选（如 `competitor_new`）不得套用这个放宽，仍需按需叠加校验。
+- **权限接受 `analysis:view` 或 `keyword:view` 任一，仅限"端点跨域共用且不携带任何域私有数据"这种情形。** 读取用户私有数据的筛选不得套用这个放宽，仍需按需叠加校验（原例 `competitor_new` 已于 #166 下架，规则保留给将来的私有筛选）。
 
 ### 竞对监控
 

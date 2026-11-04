@@ -11,7 +11,6 @@
 - [analysis-screen-layout](../specs/analysis-screen-layout/spec.md)
 - [site-scoped-query](../specs/site-scoped-query/spec.md)
 - [keyword-first-seen](../specs/keyword-first-seen/spec.md)
-- [competitor-keyword-crosslink](../specs/competitor-keyword-crosslink/spec.md)
 
 ## 设计依据
 

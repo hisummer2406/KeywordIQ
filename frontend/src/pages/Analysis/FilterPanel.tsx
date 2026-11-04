@@ -37,20 +37,6 @@ export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里�
 const EXCLUDE_BRAND_HINT =
   '排除关键词里带有该词自己前三品牌名（整词、不分大小写）的词。仅在「只看首次入榜」时生效，默认开启；关闭后首次入榜榜单会包含品牌词。';
 
-/**
- * 「竞对新发现」的口径提示。
- *
- * **必须把 7 天窗口写进提示里。** 空结果有两个同样常见的成因——插件客户端尚未上线
- * （issue #56 P3b，数据根本没进来），以及关注卖家的这些商品是 7 天前就见到的（数据
- * 进来了但都过了窗口）。提示只说前者，用户在插件上线后碰到空表会照着一条已经不成立的
- * 原因去排查（PR #66 三次复审 P2）。
- *
- * 措辞用「发现」不用「上新」：被动采集证明不了商品何时上架，只能证明我们何时见到
- * ——与卖家清单「近 N 日新发现」同一条纪律（见 CLAUDE.md 竞对 ASIN 上报一节）。
- */
-export const COMPETITOR_NEW_HINT =
-  '近 7 日内首次见到、且晚于该卖家基线批次的商品；数据依赖浏览器插件采集，插件未上线前可能长期无命中';
-
 function Row({
   label,
   hint,
@@ -142,16 +128,9 @@ function RangeRow({ label, hint, disabled, suffix, presets, value, onChange }: R
 export interface FilterPanelProps {
   value: FilterDraft;
   onChange: (next: FilterDraft) => void;
-  /**
-   * 是否显示「竞对新发现」开关。它读取的是竞对监控域的私有数据（关注了哪些卖家），
-   * `analysis:view` 不足以授权——只有同时拥有 `competitor:view` 的用户才看得到这个
-   * 开关，后端 `/search`、`/export` 在 `competitor_new=true` 时同样会再校验一次
-   * （PR #66 复审 P1：这不是"前端隐藏就够了"的纯展示问题，两处都要拦）。
-   */
-  canCompetitorNew: boolean;
 }
 
-export default function FilterPanel({ value, onChange, canCompetitorNew }: FilterPanelProps) {
+export default function FilterPanel({ value, onChange }: FilterPanelProps) {
   const patch = (p: Partial<FilterDraft>) => onChange({ ...value, ...p });
   // 「仅掉榜」时其余筛选全部失效：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行
   // 可匹配，任何条件一生效结果必然为空。置灰是把这条规则摆到用户眼前，免得他填了条件、
@@ -235,16 +214,6 @@ export default function FilterPanel({ value, onChange, canCompetitorNew }: Filte
           onChange={(checked) => patch({ excludeBrandWords: checked })}
         />
       </Row>
-      {canCompetitorNew ? (
-        <Row label="竞对新发现" hint={COMPETITOR_NEW_HINT}>
-          <Switch
-            aria-label="竞对新发现"
-            disabled={onlyDropped}
-            checked={value.competitorNew}
-            onChange={(checked) => patch({ competitorNew: checked })}
-          />
-        </Row>
-      ) : null}
       <Row label="商品标题" hint={TOP1_ONLY_HINT}>
         <Input
           size="middle"

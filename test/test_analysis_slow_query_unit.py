@@ -45,7 +45,7 @@ async def _fast_available_dates(_db, _site, _view, db_ms=None):
     return [date(2026, 1, 1)]
 
 
-async def _fast_listed_total(_db, _site, _view, _on, _req, _has_filters, _user_id, db_ms=None, **_kw):
+async def _fast_listed_total(_db, _site, _view, _on, _req, _has_filters, db_ms=None, **_kw):
     return 0
 
 
@@ -75,10 +75,10 @@ async def test_slow_request_emits_diagnostic_with_whitelisted_fields(monkeypatch
 
     monkeypatch.setattr(service, "_fetch_trends", _slow_fetch_trends)
 
-    req = _req(keyword="anker太阳能充电宝", asins=["B0EXAMPLE1"], categories=["Electronics", "Pet"], competitor_new=True)
+    req = _req(keyword="anker太阳能充电宝", asins=["B0EXAMPLE1"], categories=["Electronics", "Pet"])
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        await service.search(_FakeSession(), req, user_id=1)
+        await service.search(_FakeSession(), req)
 
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
     assert len(records) == 1
@@ -108,7 +108,7 @@ async def test_app_side_shaping_time_not_misreported_as_db_time(monkeypatch, cap
     monkeypatch.setattr(service, "_fetch_trends", _slow_pure_python_fetch_trends)
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        await service.search(_FakeSession(), _req(), user_id=1)
+        await service.search(_FakeSession(), _req())
 
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
     assert len(records) == 1
@@ -129,7 +129,7 @@ async def test_fast_request_does_not_emit_diagnostic(monkeypatch, caplog):
     monkeypatch.setattr(service, "_fetch_trends", _fast_fetch_trends)
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        await service.search(_FakeSession(), _req(), user_id=1)
+        await service.search(_FakeSession(), _req())
 
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
     assert not records
@@ -146,7 +146,7 @@ async def test_no_data_scope_fast_skips_diagnostic(monkeypatch, caplog):
     monkeypatch.setattr(service, "_available_dates", _no_dates)
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        resp = await service.search(_FakeSession(), _req(), user_id=1)
+        resp = await service.search(_FakeSession(), _req())
 
     assert resp.total == 0
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
@@ -187,7 +187,7 @@ async def test_failed_request_still_emits_diagnostic_marked_failed(monkeypatch, 
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         with pytest.raises(RuntimeError, match="模拟连接卡死或锁等待超时"):
-            await service.search(_FakeSession(), _req(), user_id=1)
+            await service.search(_FakeSession(), _req())
 
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
     assert len(records) == 1
@@ -214,7 +214,7 @@ async def test_cancelled_request_still_emits_diagnostic_marked_cancelled(monkeyp
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         with pytest.raises(asyncio.CancelledError):
-            await service.search(_FakeSession(), _req(), user_id=1)
+            await service.search(_FakeSession(), _req())
 
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]
     assert len(records) == 1
@@ -235,7 +235,7 @@ async def test_no_data_scope_but_slow_scope_resolution_still_diagnoses(monkeypat
     monkeypatch.setattr(service, "_available_dates", _slow_no_dates)
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
-        resp = await service.search(_FakeSession(), _req(), user_id=1)
+        resp = await service.search(_FakeSession(), _req())
 
     assert resp.total == 0
     records = [r for r in caplog.records if "分析查询慢请求诊断" in r.message]

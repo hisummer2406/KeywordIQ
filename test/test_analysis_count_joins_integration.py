@@ -14,7 +14,7 @@ from app.table.analysis import analysis_crud as crud
 from app.table.analysis import analysis_service as service
 from app.table.search.search_schemas import AnalysisSearchRequest
 from test import test_site_scoped_query_integration as _base
-from test.test_site_scoped_query_integration import D1, D3, SITE, USER_ID, pytestmark  # noqa: F401
+from test.test_site_scoped_query_integration import D1, D3, SITE, pytestmark  # noqa: F401
 
 db = _base.db
 
@@ -75,7 +75,7 @@ COMBOS = [
 
 async def _old_count(db, req):
     stmt, fact = crud._count_base_query(SITE, "DAY", D3, keyword=True, product=True)
-    stmt = crud._apply_filters(stmt, fact, req, site=SITE, user_id=USER_ID, view="DAY", on=D3)
+    stmt = crud._apply_filters(stmt, fact, req, site=SITE, view="DAY", on=D3)
     return (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
 
@@ -84,9 +84,9 @@ async def test_count_matches_old_joins_and_listed_rows(db, extra):
     await db.run_sync(lambda s: _seed(s))
     req = AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=200, include="LISTED", **extra)
 
-    new = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req, USER_ID))).scalar_one()
+    new = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req))).scalar_one()
     old = await _old_count(db, req)
-    resp = await service.search(db, req, user_id=USER_ID)
+    resp = await service.search(db, req)
 
     assert new == old
     assert resp.total == new == len(resp.data)
@@ -96,17 +96,17 @@ async def test_seed_actually_exercises_each_filter(db):
     """守卫：上面每个组合都要筛掉点什么，否则「新旧相等」可能只是都没生效。"""
     await db.run_sync(lambda s: _seed(s))
     base = AnalysisSearchRequest(site=SITE, view="DAY", date=D3, include="LISTED")
-    total = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, base, USER_ID))).scalar_one()
+    total = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, base))).scalar_one()
     assert total == 4  # 黑名单类目那行不计
     for extra in COMBOS[1:]:
         req = AnalysisSearchRequest(site=SITE, view="DAY", date=D3, include="LISTED", **extra)
-        n = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req, USER_ID))).scalar_one()
+        n = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req))).scalar_one()
         assert 0 < n < total, extra
 
 
 async def test_first_listed_count_matches_filtered_total(db):
     await db.run_sync(lambda s: _seed(s))
     req = AnalysisSearchRequest(site=SITE, view="DAY", date=D3, first_listed=True)
-    filtered = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req, USER_ID))).scalar_one()
+    filtered = (await db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req))).scalar_one()
     summary = (await db.execute(crud.first_listed_count_stmt(SITE, "DAY", D3))).scalar_one()
     assert summary == filtered == 2  # acme drill、hammer；novel 在黑名单类目
