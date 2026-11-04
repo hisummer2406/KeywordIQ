@@ -16,8 +16,8 @@ from app.table.analysis import analysis_service as service
 
 
 class _StubUser:
-    """够用即可：require_permission 只看 is_super 与 permission_codes；``id`` 供
-    「竞对新发现」筛选的 user_id 透传使用（issue #56 P2）。"""
+    """够用即可：require_permission 只看 is_super 与 permission_codes；``id`` 保留只为
+    与真实用户对象同形。"""
 
     def __init__(self, *, is_super=False, permissions=(), id=1):
         self.is_super = is_super
@@ -58,10 +58,10 @@ def _build_app(monkeypatch, *, user=None, rows=None, total=2, view_date=date(202
     monkeypatch.setattr(service.crud, "scope_row_count", lambda db, s, v, on: total)
     monkeypatch.setattr(
         service.crud, "count_capped",
-        lambda db, s, v, on, req, cap, user_id, **_kw: min(total, cap),
+        lambda db, s, v, on, req, cap, **_kw: min(total, cap),
     )
     monkeypatch.setattr(service.crud, "iter_export_rows",
-                        lambda db, s, v, on, req, limit, user_id, **_kw: iter([rows]))
+                        lambda db, s, v, on, req, limit, **_kw: iter([rows]))
     # 掉榜段：默认为空，故这些用例断言的仍是原来那份在榜行为
     monkeypatch.setattr(service.crud, "scope_dropped_count", lambda db, s, v, on: dropped)
     monkeypatch.setattr(service.crud, "iter_export_dropped_rows",
@@ -304,7 +304,7 @@ def test_stream_interruption_is_logged_with_stack(monkeypatch, caplog):
 
     from app.table.analysis import analysis_service as svc
 
-    def _boom(db, s, v, on, req, limit, user_id, **_kw):
+    def _boom(db, s, v, on, req, limit, **_kw):
         yield [_row(1, "kettle", 1)]
         raise RuntimeError("cursor died mid-stream")
 

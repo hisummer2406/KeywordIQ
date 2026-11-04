@@ -80,8 +80,8 @@ def _fact_indexes(prefix: str, date_column: str) -> tuple[Index, ...]:
         # 按排名变化排序/筛选。
         Index(f"idx_{prefix}_change", "site", date_column, "ranking_change"),
         # ASIN / 标题筛选：先在 dim_product 上解析出 product_id，再回查事实表。
-        # top2/top3 同样要建——ASIN 精确匹配与"竞对新发现"筛选都按前三任一命中（与品牌/
-        # 类目同一形状），只建 top1 会让另外两个槽位退化成全表扫描（issue #56 P2）。
+        # top2/top3 同样要建——ASIN 精确匹配按前三任一命中（与品牌/类目同一形状），
+        # 只建 top1 会让另外两个槽位退化成全表扫描（issue #56 P2、#150）。
         *(
             Index(f"idx_{prefix}_top{n}_product", "site", date_column, f"top{n}_product_id")
             for n in (1, 2, 3)

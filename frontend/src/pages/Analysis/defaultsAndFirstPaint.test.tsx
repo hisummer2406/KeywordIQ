@@ -267,7 +267,6 @@ describe('分析查询屏 · 首屏与默认条件', () => {
             firstListed: undefined,
             brands: [],
             productTitle: '',
-            competitorNew: false,
           },
           sort: { field: 'current_ranking', dir: 'asc' },
           ...over,
@@ -305,14 +304,10 @@ describe('分析查询屏 · 首屏与默认条件', () => {
     });
 
     /**
-     * 权限收回后，已保存的「竞对新发现」不得原样复活（PR #66 复审 P2）。
-     *
-     * 保存的条件跨登录持久；用户保存时有 `competitor:view`、之后被收回，若首屏原样
-     * 恢复 `competitorNew: true`，自动查询会带着 `competitor_new=true` 撞上后端新增
-     * 的权限校验（403）——而开关本身又因无权限被隐藏，用户看不到也无从关掉这个仍在
-     * 生效的条件，只能猜测并重置全部条件。
+     * 「竞对新发现」已下架（#166）：旧保存条件里开着它时，其余条件照常恢复，首屏请求不带
+     * `competitor_new`（后端对 true 会 422），也不因此被判成「有未生效改动」。
      */
-    it('保存过竞对新发现筛选但当前无权限时，首屏不带 competitor_new 且开关隐藏', async () => {
+    it('旧保存条件里开着竞对新发现时，其余条件照常恢复且首屏不带 competitor_new', async () => {
       seedSaved(1, {
         filters: {
           categories: [],
@@ -326,14 +321,18 @@ describe('分析查询屏 · 首屏与默认条件', () => {
           competitorNew: true,
         },
       });
-      accessState.canViewCompetitor = false;
+      accessState.canViewCompetitor = true;
 
       await renderSettled();
       await waitFor(() => expect(searchAnalysis).toHaveBeenCalled());
 
-      expect(searchAnalysis.mock.calls[0][0].competitor_new).toBeUndefined();
+      const body = searchAnalysis.mock.calls[0][0];
+      expect(body).not.toHaveProperty('competitor_new');
+      // 其余保存条件照常生效：站点 DE、首次入榜为「全部」
+      expect(getScope.mock.calls[0][0]).toBe('DE');
+      expect(body.first_listed).toBeUndefined();
+      expect(await screen.findByText('我的默认')).toBeInTheDocument();
       expect(screen.queryByRole('switch', { name: '竞对新发现' })).not.toBeInTheDocument();
-      // 权限撤销不该被误判成「有未生效改动」——规范化发生在读取草稿时，不是提交时。
       expect(screen.queryByText(/未生效条件/)).not.toBeInTheDocument();
     });
 

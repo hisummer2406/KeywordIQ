@@ -11,7 +11,6 @@ from test.test_site_scoped_query_integration import (
     D3,
     SITE,
     TEST_URL,
-    USER_ID,
     db,  # noqa: F401
 )
 
@@ -59,7 +58,7 @@ def _seed_categories(conn):
 async def test_blacklisted_rows_are_excluded_but_null_category_is_kept(db):  # noqa: F811
     await db.run_sync(_seed_categories)
     resp = await service.search(
-        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3), user_id=USER_ID
+        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3)
     )
     assert sorted(r["keyword"] for r in resp.data) == ["kw-kept", "kw-nocat"]
     # 无筛选也实算，不读 site_data_stats 的预存 4

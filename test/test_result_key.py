@@ -21,11 +21,31 @@ def test_non_private_requests_share_a_key_across_users():
     assert _key(user_id=1).user_id is None
 
 
-def test_competitor_new_keys_by_user_and_scope():
-    a, b = _key(user_id=1, competitor_new=True), _key(user_id=2, competitor_new=True)
+def test_no_private_filters_remain_after_competitor_new_retired():
+    """#166：唯一的私有筛选已下架，所有请求跨用户共享键；false 与不传同键。"""
+    assert rk._PRIVATE_FLAGS == {}
+    assert _key(user_id=1, competitor_new=False) == _key(user_id=2)
+    assert _key(user_id=1, competitor_new=False).scope == ("analysis:view",)
+
+
+def test_registered_private_filter_keys_by_user_and_scope(monkeypatch):
+    """登记机制保留：以后新增私有筛选只需登记，键自动按用户与权限范围区分。"""
+    monkeypatch.setitem(rk._PRIVATE_FLAGS, "first_listed", "x:view")
+    a, b = _key(user_id=1, first_listed=True), _key(user_id=2, first_listed=True)
     assert a != b
-    assert a.user_id == 1 and "competitor:view" in a.scope
+    assert a.user_id == 1 and "x:view" in a.scope
     assert a.fingerprint() != b.fingerprint()
+    # 未命中私有筛选时仍跨用户共享
+    assert _key(user_id=1) == _key(user_id=2)
+
+
+def test_private_filter_without_user_id_is_refused(monkeypatch):
+    """宁可失败也不能把私有结果算成共享键。"""
+    import pytest
+
+    monkeypatch.setitem(rk._PRIVATE_FLAGS, "first_listed", "x:view")
+    with pytest.raises(ValueError):
+        rk.result_key(AnalysisSearchRequest(first_listed=True), site="US")
 
 
 def test_explicit_defaults_and_equivalent_spellings_share_a_key():
@@ -65,7 +85,7 @@ def test_summary_fields_resolve_default_site_and_skip_invalid_site():
     from app.table.analysis import analysis_service as service
     from config import settings
 
-    default = service.search_summary_fields(AnalysisSearchRequest(), 1)
-    explicit = service.search_summary_fields(AnalysisSearchRequest(site=settings.default_site), 1)
+    default = service.search_summary_fields(AnalysisSearchRequest())
+    explicit = service.search_summary_fields(AnalysisSearchRequest(site=settings.default_site))
     assert default == explicit and default["view"] == "DAY"
-    assert service.search_summary_fields(AnalysisSearchRequest(site="ZZ"), 1) == {"view": "DAY"}
+    assert service.search_summary_fields(AnalysisSearchRequest(site="ZZ")) == {"view": "DAY"}

@@ -3,9 +3,9 @@
 结果键是请求去重与结果缓存的唯一依据，也以指纹形式进请求摘要，供重采估算重复率（D5）。
 两条纪律：
 
-- **结果与查询者无关的请求跨用户共享同一个键。** ``search()`` 的 ``user_id`` 只喂给
-  ``competitor_new``（读用户私有的关注数据），其余请求不含用户标识；含 ``competitor_new`` 时
-  键带上用户标识与 ``competitor:view`` 权限范围。
+- **结果与查询者无关的请求跨用户共享同一个键。** 只有命中 ``_PRIVATE_FLAGS`` 登记的、
+  依赖查询者私有数据的筛选时，键才带上用户标识与该筛选要求的权限范围。登记表目前为空：
+  唯一的私有筛选 ``competitor_new`` 已下架（#166），请求模型把 ``true`` 拒为 422。
 - **规范化只用代码里能证明等价的规则**（见 ``analysis_crud`` 的对应判断）：布尔筛选为假与
   没传一样（``if req.first_listed``）、空列表与没传一样（``req.brands or None``）、``IN``
   列表与顺序无关、没填关键词时匹配方式无关、空标题与没传一样。拿不准的（排序缺省、日期
@@ -21,7 +21,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from app.auth.permissions import ANALYSIS_VIEW, COMPETITOR_VIEW
+from app.auth.permissions import ANALYSIS_VIEW
 from app.table.search.search_schemas import AnalysisSearchRequest
 
 # 每个请求字段的规范化方式。site 单独处理（服务端解析缺省站点后传入）。
@@ -56,12 +56,13 @@ _FIELDS: dict[str, str] = {
     "conversion_share_min": _AS_IS,
     "conversion_share_max": _AS_IS,
     "first_listed": _FLAG,
-    "competitor_new": _FLAG,
+    "competitor_new": _FLAG,  # 已下架：模型层恒落回 None，留在这里只为满足「每个字段都已归类」
     "exclude_brand_in_keyword": _FLAG,
 }
 
-# 结果依赖查询者私有数据的筛选：命中时键带用户标识。
-_PRIVATE_FLAGS = ("competitor_new",)
+# 结果依赖查询者私有数据的筛选 → 它额外要求的权限点。命中时键带用户标识与该权限范围。
+# **新增私有筛选必须登记在这里**，否则两个用户的私有结果会落在同一个键上。
+_PRIVATE_FLAGS: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -90,13 +91,18 @@ def _normalise(kind: str, value, req: AnalysisSearchRequest):
     return value
 
 
-def result_key(req: AnalysisSearchRequest, *, site: str, user_id: int) -> ResultKey:
-    """``site`` 为服务端解析后的站点（缺省站点与显式写出得到同一个键）。"""
+def result_key(req: AnalysisSearchRequest, *, site: str, user_id: int | None = None) -> ResultKey:
+    """``site`` 为服务端解析后的站点（缺省站点与显式写出得到同一个键）。
+
+    命中私有筛选却没给 ``user_id`` 时抛错：宁可请求失败，也不能把私有结果算成共享键。
+    """
     values = {
         name: _normalise(kind, getattr(req, name), req) for name, kind in _FIELDS.items() if name != "site"
     }
     values["site"] = site
-    private = any(getattr(req, name) for name in _PRIVATE_FLAGS)
-    scope = (ANALYSIS_VIEW, COMPETITOR_VIEW) if private else (ANALYSIS_VIEW,)
+    hit = sorted(perm for name, perm in _PRIVATE_FLAGS.items() if getattr(req, name))
+    if hit and user_id is None:
+        raise ValueError("私有筛选的结果键必须带用户标识")
+    scope = (ANALYSIS_VIEW, *hit)
     canonical = json.dumps(values, sort_keys=True, ensure_ascii=False, default=str)
-    return ResultKey(scope=scope, user_id=user_id if private else None, canonical=canonical)
+    return ResultKey(scope=scope, user_id=user_id if hit else None, canonical=canonical)

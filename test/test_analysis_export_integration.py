@@ -19,7 +19,6 @@ from test.test_site_scoped_query_integration import (
     D2,
     D3,
     SITE,
-    USER_ID,
     _ensure_partitions_sync,
     _seed,
     _seed_top_slots,
@@ -78,7 +77,7 @@ def _bind_stream_to_fixture(monkeypatch, db):
 def test_iter_export_rows_streams_scoped_rows(db):
     """服务端游标分块产出：块内是 dict，作用域与排序与列表一致。"""
     _seed(db)
-    chunks = list(crud.iter_export_rows(db, SITE, "DAY", D3, _req(), limit=100, user_id=USER_ID))
+    chunks = list(crud.iter_export_rows(db, SITE, "DAY", D3, _req(), limit=100))
 
     rows = [r for chunk in chunks for r in chunk]
     assert [r["current_ranking"] for r in rows] == [1, 9]  # 默认按当期排名升序
@@ -90,7 +89,7 @@ def test_iter_export_rows_respects_limit(db):
     _seed(db)
     rows = [
         r
-        for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, _req(), limit=1, user_id=USER_ID)
+        for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, _req(), limit=1)
         for r in chunk
     ]
     assert len(rows) == 1
@@ -102,7 +101,7 @@ def test_iter_export_rows_applies_filters(db):
     rows = [
         r
         for chunk in crud.iter_export_rows(
-            db, SITE, "DAY", D3, _req(keyword="kw-two"), limit=100, user_id=USER_ID
+            db, SITE, "DAY", D3, _req(keyword="kw-two"), limit=100
         )
         for r in chunk
     ]
@@ -117,19 +116,19 @@ def test_export_asin_batch_matches_search_rows(db):
 
     rows = [
         r
-        for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, req, limit=100, user_id=USER_ID)
+        for chunk in crud.iter_export_rows(db, SITE, "DAY", D3, req, limit=100)
         for r in chunk
     ]
     assert sorted(r["keyword_id"] for r in rows) == sorted(kids.values())
-    counted = db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req, USER_ID)).scalar_one()
+    counted = db.execute(crud.count_filtered_stmt(SITE, "DAY", D3, req)).scalar_one()
     assert counted == len(rows) == 2
 
 
 def test_count_capped_stops_at_cap(db):
     """上限计数数满即止，不给出真实总数。"""
     _seed(db)
-    assert crud.count_capped(db, SITE, "DAY", D3, _req(), cap=1, user_id=USER_ID) == 1
-    assert crud.count_capped(db, SITE, "DAY", D3, _req(), cap=10, user_id=USER_ID) == 2
+    assert crud.count_capped(db, SITE, "DAY", D3, _req(), cap=1) == 1
+    assert crud.count_capped(db, SITE, "DAY", D3, _req(), cap=10) == 2
 
 
 def test_export_csv_contains_day_extras(db, monkeypatch):
@@ -144,8 +143,8 @@ def test_export_csv_contains_day_extras(db, monkeypatch):
     _seed(db)
     monkeypatch.setattr(service, "SessionFactory", lambda: db)
 
-    site, view, on = service.resolve_export_scope(db, _req(), user_id=USER_ID)
-    body = "".join(service.iter_export_csv(site, view, on, _req(), user_id=USER_ID))
+    site, view, on = service.resolve_export_scope(db, _req())
+    body = "".join(service.iter_export_csv(site, view, on, _req()))
     lines = body.lstrip("﻿").strip().splitlines()
 
     assert "近 7 日趋势" in lines[0] and "当周排名变化" not in lines[0]
@@ -159,8 +158,8 @@ def test_export_week_view_contains_real_week_trend(db, monkeypatch):
     monkeypatch.setattr(service, "SessionFactory", lambda: db)
 
     req = AnalysisSearchRequest(site=SITE, view="WEEK")
-    site, view, on = service.resolve_export_scope(db, req, user_id=USER_ID)
-    lines = "".join(service.iter_export_csv(site, view, on, req, user_id=USER_ID)).lstrip("﻿").splitlines()
+    site, view, on = service.resolve_export_scope(db, req)
+    lines = "".join(service.iter_export_csv(site, view, on, req)).lstrip("﻿").splitlines()
 
     assert "近 7 周趋势" in lines[0] and "近 7 日趋势" not in lines[0]
     assert lines[1].endswith("9 5 1")
@@ -172,7 +171,7 @@ def test_export_scope_rejects_over_cap_unfiltered(db, monkeypatch):
     monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 1)
 
     with pytest.raises(service.ExportTooLargeError):
-        service.resolve_export_scope(db, _req(), user_id=USER_ID)
+        service.resolve_export_scope(db, _req())
 
 
 def test_export_scope_rejects_over_cap_filtered(db, monkeypatch):
@@ -181,13 +180,13 @@ def test_export_scope_rejects_over_cap_filtered(db, monkeypatch):
     monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 0)
 
     with pytest.raises(service.ExportTooLargeError):
-        service.resolve_export_scope(db, _req(keyword="kw"), user_id=USER_ID)
+        service.resolve_export_scope(db, _req(keyword="kw"))
 
 
 def test_export_scope_allows_within_cap(db, monkeypatch):
     _seed(db)
     monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 2)
-    assert service.resolve_export_scope(db, _req(), user_id=USER_ID) == (SITE, "DAY", D3)
+    assert service.resolve_export_scope(db, _req()) == (SITE, "DAY", D3)
 
 
 # --------------------------------------------------------------------------
@@ -227,8 +226,8 @@ def test_export_includes_dropped_rows(db, monkeypatch):
     _seed_dropped(db)
     _bind_stream_to_fixture(monkeypatch, db)
 
-    site, view, on = service.resolve_export_scope(db, _req(), user_id=USER_ID)
-    body = "".join(service.iter_export_csv(site, view, on, _req(), user_id=USER_ID))
+    site, view, on = service.resolve_export_scope(db, _req())
+    body = "".join(service.iter_export_csv(site, view, on, _req()))
 
     assert "kw-gone" in body, "导出漏掉了掉榜行"
 
@@ -244,7 +243,7 @@ def test_export_cap_counts_both_segments(db, monkeypatch):
 
     monkeypatch.setattr(service.settings, "EXPORT_ROW_CAP", 2)
     with pytest.raises(service.ExportTooLargeError):
-        service.resolve_export_scope(db, _req(), user_id=USER_ID)
+        service.resolve_export_scope(db, _req())
 
 
 def test_export_respects_include_listed(db, monkeypatch):
@@ -254,8 +253,8 @@ def test_export_respects_include_listed(db, monkeypatch):
     _bind_stream_to_fixture(monkeypatch, db)
 
     req = _req(include="LISTED")
-    site, view, on = service.resolve_export_scope(db, req, user_id=USER_ID)
-    body = "".join(service.iter_export_csv(site, view, on, req, user_id=USER_ID))
+    site, view, on = service.resolve_export_scope(db, req)
+    body = "".join(service.iter_export_csv(site, view, on, req))
 
     assert "kw-gone" not in body
     assert "kw-one" in body

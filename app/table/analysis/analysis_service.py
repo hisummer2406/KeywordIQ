@@ -251,7 +251,7 @@ def _resolve_site(site: str | None) -> str:
         raise ScopeError(str(exc)) from exc
 
 
-def search_summary_fields(req: AnalysisSearchRequest, user_id: int) -> dict[str, str]:
+def search_summary_fields(req: AnalysisSearchRequest) -> dict[str, str]:
     """请求摘要附加的视图与结果键指纹（#154 design D5），供重采分日周统计并估算重复率。
 
     站点非法时只给视图：``search()`` 随后会以 422 拒绝这个请求，没有结果可言。
@@ -260,7 +260,7 @@ def search_summary_fields(req: AnalysisSearchRequest, user_id: int) -> dict[str,
         site = _resolve_site(req.site)
     except ScopeError:
         return {"view": req.view}
-    return {"view": req.view, "result_key_fp": result_key(req, site=site, user_id=user_id).fingerprint()}
+    return {"view": req.view, "result_key_fp": result_key(req, site=site).fingerprint()}
 
 
 def _resolve_date(
@@ -352,7 +352,7 @@ def _brand_hits_ready_sync(db: Session, site: str, view: str, on: date, req: Ana
 
 async def _listed_total(
     db: AsyncSession, site: str, view: str, on: date,
-    req: AnalysisSearchRequest, has_filters: bool, user_id: int,
+    req: AnalysisSearchRequest, has_filters: bool,
     db_ms: list[int] | None = None, *, brand_hits_ready: bool = False,
 ) -> int:
     """在榜段的行数——**同时也是分段分页的分界线**，所以任何时候都要算。
@@ -363,7 +363,7 @@ async def _listed_total(
     翻的行数多，末页出现空页。``has_filters`` 仍管掉榜段是否显示，与这里无关。
     """
     result = await _timed_execute(
-        db, crud.count_filtered_stmt(site, view, on, req, user_id, brand_hits_ready=brand_hits_ready),
+        db, crud.count_filtered_stmt(site, view, on, req, brand_hits_ready=brand_hits_ready),
         db_ms,
     )
     return result.scalar_one()
@@ -416,19 +416,15 @@ def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
         "categories_count": len(req.categories) if req.categories else 0,
         "brands_count": len(req.brands) if req.brands else 0,
         "first_listed": req.first_listed,
-        "competitor_new": req.competitor_new,
         "exclude_brand_in_keyword": req.exclude_brand_in_keyword,
         "include": req.include,
     }
 
 
 async def search(
-    db: AsyncSession, req: AnalysisSearchRequest, user_id: int, *, deadline: float | None = None
+    db: AsyncSession, req: AnalysisSearchRequest, *, deadline: float | None = None
 ) -> AnalysisSearchResponse:
     """作用域内分页查询，返回 ProTable 契约 + 生效作用域回显。
-
-    ``user_id`` 取自当前登录用户（API 层的鉴权依赖），只喂给「竞对新发现」筛选判定关注
-    关系，MUST NOT 从请求体读——与本仓库既有鉴权模式一致（词库/竞对监控同一条纪律）。
 
     ``deadline`` 是完整请求的截止时刻（:func:`request_deadline`）；给了就让每条语句在剩余
     预算内由数据库取消，用尽返回 503 ``db.query_timeout``。不给则只受引擎级语句超时约束。
@@ -512,7 +508,7 @@ async def search(
 
         brand_ready = await _brand_hits_ready(db, site, view, on, req, db_ms=db_ms)
         listed_total = await _listed_total(
-            db, site, view, on, req, has_filters, user_id, db_ms=db_ms, brand_hits_ready=brand_ready,
+            db, site, view, on, req, has_filters, db_ms=db_ms, brand_hits_ready=brand_ready,
         )
         dropped_total = 0 if has_filters else await _dropped_total(db, site, view, on, db_ms=db_ms)
         _stage("count_ms")
@@ -532,7 +528,7 @@ async def search(
                     await _timed_execute(
                         db,
                         crud.search_stmt(
-                            site, view, on, req, offset=offset, limit=limit, user_id=user_id,
+                            site, view, on, req, offset=offset, limit=limit,
                             brand_hits_ready=brand_ready,
                         ),
                         db_ms,
@@ -604,12 +600,12 @@ async def search(
 
 
 def resolve_export_scope(
-    db: Session, req: AnalysisSearchRequest, user_id: int
+    db: Session, req: AnalysisSearchRequest
 ) -> tuple[str, str, date | None]:
     """解析导出作用域并在开始流式输出前把上限检查做掉。
 
     上限必须在响应头发出之前检查：一旦开始流，就只能给出 200 + 一个被截断的 CSV，
-    而截断的 CSV 会被当成完整数据使用。宁可 413 让用户加筛选。``user_id`` 同 ``search``。
+    而截断的 CSV 会被当成完整数据使用。宁可 413 让用户加筛选。
     """
     site = _resolve_site(req.site)
     dates = crud.available_dates(db, site, req.view)
@@ -626,7 +622,7 @@ def resolve_export_scope(
     if wants_listed(req.include):
         # 无筛选也实算：预存的 row_count 不扣黑名单类目，会高估（见 ``_listed_total``）。
         listed = crud.count_capped(
-            db, site, req.view, on, req, cap + 1, user_id,
+            db, site, req.view, on, req, cap + 1,
             brand_hits_ready=_brand_hits_ready_sync(db, site, req.view, on, req),
         )
     # 带筛选时掉榜段恒为空：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行可匹配。
@@ -643,7 +639,7 @@ def resolve_export_scope(
 
 
 def iter_export_csv(
-    site: str, view: str, on: date | None, req: AnalysisSearchRequest, user_id: int
+    site: str, view: str, on: date | None, req: AnalysisSearchRequest
 ) -> Iterator[str]:
     """产出 CSV 文本块（首块带 UTF-8 BOM）。
 
@@ -684,7 +680,7 @@ def iter_export_csv(
 
         if wants_listed(req.include):
             for rows in crud.iter_export_rows(
-                db, site, view, on, req, settings.EXPORT_ROW_CAP, user_id,
+                db, site, view, on, req, settings.EXPORT_ROW_CAP,
                 brand_hits_ready=_brand_hits_ready_sync(db, site, view, on, req),
             ):
                 yield _emit(rows)

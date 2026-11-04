@@ -60,6 +60,22 @@ export function clearSavedMode(userId: number | undefined): void {
 }
 
 /**
+ * 已下架、但旧 payload 里可能还留着的筛选字段（#166：`competitorNew`「竞对新发现」）。
+ *
+ * **删字段在读取时剔除，不提升 `SAVED_MODE_VERSION`。** 提升版本会把每个用户其余仍然有效
+ * 的保存条件整份丢掉；而删掉的字段只是旧 payload 里一个不再被读的多余键，剔掉即可，不会
+ * 出现「新字段缺省、控件空白」那类形状不符的问题。新增或改变字段语义仍须提升版本。
+ */
+const RETIRED_FILTER_KEYS = ['competitorNew'] as const;
+
+function dropRetiredFilters(mode: SavedMode): SavedMode {
+  if (!mode.filters) return mode;
+  const filters = { ...mode.filters } as Record<string, unknown>;
+  for (const key of RETIRED_FILTER_KEYS) delete filters[key];
+  return { ...mode, filters: filters as SavedMode['filters'] };
+}
+
+/**
  * 读保存的条件。以下情况一律返回 `null`（视同没保存过）：
  * userId 缺失、没存过、JSON 损坏、版本不符。后两种会顺手把那条删掉。
  */
@@ -80,7 +96,7 @@ export function readSavedMode(userId: number | undefined): SavedMode | null {
       clearSavedMode(userId);
       return null;
     }
-    return parsed as SavedMode;
+    return dropRetiredFilters(parsed as SavedMode);
   } catch {
     clearSavedMode(userId);
     return null;

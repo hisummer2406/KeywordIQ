@@ -241,7 +241,7 @@ async def test_search_applies_and_then_clears_its_deadline(gate, fresh_async_eng
     monkeypatch.setattr(gate, "_bound_statement_to_deadline", spy)
     deadline = time.monotonic() + 10
     async with AsyncSession(fresh_async_engine) as db:
-        await gate.search(db, AnalysisSearchRequest(site="US", view="DAY"), 1, deadline=deadline)
+        await gate.search(db, AnalysisSearchRequest(site="US", view="DAY"), deadline=deadline)
     assert seen and set(seen) == {deadline}
     assert gate._search_deadline.get() is None
 
