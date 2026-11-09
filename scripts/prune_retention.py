@@ -28,6 +28,7 @@ cron 示例（每天凌晨 3 点，容器内）::
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -50,7 +51,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="移出前把每个超期分区导出为 <分区名>.csv 到该目录")
     parser.add_argument("--yes", action="store_true",
                         help="跳过确认提示（非 dry-run 时需要）")
+    parser.add_argument("--json", action="store_true",
+                        help="在 stdout 最后一行输出结构化结果；被归档校验拦截也是正常结束（退出码 0），"
+                             "非 0 只表示运行本身失败。必须配合 --dry-run 或 --yes")
     args = parser.parse_args(argv)
+    if args.json and not (args.dry_run or args.yes):
+        parser.error("--json 用于无人值守运行，必须配合 --dry-run 或 --yes")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -65,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
     # ``sqlalchemy.log.InstanceLogger``，它的 isEnabledFor 只看自己的 _echo 标志，
     # **完全不查 logger 的 level**——setLevel(WARNING) 静默无效，SQL 照打。
     engine.echo = False
+
+    def finish(outcome: retention_service.RetentionResult) -> int:
+        if args.json:
+            print(json.dumps(outcome.to_dict(), ensure_ascii=False))
+        return 0
 
     with SessionFactory() as session:
         # 先做一次 dry-run 枚举，把将移出的分区摆到用户面前再决定是否执行。
@@ -86,17 +97,20 @@ def main(argv: list[str] | None = None) -> int:
             logger.info("%s 将清理 %s 行残留统计", table_name, count)
         else:
             logger.info("%s 无残留统计", table_name)
+    for gap in preview.blocked:
+        logger.warning("归档校验未通过，%s 月保留: 站点=%s 周期=%s 期次=%s 原因=%s",
+                       gap.month.strftime("%Y-%m"), gap.site, gap.period_type, gap.report_date, gap.reason)
 
     # 两者都为 0 才是真的无事可做。残留统计的清理不依赖"本次是否移出了分区"——
     # 存量残留（本变更上线前已经产生的）可能单独存在，不能因为这次没有分区要移出
     # 就连它也一起跳过（design.md 决策 2/4）。
     if preview.total_dropped == 0 and preview.total_purged_stats == 0:
         logger.info("没有需要移出的分区，也没有残留统计需要清理，结束")
-        return 0
+        return finish(preview)
 
     if args.dry_run:
         logger.info("dry-run 结束，未做任何变更")
-        return 0
+        return finish(preview)
 
     if not args.yes:
         answer = input(
@@ -123,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         for _table_name, paths in result.exported.items():
             for path in paths:
                 logger.info("已留档: %s", path)
-    return 0
+    return finish(result)
 
 
 if __name__ == "__main__":

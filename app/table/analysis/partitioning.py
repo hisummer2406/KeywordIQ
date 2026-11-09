@@ -302,6 +302,31 @@ def list_month_partitions(session: Session, table_name: str) -> list[MonthPartit
     return partitions
 
 
+_LIST_BOUND_RE = re.compile(r"FOR VALUES IN \('(?P<site>[^']+)'\)")
+
+
+def list_site_subpartitions(session: Session, partition_name: str) -> list[str]:
+    """枚举某个月度分区下实际存在的站点子分区，返回站点码（升序）。
+
+    读目录而不是 ``ENABLED_SITES``：站点停用后它的历史分区仍在，按配置枚举会漏掉这些
+    数据，归档校验随之对它们失明。``partition_name`` 必须来自
+    :func:`list_month_partitions`。
+    """
+    rows = session.execute(
+        text(
+            "SELECT pg_get_expr(c.relpartbound, c.oid) "
+            "FROM pg_inherits i "
+            "JOIN pg_class c ON c.oid = i.inhrelid "
+            "JOIN pg_class p ON p.oid = i.inhparent "
+            "JOIN pg_namespace n ON n.oid = p.relnamespace "
+            "WHERE p.relname = :partition AND n.nspname = :schema"
+        ),
+        {"partition": partition_name, "schema": settings.DATABASE_SCHEMA},
+    ).scalars().all()
+    sites = {m["site"] for bound in rows if (m := _LIST_BOUND_RE.search(bound or ""))}
+    return sorted(sites)
+
+
 def drop_month_partition(session: Session, table_name: str, partition_name: str) -> None:
     """移出单个月度分区：``DROP TABLE`` 会连带其站点子分区一并删除。
 

@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime
 
 from config import settings
-from ops_bot import alerts, crud, daily_summary
+from ops_bot import alerts, crud, daily_summary, retention
 from ops_bot.checks import alembic_drift, heartbeat, import_status, logs, resources, service
 from ops_bot.database import OpsAsyncSessionFactory
 from ops_bot.feishu.client import FeishuAPIError, FeishuClient
@@ -36,6 +36,30 @@ RETIRED_ALERT_KEYS = ("backup-overdue",)
 # ops_task/ops_audit_log/ops_dedup_key 的保留期（design.md D3「任务/审计保留」）。
 # 数据量远小于业务事实表，不需要分区，daily 分组里直接 DELETE。
 _TASK_RETENTION_DAYS = 90
+
+_RETENTION_ALERT_DETAIL_LIMIT = 20
+
+
+def _summarize_retention(label: str, result: dict) -> str:
+    if result["status"] == "lock_skipped":
+        return f"{label}: 导入进行中，已跳过"
+    dropped = sum(len(names) for names in result.get("dropped", {}).values())
+    purged = sum(result.get("purged_stats", {}).values())
+    months = ",".join(result.get("blocked_months", [])) or "无"
+    return f"{label}: 分区 {dropped} 个，残留统计 {purged} 行，拦截月份 {months}"
+
+
+def _retention_blocked_message(result: dict) -> str:
+    gaps = result.get("blocked", [])
+    if not gaps:
+        return "保留清理归档校验"
+    shown = gaps[:_RETENTION_ALERT_DETAIL_LIMIT]
+    lines = [
+        f"{g['site']} {g['period_type']} {g['report_date']}: {g['reason']}" for g in shown
+    ]
+    more = f"\n另有 {len(gaps) - len(shown)} 条未列出" if len(gaps) > len(shown) else ""
+    months = ",".join(result.get("blocked_months", []))
+    return f"保留清理被归档校验拦截，月份 {months} 的数据已保留：\n" + "\n".join(lines) + more
 
 
 def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
@@ -214,7 +238,63 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
             await session.commit()
         return f"清理了 {deleted} 条超过 {_TASK_RETENTION_DAYS} 天的任务记录"
 
+    async def _report_retention(*, failed: bool, failure: str, last: dict | None) -> None:
+        async with OpsAsyncSessionFactory() as session:
+            await alerts.evaluate(
+                session, feishu_client, chat_id,
+                alert_key="retention-job-failed", level="crit", is_alerting=failed,
+                message=failure or "保留清理任务",
+                silence_minutes=settings.OPS_ALERT_SILENCE_MINUTES,
+            )
+            # 没有拿到结果（运行失败、导入占锁）时不知道归档状态，不能把既有拦截告警判成已恢复。
+            if last is not None and last["status"] == "ok":
+                await alerts.evaluate(
+                    session, feishu_client, chat_id,
+                    alert_key="retention-gate-blocked", level="warn",
+                    is_alerting=bool(last.get("blocked")),
+                    message=_retention_blocked_message(last),
+                    silence_minutes=settings.OPS_ALERT_SILENCE_MINUTES,
+                )
+            await session.commit()
+
+    async def retention_prune_job() -> str:
+        # 任何失败都在这里收口并正常返回：调度器遇异常记 FAILED，而 daily_at 只看
+        # 最近一次成功，抛出去会让这个删除任务每 60 秒重跑一次（design D8）。
+        summaries: list[str] = []
+        last: dict | None = None
+        failure = ""
+        try:
+            last = await asyncio.to_thread(retention.run_prune, dry_run=True)
+            summaries.append(_summarize_retention("预览", last))
+            logger.info("保留清理%s", summaries[-1])
+            if settings.OPS_RETENTION_MODE == "execute":
+                last = await asyncio.to_thread(retention.run_prune, dry_run=False)
+                summaries.append(_summarize_retention("执行", last))
+                logger.info("保留清理%s", summaries[-1])
+        except retention.RetentionRunError as exc:
+            failure = f"保留清理失败：{exc}"
+            summaries.append(failure)
+            logger.error(failure)
+        try:
+            await _report_retention(failed=bool(failure), failure=failure, last=last)
+        except Exception:
+            logger.exception("保留清理结果告警失败")
+            summaries.append("告警发送失败，详见应用日志")
+        return "；".join(summaries)
+
+    retention_jobs = (
+        []
+        if settings.OPS_RETENTION_MODE == "off"
+        else [
+            ScheduledJob(
+                kind="RETENTION_PRUNE", interval_seconds=86400, run=retention_prune_job,
+                should_run=daily_at(3, 30),
+            )
+        ]
+    )
+
     return [
+        *retention_jobs,
         ScheduledJob(kind=heartbeat.KIND, interval_seconds=_QUICK_SECONDS, run=heartbeat.run),
         ScheduledJob(kind="SERVICE_CHECK", interval_seconds=_FULL_SECONDS, run=service_check),
         ScheduledJob(kind="POOL_CHECK", interval_seconds=_FULL_SECONDS, run=pool_check),
