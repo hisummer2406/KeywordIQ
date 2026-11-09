@@ -165,6 +165,21 @@ opsbot ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /bin/systemctl reload nginx, \
   OSS 桶验证过，可直接照抄；**生产数据库恢复不通过飞书指令开放**，只能按这份文档
   手动执行。
 
+### 定时保留清理与 OSS 原始归档
+
+- 机器人每日 03:30 运行 `RETENTION_PRUNE`，由 `.env` 的 `OPS_RETENTION_MODE` 控制：
+  `off`（默认，不运行）/ `dry_run`（只预览）/ `execute`（预览后真实移出，**不可恢复**）。
+  改配置后需重启 `keywordiq-ops-bot.service`；结果在 `ops_task` 的 `output`。
+- 超期月份只有全部日报、周报期次的 OSS 原始文件校验通过才会移出，没有跳过手段。
+- 收到 `retention-gate-blocked`：该月数据已保留。按告警的期次和原因处理：`no_batch`、
+  `empty_object_key`、`no_rows` 查 `import_batch`；`object_missing`、`object_empty` 查
+  OSS 对象，能补则重传重导；`oss_unavailable` 查 OSS 配置与网络。处理后次日自动重试。
+- 收到 `retention-job-failed`：当日不会自动重跑，看 ops-bot 日志；手工诊断只用
+  `docker compose run --rm app python scripts/prune_retention.py --dry-run`。
+- **`keywordiq-release` 的原始对象不得配置过期规则**：它们是分区移出后唯一的恢复来源，
+  也是后续 AI 训练的数据积累。转低频或归档存储不影响校验，但归档对象重导前要先解冻。
+- 恢复已移出的月份：按批次的 object key 从 OSS 重新导入。
+
 ## 7. 故障处理
 
 | 现象 | 排查方向 |
