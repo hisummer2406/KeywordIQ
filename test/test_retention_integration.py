@@ -419,10 +419,17 @@ def test_run_retention_purges_stats_in_the_same_run_as_partition_drop():
         )
         _seed_site_data_stats(session, "US", "DAY", _STALE_DATE)
         _seed_site_data_stats(session, "US", "DAY", _IN_WINDOW_DATE)
+        session.execute(
+            text("INSERT INTO analysis.import_batch"
+                 "(site,period_type,report_date,file_name,status,written_rows,object_key) "
+                 "VALUES ('US','DAY',:d,'a.csv','COMPLETED',1,'k/a.csv')"),
+            {"d": _STALE_DATE},
+        )
         session.commit()
 
         result = retention_service.run_retention(
-            session, today=date(2026, 7, 15), retention_months=3, dry_run=False
+            session, today=date(2026, 7, 15), retention_months=3, dry_run=False,
+            archive_stat=lambda _key: 1,
         )
 
         assert result.lock_skipped is False
@@ -440,6 +447,10 @@ def test_run_retention_purges_stats_in_the_same_run_as_partition_drop():
         ).scalar_one_or_none()
         assert row_count is None
     finally:
+        session.rollback()
+        session.execute(
+            text("DELETE FROM analysis.import_batch WHERE file_name='a.csv' AND object_key='k/a.csv'")
+        )
         # run_retention 自己已经清掉了超期分区/事实行/超期统计；这里只清它不管的两样。
         session.execute(
             text("DELETE FROM analysis.site_data_stats WHERE site='US' AND period_type='DAY' "

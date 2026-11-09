@@ -1,4 +1,4 @@
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic_settings import BaseSettings
@@ -564,6 +564,8 @@ class Settings(BaseSettings):
     OPS_IMPORT_WEEK_TIMEOUT_MINUTES: int = 240
     OPS_ERROR_RATE_THRESHOLD: int = 20        # 近 5 分钟 ERROR/5xx 计数阈值
     OPS_BACKUP_RETENTION_DAYS: int = 30
+    # 定时保留清理：off 不运行；dry_run 只预览；execute 真实移出超期分区（不可恢复）。
+    OPS_RETENTION_MODE: Literal["off", "dry_run", "execute"] = "off"
     # ops-bot 探测业务 app 的本机地址（`/health`、`/health/pool`）。V2 的 app 容器映射在
     # 127.0.0.1:8001；8000 是同机的 V1，不要改回去。
     OPS_APP_BASE_URL: str = "http://127.0.0.1:8001"
