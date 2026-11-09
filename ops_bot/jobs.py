@@ -190,14 +190,28 @@ def build_jobs(feishu_client: FeishuClient, chat_id: str) -> list[ScheduledJob]:
 
     async def disk_check() -> str:
         percent = resources.disk_usage_percent()
-        level = "crit" if percent >= resources.DISK_CRIT_PERCENT else "warn"
+        critical = percent >= resources.DISK_CRIT_PERCENT
         is_alerting = percent >= resources.DISK_WARN_PERCENT
+        # 告警档只按天提醒，escalate_after=0 关掉"持续异常"强提醒（连续计数从 1 起，
+        # 永远不等于 0），否则持续 45 分钟时仍会多发一条。
+        severity = (
+            {
+                "level": "crit",
+                "silence_minutes": settings.OPS_ALERT_SILENCE_MINUTES,
+            }
+            if critical
+            else {
+                "level": "warn",
+                "silence_minutes": resources.DISK_WARN_REMINDER_MINUTES,
+                "escalate_after": 0,
+            }
+        )
         async with OpsAsyncSessionFactory() as session:
             await alerts.evaluate(
                 session, feishu_client, chat_id,
-                alert_key="disk-usage", level=level, is_alerting=is_alerting,
+                alert_key="disk-usage", is_alerting=is_alerting,
                 message=f"磁盘使用率 {percent:.1f}%",
-                silence_minutes=settings.OPS_ALERT_SILENCE_MINUTES,
+                **severity,
             )
             await session.commit()
         return f"{percent:.1f}%"

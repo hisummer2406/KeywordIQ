@@ -8,7 +8,8 @@ from __future__ import annotations
 import psutil
 
 DISK_WARN_PERCENT = 70.0
-DISK_CRIT_PERCENT = 80.0
+DISK_CRIT_PERCENT = 90.0
+DISK_WARN_REMINDER_MINUTES = 24 * 60  # 70～90% 还有处理时间，每天提醒一次即可
 
 
 def disk_usage_percent(path: str = "/") -> float:
