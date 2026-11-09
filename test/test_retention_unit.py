@@ -8,15 +8,27 @@
 """
 
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 
+from app.table.analysis import retention_service
 from app.table.analysis.partitioning import (
     MonthPartition,
     retention_cutoff,
     select_expired_partitions,
     subtract_months,
 )
+
+
+def test_default_archive_stat_refuses_when_oss_disabled():
+    """未启用 OSS 必须抛错（由闸门判为 oss_unavailable），绝不能被当成校验通过。"""
+    with patch.object(retention_service.settings, "OSS_ENABLED", False), patch.object(
+        retention_service.oss_client, "stat_object"
+    ) as stat:
+        with pytest.raises(RuntimeError):
+            retention_service._default_archive_stat("k/a.csv")
+    stat.assert_not_called()
 
 
 class TestSubtractMonths:

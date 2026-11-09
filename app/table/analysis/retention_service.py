@@ -12,22 +12,28 @@
 分层约定：本模块是 service 层，控制事务边界（唯一的 ``commit`` 在这里）；真正的枚举与
 DDL 由 :mod:`app.table.analysis.partitioning` 提供，那一层不提交。
 
+归档闸门：分区 DROP 不可恢复且生产库没有备份，OSS 上的原始 CSV 是唯一的恢复来源。
+某月每个站点、每个日报/周报期次的原始归档都校验通过，该月才允许移出（见
+:func:`verify_month_archive`）；任一期次不通过或校验无法完成，该月全部分区表都保留。
+
 调度：清理是写操作、可能持有父表锁，不应放在 FastAPI 事件循环上。入口是可定时触发的
-脚本 ``scripts/prune_retention.py``，由 cron / 容器定时任务在低峰调用。
+脚本 ``scripts/prune_retention.py``，由运维机器人的定时任务在低峰调用。
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.table.analysis import partitioning
-from app.table.upload import import_service
+from app.table.upload import import_service, oss_client
+from app.table.upload.import_batch_model import STATUS_COMPLETED
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,40 @@ logger = logging.getLogger(__name__)
 # 唯一的数据来源。三张表都不在 PARTITIONED_TABLES 里（不是分区表，是普通表按切片增删），
 # 分区移出时必须单独清理，否则残留行会让查询侧继续相信"这个日期还能查"（issue #100）。
 _STALE_STATS_TABLES: tuple[str, ...] = ("site_data_stats", "category_stats", "brand_stats")
+
+# 有独立原始文件的表及其批次周期。掉榜与增长榜是导入时由它们算出的派生数据，没有
+# 自己的原始文件，随所在月份的判定结果一起走。
+_ARCHIVE_SOURCE_TABLES: tuple[tuple[str, str], ...] = (("fact_daily", "DAY"), ("fact_weekly", "WEEK"))
+
+REASON_NO_BATCH = "no_batch"
+REASON_EMPTY_OBJECT_KEY = "empty_object_key"
+REASON_NO_ROWS = "no_rows"
+REASON_OBJECT_MISSING = "object_missing"
+REASON_OBJECT_EMPTY = "object_empty"
+REASON_OSS_UNAVAILABLE = "oss_unavailable"
+
+ArchiveStat = Callable[[str], int]
+"""给定 object key 返回对象字节数；对象不存在抛 ``OSSObjectNotFound``。"""
+
+
+@dataclass(frozen=True)
+class ArchiveGap:
+    """一个未通过归档校验的期次。"""
+
+    month: date
+    site: str
+    period_type: str
+    report_date: date
+    reason: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "month": self.month.strftime("%Y-%m"),
+            "site": self.site,
+            "period_type": self.period_type,
+            "report_date": self.report_date.isoformat(),
+            "reason": self.reason,
+        }
 
 
 @dataclass
@@ -54,6 +94,8 @@ class RetentionResult:
     # True：本次运行没有拿到与导入共用的咨询锁，什么都没做（不移出分区、不清理统计、
     # 不提交），下次调度会重试。见 run_retention 文档。
     lock_skipped: bool = False
+    # 未通过归档校验的期次；所在月份的全部分区本次都被保留。
+    blocked: list[ArchiveGap] = field(default_factory=list)
 
     @property
     def total_dropped(self) -> int:
@@ -62,6 +104,122 @@ class RetentionResult:
     @property
     def total_purged_stats(self) -> int:
         return sum(self.purged_stats.values())
+
+    @property
+    def blocked_months(self) -> list[date]:
+        return sorted({gap.month for gap in self.blocked})
+
+    def to_dict(self) -> dict:
+        """运维任务读取的结构化结果，字段即 ``--json`` 的对外约定。"""
+        return {
+            "status": "lock_skipped" if self.lock_skipped else "ok",
+            "dry_run": self.dry_run,
+            "cutoff": self.cutoff.isoformat(),
+            "retention_months": self.retention_months,
+            "dropped": self.dropped,
+            "purged_stats": self.purged_stats,
+            "blocked_months": [m.strftime("%Y-%m") for m in self.blocked_months],
+            "blocked": [gap.to_dict() for gap in self.blocked],
+        }
+
+
+def _default_archive_stat(object_key: str) -> int:
+    if not settings.OSS_ENABLED:
+        raise RuntimeError("OSS 未启用，无法校验原始归档")
+    return oss_client.stat_object(object_key)
+
+
+def _latest_completed_batches(
+    session: Session, start: date, end: date
+) -> dict[tuple[str, str, date], tuple[str, int]]:
+    """``[start, end)`` 内每个期次最新一次成功批次的 ``(object_key, written_rows)``。
+
+    重导会先清后写，库内数据对应最后一次成功的批次，较早批次的文件不能代表现有数据。
+    """
+    rows = session.execute(
+        text(
+            f'SELECT DISTINCT ON (site, period_type, report_date) '
+            f'       site, period_type, report_date, object_key, written_rows '
+            f'FROM "{settings.DATABASE_SCHEMA}".import_batch '
+            f"WHERE status = :status AND report_date >= :start AND report_date < :end "
+            f"ORDER BY site, period_type, report_date, id DESC"
+        ),
+        {"status": STATUS_COMPLETED, "start": start, "end": end},
+    ).all()
+    return {(r[0], r[1], r[2]): (r[3], r[4]) for r in rows}
+
+
+def _periods_with_data(
+    session: Session, table_name: str, partition: partitioning.MonthPartition
+) -> list[tuple[str, date]]:
+    """枚举月度分区内有事实行的 ``(站点, 期次)``。
+
+    逐日 ``EXISTS`` 点查而不是 ``SELECT DISTINCT``：后者要扫千万级行，前者命中
+    ``(site, 日期, ...)`` 复合索引，每月每站点至多 31 次。
+    """
+    schema = settings.DATABASE_SCHEMA
+    column = partitioning.PARTITIONED_TABLES[table_name].date_column
+    stmt = text(
+        f'SELECT EXISTS (SELECT 1 FROM "{schema}"."{partition.name}" '
+        f'WHERE site = :site AND "{column}" = :day)'
+    )
+    periods: list[tuple[str, date]] = []
+    for site in partitioning.list_site_subpartitions(session, partition.name):
+        day = partition.start
+        while day < partition.end:
+            if session.execute(stmt, {"site": site, "day": day}).scalar():
+                periods.append((site, day))
+            day += timedelta(days=1)
+    return periods
+
+
+def verify_month_archive(
+    session: Session,
+    *,
+    month: date,
+    month_end: date,
+    source_partitions: dict[str, partitioning.MonthPartition],
+    archive_stat: ArchiveStat,
+) -> list[ArchiveGap]:
+    """校验一个超期月份的原始归档，返回未通过的期次；空列表表示可以移出。
+
+    对象存储本身不可用时立刻停止：继续只会让每个期次各等一轮超时，而这一条已足以
+    拦下整月。
+    """
+    batches = _latest_completed_batches(session, month, month_end)
+    gaps: list[ArchiveGap] = []
+
+    def gap(site: str, period: str, day: date, reason: str) -> ArchiveGap:
+        return ArchiveGap(month=month, site=site, period_type=period, report_date=day, reason=reason)
+
+    for table_name, period in _ARCHIVE_SOURCE_TABLES:
+        partition = source_partitions.get(table_name)
+        if partition is None:
+            continue
+        for site, day in _periods_with_data(session, table_name, partition):
+            batch = batches.get((site, period, day))
+            if batch is None:
+                gaps.append(gap(site, period, day, REASON_NO_BATCH))
+                continue
+            object_key, written_rows = batch
+            if not object_key:
+                gaps.append(gap(site, period, day, REASON_EMPTY_OBJECT_KEY))
+                continue
+            if written_rows <= 0:
+                gaps.append(gap(site, period, day, REASON_NO_ROWS))
+                continue
+            try:
+                size = archive_stat(object_key)
+            except oss_client.OSSObjectNotFound:
+                gaps.append(gap(site, period, day, REASON_OBJECT_MISSING))
+                continue
+            except Exception:
+                logger.exception("校验原始归档失败: %s", object_key)
+                gaps.append(gap(site, period, day, REASON_OSS_UNAVAILABLE))
+                return gaps
+            if size <= 0:
+                gaps.append(gap(site, period, day, REASON_OBJECT_EMPTY))
+    return gaps
 
 
 def export_partition_to_csv(session: Session, partition_name: str, dest_path: str) -> None:
@@ -75,7 +233,9 @@ def export_partition_to_csv(session: Session, partition_name: str, dest_path: st
     with open(dest_path, "w", encoding="utf-8", newline="") as fh:
         with raw.cursor() as cur:
             cur.copy_expert(
-                f'COPY "{schema}"."{partition_name}" TO STDOUT WITH (FORMAT csv, HEADER true)',
+                # 必须是 COPY (SELECT ...)：月分区带站点子分区时本身是分区表，PG 拒绝直接 COPY。
+                f'COPY (SELECT * FROM "{schema}"."{partition_name}") '
+                "TO STDOUT WITH (FORMAT csv, HEADER true)",
                 fh,
             )
     logger.info("已导出分区留档: %s -> %s", partition_name, dest_path)
@@ -130,6 +290,7 @@ def run_retention(
     retention_months: int | None = None,
     export_dir: str | None = None,
     dry_run: bool = False,
+    archive_stat: ArchiveStat | None = None,
 ) -> RetentionResult:
     """对两张事实表按同一热窗口移出超期月度分区，并同步清理对应的预存统计残留。
 
@@ -137,6 +298,8 @@ def run_retention(
     - ``retention_months``：默认取 ``settings.HOT_WINDOW_MONTHS``。
     - ``export_dir``：给定时，移出前把每个超期分区导出为 ``<分区名>.csv`` 留档。
     - ``dry_run``：只枚举将移出的分区与将清理的残留统计行数，不执行导出/DDL/DML、不提交。
+    - ``archive_stat``：称量归档对象的函数，默认走 OSS，仅供测试注入。归档校验没有开关，
+      dry-run 与真实运行都会执行，被拦截的月份不会出现在 ``dropped`` 里。
 
     返回 :class:`RetentionResult`。同时服务于日常保留与首次上线的存量一次性清理——两者
     都是"移出所有超期分区"，只是存量场景一次会命中更多月份，务必先 ``dry_run`` 核对。
@@ -160,15 +323,41 @@ def run_retention(
     cutoff = partitioning.retention_cutoff(today, months)
 
     result = RetentionResult(cutoff=cutoff, retention_months=months, dry_run=dry_run)
+    stat = archive_stat or _default_archive_stat
 
     def _enumerate_and_mutate() -> None:
         if export_dir is not None and not dry_run:
             os.makedirs(export_dir, exist_ok=True)
 
-        for table_name in partitioning.PARTITIONED_TABLES:
-            expired = partitioning.select_expired_partitions(
+        expired_by_table = {
+            table_name: partitioning.select_expired_partitions(
                 partitioning.list_month_partitions(session, table_name), cutoff
             )
+            for table_name in partitioning.PARTITIONED_TABLES
+        }
+
+        # 全部月份校验完才开始第一条 DROP：判定结果不受删除进度影响，也让校验期间的
+        # 网络往返不发生在持有分区排他锁的时候。
+        months: dict[tuple[date, date], dict[str, partitioning.MonthPartition]] = {}
+        for table_name, partitions in expired_by_table.items():
+            for part in partitions:
+                months.setdefault((part.start, part.end), {})[table_name] = part
+        for (month, month_end), source_partitions in sorted(months.items()):
+            result.blocked.extend(
+                verify_month_archive(
+                    session,
+                    month=month,
+                    month_end=month_end,
+                    source_partitions=source_partitions,
+                    archive_stat=stat,
+                )
+            )
+        blocked_months = set(result.blocked_months)
+        for month in sorted(blocked_months):
+            logger.warning("保留清理拦截月份 %s：原始归档校验未通过，该月分区全部保留", month)
+
+        for table_name, partitions in expired_by_table.items():
+            expired = [p for p in partitions if p.start not in blocked_months]
             result.dropped[table_name] = [p.name for p in expired]
 
             if dry_run:
