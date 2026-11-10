@@ -130,32 +130,22 @@ export const routes = [
     // 原名「侵权查询」，issue #76 改名「风险核查」——为承接未来商标/专利之外的其他
     // 风险信号（如竞对监控的合规风险）留出更宽的名字，路由不变。
     //
-    // 外观专利与审核待办接入了智慧芽检索（#24，change add-patent-risk-check），整个模块改挂
-    // `risk:view`；发起检索（计费）与签署意见另由 risk:search / risk:review 在页面按钮与后端
-    // 逐端点把守。商标查询、风险案例仍是没有端点的占位屏，单独挂占位屏守卫（仅超管），
-    // 不因父级开放而让普通用户以为已经接入。核查详情是独立路由，不进菜单（刷新/书签可恢复）。
+    // 按任务组织、与定价核算同构：先「外观专利核查」（新建），再「核查记录」（列表 + 详情）。
+    // 整个模块挂 `risk:view`；发起检索（计费）与签署意见另由 risk:search / risk:review 在页面
+    // 按钮与后端逐端点把守。商标查询、风险案例两个空占位已移出菜单（用户 2026-11-11），
+    // 真正接入数据源时再加回。详情是独立路由，不进菜单（刷新/书签可恢复）。
+    // `/ip/review*` 是 #179 上线时的旧地址，保留重定向以免已收藏的链接失效。
     name: '风险核查',
     path: '/ip',
     icon: 'SafetyCertificate',
     access: 'canViewRisk',
     routes: [
-      { path: '/ip', redirect: '/ip/review' },
-      { name: '审核待办', path: '/ip/review', component: './IP/Review' },
-      { path: '/ip/review/:id', component: './IP/ReviewDetail', hideInMenu: true },
-      {
-        name: '外观专利',
-        path: '/ip/patent',
-        component: './IP/DesignPatent',
-        icon: 'FileProtect',
-      },
-      {
-        name: '商标查询',
-        path: '/ip/trademark',
-        component: './IP/Trademark',
-        icon: 'Trademark',
-        access: 'canViewUnreleased',
-      },
-      { name: '风险案例', path: '/ip/cases', component: './IP/Cases', access: 'canViewUnreleased' },
+      { path: '/ip', redirect: '/ip/patent' },
+      { name: '外观专利核查', path: '/ip/patent', component: './IP/DesignPatent', icon: 'FileSearch' },
+      { name: '核查记录', path: '/ip/records', component: './IP/Records', icon: 'History' },
+      { path: '/ip/records/:id', component: './IP/RecordDetail', hideInMenu: true },
+      { path: '/ip/review', redirect: '/ip/records', hideInMenu: true },
+      { path: '/ip/review/:id', redirect: '/ip/records/:id', hideInMenu: true },
     ],
   },
   {

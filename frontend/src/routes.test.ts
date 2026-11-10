@@ -58,7 +58,7 @@ describe('顶栏一级菜单', () => {
     ).toEqual([
       ['/keyword', '/keyword/growth'],
       ['/competitor', '/competitor/discovery'],
-      ['/ip', '/ip/review'],
+      ['/ip', '/ip/patent'],
       ['/pricing', '/pricing/calculate'],
       ['/upload', '/upload/file'],
     ]);
@@ -116,18 +116,26 @@ describe('权限', () => {
     expect(node.routes!.find((c) => c.path === '/pricing')?.redirect).toBe('/pricing/calculate');
   });
 
-  it('风险核查接入外观专利后挂 canViewRisk；商标、案例仍是占位屏只给超管（add-patent-risk-check）', () => {
+  it('风险核查按任务组织：外观专利核查、核查记录两项，挂 canViewRisk，不再列空占位（2026-11-11）', () => {
     const node = topLevel.find((r) => r.name === '风险核查')!;
     expect(node.access).toBe('canViewRisk');
-    expect(node.routes!.filter((c) => c.name).map((c) => [c.name, c.path, c.access])).toEqual([
-      ['审核待办', '/ip/review', undefined],
-      ['外观专利', '/ip/patent', undefined],
-      ['商标查询', '/ip/trademark', 'canViewUnreleased'],
-      ['风险案例', '/ip/cases', 'canViewUnreleased'],
+    expect(node.routes!.filter((c) => c.name).map((c) => [c.name, c.path])).toEqual([
+      ['外观专利核查', '/ip/patent'],
+      ['核查记录', '/ip/records'],
     ]);
-    const detail = node.routes!.find((c) => c.path === '/ip/review/:id')!;
+    expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
+    const detail = node.routes!.find((c) => c.path === '/ip/records/:id')!;
     expect(detail.hideInMenu).toBe(true);
-    expect((detail as { component?: string }).component).toBe('./IP/ReviewDetail');
+    expect((detail as { component?: string }).component).toBe('./IP/RecordDetail');
+  });
+
+  it('风险核查旧地址 /ip/review 带参数重定向到核查记录，且不进菜单', () => {
+    const node = topLevel.find((r) => r.name === '风险核查')!;
+    const legacy = node.routes!.filter((c) => c.path?.startsWith('/ip/review'));
+    expect(legacy.map((c) => [c.path, c.redirect, c.hideInMenu])).toEqual([
+      ['/ip/review', '/ip/records', true],
+      ['/ip/review/:id', '/ip/records/:id', true],
+    ]);
   });
 });
 
