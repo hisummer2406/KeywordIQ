@@ -1,4 +1,4 @@
-import { Alert, Button, Input, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, message } from 'antd';
+import { Alert, Button, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Tooltip, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -181,11 +181,13 @@ export default function RatesManager({ meta, canManage, onChanged }: Props) {
         />
       ) : null}
       <Space style={{ marginBottom: 12 }} wrap>
-        <Segmented
+        <Radio.Group
+          optionType="button"
+          buttonStyle="solid"
           value={kind}
-          onChange={(v) => {
+          onChange={(e) => {
             setPage(1);
-            setKind(v as RuleKind);
+            setKind(e.target.value as RuleKind);
           }}
           options={meta.rule_kinds.map((k) => ({ label: k.name, value: k.key }))}
         />

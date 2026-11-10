@@ -144,6 +144,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
           <Radio.Group
             size="middle"
             optionType="button"
+            buttonStyle="solid"
             value={value.include ?? 'ALL'}
             onChange={(e) => patch({ include: e.target.value })}
             options={[
@@ -195,6 +196,7 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
         <Radio.Group
           size="middle"
           optionType="button"
+          buttonStyle="solid"
           disabled={onlyDropped}
           value={value.firstListed ? 'true' : 'all'}
           onChange={(e) =>

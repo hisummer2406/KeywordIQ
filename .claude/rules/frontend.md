@@ -11,6 +11,7 @@ paths:
 - 先按 [前端导航](../../openspec/guides/frontend.md) 读相关规格；菜单/标签/查询时机不是指令文件中的功能清单。
 - routes.ts 保持独立可测；单页宽表不加挤占空间的二级侧栏；分组管理按既有规格用纵向空间。
 - 模块内互不相关的功能一律做左侧二级菜单（独立路由），不用页内 Tab；同一数据的筛选、机会中心阶段、市场分析单页除外（用户 2026-11-10 全系统约定，见 top-nav-structure）。
+- 页内单选切换（时间范围、来源、视图、店铺类型、分组）一律用实心按钮组 `Radio.Group optionType="button" buttonStyle="solid"`，不用 Segmented（ESLint 已禁）或页内 Tab；表单里的普通单选项不在此列（用户 2026-11-10 全系统约定）。
 - 分析三个 hook 不互相 import，由 index 传值/回调协调；展示组件受控、不自行发请求。
 - 默认工厂共用；草稿与生效条件分离，导出/数量/加入词库跟已加载作用域，不能跟未应用的草稿。
 - 首屏初始化用 reloadScopeMeta 返回值，恢复类目传 keepCategories；不能用尚未落位的 React state 组请求。
