@@ -235,3 +235,24 @@ async def test_no_data_at_all_returns_null_anchor_without_error(db):
     assert resp.on is None
     assert resp.points == []
     assert resp.coverage is None
+
+
+async def test_first_evidence_lists_day_week_and_monitor(db):
+    """#178：详情带日榜、周榜、共享监测三项证据，取自关键词维度、不随视图变。"""
+    k1 = await db.run_sync(_seed)
+    await db.execute(text(
+        "UPDATE analysis.dim_keyword SET day_first_date='2026-10-31', day_first_basis='IMPORTED',"
+        " week_first_date='2026-09-12', week_first_basis='EARLIEST_OBSERVED',"
+        " first_seen_date='2026-09-12', first_seen_period_type='WEEK',"
+        " first_seen_basis='EARLIEST_OBSERVED' WHERE keyword_id=:k"
+    ), {"k": k1})
+    for view in ("DAY", "WEEK"):
+        resp = await service.get_keyword_trend(
+            db, keyword_id=k1, site=SITE, view=view, range_="RECENT_30D", on=None
+        )
+        ev = resp.first_evidence
+        assert (ev.day.date, ev.day.basis) == (date(2026, 10, 31), "IMPORTED")
+        assert (ev.week.date, ev.week.basis) == (date(2026, 9, 12), "EARLIEST_OBSERVED")
+        assert (ev.monitor.date, ev.monitor.basis, ev.monitor.period_type) == (
+            date(2026, 9, 12), "EARLIEST_OBSERVED", "WEEK"
+        )

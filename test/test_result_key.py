@@ -30,8 +30,10 @@ def test_no_private_filters_remain_after_competitor_new_retired():
 
 def test_registered_private_filter_keys_by_user_and_scope(monkeypatch):
     """登记机制保留：以后新增私有筛选只需登记，键自动按用户与权限范围区分。"""
-    monkeypatch.setitem(rk._PRIVATE_FLAGS, "first_listed", "x:view")
-    a, b = _key(user_id=1, first_listed=True), _key(user_id=2, first_listed=True)
+    # 借一个现有布尔筛选当「私有筛选」样本（first_listed 已被请求模型折叠，不能再当样本）。
+    monkeypatch.setitem(rk._PRIVATE_FLAGS, "exclude_brand_in_keyword", "x:view")
+    a = _key(user_id=1, exclude_brand_in_keyword=True)
+    b = _key(user_id=2, exclude_brand_in_keyword=True)
     assert a != b
     assert a.user_id == 1 and "x:view" in a.scope
     assert a.fingerprint() != b.fingerprint()
@@ -43,9 +45,9 @@ def test_private_filter_without_user_id_is_refused(monkeypatch):
     """宁可失败也不能把私有结果算成共享键。"""
     import pytest
 
-    monkeypatch.setitem(rk._PRIVATE_FLAGS, "first_listed", "x:view")
+    monkeypatch.setitem(rk._PRIVATE_FLAGS, "exclude_brand_in_keyword", "x:view")
     with pytest.raises(ValueError):
-        rk.result_key(AnalysisSearchRequest(first_listed=True), site="US")
+        rk.result_key(AnalysisSearchRequest(exclude_brand_in_keyword=True), site="US")
 
 
 def test_explicit_defaults_and_equivalent_spellings_share_a_key():
@@ -89,3 +91,11 @@ def test_summary_fields_resolve_default_site_and_skip_invalid_site():
     explicit = service.search_summary_fields(AnalysisSearchRequest(site=settings.default_site))
     assert default == explicit and default["view"] == "DAY"
     assert service.search_summary_fields(AnalysisSearchRequest(site="ZZ")) == {"view": "DAY"}
+
+
+def test_first_listing_modes_key_by_effective_mode():
+    """#178：旧 first_listed=true 与 MONITOR 是同一结果、同一个键；PERIOD 是另一个键。"""
+    monitor = _key(first_listing="MONITOR")
+    assert _key(first_listed=True) == monitor
+    assert _key(first_listed=True, first_listing="MONITOR") == monitor
+    assert _key(first_listing="PERIOD") not in (monitor, _key())
