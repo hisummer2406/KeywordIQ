@@ -41,7 +41,7 @@ import ReviewPanel from './ReviewPanel';
 
 const POLL_MS = 3000;
 
-export default function ReviewDetailPage() {
+export default function RecordDetailPage() {
   const access = useAccess();
   const { id } = useParams<{ id: string }>();
   const checkId = Number(id);
@@ -101,7 +101,7 @@ export default function ReviewDetailPage() {
   if (notFound) {
     return (
       <PageContainer title="核查详情">
-        <Result status="404" title="核查记录不存在" extra={<Button onClick={() => history.push('/ip/review')}>返回审核待办</Button>} />
+        <Result status="404" title="核查记录不存在" extra={<Button onClick={() => history.push('/ip/records')}>返回核查记录</Button>} />
       </PageContainer>
     );
   }
@@ -122,7 +122,7 @@ export default function ReviewDetailPage() {
   return (
     <PageContainer
       title={`${data.product_name} · ${data.product_version}`}
-      onBack={() => history.push('/ip/review')}
+      onBack={() => history.push('/ip/records')}
       extra={
         <Space>
           {access.canSearchRisk && (
@@ -154,7 +154,7 @@ export default function ReviewDetailPage() {
                 <Descriptions.Item label="创建时间">{dt(data.created_at)}</Descriptions.Item>
                 {data.previous_check_id && (
                   <Descriptions.Item label="上一轮">
-                    <Typography.Link onClick={() => history.push(`/ip/review/${data.previous_check_id}`)}>
+                    <Typography.Link onClick={() => history.push(`/ip/records/${data.previous_check_id}`)}>
                       {`#${data.previous_check_id}`}
                     </Typography.Link>
                   </Descriptions.Item>
@@ -163,7 +163,7 @@ export default function ReviewDetailPage() {
                   <Descriptions.Item label="后续轮次">
                     <Space>
                       {data.next_check_ids.map((n) => (
-                        <Typography.Link key={n} onClick={() => history.push(`/ip/review/${n}`)}>{`#${n}`}</Typography.Link>
+                        <Typography.Link key={n} onClick={() => history.push(`/ip/records/${n}`)}>{`#${n}`}</Typography.Link>
                       ))}
                     </Space>
                   </Descriptions.Item>

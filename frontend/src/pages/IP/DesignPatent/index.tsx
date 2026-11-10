@@ -133,7 +133,7 @@ export default function DesignPatentPage() {
       });
       message.success('已提交检索，结果会在核查详情中更新');
       resetToken();
-      history.push(`/ip/review/${r.id}`);
+      history.push(`/ip/records/${r.id}`);
     } finally {
       setSubmitting(false);
     }
@@ -141,7 +141,7 @@ export default function DesignPatentPage() {
 
   if (!meta) {
     return (
-      <PageContainer title="外观专利">
+      <PageContainer title="外观专利核查">
         <Card>
           <Spin />
         </Card>
@@ -153,7 +153,7 @@ export default function DesignPatentPage() {
   const fileList: UploadFile[] = file ? [{ uid: '1', name: file.name, status: 'done' }] : [];
 
   return (
-    <PageContainer title="外观专利" content="上传产品原图，在所选法域检索相似外观专利，结果与人工意见在「审核待办」中留存。">
+    <PageContainer title="外观专利核查" content="上传产品原图，在所选法域检索相似外观专利，结果与人工意见在「核查记录」中留存。">
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         {!meta.provider_configured && (
           <Alert type="warning" showIcon message="智慧芽接口未配置，暂时无法检索。请联系管理员在服务端配置 API Key。" />
@@ -289,7 +289,7 @@ export default function DesignPatentPage() {
           </Form>
         </Card>
         <Typography.Text type="secondary">
-          检索在后台执行，提交后可以离开本页；结果与历史在「审核待办」中查看。
+          检索在后台执行，提交后可以离开本页；结果与历史在「核查记录」中查看。
         </Typography.Text>
       </Space>
     </PageContainer>

@@ -1,6 +1,6 @@
 ## Why
 
-「风险核查」菜单下的外观专利和审核待办一直是占位页（#24）。运营上新前要人工判断外观专利风险，现在靠 `docs/河南国曼侵权审核表(1).xlsx` 这类 Excel 手填：检索没有留存证据，意见不绑定产品版本和市场，换图后旧结论还被沿用。用户已选定智慧芽 Data REST API（与网页版账号、官方 MCP 是三个独立付费项目，本期只用 REST API），需要一个能走通的闭环：（Key 写在服务端 `.env`）上传产品图检索外观专利 → 阅读候选并按需补充著录和法律状态 → 按市场填写人工意见 → 回看历史证据。
+「风险核查」菜单下的外观专利和审核待办原本是占位页（#24）。运营上新前要人工判断外观专利风险，现在靠 `docs/河南国曼侵权审核表(1).xlsx` 这类 Excel 手填：检索没有留存证据，意见不绑定产品版本和市场，换图后旧结论还被沿用。用户已选定智慧芽 Data REST API（与网页版账号、官方 MCP 是三个独立付费项目，本期只用 REST API），需要一个能走通的闭环：（Key 写在服务端 `.env`）上传产品图检索外观专利 → 阅读候选并按需补充著录和法律状态 → 按市场填写人工意见 → 回看历史证据。
 
 本变更**不涉及**日报或周报路径：核查是独立数据域，不读写 ABA 事实表、分区、物化视图，不参与保留清理，不取导入咨询锁。
 
@@ -12,7 +12,7 @@
 - 失败语义：无配置、已停用、Key 无效、无接口权限、余额或次数不足、过期、限流、超时、上游 5xx/HTML、响应结构异常分别归类；超时、中断、无法解析的调用记为「未知」，不自动重发；所有失败都不归为「无命中」，也不清除应用登录态。
 - 新增按市场的人工意见：追加保存、绑定核查单版本与证据引用；条件通过必须填写条件、证据和复核日期。无命中不会自动变成低风险或可上架。换图、换版本或增加市场要新建核查轮次并关联上一轮。
 - 新增权限点 `risk:view`、`risk:search`、`risk:review`，迁移种子只授予 admin 角色。所有记录、图片、证据和意见都按创建人私有，越权返回 404（超管也不例外）。
-- 前端：`/ip/patent` 替换为核查表单，`/ip/review` 替换为核查列表，新增详情页 `/ip/review/:id`。商标和风险案例保持占位。「风险核查」菜单从占位守卫改为 `risk:view`。
+- 前端：「风险核查」按任务组织为两项左侧菜单：外观专利核查（`/ip/patent`，核查表单）、核查记录（`/ip/records`，列表），详情页为 `/ip/records/:id`。商标查询与风险案例两个空占位移出菜单（2026-11-11 用户决定），旧地址 `/ip/review*` 重定向到新地址。「风险核查」菜单从占位守卫改为 `risk:view`。
 
 ## Capabilities
 
@@ -22,7 +22,7 @@
 - `patent-risk-review`：按市场的人工意见、核查轮次、列表与详情页交互。
 
 ### Modified Capabilities
-- `top-nav-structure`：「风险核查」菜单由「不设权限点的占位容器」改为由 `risk:view` 把守，外观专利和审核待办接入真实端点，`/ip` 重定向到审核待办。
+- `top-nav-structure`：「风险核查」菜单由「不设权限点的占位容器」改为由 `risk:view` 把守，按任务组织为外观专利核查、核查记录两项，`/ip` 重定向到外观专利核查，空占位移出菜单。
 
 ## Impact
 
@@ -30,6 +30,6 @@
 - 数据库：新增 `risk_*` 普通表，登记 `migration_scope.V2_TABLES`；手写迁移同时写入权限种子。
 - 依赖：不新增运行依赖（沿用 `httpx`）。
 - 配置：新增 `ZHIHUIYA_API_KEY`、`RISK_TASK_POLL_SECONDS`、`RISK_TASK_LEASE_SECONDS`、`RISK_PROVIDER_TIMEOUT_SECONDS`，同步 `.env.example`。生产 Key 写入 ECS `.env`，不提交。
-- 前端：重写 `frontend/src/pages/IP/DesignPatent`、`IP/Review`，新增 `IP/ReviewDetail`、`services/risk`；`access.ts`、`routes.ts` 改用真实权限。
+- 前端：重写 `frontend/src/pages/IP/DesignPatent`，新增 `IP/Records`、`IP/RecordDetail`、`services/risk`，删除商标与案例占位页；`access.ts`、`routes.ts` 改用真实权限。
 - 外部：只有用户提交、翻页、补充详情时调用 `https://connect.zhihuiya.com`；真实 Key 的接口权益、单价、QPS 与展示授权待联调核实。
 - Issue：Refs #24。#25（商标）与内部案例、旧表导入、团队协作不在本期。
