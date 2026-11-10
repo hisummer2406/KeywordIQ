@@ -7,13 +7,13 @@ import { type CheckSummary, listChecks, type TaskStatus } from '@/services/risk'
 import { coverageText, dt, TASK_STATUS } from '../riskLabels';
 
 /**
- * 审核待办：当前用户自己的外观专利核查单（后端按 owner 过滤，他人记录一律 404）。
+ * 核查记录：当前用户自己的外观专利核查单（后端按 owner 过滤，他人记录一律 404）。
  * 只读库，不触发任何智慧芽调用。
  */
 
 type ReviewState = 'none' | 'partial' | 'complete';
 
-export default function ReviewListPage() {
+export default function RecordsPage() {
   const [rows, setRows] = useState<CheckSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -48,7 +48,7 @@ export default function ReviewListPage() {
       key: 'product',
       render: (_, r) => (
         <Space direction="vertical" size={0}>
-          <Typography.Link onClick={() => history.push(`/ip/review/${r.id}`)}>{r.product_name}</Typography.Link>
+          <Typography.Link onClick={() => history.push(`/ip/records/${r.id}`)}>{r.product_name}</Typography.Link>
           <Typography.Text type="secondary">{r.product_version}</Typography.Text>
         </Space>
       ),
@@ -83,13 +83,13 @@ export default function ReviewListPage() {
     {
       title: '操作',
       key: 'op',
-      render: (_, r) => <Button size="small" onClick={() => history.push(`/ip/review/${r.id}`)}>详情</Button>,
+      render: (_, r) => <Button size="small" onClick={() => history.push(`/ip/records/${r.id}`)}>详情</Button>,
     },
   ];
 
   return (
     <PageContainer
-      title="审核待办"
+      title="核查记录"
       extra={<Button type="primary" onClick={() => history.push('/ip/patent')}>新建外观专利核查</Button>}
     >
       <Card>

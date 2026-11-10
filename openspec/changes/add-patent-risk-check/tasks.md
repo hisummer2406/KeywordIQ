@@ -34,6 +34,7 @@
 - [x] 6.1 `services/risk`；`access.ts` 新增 `canRiskView/Search/Review`；`routes.ts` 改为 risk:view 把守，新增 `/ip/review/:id`，`/ip` 重定向到审核待办（top-nav delta）
 - [x] 6.3 `IP/DesignPatent`：表单、市场与法域（推荐需勾选、EU 说明）、本地预览、调用说明、令牌防重复、未配置时的提示
 - [x] 6.4 `IP/Review` 列表与 `IP/ReviewDetail`：状态轮询、读取范围、候选与并排比对、下一页和详情按钮的调用提示、安全渲染与 https 校验、分市场意见表单和历史、前后轮次链接、新一轮
+- [x] 6.6 菜单整理（2026-11-11 用户要求，PR fix/risk-menu）：改为「外观专利核查」「核查记录」两项并统一图标，`/ip` 重定向到外观专利核查；`IP/Review`→`IP/Records`、`IP/ReviewDetail`→`IP/RecordDetail`；删除商标、案例占位页；`/ip/review*` 带参数重定向；同步 top-nav、patent-risk-review delta 与 routes.test
 - [x] 6.5 前端单元测试：路由和权限（routes/access）、无命中和未知状态的文案、https 放行、检索未完成时禁选的建议（riskLabels）；表单组件交互未写组件测试，靠浏览器验收
 
 ## 7. 验证与交付

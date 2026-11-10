@@ -38,7 +38,7 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     canViewRisk: has('risk:view'),
     canSearchRisk: has('risk:search'),
     canReviewRisk: has('risk:review'),
-    // 「产品档案」与风险核查下的商标查询、风险案例：占位屏，没有后端端点，只有 is_super 能看到，
+    // 「产品档案」：占位屏，没有后端端点，只有 is_super 能看到，
     // 免得运营/分析师点进一个写着「尚未接入」的空屏。判据是 is_super，**不是权限点**：
     // 权限矩阵里没有对应的一项，因此不存在「勾了也不生效」的复选框（`user:manage` 的教训）。
     // 有了真实端点再按数据域各开权限点、把这里的守卫换掉——那时是加法。
