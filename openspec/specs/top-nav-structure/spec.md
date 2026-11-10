@@ -133,27 +133,6 @@ MUST NOT 发起任何后端请求，系统 MUST NOT 为它们新增端点。
 - **WHEN** 用户访问 `/toolbox/patent`
 - **THEN** 落到 404 屏，不做重定向
 
-### Requirement: 风险核查菜单容器不设权限点
-
-界面 SHALL 提供「风险核查」一级菜单（`/ip`），下挂外观专利（`/ip/patent`）与
-全球商标库（`/ip/trademark`）两个二级项。访问 `/ip` SHALL 重定向到外观专利。
-
-该菜单 MUST NOT 拥有权限点，访问判据 SHALL 只是「已登录」。两屏都没有后端端点，
-没有端点可挂的权限点是「勾了也不生效」的复选框，与已被移除的 `user:manage` 同类。
-接入数据源、有了真实端点之后再新增权限点——那时是加法，不会留下失效的历史勾选。
-「仅超管可见」不是这类占位屏缺的东西，缺的是数据源本身，给它挂一个可配置的权限点
-不能让数据变得存在。
-
-#### Scenario: 任意已登录用户
-
-- **WHEN** 一个只有 `analysis:view` 的用户登录
-- **THEN** 顶栏出现「风险核查」，两个二级屏均可打开
-
-#### Scenario: 权限矩阵
-
-- **WHEN** 查看系统的可授予权限点清单
-- **THEN** 其中不存在 `ip:*` 或任何只作用于这两屏的权限点
-
 ### Requirement: 竞对监控以任务菜单组织，不按来源分菜单
 
 竞对监控 SHALL 保留为一级菜单，下设且只设两个子菜单：「商品发现」（`/competitor/discovery`，默认）与「店铺管理」（`/competitor/stores`）。子菜单按运营任务划分，Amazon 与 Shopify 是来源类型，SHALL 以页内的来源筛选或店铺类型切换呈现，MUST NOT 成为与任务并列的菜单项。
@@ -176,3 +155,30 @@ MUST NOT 发起任何后端请求，系统 MUST NOT 为它们新增端点。
 
 - **WHEN** 有人提出给「Amazon 卖家」「Shopify 店铺」各加一个菜单项
 - **THEN** 该提议被拒绝，理由是来源属于筛选维度，不是任务；与任务并列会重现 #166 所说的层级混杂
+
+### Requirement: 风险核查菜单由 risk:view 把守
+
+界面 SHALL 提供「风险核查」一级菜单（`/ip`），按任务组织，左侧二级菜单依次为：外观专利核查（`/ip/patent`，新建核查）、核查记录（`/ip/records`，列表）。访问 `/ip` SHALL 重定向到外观专利核查。核查详情 `/ip/records/:id` 是不出现在菜单中的独立路由。旧地址 `/ip/review` 与 `/ip/review/:id` SHALL 分别重定向到 `/ip/records` 与 `/ip/records/:id`（带上记录 ID），且不出现在菜单中。
+
+一级菜单 SHALL 由 `risk:view` 把守，二级菜单继承，不另挂权限点。没有数据源的功能（商标查询、风险案例）MUST NOT 以空占位屏出现在菜单里（用户 2026-11-11 决定），真正接入时再加入菜单。
+
+#### Scenario: 运营被授予 risk:view
+
+- **WHEN** 一个拥有 `risk:view` 的非超管用户登录
+- **THEN** 顶栏出现「风险核查」，左侧依次是外观专利核查、核查记录
+
+#### Scenario: 没有 risk:view
+
+- **WHEN** 一个只有 `analysis:view` 的用户登录
+- **THEN** 顶栏不出现「风险核查」，直接访问 `/ip/patent` 显示无权限
+
+#### Scenario: 超管
+
+- **WHEN** 超管登录
+- **THEN** 左侧同样只有外观专利核查、核查记录两项，没有商标查询、风险案例占位
+
+#### Scenario: 旧收藏链接
+
+- **WHEN** 用户打开 #179 上线时收藏的 `/ip/review/42`
+- **THEN** 跳转到 `/ip/records/42`，看到同一条核查记录
+
