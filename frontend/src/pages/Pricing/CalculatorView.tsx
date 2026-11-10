@@ -377,7 +377,7 @@ export default function CalculatorView({ meta, openTarget, onSheetChanged, onLoc
           <Row gutter={16}>
             <Col xs={24}>
               <Form.Item name="mode" label="核价方式">
-                <Radio.Group optionType="button" options={MODE_OPTIONS} />
+                <Radio.Group optionType="button" buttonStyle="solid" options={MODE_OPTIONS} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
