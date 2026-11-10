@@ -38,11 +38,23 @@ class Site:
     domain: str
     """站点域名，用于拼接商品链接。"""
 
+    currency: str
+    """站点前台标价币种（ISO 4217），核价的售价以此币种表示。"""
+
+    currency_minor_unit: str
+    """该币种的最小货币单位（十进制字符串，如 ``"0.01"``），核价售价按它取整。
+
+    用字符串而非 float：核价全程是 ``Decimal`` 定点运算，浮点字面量会把误差带进去。
+    """
+
 
 SITE_CATALOG: dict[str, Site] = {
-    "US": Site(code="US", name_zh="美国", timezone="America/Los_Angeles", domain="amazon.com"),
-    "GB": Site(code="GB", name_zh="英国", timezone="Europe/London", domain="amazon.co.uk"),
-    "DE": Site(code="DE", name_zh="德国", timezone="Europe/Berlin", domain="amazon.de"),
+    "US": Site(code="US", name_zh="美国", timezone="America/Los_Angeles", domain="amazon.com",
+               currency="USD", currency_minor_unit="0.01"),
+    "GB": Site(code="GB", name_zh="英国", timezone="Europe/London", domain="amazon.co.uk",
+               currency="GBP", currency_minor_unit="0.01"),
+    "DE": Site(code="DE", name_zh="德国", timezone="Europe/Berlin", domain="amazon.de",
+               currency="EUR", currency_minor_unit="0.01"),
 }
 """已知站点的静态目录。在此登记不等于启用——启用与否由 ``ENABLED_SITES`` 决定。"""
 

@@ -47,7 +47,7 @@ def test_permission_codes_from_role():
     op = _operator()
     assert op.permission_codes == {
         "analysis:view", "analysis:export", "upload:import", "keyword:view",
-        "competitor:view",
+        "competitor:view", "pricing:view",
     }
     assert op.role_code == "operator"
 
@@ -173,7 +173,7 @@ def test_serialize_user_shape():
         "role_name": "operator",
         "permissions": [
             "analysis:export", "analysis:view", "competitor:view", "keyword:view",
-            "upload:import",
+            "pricing:view", "upload:import",
         ],
         "is_active": True,
         "is_super": False,
@@ -331,11 +331,23 @@ def test_role_permission_matrix_matches_spec():
     assert P.ROLES["admin"][1] == set(P.PERMISSIONS.keys()) - P.SUPER_ONLY_PERMISSIONS
     assert P.ROLES["operator"][1] == {
         "analysis:view", "analysis:export", "upload:import", "keyword:view",
-        "competitor:view",
+        "competitor:view", "pricing:view",
     }
     assert P.ROLES["analyst"][1] == {
-        "analysis:view", "analysis:export", "keyword:view", "competitor:view",
+        "analysis:view", "analysis:export", "keyword:view", "competitor:view", "pricing:view",
     }
+
+
+def test_pricing_permissions_matrix():
+    """定价核算：核价给三个内置角色，改共享费率只给 admin（change add-pricing-calculation D11）。"""
+    assert P.PRICING_VIEW in P.PERMISSIONS
+    assert P.PRICING_MANAGE_RATES in P.PERMISSIONS
+    assert P.PRICING_VIEW not in P.SUPER_ONLY_PERMISSIONS
+    assert P.PRICING_MANAGE_RATES not in P.SUPER_ONLY_PERMISSIONS
+    assert {P.PRICING_VIEW, P.PRICING_MANAGE_RATES} <= P.ROLES["admin"][1]
+    for role in ("operator", "analyst"):
+        assert P.PRICING_VIEW in P.ROLES[role][1]
+        assert P.PRICING_MANAGE_RATES not in P.ROLES[role][1]
 
 
 def test_opportunity_view_is_super_only():
