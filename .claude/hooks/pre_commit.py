@@ -21,7 +21,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 # 后端改动的判定路径。alembic/ 也算：迁移写错会让整个部署起不来。
 BACKEND_PREFIXES = ("app/", "scripts/", "test/", "alembic/")
@@ -40,6 +40,7 @@ TEST_DB_URL = "postgresql://postgres:pwd123@localhost:5433/keywordiq_test"
 # 另一个分支的门禁就必然红（2026-11-10 竞对与核价并行时撞上）。覆盖只接受本机地址——
 # 夹具会 TRUNCATE 业务表，指到远端或转发端口上的生产库就是事故。
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_REDIRECT_PARAMS = {"host", "hostaddr", "service", "servicefile"}
 
 # 单条检查的超时上限。后端全量约 5 秒、前端约 15 秒，给到分钟级只为兜住"卡死"这一种
 # 情况——正常慢一点不该被误杀，真卡住则必须有个头。
@@ -241,7 +242,18 @@ def override_rejection(url: str) -> str | None:
     """覆盖的测试库不在本机时返回拒绝原因；共享库本身不检查。"""
     if url == TEST_DB_URL:
         return None
-    host = urlsplit(url).hostname or ""
+    parts = urlsplit(url)
+    # libpq 允许 query 里的 host/hostaddr/service 改写真正的连接目标，netloc 里逗号分隔的
+    # 多主机同理；只看 hostname 会被 `localhost:5433/x?host=远端` 绕过（PR #173 Codex P1）。
+    # 这些写法在本机一次性库上用不到，一律拒绝。
+    redirecting = {k.lower() for k in parse_qs(parts.query, keep_blank_values=True)} & _REDIRECT_PARAMS
+    if redirecting or "," in parts.netloc:
+        return (
+            "目标仓库 .env 的 TEST_DATABASE_URL 用了会改写连接目标的写法"
+            f"（{', '.join(sorted(redirecting)) or '多主机'}），门禁无法确认它连的是本机。"
+            "改成 postgresql://用户:密码@localhost:端口/库名 的单主机写法。"
+        )
+    host = parts.hostname or ""
     if host not in _LOCAL_HOSTS:
         return (
             f"目标仓库 .env 的 TEST_DATABASE_URL 指向 {host or '（无主机）'}，不是本机。"

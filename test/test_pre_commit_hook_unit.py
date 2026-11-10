@@ -403,3 +403,20 @@ def test_plain_commit_only_sees_the_index(hook, tmp_path):
     (repo / "b.py").write_text("y = 2\n")  # 未暂存，不属于本次提交
 
     assert hook.staged_files(repo, "git commit -m x") == ["a.py"]
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://u:p@localhost:5433/test?host=203.0.113.10",
+    "postgresql://u:p@localhost:5433/test?sslmode=disable&HOSTADDR=203.0.113.10",
+    "postgresql://u:p@localhost:5433/test?service=prod",
+    "postgresql://u:p@localhost:5433,203.0.113.10:5432/test",
+])
+def test_override_that_redirects_the_connection_is_rejected(hook, url):
+    """libpq 以 query 的 host/hostaddr/service 或多主机为准，只看 hostname 会被绕过（PR #173 P1）。"""
+    reason = hook.override_rejection(url)
+
+    assert reason is not None and "改写连接目标" in reason
+
+
+def test_harmless_query_params_are_accepted(hook):
+    assert hook.override_rejection("postgresql://u:p@localhost:5433/test?sslmode=disable") is None
