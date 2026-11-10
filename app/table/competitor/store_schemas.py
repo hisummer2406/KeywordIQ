@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -194,12 +195,31 @@ class NewArrivalOut(BaseModel):
     image_url: str | None
     at: datetime
     time_kind: str = Field(description="PUBLISHED（上架于）/ DISCOVERED（发现于）")
+    discovered_at: datetime = Field(description="首次发现于（两类来源都有）；不是上架时间")
+    published_at: datetime | None = Field(
+        default=None, description="数据源给出的上架时间，仅 Shopify 行可能有值"
+    )
+    product_url: str | None = Field(
+        default=None,
+        description="原商品链接：Amazon 为该站点的 /dp/{ASIN}，Shopify 为 /products/{handle}",
+    )
 
 
 class NewArrivalRequest(BaseModel):
+    """商品发现（#166 D6）。筛选全部可选，**在合并之前分别施加到两侧**，列表与总数同一口径。"""
+
     days: int = Field(default=7, ge=1, le=90)
     page: int = Field(default=1, ge=1)
     per_page: int = Field(default=20, ge=1, le=100)
+    source: Literal["AMAZON", "DTC"] | None = Field(default=None, description="只看一类来源")
+    site: str | None = Field(
+        default=None, description="Amazon 站点码；给了时 Shopify 侧不参与（它没有站点概念）"
+    )
+    group_id: int | None = Field(default=None, description="只看该分组下的关注；须属于当前用户")
+    seller_id: str | None = Field(
+        default=None, max_length=24, description="只看这个 Amazon 卖家（可与 site 同用）"
+    )
+    domain: str | None = Field(default=None, max_length=255, description="只看这家 Shopify 店铺")
 
 
 class NewArrivalResponse(BaseModel):

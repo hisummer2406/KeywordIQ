@@ -14,7 +14,20 @@ export interface CaptureMessage {
   requestId: string;
   capturedAt: string;
   pageContext?: string;
+  /** 页面上尽力解析出的卖家店名；取不到就不带（#166 D5），不拿 seller_id 之类拼凑。 */
+  sellerName?: string;
 }
+
+/** 打开采集面板时读取服务端单批上限（#166 D4）。 */
+export interface ConfigMessage {
+  type: 'GET_COLLECTOR_CONFIG';
+}
+
+/**
+ * `unavailable` 不细分成因（网络、服务端、未配置地址、令牌都同步不到）：面板对它们的
+ * 处理完全一样——禁止开始采集并提示，运营去设置页或网页上处理即可。
+ */
+export type ConfigResult = { outcome: 'ok'; maxReportItems: number } | { outcome: 'unavailable' };
 
 export type CaptureResult =
   | {

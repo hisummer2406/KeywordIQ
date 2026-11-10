@@ -5,15 +5,12 @@ import {
   clearWebOrigin,
   getApiBaseUrl,
   getAuthToken,
-  getMaxReportItems,
   getTokenSyncedAt,
   getWebOrigin,
   setApiBaseUrl,
   setAuthToken,
-  setMaxReportItems,
   setWebOrigin,
 } from './auth';
-import { MAX_REPORT_ITEMS } from './capture-accumulator';
 import { ensureHostPermission } from './host-permission';
 import { syncTokenFromWeb } from './session-sync';
 
@@ -29,7 +26,6 @@ async function init(): Promise<void> {
   const apiBaseInput = document.getElementById('api-base') as HTMLInputElement;
   const webOriginInput = document.getElementById('web-origin') as HTMLInputElement;
   const tokenInput = document.getElementById('token') as HTMLInputElement;
-  const maxReportItemsInput = document.getElementById('max-report-items') as HTMLInputElement;
   const saveButton = document.getElementById('save') as HTMLButtonElement;
   const saveTokenButton = document.getElementById('save-token') as HTMLButtonElement;
   const syncButton = document.getElementById('sync-token') as HTMLButtonElement;
@@ -44,7 +40,6 @@ async function init(): Promise<void> {
   const storedWebOrigin = await getWebOrigin();
   webOriginInput.value = storedWebOrigin && storedWebOrigin !== apiBase ? storedWebOrigin : '';
   tokenInput.value = '';
-  maxReportItemsInput.value = String(await getMaxReportItems());
 
   const refreshTokenState = async (): Promise<void> => {
     tokenState.textContent = describeTokenState(await getAuthToken(), await getTokenSyncedAt());
@@ -100,14 +95,9 @@ async function init(): Promise<void> {
     void (async () => {
       const apiBaseValue = apiBaseInput.value.trim();
       const webOriginValue = webOriginInput.value.trim();
-      const maxReportItems = Number.parseInt(maxReportItemsInput.value, 10);
 
       if (!apiBaseValue) {
         status.textContent = 'API 地址不能为空';
-        return;
-      }
-      if (!Number.isInteger(maxReportItems) || maxReportItems <= 0) {
-        status.textContent = `单次上报条数上限必须是正整数（默认 ${MAX_REPORT_ITEMS}）`;
         return;
       }
 
@@ -140,7 +130,6 @@ async function init(): Promise<void> {
       } else {
         await clearWebOrigin();
       }
-      await setMaxReportItems(maxReportItems);
       status.textContent = '已保存';
     })();
   });

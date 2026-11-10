@@ -103,10 +103,12 @@ class Settings(BaseSettings):
     # 预览结果的暂存时长。够运营看完预览再点确认，又不至于让废弃的预览行长期占位——
     # 过期行由 import_queue.py 的轮询循环顺带清理，不新开定时器。
     COMPETITOR_PREVIEW_TTL_SECONDS: int = 600    # 10 分钟
-    # 采集端单次上报的条目数上限。一页店铺搜索结果约 48~60 个品，留三倍余量。
+    # 采集端单次上报的条目数上限。一页店铺搜索结果约 48~60 个品，1000 约合 17~20 页手动翻页
+    # （#166 D4：一次提交建立基线，大店不能拆批，见 competitor-asin-ingest「服务端公布单批上限」）。
     # **超限整批拒绝（422），不截断**——截断后的记录与"这家店只有这些品"在数据上完全一致，
-    # 事后无法分辨；而超限本身恰恰说明采集端手上的条目比它送出的多。
-    COMPETITOR_MAX_REPORT_ITEMS: int = 200       # 单次 ASIN 上报的条目数上限
+    # 事后无法分辨；而超限本身恰恰说明采集端手上的条目比它送出的多。插件经
+    # GET /api/competitor/collector-config 读取这个值，不手工镜像。
+    COMPETITOR_MAX_REPORT_ITEMS: int = 1000      # 单次 ASIN 上报的条目数上限，单位：条
 
     # 独立站监控的拉取参数。拉取挂在 import_queue.py 已有的轮询循环上，按站点行的
     # last_fetch_at 状态列认领到期站点，不新开定时器。

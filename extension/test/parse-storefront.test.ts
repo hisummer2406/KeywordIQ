@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { hasNextPage, parseStorefrontPage } from '../src/parse-storefront';
+import { hasNextPage, parseSellerName, parseStorefrontPage } from '../src/parse-storefront';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -67,5 +67,23 @@ describe('hasNextPage', () => {
       'text/html',
     );
     expect(hasNextPage(doc)).toBe(false);
+  });
+});
+
+describe('parseSellerName（#166 D5，选择器待真实页面验收）', () => {
+  function doc(html: string): Document {
+    return new DOMParser().parseFromString(html, 'text/html');
+  }
+
+  it('找到店名元素时返回压缩空白后的文本', () => {
+    expect(parseSellerName(doc('<div id="sellerName">  Acme \n Store </div>'))).toBe('Acme Store');
+  });
+
+  it('页面上没有店名元素时返回 undefined，不拼凑', () => {
+    expect(parseSellerName(doc('<title>Amazon.com : A1TZ946F8HZTNY</title><div>x</div>'))).toBeUndefined();
+  });
+
+  it('超长文本不当作店名（多半是取错了元素）', () => {
+    expect(parseSellerName(doc(`<div id="sellerName">${'x'.repeat(300)}</div>`))).toBeUndefined();
   });
 });

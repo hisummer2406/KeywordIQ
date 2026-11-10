@@ -21,7 +21,7 @@ from app.table.competitor.watch_schemas import (
     WatchListRequest,
     WatchRemoveRequest,
 )
-from app.table.competitor.watch_service import _dedup_entries, _status_of
+from app.table.competitor.watch_service import _dedup_entries
 
 # ---------- 请求 schema 白名单 ----------
 
@@ -79,18 +79,15 @@ def test_分组名取首次出现的非空值():
     assert entries[0]["group_name"] == "竞品店铺"
 
 
-def test_未标注状态恒为待建立基线():
-    assert _status_of(None) == "PENDING_BASELINE"
-
-
-def test_状态只有两态_没有已暂停():
-    """PAUSED 被删掉了，别再加回来当占位取值。
+def test_状态只有三态_没有已暂停():
+    """#166：未采集 / 已采集 / 数据陈旧，由服务端在 SQL 里判定（见集成测试）。
+    PAUSED 被删掉了，别再加回来当占位取值。
 
     它曾作为「后续数据获取层」的预留取值存在，但没有任何字段或端点能让一行进入该状态
     ——一个永远取不到值的状态会让读界面的人以为系统能暂停某个卖家。要做暂停，它属于
     私有层 user_seller_watch，是另一次变更。
     """
-    assert set(get_args(watch_schemas.WatchStatus)) == {"PENDING_BASELINE", "MONITORING"}
+    assert set(get_args(watch_schemas.WatchStatus)) == {"NOT_COLLECTED", "COLLECTED", "STALE"}
 
 
 # ---------- upsert 语句形状 ----------

@@ -20,8 +20,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.common.errors import BadRequestError, ConflictError, NotFoundError, UnprocessableError
-from app.table.competitor import store_crud
+from app.common.errors import (
+    CODE_COMPETITOR_SITE_INVALID,
+    BadRequestError,
+    ConflictError,
+    NotFoundError,
+    UnprocessableError,
+)
+from app.site_registry import UnknownSiteError, get_site, normalize_site_code
+from app.table.competitor import store_crud, watch_crud
 from app.table.competitor.store_fetcher import (
     FETCH_FAILED,
     FETCH_NO_CATALOG_API,
@@ -725,7 +732,8 @@ async def new_arrivals(
     ``total`` 对**同一个** union 子查询计数，不是两侧各数一次再相加：后者在任一侧的
     过滤条件写歪时仍会给出一个看起来合理的数字，而分页恰好就用它算页数。
     """
-    stmt = store_crud.new_arrivals_stmt(user_id, days=req.days)
+    filters = await _arrival_filters(db, user_id, req)
+    stmt = store_crud.new_arrivals_stmt(user_id, days=req.days, filters=filters)
     total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = (
         await db.execute(stmt.offset((req.page - 1) * req.per_page).limit(req.per_page))
@@ -743,11 +751,49 @@ async def new_arrivals(
                 image_url=row.image_url,
                 at=row.at,
                 time_kind=row.time_kind,
+                discovered_at=row.discovered_at,
+                published_at=row.published_at,
+                product_url=_product_url(row),
             )
             for row in rows
         ],
         total=total,
     )
+
+
+async def _arrival_filters(
+    db: AsyncSession, user_id: int, req: NewArrivalRequest
+) -> store_crud.ArrivalFilters:
+    """把请求收敛成筛选：站点规范化（非法 422）、分组须属于本人（否则 404，与卖家清单一致）、
+    域名按加入时的同一份规则规范化——各处口径不一，筛选就会对着存储值静默落空。"""
+    site = None
+    if req.site:
+        try:
+            site = normalize_site_code(req.site)
+        except UnknownSiteError as exc:
+            raise UnprocessableError(str(exc), code=CODE_COMPETITOR_SITE_INVALID) from exc
+    if req.group_id is not None:
+        owned = (await db.execute(watch_crud.group_stmt(user_id, req.group_id))).scalar_one_or_none()
+        if owned is None:
+            raise NotFoundError("分组不存在")
+    # 非法域名由 normalize_store_domain 自己抛 400，原因与加入时一致。
+    domain = normalize_store_domain(req.domain) if req.domain else None
+    seller_id = req.seller_id.strip() if req.seller_id and req.seller_id.strip() else None
+    return store_crud.ArrivalFilters(
+        source=req.source, site=site, group_id=req.group_id, seller_id=seller_id, domain=domain
+    )
+
+
+def _product_url(row) -> str | None:
+    """原商品链接（#166 D6）。只用公开、稳定的标识现拼，不回存任何会话参数。"""
+    if row.source == "AMAZON" and row.site:
+        try:
+            return f"https://www.{get_site(row.site).domain}/dp/{row.product_key}"
+        except UnknownSiteError:
+            return None
+    if row.source == "DTC" and row.product_handle:
+        return f"https://{row.source_key}/products/{row.product_handle}"
+    return None
 
 
 async def product_history(

@@ -58,3 +58,17 @@ describe('buildReportRequest', () => {
     expect(body.page_context).toBeUndefined();
   });
 });
+
+describe('seller_name（#166 D5）', () => {
+  it('有店名时带上，去首尾空白', () => {
+    const body = buildReportRequest({ ...baseInput, items: [{ asin: 'B0TESTASIN1' }], sellerName: ' Acme ' });
+    expect(body.seller_name).toBe('Acme');
+  });
+
+  it('没有或只有空白时不带', () => {
+    expect(buildReportRequest({ ...baseInput, items: [{ asin: 'B0TESTASIN1' }] }).seller_name).toBeUndefined();
+    expect(
+      buildReportRequest({ ...baseInput, items: [{ asin: 'B0TESTASIN1' }], sellerName: '  ' }).seller_name,
+    ).toBeUndefined();
+  });
+});

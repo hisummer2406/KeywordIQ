@@ -274,7 +274,9 @@ def test_两侧投影的列名与列序一致():
     dtc = list(_dtc_arrivals_select(1, 7).selected_columns.keys())
     amazon = list(_amazon_arrivals_select(1, 7).selected_columns.keys())
     assert dtc == amazon
-    assert set(dtc) == set(NewArrivalOut.model_fields)
+    # 唯一的差异是刻意的（#166 D6）：投影多一列 ``product_handle``（只用来拼 Shopify 链接），
+    # 响应多一个 service 现拼的 ``product_url``。其余列名必须与响应字段一一对应。
+    assert set(dtc) - {"product_handle"} == set(NewArrivalOut.model_fields) - {"product_url"}
 
 
 def test_amazon侧的时间语义写死为发现于():

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MAX_REPORT_ITEMS,
   buildPageContext,
   freezeRequest,
   mergeItems,
@@ -102,8 +101,11 @@ describe('mergeItemsWithCap', () => {
     expect(result.items).toHaveLength(10);
   });
 
-  it('默认上限是 200，与 .env.example 的 COMPETITOR_MAX_REPORT_ITEMS 默认值一致', () => {
-    expect(MAX_REPORT_ITEMS).toBe(200);
+  it('服务端上限 1000 时：960 条已累积再并入 60 条整体拒绝，不截断（#166 D4）', () => {
+    const existing = makeItems(960, 'B0OLD');
+    const result = mergeItemsWithCap(existing, makeItems(60, 'B0NEW'), 1000);
+    expect(result.rejectedByCap).toBe(true);
+    expect(result.items).toHaveLength(960);
   });
 });
 

@@ -88,15 +88,33 @@ export const routes = [
     ],
   },
   {
-    // 独立顶层菜单——competitor:view 是独立权限点(design.md 决策 6/8)。同样是单页顶层
-    // 模式，照 /analysis。排在关键词工具之后、风险核查之前：机会中心之后的三项同属
-    // "看 ABA 与竞对数据"一类，风险核查次之，数据管理是"喂数据"排最后（见下方数据管理
-    // 节点的注释）。
+    // 独立顶层菜单——competitor:view 是独立权限点(design.md 决策 6/8)。排在关键词工具之后、
+    // 风险核查之前：机会中心之后的三项同属"看 ABA 与竞对数据"一类，风险核查次之，数据管理
+    // 是"喂数据"排最后（见下方数据管理节点的注释）。
+    //
+    // **按运营任务拆两个子菜单**（#166 D1，top-nav-structure「竞对监控以任务菜单组织」）：
+    // 商品发现看新品、店铺管理管关注对象。Amazon/Shopify 是来源类型，放在页内切换，不进菜单。
+    // 有子项即长出可折叠的左侧栏——竞对两张表远窄于分析查询屏，这笔宽度付得起；这个例外
+    // 不能拿来给分析查询屏或机会中心加子菜单。子屏继承父级 access，不新增逐页权限点。
     name: '竞对监控',
     path: '/competitor',
-    component: './Competitor',
     icon: 'EyeOutlined',
     access: 'canViewCompetitor',
+    routes: [
+      { path: '/competitor', redirect: '/competitor/discovery' },
+      {
+        name: '商品发现',
+        path: '/competitor/discovery',
+        component: './Competitor/Discovery',
+        icon: 'ShoppingOutlined',
+      },
+      {
+        name: '店铺管理',
+        path: '/competitor/stores',
+        component: './Competitor/Stores',
+        icon: 'ShopOutlined',
+      },
+    ],
   },
   {
     // 跨来源产品档案的独立入口；业务尚未接入，保持全宽。

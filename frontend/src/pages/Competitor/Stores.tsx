@@ -1,6 +1,7 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
-import { Button, Card, Progress, Space, Tabs, Typography, message } from 'antd';
+import { history, useSearchParams } from '@umijs/max';
+import { Button, Card, Progress, Segmented, Space, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   createGroup,
@@ -16,28 +17,35 @@ import {
 import { getSites, type SiteOption } from '@/services/upload';
 import GroupBar from './GroupBar';
 import ImportModal from './ImportModal';
-import NewArrivalsTab from './NewArrivalsTab';
+import SellerAsinsDrawer from './SellerAsinsDrawer';
 import StoreTab from './StoreTab';
 import { buildWatchColumns } from './columns';
 
+/** 店铺类型写在 URL（`?type=`）里：刷新、收藏、分享都停在同一类，不回落到默认。 */
+type StoreType = 'amazon' | 'shopify';
+
+const TYPE_OPTIONS: { label: string; value: StoreType }[] = [
+  { label: 'Amazon 卖家', value: 'amazon' },
+  { label: 'Shopify 店铺', value: 'shopify' },
+];
+
 /**
- * 竞对监控。三个 tab：亚马逊卖家（issue #56 P0）、独立站（Shopify 监控）、上新流。
+ * 竞对监控 · 店铺管理（#166 D2）：管理关注对象并检查数据更新状态。
  *
- * **分 tab 而不是并进一张表**：两类对象能拿到的字段几乎不重叠——独立站有上架时间、
- * 变体与币种、没有任何销量；Amazon 卖家有 BSR 与评价数、拿不到上架时间。硬合成一张
- * 表会让一半的列对另一类恒为空。
+ * **一页内按店铺类型切换，不按来源拆菜单**：Amazon 与 Shopify 是来源类型，不是任务；把它们
+ * 和「商品发现」并列成同级菜单，正是 #166 要消掉的层级混杂。两类对象的字段几乎不重叠
+ * （Shopify 有上架时间、变体与币种；Amazon 只有我们首次见到的时刻），所以仍是两张表、不合表。
  *
- * **分 tab 而不是加二级菜单**：`/competitor` 是单页顶层，布局是 `layout: 'mix'` +
- * `splitMenus`，顶层节点一有子项就长出约 208px 的左侧栏，把表格横向挤掉。
+ * **`GroupBar` 在类型切换之外**，因为分组是两类共用的同一张 `user_seller_group`——分组是纯
+ * 标签，不该因成员类型分裂成两套体系。它摆在表格上方而不是侧栏：左侧已经有任务菜单。
  *
- * **`GroupBar` 在 tab 之外，因为分组是两类共用的**（同一张 `user_seller_group`）——
- * 分组是纯标签，不该因成员类型分裂成两套体系。
- *
- * **进屏即查**（与「持续增长市场」屏相反、与「我的词库」屏一致）：这一屏的空表格恒与
- * "还没做选择"无关——行集合就是用户自己的关注清单。
+ * **进屏即查**：这一屏的空表格恒与"还没做选择"无关——行集合就是用户自己的关注清单。
  */
-export default function CompetitorPage() {
+export default function CompetitorStoresPage() {
   const actionRef = useRef<ActionType>();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const storeType: StoreType = searchParams.get('type') === 'shopify' ? 'shopify' : 'amazon';
+  const [asinsOf, setAsinsOf] = useState<WatchRow | null>(null);
 
   const [sites, setSites] = useState<SiteOption[]>([]);
   const [groups, setGroups] = useState<CompetitorGroup[]>([]);
@@ -135,7 +143,11 @@ export default function CompetitorPage() {
         style={{ marginTop: 12 }}
         actionRef={actionRef}
         rowKey="watch_id"
-        columns={buildWatchColumns(sites, groups, onChangeGroup, onRemove)}
+        columns={buildWatchColumns(sites, groups, onChangeGroup, onRemove, setAsinsOf, (r) =>
+          history.push(
+            `/competitor/discovery?seller=${encodeURIComponent(r.seller_id)}&site=${encodeURIComponent(r.site)}`,
+          ),
+        )}
         search={false}
         options={false}
         dateFormatter="string"
@@ -169,11 +181,17 @@ export default function CompetitorPage() {
         onClose={() => setImportOpen(false)}
         onImported={onImported}
       />
+
+      <SellerAsinsDrawer
+        watch={asinsOf}
+        domain={asinsOf ? sites.find((s) => s.code === asinsOf.site)?.domain : undefined}
+        onClose={() => setAsinsOf(null)}
+      />
     </>
   );
 
   return (
-    <PageContainer title="竞对监控">
+    <PageContainer title="店铺管理">
       <GroupBar
         groups={groups}
         activeId={activeGroupId}
@@ -185,25 +203,18 @@ export default function CompetitorPage() {
         onDelete={(group) => deleteGroup(group.group_id)}
       />
 
-      <Tabs
-        style={{ marginTop: 12 }}
-        defaultActiveKey="sellers"
-        items={[
-          { key: 'sellers', label: '亚马逊卖家', children: sellerTab },
-          {
-            key: 'stores',
-            label: '独立站',
-            children: (
-              <StoreTab
-                groups={groups}
-                activeGroupId={activeGroupId}
-                onGroupsChanged={reloadGroups}
-              />
-            ),
-          },
-          { key: 'arrivals', label: '上新流', children: <NewArrivalsTab /> },
-        ]}
+      <Segmented
+        style={{ marginTop: 12, marginBottom: 12 }}
+        value={storeType}
+        options={TYPE_OPTIONS}
+        onChange={(value) => setSearchParams(value === 'shopify' ? { type: 'shopify' } : {})}
       />
+
+      {storeType === 'amazon' ? (
+        sellerTab
+      ) : (
+        <StoreTab groups={groups} activeGroupId={activeGroupId} onGroupsChanged={reloadGroups} />
+      )}
     </PageContainer>
   );
 }
