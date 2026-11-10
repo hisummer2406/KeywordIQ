@@ -25,7 +25,6 @@ from test.test_site_scoped_query_integration import (
     D2,
     D3,
     SITE,
-    USER_ID,
     _async_url,
     _ensure_partitions_sync,
 )
@@ -113,7 +112,7 @@ def _req(**kw) -> AnalysisSearchRequest:
 
 
 async def _page(db, page: int, per: int, **kw):
-    resp = await service.search(db, _req(page=page, perPage=per, **kw), user_id=USER_ID)
+    resp = await service.search(db, _req(page=page, perPage=per, **kw))
     return [r["keyword"] for r in resp.data], resp.total
 
 
@@ -217,7 +216,7 @@ async def test_missing_reference_period_is_null_not_an_error(db):
     顶替是最坏的做法：用户读到一个看似真实的数字，而它属于另一期。
     """
     await db.run_sync(_seed_segments)          # 只有 D2/D3 有数据，D1 之前是空的
-    resp = await service.search(db, _req(page=1, perPage=1), user_id=USER_ID)
+    resp = await service.search(db, _req(page=1, perPage=1))
     row = resp.data[0]
     assert "history" in row
     # 「7 天前」（D3-7 = 2026-07-03）没有导入过，该点必须是 None
@@ -227,7 +226,7 @@ async def test_missing_reference_period_is_null_not_an_error(db):
 async def test_dropped_rows_carry_trend_and_last_seen(db):
     """掉榜行同样附带趋势，其最后一个点是它最后在榜的那一期。"""
     await db.run_sync(_seed_segments)
-    resp = await service.search(db, _req(page=1, perPage=10, include="DROPPED"), user_id=USER_ID)
+    resp = await service.search(db, _req(page=1, perPage=10, include="DROPPED"))
     row = resp.data[0]
     assert row["is_dropped"] is True
     assert row["last_seen_date"] == D2
@@ -244,7 +243,7 @@ async def test_period_without_dropped_records_returns_only_listed(db):
     "查不到掉榜记录"而失败。
     """
     await db.run_sync(_seed_segments)
-    resp = await service.search(db, _req(date=D2, page=1, perPage=10), user_id=USER_ID)
+    resp = await service.search(db, _req(date=D2, page=1, perPage=10))
     assert resp.success
     assert resp.total == 2                      # D2 只有那两个后来掉榜的词
     assert all(r["is_dropped"] is False for r in resp.data)

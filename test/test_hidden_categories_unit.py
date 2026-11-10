@@ -36,10 +36,10 @@ def test_every_query_path_excludes_the_blacklist():
     on = date(2026, 7, 18)
     req = _req()
     stmts = {
-        "search": crud.search_stmt("US", "DAY", on, req, user_id=1),
-        "count_filtered": crud.count_filtered_stmt("US", "DAY", on, req, 1),
-        "count_capped": crud.count_capped_stmt("US", "DAY", on, req, 10, 1),
-        "export": crud.export_stmt("US", "DAY", on, req, 10, 1),
+        "search": crud.search_stmt("US", "DAY", on, req),
+        "count_filtered": crud.count_filtered_stmt("US", "DAY", on, req),
+        "count_capped": crud.count_capped_stmt("US", "DAY", on, req, 10),
+        "export": crud.export_stmt("US", "DAY", on, req, 10),
     }
     for name, stmt in stmts.items():
         sql = _sql(stmt)
