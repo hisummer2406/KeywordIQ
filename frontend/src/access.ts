@@ -29,7 +29,11 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     // 能看到——即便某个用户的角色码是 admin，只要 is_super 为假就看不到，与其余按角色
     // 矩阵授予的权限点不同档次（add-opportunity-center-nav/design.md 决策 1）。
     canViewOpportunity: has('opportunity:view'),
-    // 「产品档案」「风险核查」「定价核算」：占位屏，没有后端端点，只有 is_super 能看到，
+    // 定价核算（change add-pricing-calculation）：真实端点，按权限点派生。核价本身与「维护
+    // 共享费率」分开授权——费率写错会让所有人的核价一起算错。后端逐端点校验，这里只管显隐。
+    canViewPricing: has('pricing:view'),
+    canManagePricingRates: has('pricing:manage-rates'),
+    // 「产品档案」「风险核查」：占位屏，没有后端端点，只有 is_super 能看到，
     // 免得运营/分析师点进一个写着「尚未接入」的空屏。判据是 is_super，**不是权限点**：
     // 权限矩阵里没有对应的一项，因此不存在「勾了也不生效」的复选框（`user:manage` 的教训）。
     // 有了真实端点再按数据域各开权限点、把这里的守卫换掉——那时是加法。
