@@ -60,9 +60,10 @@ cd ~/.claude-worktrees/$ID/frontend && pnpm install --prefer-offline    # ② �
 | `.env` | `ValidationError: 7 validation errors for Settings`（APP_NAME 等 required） | 像是配置类写坏了，其实只是没读到文件 |
 | `frontend/node_modules` | `sh: tsc: command not found` | 像是环境坏了，其实是依赖没装 |
 
-**数据库不用建，但要确认 `keywordiq_test` 在。** 集成测试与提交门禁都跑在这一个共享库上
-（`pre_commit.py` 里的 `TEST_DB_URL` 是写死的常量，`local-db` 的跑法同样写死），worktree
-既不需要、也无法拥有自己的库。库不在时门禁不会报错，只会让那 45 个集成测试**静默全跳过**
+**数据库默认不用建，但要确认 `keywordiq_test` 在。** 集成测试与提交门禁默认都跑在这一个共享库上
+（`pre_commit.py` 的 `TEST_DB_URL`）。**本变更带迁移、而另一个在飞分支也带迁移时**，共享库只能停在
+其中一条链上，另一方的门禁必然红：这时在本 worktree 的 `.env` 写一行
+`TEST_DATABASE_URL=<本机一次性库>`，门禁就改用它（只接受本机地址），建库与迁移见 `local-db`。库不在时门禁不会报错，只会让那 45 个集成测试**静默全跳过**
 ——`317 passed` 与 `265 passed, 52 skipped` 长得很像，而跳过的正是唯一碰真实分区表和咨询锁
 的部分。本项目发生过「模型改了、查询层没跟上，单元测试全绿」，接上真库立刻红 21 个。
 建库跑法见 skill `local-db`。
@@ -71,8 +72,8 @@ cd ~/.claude-worktrees/$ID/frontend && pnpm install --prefer-offline    # ② �
 > 全文只出现在 `createdb` 与 `dropdb` 两处，没有任何地方把 `.env`、`TEST_DATABASE_URL`
 > 或门禁指向它——建出来的是个连迁移都没跑过的空库，而真实的测试自始至终跑在
 > `keywordiq_test`。它收着维护成本（孤儿扫描、下划线/连字符换算、收工 dropdb），
-> 隔离性是零。要让它真有意义，前置是把 `pre_commit.py` 的 `TEST_DB_URL` 改成按 worktree
-> 派生；单人开发不值得，两个会话同时跑 pytest 的风险今天本来就存在，删掉它不损失什么。
+> 隔离性是零。门禁现在可以读 worktree `.env` 的 `TEST_DATABASE_URL`（2026-11-10），但仍只在
+> 迁移链冲突时按需建库，不恢复每个变更固定建库、收工 dropdb 的流程。
 
 ## 3. 干活期间：三样共享资源要探活
 
