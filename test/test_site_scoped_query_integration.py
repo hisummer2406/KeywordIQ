@@ -30,9 +30,6 @@ SITE = "US"
 D1, D2, D3 = date(2026, 7, 8), date(2026, 7, 9), date(2026, 7, 10)  # 同 ISO 周
 W1, W2, WEEK = date(2026, 6, 26), date(2026, 7, 3), date(2026, 7, 10)
 
-# 大多数用例不关心「谁在查」，固定一个占位 user_id——真实身份隔离由
-# 「竞对新发现」那组测试用真实 user_center 行覆盖（issue #56 P2）。
-USER_ID = 1
 
 
 def _async_url(url: str) -> str:
@@ -153,7 +150,7 @@ async def test_scope_lists_dates_descending(db):
 
 async def test_search_scoped_total_and_rows(db):
     await db.run_sync(_seed)
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
     assert resp.success and resp.date == D3
     assert resp.total == 2  # 来自 site_data_stats
     rankings = [r["current_ranking"] for r in resp.data]
@@ -162,7 +159,7 @@ async def test_search_scoped_total_and_rows(db):
 
 async def test_day_view_trend_without_week_change(db):
     k1, k2 = await db.run_sync(_seed)
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
     rows = {r["keyword_id"]: r for r in resp.data}
     assert rows[k1]["trend"] == [5, 3, 1]      # 按日期回溯
     assert rows[k2]["trend"] == [9]            # 只有 D3
@@ -171,7 +168,7 @@ async def test_day_view_trend_without_week_change(db):
 
 async def test_trend_is_as_of_selected_date(db):
     k1, _ = await db.run_sync(_seed)
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D2), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D2))
     rows = {r["keyword_id"]: r for r in resp.data}
     assert rows[k1]["trend"] == [5, 3]  # 截至 D2，不含 D3
 
@@ -181,7 +178,6 @@ async def test_sort_whitelist_rejects_trend(db):
     # 非法排序字段 trend → 回落默认 current_ranking 升序
     resp = await service.search(
         db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, orderBy="trend"),
-        user_id=USER_ID,
     )
     assert [r["current_ranking"] for r in resp.data] == [1, 9]
 
@@ -189,12 +185,12 @@ async def test_sort_whitelist_rejects_trend(db):
 async def test_invalid_date_raises_scope_error(db):
     await db.run_sync(_seed)
     with pytest.raises(service.ScopeError):
-        await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=date(2020, 1, 1)), user_id=USER_ID)
+        await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=date(2020, 1, 1)))
 
 
 async def test_week_view_trend_reaches_across_report_periods(db):
     await db.run_sync(_seed)
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="WEEK", date=WEEK), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="WEEK", date=WEEK))
     assert resp.total == 1
     assert resp.data[0]["trend"] == [9, 5, 1]
     assert resp.data[0]["trend_dates"] == [W1, W2, WEEK]
@@ -214,7 +210,7 @@ async def test_scope_boundary_excludes_other_dates(db):
         {"s": SITE, "d": D1, "k": k3},
     )
     await db.flush()
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100))
     assert k3 not in {r["keyword_id"] for r in resp.data}
 
 
@@ -223,7 +219,6 @@ async def test_filtered_total_reflects_filter(db):
     await db.run_sync(_seed)  # D3 有 K1(kw-one)、K2(kw-two)，site_data_stats=2
     resp = await service.search(
         db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, keyword="one"),
-        user_id=USER_ID,
     )
     assert resp.total == 1  # 只匹配 kw-one，不是无筛选的 2
     assert all("one" in r["keyword"] for r in resp.data)
@@ -242,7 +237,6 @@ async def test_filtered_total_is_exact_beyond_page_size(db):
     await db.run_sync(_seed)
     resp = await service.search(
         db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, ranking_min=0, perPage=1),
-        user_id=USER_ID,
     )
     assert len(resp.data) == 1
     assert resp.total == 2
@@ -261,7 +255,7 @@ async def test_include_total_false_skips_the_count(db):
     req = AnalysisSearchRequest(
         site=SITE, view="DAY", date=D3, ranking_min=0, include_total=False
     )
-    resp = await service.search(db, req, user_id=USER_ID)
+    resp = await service.search(db, req)
 
     assert resp.total is None
     assert len(resp.data) == 2  # 行照常返回，省掉的只是计数
@@ -272,7 +266,6 @@ async def test_include_total_defaults_to_true(db):
     await db.run_sync(_seed)
     resp = await service.search(
         db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, ranking_min=0),
-        user_id=USER_ID,
     )
     assert resp.total == 2
 
@@ -285,7 +278,6 @@ async def test_unfiltered_total_ignores_include_total(db):
     await db.run_sync(_seed)
     resp = await service.search(
         db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, include_total=False),
-        user_id=USER_ID,
     )
     assert resp.total == 2
 
@@ -293,7 +285,7 @@ async def test_unfiltered_total_ignores_include_total(db):
 async def test_response_has_protable_contract(db):
     """列表响应含 ProTable 契约字段 {success,data,total} + 作用域回显。"""
     await db.run_sync(_seed)
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
     dumped = resp.model_dump()
     assert {"success", "data", "total"} <= dumped.keys()
     assert dumped["success"] is True and isinstance(dumped["data"], list)
@@ -303,7 +295,7 @@ async def test_response_has_protable_contract(db):
 async def test_default_site_when_omitted(db):
     """未传站点用配置默认站点（不返回全站点混合）。"""
     await db.run_sync(_seed)
-    resp = await service.search(db, AnalysisSearchRequest(view="DAY", date=D3), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(view="DAY", date=D3))
     from config import settings
     assert resp.site == settings.default_site
 
@@ -360,7 +352,6 @@ async def test_multi_category_filter_matches_any_selected(db):
             site=SITE, view="DAY", date=D3, perPage=100,
             categories=["Electronics", "Pet Supplies"],
         ),
-        user_id=USER_ID,
     )
     got = {r["keyword_id"] for r in resp.data}
     assert got == {kids["Electronics"], kids["Pet Supplies"]}
@@ -377,7 +368,6 @@ async def test_multi_category_filter_stays_in_scope(db):
         db, AnalysisSearchRequest(
             site=SITE, view="DAY", date=D3, perPage=100, categories=["Electronics"],
         ),
-        user_id=USER_ID,
     )
     assert len(resp.data) == 1  # D1 那行同关键词同类目，被日期边界挡在外面
     assert resp.data[0]["current_ranking"] == 20  # D3 的值，不是 D1 的 21
@@ -388,13 +378,12 @@ async def test_empty_categories_behaves_as_no_filter(db):
     await db.run_sync(_seed)
     await db.run_sync(_seed_categories)
     base = await service.search(
-        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100), user_id=USER_ID,
+        db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100),
     )
     empty = await service.search(
         db, AnalysisSearchRequest(
             site=SITE, view="DAY", date=D3, perPage=100, categories=[],
         ),
-        user_id=USER_ID,
     )
     assert {r["keyword_id"] for r in empty.data} == {r["keyword_id"] for r in base.data}
     assert empty.total == base.total
@@ -453,12 +442,11 @@ def _seed_top_slots(db):
     return kids
 
 
-async def _row_for(db, keyword_id: int, *, user_id: int = USER_ID, **kwargs):
+async def _row_for(db, keyword_id: int, **kwargs):
     resp = await service.search(
         db, AnalysisSearchRequest(
             site=SITE, view="DAY", date=D3, perPage=100, **kwargs,
         ),
-        user_id=user_id,
     )
     return next((r for r in resp.data if r["keyword_id"] == keyword_id), None), resp
 
@@ -582,7 +570,6 @@ async def test_asin_batch_hits_any_slot_once_and_ignores_unknown(db):
             site=SITE, view="DAY", date=D3, perPage=100,
             asins=["B0SLOT00001", "b0slot00003", "B0NOTEXIST", "B0SLOT00001"],
         ),
-        user_id=USER_ID,
     )
     ids = [r["keyword_id"] for r in resp.data]
     assert sorted(ids) == sorted([kids["kw-full"], kids["kw-partial"]])
@@ -605,7 +592,6 @@ async def test_asin_batch_combines_with_other_filters(db):
             site=SITE, view="DAY", date=D3, perPage=100,
             asins=["B0SLOT00001", "B0SLOT00002"], ranking_max=10,
         ),
-        user_id=USER_ID,
     )
     assert resp.total == 0  # 两个词的当期排名都是 30
 
@@ -623,34 +609,16 @@ async def test_share_filter_only_considers_first_slot(db):
 
 
 # --------------------------------------------------------------------------
-# 竞对新发现筛选（issue #56 P2）
+# 竞对新发现筛选已下架（#166，site-scoped-query「已下架的竞对新发现参数明确拒绝」）
 #
-# 命中口径：该词前三商品槽位任一 ASIN，属于当前用户在当前站点关注的卖家**近期新发现**
-# 的 ASIN——`first_seen_at > baseline_at`（基线批次不算）且落在
-# `watch_crud.NEW_DISCOVERY_WINDOW_DAYS`（7 天）窗口内，与卖家清单「近 7 日新发现」
-# 同一判据（PR #66 复审 P1：早期实现没有时间限定，会把卖家有史以来上报过的全部商品都
-# 算成"新品"）。判定按 user_id 私有、按 site 限定——与词库/竞对监控同一条纪律。
-# 依赖 ``_seed_top_slots`` 造好的 B0SLOT00001/2/3 三个 ASIN。
+# 即便库里有真实的关注与近期新发现数据，`competitor_new=false` 的结果也必须与不带该字段
+# 完全一致——分析查询不再读取任何竞对表。`true` 的 422 由单元测试覆盖（解析阶段即拒绝）。
 # --------------------------------------------------------------------------
 
 
 def _seed_competitor_watch(db):
-    """四个用户覆盖四种关注形态，全部落在「基线已建立 + 近期新发现」的窗口内：
-
-    - ``owner``：在 US 关注一个卖家，其在售 ASIN 对应 kw-full 的**第二**名——覆盖
-      非 top1 槽位；同时该卖家在 GB 站也有一条独立主体，被 owner 一并关注，用来在
-      「跨站点」用例里验证这条不会泄漏进 US 的判定。
-    - ``other``：在 US 关注另一个卖家，其在售 ASIN 对应**第三**名——与 owner 不重叠，
-      验证身份隔离；kw-partial 没有第三个商品，故 other 的命中集合比 owner 窄，
-      用于验证总数是精确计数而非预存值。
-    - ``no_watch``：不关注任何卖家——最常见的初始状态，命中必须为空且不报错。
-    - ``gb_only``：只在 GB 关注一个卖家，其 GB 在售 ASIN 恰与 kw-full 的**第一**名
-      字符串相同——专门验证跨站点关注不该让 US 查询命中，即便 ASIN 字符串一致。
-
-    每个卖家 ``baseline_at`` 落在 30 天前，``competitor_seller_asin.first_seen_at``
-    落在 1 天前（晚于基线、在 7 天窗口内）——两个条件都满足才算「新发现」，时间窗口
-    本身的正确性由 :func:`test_competitor_new_excludes_baseline_batch` 与
-    :func:`test_competitor_new_excludes_stale_discovery` 单独验证。
+    """造真实的竞对关注与近期新发现数据（基线 30 天前、发现 1 天前），US 站 owner 关注的
+    卖家在售 ASIN 对应 kw-full 的第二名。筛选下架后这些数据必须对分析查询毫无影响。
 
     返回 ``{"owner": id, "other": id, "no_watch": id, "gb_only": id}``。
     """
@@ -705,177 +673,22 @@ def _seed_competitor_watch(db):
     return {"owner": owner, "other": other, "no_watch": no_watch, "gb_only": gb_only}
 
 
-async def test_competitor_new_filter_hits_second_slot_for_watching_user(db):
-    """命中口径覆盖非 top1 槽位：owner 关注的卖家在售 ASIN 对应 kw-full 的第二名。"""
-    await db.run_sync(_seed)
-    kids = await db.run_sync(_seed_top_slots)
-    watch = await db.run_sync(_seed_competitor_watch)
-
-    hit, resp = await _row_for(
-        db, kids["kw-full"], competitor_new=True, user_id=watch["owner"],
-    )
-    assert hit is not None
-    assert resp.total >= 1
 
 
-async def test_competitor_new_filter_isolates_by_user(db):
-    """身份隔离：owner 与 other 各自关注不重叠的卖家，同一个词对两人都命中
-    （各自的商品槽位不同），但对完全没有关注记录的第三个用户必须是 miss——
-    命中不是"有没有人关注"这个全局判断，是"当前用户有没有关注"。
-    """
-    await db.run_sync(_seed)
-    kids = await db.run_sync(_seed_top_slots)
-    watch = await db.run_sync(_seed_competitor_watch)
-
-    owner_hit, _ = await _row_for(
-        db, kids["kw-full"], competitor_new=True, user_id=watch["owner"],
-    )
-    other_hit, _ = await _row_for(
-        db, kids["kw-full"], competitor_new=True, user_id=watch["other"],
-    )
-    assert owner_hit is not None
-    assert other_hit is not None
-
-    no_watch_hit, resp = await _row_for(
-        db, kids["kw-full"], competitor_new=True, user_id=watch["no_watch"],
-    )
-    assert no_watch_hit is None
-    assert resp.total == 0
-
-
-async def test_competitor_new_filter_scoped_to_site(db):
-    """跨站点关注不影响判定：只在 GB 关注的卖家，其 GB 在售 ASIN 不该让 US 查询命中，
-    即便 ASIN 字符串与 US 站某个词的第一名商品完全一致——子查询漏掉 site 限定的表现
-    正是这种"看起来命中了，其实是另一个站点的行"。
-    """
-    await db.run_sync(_seed)
-    kids = await db.run_sync(_seed_top_slots)
-    watch = await db.run_sync(_seed_competitor_watch)
-
-    miss, resp = await _row_for(
-        db, kids["kw-full"], competitor_new=True, user_id=watch["gb_only"],
-    )
-    assert miss is None
-    assert resp.total == 0
-
-
-async def test_competitor_new_combines_with_brand_filter_as_and(db):
-    """与其他筛选维度同一语义：勾选的所有条件同时成立，不是任一成立（design.md 决策 4）。
-
-    kw-full 本身就带 BRAND2（第二名品牌），单独按 brands=["BRAND2"] 筛选必然命中——
-    用 gb_only（US 站没有任何关注记录）同时勾 competitor_new 与这个必然满足的品牌条件，
-    若两者是 OR，brand 那一半会把它救回来；必须是 AND 才会落空。owner 两个条件都满足，
-    同样的品牌筛选应当命中，证明不是 competitor_new 单独把行挡掉了。
-    """
-    await db.run_sync(_seed)
-    kids = await db.run_sync(_seed_top_slots)
-    watch = await db.run_sync(_seed_competitor_watch)
-
-    miss, _ = await _row_for(
-        db, kids["kw-full"], competitor_new=True, brands=["BRAND2"], user_id=watch["gb_only"],
-    )
-    assert miss is None
-
-    hit, _ = await _row_for(
-        db, kids["kw-full"], competitor_new=True, brands=["BRAND2"], user_id=watch["owner"],
-    )
-    assert hit is not None
-
-
-async def test_competitor_new_total_is_exact_hit_count(db):
-    """只传 competitor_new 时总数是真实命中行数，不是 site_data_stats 的预存值
-    （design.md 决策 3 的集成级验证：真库上比单测更有说服力）。
-
-    other 关注的卖家只对应 kw-full 的第三名（kw-partial 没有第三个商品），真实命中
-    只有 1 行；``_seed`` 预存的 D3 总数是 2——两者不相等，才能证明总数真的走了精确
-    计数（``count_filtered``），而不是漏算 ``request_has_filters`` 后退回预存值、
-    凑巧算对。
-    """
+@pytest.mark.parametrize("view,on", [("DAY", D3), ("WEEK", WEEK)])
+async def test_retired_competitor_new_false_matches_omitted(db, view, on):
     await db.run_sync(_seed)
     await db.run_sync(_seed_top_slots)
-    watch = await db.run_sync(_seed_competitor_watch)
+    await db.run_sync(_seed_competitor_watch)
 
-    resp = await service.search(
-        db,
-        AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=100, competitor_new=True),
-        user_id=watch["other"],
-    )
-    assert resp.total == 1
-    assert len(resp.data) == 1
+    base = AnalysisSearchRequest(site=SITE, view=view, date=on, perPage=100)
+    with_false = base.model_copy(update={"competitor_new": False})
+    omitted = await service.search(db, base)
+    explicit = await service.search(db, AnalysisSearchRequest(**with_false.model_dump()))
 
-
-async def test_competitor_new_excludes_baseline_batch(db):
-    """基线批次不算新发现（PR #66 复审 P1 的核心场景）：某卖家首次上报时，那一批 ASIN 的
-    `first_seen_at` 与 `competitor_seller.baseline_at` 严格相等（同一事务落定，见
-    `asin_service.py` 的不变式），`first_seen_at > baseline_at` 因此为假——不加时间限定
-    的旧实现会把这批"卖家有史以来就在卖"的商品也算成"新品"。
-    """
-    await db.run_sync(_seed)
-    kids = await db.run_sync(_seed_top_slots)
-
-    def _seed_baseline_batch(db):
-        user_id = db.execute(
-            text("INSERT INTO analysis.user_center(user_name,hashed_pwd,is_active,is_super) "
-                 "VALUES ('cn-baseline-batch','x',true,false) RETURNING id"),
-        ).scalar()
-        db.execute(
-            text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
-                 "VALUES ('A1BASELINESELLER','US',now() - interval '10 days')")
-        )
-        # 首次上报：first_seen_at 与 baseline_at 落在同一时刻，不是"之后"
-        db.execute(
-            text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
-                 "SELECT 'A1BASELINESELLER','US','B0SLOT00002',baseline_at "
-                 "FROM analysis.competitor_seller "
-                 "WHERE seller_id='A1BASELINESELLER' AND site='US'")
-        )
-        db.execute(
-            text("INSERT INTO analysis.user_seller_watch(user_id,seller_id,site) "
-                 "VALUES (:u,'A1BASELINESELLER','US')"),
-            {"u": user_id},
-        )
-        db.flush()
-        return user_id
-
-    user_id = await db.run_sync(_seed_baseline_batch)
-    miss, resp = await _row_for(db, kids["kw-full"], competitor_new=True, user_id=user_id)
-    assert miss is None
-    assert resp.total == 0
-
-
-async def test_competitor_new_excludes_stale_discovery(db):
-    """窗口外的新发现不算：ASIN 确实晚于基线才被上报（是真正的新发现），但发现时刻是
-    20 天前，超出 `NEW_DISCOVERY_WINDOW_DAYS`（7 天）——"新发现"是有时效的，不是
-    "只要晚于基线就永远算新"。
-    """
-    await db.run_sync(_seed)
-    kids = await db.run_sync(_seed_top_slots)
-
-    def _seed_stale_discovery(db):
-        user_id = db.execute(
-            text("INSERT INTO analysis.user_center(user_name,hashed_pwd,is_active,is_super) "
-                 "VALUES ('cn-stale','x',true,false) RETURNING id"),
-        ).scalar()
-        db.execute(
-            text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at) "
-                 "VALUES ('A1STALESELLER','US',now() - interval '30 days')")
-        )
-        db.execute(
-            text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
-                 "VALUES ('A1STALESELLER','US','B0SLOT00002',now() - interval '20 days')")
-        )
-        db.execute(
-            text("INSERT INTO analysis.user_seller_watch(user_id,seller_id,site) "
-                 "VALUES (:u,'A1STALESELLER','US')"),
-            {"u": user_id},
-        )
-        db.flush()
-        return user_id
-
-    user_id = await db.run_sync(_seed_stale_discovery)
-    miss, resp = await _row_for(db, kids["kw-full"], competitor_new=True, user_id=user_id)
-    assert miss is None
-    assert resp.total == 0
+    assert explicit.total == omitted.total
+    assert [r["keyword_id"] for r in explicit.data] == [r["keyword_id"] for r in omitted.data]
+    assert omitted.total > 0
 
 
 # --------------------------------------------------------------------------
@@ -891,7 +704,7 @@ async def test_response_flags_slice_pending_rebuild(db):
     """切片没有任何品牌数据时，响应要标出「待重建」。"""
     await db.run_sync(_seed)  # _seed 的行不带品牌/类目
 
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
 
     assert resp.pending_rebuild is True
 
@@ -901,6 +714,6 @@ async def test_rebuilt_slice_is_not_flagged(db):
     await db.run_sync(_seed)
     await db.run_sync(_seed_top_slots)  # 这个夹具写了 top1..3_brand_id
 
-    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3), user_id=USER_ID)
+    resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
 
     assert resp.pending_rebuild is False

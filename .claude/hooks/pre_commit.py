@@ -21,7 +21,7 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 # 后端改动的判定路径。alembic/ 也算：迁移写错会让整个部署起不来。
 BACKEND_PREFIXES = ("app/", "scripts/", "test/", "alembic/")
@@ -34,6 +34,13 @@ EXTENSION_PREFIX = "extension/"
 # 本机测试库在 pgbase 容器，映射到 5433；5432 被别的项目的 PostgreSQL 占着。端口写错时探测连不上、
 # 集成测试整片静默跳过（曾跳过 378 个而门禁照样放行），所以端口必须显式写出，不能靠默认 5432。
 TEST_DB_URL = "postgresql://postgres:pwd123@localhost:5433/keywordiq_test"
+
+# 目标仓库（worktree）可以在自己的 .env 里写 TEST_DATABASE_URL，让门禁改用它自己的一次性库。
+# 共享库只能停在一条迁移链上：两个分支各带一条接在同一父节点上的迁移时，谁占着共享库，
+# 另一个分支的门禁就必然红（2026-11-10 竞对与核价并行时撞上）。覆盖只接受本机地址——
+# 夹具会 TRUNCATE 业务表，指到远端或转发端口上的生产库就是事故。
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_REDIRECT_PARAMS = {"host", "hostaddr", "service", "servicefile"}
 
 # 单条检查的超时上限。后端全量约 5 秒、前端约 15 秒，给到分钟级只为兜住"卡死"这一种
 # 情况——正常慢一点不该被误杀，真卡住则必须有个头。
@@ -209,11 +216,58 @@ def _commits_all(command: str) -> bool:
     return False
 
 
-def _port_open() -> bool:
+def test_db_url(repo: Path) -> str:
+    """本次提交的集成测试库：目标仓库 .env 的 TEST_DATABASE_URL，没写就用共享库。
+
+    只认 ``TEST_DATABASE_URL=`` 这一行，不解析整份 .env，也不读 DATABASE_URL：
+    后者是应用自己的连接，可能指向开发库，拿来给会 TRUNCATE 的夹具用不安全。
+    """
+    env_file = repo / ".env"
+    try:
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return TEST_DB_URL
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        if not line.startswith("TEST_DATABASE_URL="):
+            continue
+        value = line.split("=", 1)[1].split(" #", 1)[0].strip().strip("'\"")
+        return value or TEST_DB_URL
+    return TEST_DB_URL
+
+
+def override_rejection(url: str) -> str | None:
+    """覆盖的测试库不在本机时返回拒绝原因；共享库本身不检查。"""
+    if url == TEST_DB_URL:
+        return None
+    parts = urlsplit(url)
+    # libpq 允许 query 里的 host/hostaddr/service 改写真正的连接目标，netloc 里逗号分隔的
+    # 多主机同理；只看 hostname 会被 `localhost:5433/x?host=远端` 绕过（PR #173 Codex P1）。
+    # 这些写法在本机一次性库上用不到，一律拒绝。
+    redirecting = {k.lower() for k in parse_qs(parts.query, keep_blank_values=True)} & _REDIRECT_PARAMS
+    if redirecting or "," in parts.netloc:
+        return (
+            "目标仓库 .env 的 TEST_DATABASE_URL 用了会改写连接目标的写法"
+            f"（{', '.join(sorted(redirecting)) or '多主机'}），门禁无法确认它连的是本机。"
+            "改成 postgresql://用户:密码@localhost:端口/库名 的单主机写法。"
+        )
+    host = parts.hostname or ""
+    if host not in _LOCAL_HOSTS:
+        return (
+            f"目标仓库 .env 的 TEST_DATABASE_URL 指向 {host or '（无主机）'}，不是本机。"
+            "门禁的集成测试会 TRUNCATE 业务表，只允许本机一次性测试库；"
+            "删掉这一行即回到共享库 keywordiq_test。"
+        )
+    return None
+
+
+def _port_open(url: str = TEST_DB_URL) -> bool:
     # 主机与端口取自 TEST_DB_URL，不另写默认值：曾默认 5432，测试库挪到 5433 后，5432 上
     # 别的项目的 PG 一停，这里就判「没起库」，集成测试又整片静默跳过（PR #157 Codex 复审）。
-    url = urlsplit(TEST_DB_URL)
-    host, port = url.hostname or "localhost", url.port or 5432
+    parts = urlsplit(url)
+    host, port = parts.hostname or "localhost", parts.port or 5432
     try:
         with socket.create_connection((host, port), timeout=0.4):
             return True
@@ -221,7 +275,7 @@ def _port_open() -> bool:
         return False
 
 
-def _test_db_reachable() -> bool:
+def _test_db_reachable(url: str = TEST_DB_URL) -> bool:
     """能不能真的连上 keywordiq_test 并跑一条语句。
 
     端口通只说明"本机有个 PostgreSQL"，不说明"有这个库"。装了别的项目的 PG 时
@@ -234,14 +288,14 @@ def _test_db_reachable() -> bool:
         return False
 
     try:
-        conn = psycopg2.connect(TEST_DB_URL, connect_timeout=2)
+        conn = psycopg2.connect(url, connect_timeout=2)
     except Exception:
         return False
     conn.close()
     return True
 
 
-def postgres_up() -> bool:
+def postgres_up(url: str = TEST_DB_URL) -> bool:
     """本地测试库在不在。在就解开集成测试的 skip gate，不在就只跑单元部分。
 
     连不上不算失败：CI 有真库兜底，本地没起库时把集成测试跳过、让门禁仍然可用，
@@ -250,7 +304,7 @@ def postgres_up() -> bool:
     先探端口再连库：端口不通时省掉一次两秒的连接超时，这是最常见的情况
     （本机根本没起 PG）。
     """
-    return _port_open() and _test_db_reachable()
+    return _port_open(url) and _test_db_reachable(url)
 
 
 def deny(reason: str) -> None:
@@ -316,7 +370,11 @@ def main() -> None:
 
     if backend:
         checks.append(("ruff", ["uv", "run", "ruff", "check", "."], repo, {}))
-        env = {"TEST_DATABASE_URL": TEST_DB_URL} if postgres_up() else {}
+        db_url = test_db_url(repo)
+        rejection = override_rejection(db_url)
+        if rejection:
+            deny("提交被门禁拦下——" + rejection)
+        env = {"TEST_DATABASE_URL": db_url} if postgres_up(db_url) else {}
         checks.append(("pytest", ["uv", "run", "pytest", "test/", "-q"], repo, env))
 
     if frontend:

@@ -98,15 +98,15 @@ def test_asins_cap_counts_after_dedup():
 
 
 # --------------------------------------------------------------------------
-# ASIN 三槽位任一命中 + 竞对新发现筛选（issue #56 P2）
+# ASIN 三槽位任一命中（issue #56 P2）
 #
-# 这两条例外地断言 SQL 形状（而不是留给集成测试）：光靠 request_has_filters 或行为
+# 这几条例外地断言 SQL 形状（而不是留给集成测试）：光靠 request_has_filters 或行为
 # 断言看不出「只命中了 top1」这种退化，必须直接看编译出的 SQL 里有没有 top2/top3 那两列。
 # --------------------------------------------------------------------------
 
 
 def _compiled_sql(req: AnalysisSearchRequest) -> str:
-    stmt = search_stmt("US", "DAY", date(2026, 7, 18), req, user_id=7)
+    stmt = search_stmt("US", "DAY", date(2026, 7, 18), req)
     return str(stmt.compile(compile_kwargs={"literal_binds": True}))
 
 
@@ -120,47 +120,17 @@ def test_asin_filter_hits_all_three_product_slots():
 
 def test_asin_filter_hits_all_three_slots_in_week_view():
     """周视图走另一张事实表，同一条筛选也要覆盖三个槽位。"""
-    stmt = search_stmt("GB", "WEEK", date(2026, 7, 18), _req(asins=["3161484100"]), user_id=7)
+    stmt = search_stmt("GB", "WEEK", date(2026, 7, 18), _req(asins=["3161484100"]))
     sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
     assert "fact_weekly" in sql
     assert all(f"top{n}_product_id IN" in sql for n in (1, 2, 3))
 
 
-def test_competitor_new_filter_joins_watch_and_asin_and_hits_three_slots():
-    """命中口径：前三商品槽位任一 ASIN 属于当前用户在当前站点关注的卖家**近期新发现**
-    的 ASIN——不是"曾经上报过就算"（PR #66 复审 P1：`competitor_seller_asin` 不做
-    下架删除，无时间限定的话这个开关会命中卖家有史以来上报过的全部商品，与字段名
-    "新品"名实不符）。判据复用卖家清单「近 7 日新发现」同一个窗口常量与 SQL 形状。
-    """
-    sql = _compiled_sql(_req(competitor_new=True))
-    assert "competitor_seller_asin" in sql
-    assert "competitor_seller" in sql
-    assert "user_seller_watch" in sql
-    assert "top1_product_id" in sql
-    assert "top2_product_id" in sql
-    assert "top3_product_id" in sql
-    # user_id 与 site 都作为常量条件出现（literal_binds 会把值编译进 SQL 文本）
-    assert "user_seller_watch.user_id = 7" in sql
-    assert "competitor_seller_asin.site = 'US'" in sql
-    # 基线之后 + 窗口内两个时间条件都要出现，缺一个都会退化回"只要上报过就算"
-    assert "first_seen_at >" in sql
-    assert "baseline_at" in sql
-    assert "interval" in sql
-
-
-def test_competitor_new_alone_counts_as_a_filter():
-    """决策 3 的回归：漏掉这一项，总数会静默走 site_data_stats 的预存值而不是精确计数，
-    分页页码全部对不上，且两条路径都能正常跑完、不会有任何报错（issue #56 P2 design.md）。
-    """
-    assert request_has_filters(_req(competitor_new=True)) is True
-    assert request_has_filters(_req(competitor_new=None)) is False
-
-
-def test_competitor_new_false_is_not_a_filter():
-    """`competitor_new` 只有两态（不像 `is_new` 三态），`False` 与 `None` 结果必须一样。
-
-    `_apply_filters` 里是 `if req.competitor_new:`——`False` 不会被施加任何条件，
-    如果这里裸传 `req.competitor_new` 会让 `False` 被 `v is not None` 误判成"带筛选"，
-    从而错误地切到精确计数路径（PR #66 复审 P2）。
-    """
-    assert request_has_filters(_req(competitor_new=False)) is False
+def test_retired_competitor_new_never_touches_competitor_tables():
+    """#166：竞对新发现已下架。false/不传的 SQL 不出现任何竞对表，也不计为带筛选。"""
+    for value in (False, None):
+        req = _req(competitor_new=value)
+        sql = _compiled_sql(req)
+        assert "competitor_seller" not in sql
+        assert "user_seller_watch" not in sql
+        assert request_has_filters(req) is False

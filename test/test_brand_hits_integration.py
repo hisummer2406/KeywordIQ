@@ -13,7 +13,7 @@ from app.table.analysis import analysis_service as service
 from app.table.analysis.brand_hits import invalidate_slice, rebuild_slice
 from app.table.search.search_schemas import AnalysisSearchRequest
 from test import test_site_scoped_query_integration as _base
-from test.test_site_scoped_query_integration import D3, SITE, USER_ID, pytestmark  # noqa: F401
+from test.test_site_scoped_query_integration import D3, SITE, pytestmark  # noqa: F401
 
 db = _base.db
 
@@ -58,7 +58,7 @@ def _ready(db_sync) -> bool:
 
 async def _keywords(db, **extra) -> tuple[int, list[str]]:
     req = AnalysisSearchRequest(site=SITE, view="DAY", date=D3, perPage=200, include="LISTED", **extra)
-    resp = await service.search(db, req, user_id=USER_ID)
+    resp = await service.search(db, req)
     return resp.total, sorted(r["keyword"] for r in resp.data)
 
 
@@ -222,9 +222,9 @@ async def test_stale_ready_hint_still_excludes_new_pairs(db):
     def run(ready_hint):
         async def go():
             count = (await db.execute(crud.count_filtered_stmt(
-                SITE, "DAY", D3, req, USER_ID, brand_hits_ready=ready_hint))).scalar_one()
+                SITE, "DAY", D3, req, brand_hits_ready=ready_hint))).scalar_one()
             rows = (await db.execute(crud.search_stmt(
-                SITE, "DAY", D3, req, user_id=USER_ID, brand_hits_ready=ready_hint))).all()
+                SITE, "DAY", D3, req, brand_hits_ready=ready_hint))).all()
             return count, sorted(r.keyword for r in rows)
         return go()
 

@@ -114,24 +114,13 @@ class AnalysisSearchRequest(BaseModel):
     # 首次入榜（keyword-first-seen）：只两态——`true` 只看首次入榜，`false`/未传不筛。
     first_listed: bool | None = Field(None, description="只看所选期次首次入榜的关键词")
 
-    # 竞对新发现：命中口径见 competitor-keyword-crosslink 能力——三个商品槽位任一个的
-    # ASIN，是当前用户在当前站点关注的卖家**近期新发现**的 ASIN
-    # （`first_seen_at > baseline_at` 且落在 `NEW_DISCOVERY_WINDOW_DAYS` 窗口内）。
-    # `None` 不筛，与 `first_listed` 同构。
+    # 已下架的「竞对新发现」筛选（#166，site-scoped-query「已下架的竞对新发现参数明确拒绝」）。
     #
-    # **不是"在售集合"。** `competitor_seller_asin` 不做下架删除，按"曾经上报过"判定会
-    # 命中卖家有史以来的全部商品（PR #66 复审 P1 的原始缺陷）。判定口径改了、这行文案
-    # 没跟着改的话，OpenAPI 上写的就是那个已被否决的旧口径。
-    #
-    # **这个字段必须同步进 crud.request_has_filters()**，否则只勾这一项时总数仍会走
-    # `site_data_stats` 的预存值路径而非精确计算路径，页码与实际可翻的页数对不上，且
-    # 没有任何地方会报错（issue #56 P2 design.md 决策 3）。
+    # **字段保留只为明确拒绝，不施加任何筛选。** 直接删掉的话，模型默认忽略多余字段，旧客户端
+    # 传 `true` 会被静默丢弃、拿到未筛选的全量结果，还以为是竞对命中结果。`true` 在解析阶段
+    # 422（不访问数据库，`/export` 因此也在开流之前失败）；`false`/未传与不带该字段等价。
     competitor_new: bool | None = Field(
-        None,
-        description=(
-            "是否命中当前用户关注的竞对卖家近期新发现的 ASIN"
-            "（前三商品槽位任一命中；窗口与卖家清单「近 7 日新发现」同一常量）"
-        ),
+        None, description="已下架：传 true 返回 422；false 或不传与不带该字段等价"
     )
 
     # 排除「关键词文本包含它自己前三品牌之一」的词（issue #119）：这类词多是品牌词，对找
@@ -141,6 +130,14 @@ class AnalysisSearchRequest(BaseModel):
         None,
         description="排除关键词文本中包含该词前三品牌名（整词、不分大小写）的词",
     )
+
+    @field_validator("competitor_new")
+    @classmethod
+    def _reject_retired_competitor_new(cls, v: bool | None) -> None:
+        """`true` 拒绝；其余落回 ``None``，结果键与「是否带筛选」因此与不传完全一致。"""
+        if v:
+            raise ValueError("竞对新发现筛选已下架，请移除该条件")
+        return None
 
     @field_validator("keyword")
     @classmethod
@@ -191,7 +188,7 @@ class FactRowBase(BaseModel):
     （ASIN/标题/品牌/类目为 None，两个份额为 0），**不由后一名顶替**——名次与槽位的
     对应关系是这些字段的全部意义。
 
-    注意：这三组字段只是**展示**数据。品牌/类目/ASIN/竞对新发现的筛选按前三任一命中，
+    注意：这三组字段只是**展示**数据。品牌/类目/ASIN 的筛选按前三任一命中，
     标题筛选与排序仍只作用于 top1，见 crud.\\_apply_filters 与 crud.SORTABLE_FIELDS。
     """
 
