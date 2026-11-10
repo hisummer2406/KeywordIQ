@@ -40,6 +40,9 @@ from app.table.analysis.column_comments import (
     FIRST_SEEN_BASIS_COMMENT,
     FIRST_SEEN_DATE_COMMENT,
     FIRST_SEEN_PERIOD_COMMENT,
+    PERIOD_FIRST_BASIS_COMMENT,
+    PERIOD_FIRST_DAY_DATE_COMMENT,
+    PERIOD_FIRST_WEEK_DATE_COMMENT,
     SITE_COLUMN_COMMENT,
 )
 from database import Base
@@ -76,6 +79,21 @@ class DimKeyword(Base):
     first_seen_basis: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="UNKNOWN", comment=FIRST_SEEN_BASIS_COMMENT
     )
+    # 周期首次证据（#178）：日报、周报各自的永久首次，与上面的共享记录互不覆盖。比共享记录多一个
+    # 等级 ABSENT（已确认从未出现在该周期）：周报新建的词在日报里是「确知没见过」而不是存量未知，
+    # 它第一次上日榜时才能记为 IMPORTED——这正是「先上周榜、后上日榜」的词。
+    day_first_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment=PERIOD_FIRST_DAY_DATE_COMMENT
+    )
+    day_first_basis: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="UNKNOWN", comment=PERIOD_FIRST_BASIS_COMMENT
+    )
+    week_first_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment=PERIOD_FIRST_WEEK_DATE_COMMENT
+    )
+    week_first_basis: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="UNKNOWN", comment=PERIOD_FIRST_BASIS_COMMENT
+    )
 
     __table_args__ = (
         UniqueConstraint("site", "keyword", name="uq_dim_keyword_site_keyword"),
@@ -84,6 +102,11 @@ class DimKeyword(Base):
         # min() 直接取索引最左一项，而不是顺着 EARLIEST_OBSERVED 的行往后扫。
         Index("idx_dim_keyword_first_seen", "site", "first_seen_date",
               postgresql_where=text("first_seen_basis = 'IMPORTED'")),
+        # 周期首次：同上的理由，只收 IMPORTED，周期监测起点 min() 取索引最左项。
+        Index("idx_dim_keyword_day_first", "site", "day_first_date",
+              postgresql_where=text("day_first_basis = 'IMPORTED'")),
+        Index("idx_dim_keyword_week_first", "site", "week_first_date",
+              postgresql_where=text("week_first_basis = 'IMPORTED'")),
         # 关键词子串搜索（keyword ILIKE '%x%'）。trigram 索引对大小写不敏感，
         # 天然匹配 ILIKE 的语义。建在这张维度表（约 500 万行/站）上，而不是事实表
         # （约 8 亿行）——同样的 trigram 建在事实表上会是几十 GB 且拖慢热写路径。

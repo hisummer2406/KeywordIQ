@@ -88,6 +88,38 @@ def first_seen_advance_sql(
     """
 
 
+# 周期首次证据（#178）的列前缀；另一周期在新建词时记 ABSENT。
+PERIOD_FIRST_PREFIX = {"DAY": "day", "WEEK": "week"}
+_OTHER_PERIOD = {"DAY": "WEEK", "WEEK": "DAY"}
+
+
+def period_first_advance_sql(period: str, source: str, match: str) -> str:
+    """周期首次证据的推进 UPDATE（keyword-first-seen「周期首次证据在导入时维护」）。
+
+    只看本周期 ``P`` 的列，比较键只有期次日期（同一周期内没有日周之分）。三种情形一条语句：
+
+    - ``ABSENT``（确知该周期从未见过，如周报新建的词第一次上日榜）→ 本期 ``IMPORTED``；
+    - ``UNKNOWN``（迁移前的存量词）→ 本期 ``EARLIEST_OBSERVED``，**不升级**为导入创建；
+    - 已有日期 → 仅当本期更早时前移日期，等级不变。
+
+    日期为空当且仅当等级是 ``UNKNOWN``/``ABSENT``，所以 ``date IS NULL`` 就是前两种情形。
+    相等不写：重复导入零更新（每次 UPDATE 都会在 ``keyword`` 的 GIN 上插新条目）。参数
+    ``:site`` ``:rdate``；``k`` 是 ``dim_keyword``，``source``/``match`` 同 ``first_seen_advance_sql``。
+    """
+    col = PERIOD_FIRST_PREFIX[period]
+    return f"""
+        UPDATE analysis.dim_keyword k
+           SET {col}_first_date = CAST(:rdate AS date),
+               {col}_first_basis = CASE k.{col}_first_basis
+                                       WHEN 'ABSENT' THEN 'IMPORTED'
+                                       WHEN 'UNKNOWN' THEN 'EARLIEST_OBSERVED'
+                                       ELSE k.{col}_first_basis END
+          FROM {source}
+         WHERE k.site = :site AND {match}
+           AND (k.{col}_first_date IS NULL OR CAST(:rdate AS date) < k.{col}_first_date)
+    """
+
+
 class ImportError_(Exception):
     """导入过程中的可预期错误（结构不符、周期非法等）。"""
 
@@ -298,6 +330,9 @@ def _upsert_keywords(session: Session, site: str, period: str, report_date: date
       它是存量词，当然不是新词）。相等不写——重复导入零更新，与 ``dim_product`` 的
       ``IS DISTINCT FROM`` 同一条纪律（UPDATE 会在每个索引上插新条目，``keyword`` 上挂着 GIN）。
 
+    周期首次证据（#178，``period_first_advance_sql``）同一事务维护：新词本周期 ``IMPORTED``、
+    另一周期 ``ABSENT``（新建行即证明该站点从未见过它，日报里当然也没见过）；存量词按周期推进。
+
     全部与调用方同一事务，导入失败整体回滚，不会留下失败期次的首次记录。
     """
     params = {
@@ -308,25 +343,21 @@ def _upsert_keywords(session: Session, site: str, period: str, report_date: date
         text(
             """
             INSERT INTO analysis.dim_keyword
-                   (site, keyword, first_seen_date, first_seen_period_type, first_seen_basis)
-            SELECT DISTINCT :site, c1, CAST(:rdate AS date), :period, 'IMPORTED'
+                   (site, keyword, first_seen_date, first_seen_period_type, first_seen_basis,
+                    {this}_first_date, {this}_first_basis, {other}_first_basis)
+            SELECT DISTINCT :site, c1, CAST(:rdate AS date), :period, 'IMPORTED',
+                   CAST(:rdate AS date), 'IMPORTED', 'ABSENT'
               FROM analysis._import_staging
              WHERE NULLIF(c1, '') IS NOT NULL
             ON CONFLICT (site, keyword) DO NOTHING
-            """
+            """.format(this=PERIOD_FIRST_PREFIX[period],
+                       other=PERIOD_FIRST_PREFIX[_OTHER_PERIOD[period]])
         ),
         params,
     )
-    session.execute(
-        text(
-            first_seen_advance_sql(
-                "(SELECT DISTINCT c1 FROM analysis._import_staging"
-                " WHERE NULLIF(c1, '') IS NOT NULL) s",
-                "k.keyword = s.c1",
-            )
-        ),
-        params,
-    )
+    staged = "(SELECT DISTINCT c1 FROM analysis._import_staging WHERE NULLIF(c1, '') IS NOT NULL) s"
+    session.execute(text(first_seen_advance_sql(staged, "k.keyword = s.c1")), params)
+    session.execute(text(period_first_advance_sql(period, staged, "k.keyword = s.c1")), params)
 
 
 def _upsert_dimensions(session: Session, site: str, period: str, report_date: date) -> None:

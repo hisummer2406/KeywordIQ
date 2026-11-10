@@ -217,6 +217,7 @@ _EXPORT_COLUMNS_BASE: list[tuple[str, str]] = [
     ("previous_ranking", "上期排名"),
     ("ranking_change", "排名变化"),
     ("first_listed", "首次入榜"),
+    # 周期判定列（#178）表头随视图，插在这里见 ``_export_columns``。
     *_product_slot_columns(1),
     *_product_slot_columns(2),
     *_product_slot_columns(3),
@@ -237,8 +238,16 @@ _TREND_COLUMN_LABEL: dict[str, str] = {
 }
 
 
+_PERIOD_FIRST_COLUMN_LABEL: dict[str, str] = {"DAY": "首次进入日榜", "WEEK": "首次进入周榜"}
+
+
 def _export_columns(view: str) -> list[tuple[str, str]]:
-    return [*_EXPORT_COLUMNS_BASE, ("trend", _TREND_COLUMN_LABEL[view])]
+    """「首次入榜」（共享判定，表头不变）之后紧跟当前视图的周期判定列。两列固定都出，
+    不随所选口径增减：口径由表头写明，下游表格的列位置也不会因用户切口径而错位。"""
+    cols = list(_EXPORT_COLUMNS_BASE)
+    at = next(i for i, (key, _) in enumerate(cols) if key == "first_listed") + 1
+    cols.insert(at, ("period_first_listed", _PERIOD_FIRST_COLUMN_LABEL[view]))
+    return [*cols, ("trend", _TREND_COLUMN_LABEL[view])]
 
 
 def _resolve_site(site: str | None) -> str:
@@ -415,7 +424,7 @@ def _search_filter_summary(req: AnalysisSearchRequest) -> dict:
         "asins_count": len(req.asins) if req.asins else 0,
         "categories_count": len(req.categories) if req.categories else 0,
         "brands_count": len(req.brands) if req.brands else 0,
-        "first_listed": req.first_listed,
+        "first_listing": req.first_listing,
         "exclude_brand_in_keyword": req.exclude_brand_in_keyword,
         "include": req.include,
     }
@@ -751,27 +760,37 @@ async def get_categories(
 
 
 async def get_first_listed(
-    db: AsyncSession, site: str | None, view: str, on: date | None = None
+    db: AsyncSession, site: str | None, view: str, on: date | None = None, mode: str = "MONITOR",
 ) -> FirstListedSummary | None:
-    """所选期次「首次入榜」数量 + 统计范围。
+    """所选期次在首次口径 ``mode`` 下的数量 + 统计范围。
 
-    映射窗口起点（日 ``d``；周 ``w-6``）不晚于站点监测起点 ``B``（导入创建的词的最早首次日期）
-    时 ``judgeable=False``、``count=None``：那之前没有对照期，**无法判断而不是 0**。
+    ``MONITOR``（共享口径）：映射窗口起点（日 ``d``；周 ``w-6``）不晚于站点监测起点 ``B`` 时
+    ``judgeable=False``、``count=None``——**无法判断而不是 0**。
+    ``PERIOD``（周期口径，#178）：``on`` 不晚于该周期监测起点 ``B_P`` 时同理不可判断；可判断时
+    另给 ``previous_period_missing``（上一期同周期没有已完成导入，部分词可能更早已出现）。
     站点无数据时返回 ``None``（调用方给空），与下拉选项同一约定。
     """
     resolved_site, resolved_date = await _resolve_options_scope(db, site, view, on)
     if resolved_date is None:
         return None
-    earliest = (await db.execute(crud.imported_since_stmt(resolved_site))).scalar()
-    if earliest is None or crud.first_listed_window_start(view, resolved_date) <= earliest:
-        return FirstListedSummary(
-            site=resolved_site, view=view, on=resolved_date,  # type: ignore[arg-type]
-            judgeable=False, earliest_known_date=earliest,
-        )
-    count = (await db.execute(crud.first_listed_count_stmt(resolved_site, view, resolved_date))).scalar_one()
+    base = {"site": resolved_site, "view": view, "on": resolved_date, "mode": mode}
+    if mode == "PERIOD":
+        earliest = (await db.execute(crud.period_imported_since_stmt(resolved_site, view))).scalar()
+        judgeable = earliest is not None and resolved_date > earliest
+    else:
+        earliest = (await db.execute(crud.imported_since_stmt(resolved_site))).scalar()
+        judgeable = earliest is not None and crud.first_listed_window_start(view, resolved_date) > earliest
+    if not judgeable:
+        return FirstListedSummary(**base, judgeable=False, earliest_known_date=earliest)
+    count = (
+        await db.execute(crud.first_listed_count_stmt(resolved_site, view, resolved_date, mode))
+    ).scalar_one()
+    missing = mode == "PERIOD" and bool(
+        (await db.execute(crud.previous_period_missing_stmt(resolved_site, view, resolved_date))).scalar()
+    )
     return FirstListedSummary(
-        site=resolved_site, view=view, on=resolved_date,  # type: ignore[arg-type]
-        judgeable=True, count=count, earliest_known_date=earliest,
+        **base, judgeable=True, count=count, earliest_known_date=earliest,
+        previous_period_missing=missing,
     )
 
 

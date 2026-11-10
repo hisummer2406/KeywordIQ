@@ -717,3 +717,29 @@ async def test_rebuilt_slice_is_not_flagged(db):
     resp = await service.search(db, AnalysisSearchRequest(site=SITE, view="DAY", date=D3))
 
     assert resp.pending_rebuild is False
+
+
+async def test_first_listed_summary_period_mode(db):
+    """#178：mode=PERIOD 按日榜证据计数；日榜起点当期不可判断；上一期无已完成批次时给缺期提示。"""
+    k1, k2 = await db.run_sync(_seed)
+    await db.execute(text(
+        "UPDATE analysis.dim_keyword SET day_first_date = CASE keyword_id WHEN :k1 THEN CAST(:d1 AS date)"
+        " ELSE CAST(:d3 AS date) END, day_first_basis = 'IMPORTED' WHERE keyword_id IN (:k1, :k2)"
+    ), {"k1": k1, "k2": k2, "d1": D1, "d3": D3})
+
+    got = await service.get_first_listed(db, SITE, "DAY", D3, "PERIOD")
+    assert (got.mode, got.judgeable, got.count, got.earliest_known_date) == ("PERIOD", True, 1, D1)
+    assert got.previous_period_missing is True  # D2 没有已完成批次
+
+    await db.execute(text(
+        "INSERT INTO analysis.import_batch (site, period_type, report_date, status)"
+        " VALUES (:s, 'DAY', :d, 'COMPLETED')"
+    ), {"s": SITE, "d": D2})
+    assert (await service.get_first_listed(db, SITE, "DAY", D3, "PERIOD")).previous_period_missing is False
+
+    at_start = await service.get_first_listed(db, SITE, "DAY", D1, "PERIOD")
+    assert (at_start.judgeable, at_start.count) == (False, None)
+
+    # 缺省口径不受周期证据影响：两词的共享记录都是 UNKNOWN，不可判断
+    monitor = await service.get_first_listed(db, SITE, "DAY", D3)
+    assert (monitor.mode, monitor.judgeable, monitor.previous_period_missing) == ("MONITOR", False, False)

@@ -20,6 +20,9 @@ MAX_ASINS = 100
 
 View = Literal["DAY", "WEEK"]
 Include = Literal["ALL", "LISTED", "DROPPED"]
+#: 首次口径（#178）：PERIOD 首次进入当前榜单（日视图=日榜、周视图=周榜，周期独立）；
+#: MONITOR 首次进入监测（日周共享记录 + 日周映射，即旧 ``first_listed``）。
+FirstListing = Literal["PERIOD", "MONITOR"]
 
 
 class AnalysisSearchRequest(BaseModel):
@@ -112,7 +115,13 @@ class AnalysisSearchRequest(BaseModel):
 
     # 布尔筛选
     # 首次入榜（keyword-first-seen）：只两态——`true` 只看首次入榜，`false`/未传不筛。
-    first_listed: bool | None = Field(None, description="只看所选期次首次入榜的关键词")
+    first_listed: bool | None = Field(
+        None, description="旧参数：true 等同 first_listing=MONITOR；请求模型规范化后恒为 None"
+    )
+    first_listing: FirstListing | None = Field(
+        None,
+        description="首次口径：PERIOD 首次进入当前榜单（日榜/周榜）；MONITOR 首次进入监测；不传不筛",
+    )
 
     # 已下架的「竞对新发现」筛选（#166，site-scoped-query「已下架的竞对新发现参数明确拒绝」）。
     #
@@ -138,6 +147,21 @@ class AnalysisSearchRequest(BaseModel):
         if v:
             raise ValueError("竞对新发现筛选已下架，请移除该条件")
         return None
+
+    @model_validator(mode="after")
+    def _fold_first_listed(self) -> "AnalysisSearchRequest":
+        """把旧 ``first_listed`` 折叠进 ``first_listing``，下游只认一个有效口径（design D5）。
+
+        ``first_listed=true`` 与 ``MONITOR`` 是同一结果，规范成同一个值，结果缓存键因此相同；
+        与 ``PERIOD`` 矛盾时 422——取交集或择一都会让用户拿到与所选口径不符的结果。折叠后
+        ``first_listed`` 恒为 ``None``，没有第二个字段可被分别解释。
+        """
+        if self.first_listed:
+            if self.first_listing == "PERIOD":
+                raise ValueError("first_listed=true 与 first_listing=PERIOD 矛盾，请只保留一个首次口径")
+            self.first_listing = "MONITOR"
+        self.first_listed = None
+        return self
 
     @field_validator("keyword")
     @classmethod
@@ -206,6 +230,13 @@ class FactRowBase(BaseModel):
     first_seen_date: _Date | None = Field(None, description="首次入榜的期次日期；依据未知时为空")
     first_seen_basis: str | None = Field(
         None, description="IMPORTED 导入创建 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知"
+    )
+    # 当前视图周期的首次（#178）：日视图=首次进入日榜，周视图=首次进入周榜；不做日周映射。
+    period_first_listed: bool = False
+    period_first_date: _Date | None = Field(None, description="当前视图周期的首次期次日期")
+    period_first_basis: str | None = Field(
+        None,
+        description="IMPORTED / EARLIEST_OBSERVED / UNKNOWN / ABSENT（已确认未上过该榜）",
     )
 
     # 掉榜行独有：它唯一能携带的跨期信息，且期次明确标注。
@@ -304,10 +335,14 @@ class FirstListedSummary(BaseModel):
     site: str
     view: View
     on: _Date
+    mode: FirstListing = "MONITOR"
     judgeable: bool
     count: int | None = None
     earliest_known_date: _Date | None = Field(
-        None, description="站点首次入榜统计的起点：最早的「已确认首次」期次日期"
+        None, description="统计起点：所选口径下最早的「导入创建」期次日期（PERIOD 为该周期的监测起点）"
+    )
+    previous_period_missing: bool = Field(
+        False, description="仅 PERIOD：所选期次的上一期同周期报告没有已完成导入，部分词可能更早已出现"
     )
 
 

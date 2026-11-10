@@ -53,7 +53,7 @@
 - `result_key`：新字段登记为枚举；`first_listed=true` 与 `first_listing=MONITOR` 规范成同一个键（同一结果）；不同口径不同键。
 - 行新增 `period_first_listed: bool`、`period_first_date`、`period_first_basis`（当前视图对应周期）；`first_listed` / `first_seen_*` 原样。掉榜行恒 false。
 - `GET /api/analysis/first-listed` 增加 `mode=PERIOD|MONITOR`（缺省 MONITOR，旧客户端不变），响应增加 `mode` 与 `previous_period_missing`。
-- 导出：「首次入榜」列在 `MONITOR` 下仍为共享判定；`PERIOD` 下列名改为「首次进入日榜 / 首次进入周榜」，取周期判定；文件附带口径说明行由现有导出摘要承载（复用 `search_summary_fields`）。
+- 导出：保留「首次入榜」列（共享判定，列名与含义不变，下游表格不破），在其后新增「首次进入日榜」（日视图）或「首次进入周榜」（周视图）列取周期判定；两列不随所选口径增减，口径由列名写明。
 - 品牌排除：界面在两种首次口径下都随默认发送（现为仅 `first_listed`）。
 
 ### D6 前端
