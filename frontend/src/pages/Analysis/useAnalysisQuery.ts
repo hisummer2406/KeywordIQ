@@ -10,7 +10,6 @@ import {
 } from '@/services/analysis';
 import {
   defaultFilters,
-  sanitizeCompetitorNew,
   searchInputError,
   toSearchBody,
   type FilterDraft,
@@ -38,7 +37,7 @@ const FILTER_KEYS = [
   'keyword', 'asins', 'product_title', 'brands', 'categories',
   'ranking_min', 'ranking_max', 'change_min', 'change_max',
   'click_share_min', 'click_share_max', 'conversion_share_min', 'conversion_share_max',
-  'first_listed', 'competitor_new', 'exclude_brand_in_keyword',
+  'first_listed', 'exclude_brand_in_keyword',
 ] as const satisfies readonly (keyof SearchBody)[];
 
 type SortDraft = { field: string; dir: 'asc' | 'desc' };
@@ -97,9 +96,8 @@ export function useAnalysisQuery(options: {
   session: AnalysisSession;
   saved: SavedMode | null;
   userId: number | undefined;
-  canViewCompetitor: boolean;
 }): AnalysisQueryState {
-  const { scope, session, saved, userId, canViewCompetitor } = options;
+  const { scope, session, saved, userId } = options;
   const { initialSnapshot, persist, markDataReady, consumeRestoredRows } = session;
 
   const actionRef = useRef<ActionType>();
@@ -124,7 +122,7 @@ export function useAnalysisQuery(options: {
 
   const [filters, setFilters] = useCachedState('filters', () =>
     saved
-      ? sanitizeCompetitorNew({ ...saved.filters, q: '', qMode: 'ALL_TERMS' }, canViewCompetitor)
+      ? { ...saved.filters, q: '', qMode: 'ALL_TERMS' as const }
       : defaultFilters(),
   );
 
@@ -219,19 +217,14 @@ export function useAnalysisQuery(options: {
    * 约 0.9s），而它**只随条件变化**——翻页、改排序、改每页条数都不会改变命中了多少行。
    * 所以只有这里（条件真的变了）才需要重算，其余情况沿用缓存值。
    *
-   * **`competitor_new` 在这里再做一次权限兜底**（PR #66 复审 P2）：草稿状态已经在
-   * 读取保存的条件时按权限规范化过（见 `sanitizeCompetitorNew`），这里是三处生效入口
-   * （立即查询/开始筛选/首屏自动查询）唯一共同必经之处，兜底不依赖调用方各自记得。
-   * `sig` 由本函数统一重算而不是接调用方传入的——否则去掉字段后 `body` 与传入的
-   * `sig` 不再对应同一份内容，`draftSig`/`appliedSig` 的比较会失真。
+   * `sig` 由本函数统一重算而不是接调用方传入的，`draftSig`/`appliedSig` 因此总对应同一份内容。
    */
   const apply = (body: SearchBody) => {
-    const safeBody: SearchBody = canViewCompetitor ? body : { ...body, competitor_new: undefined };
-    appliedRef.current = safeBody;
+    appliedRef.current = body;
     needsTotalRef.current = true;
-    persist({ applied: safeBody, needsTotal: true });
-    setAppliedSig(JSON.stringify(safeBody));
-    setAppliedView(safeBody.view);
+    persist({ applied: body, needsTotal: true });
+    setAppliedSig(JSON.stringify(body));
+    setAppliedView(body.view);
     actionRef.current?.reload(true);
   };
 

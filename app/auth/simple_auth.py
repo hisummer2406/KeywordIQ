@@ -198,8 +198,8 @@ class SimpleAuth:
         """按需校验权限，供 `require_permission` 的依赖注入覆盖不到的场景用：
         某个权限点要不要求，取决于请求体的内容（例如"只在勾了某个筛选开关时才需要"），
         而不是逐路由的静态声明。逻辑与 `require_permission` 内部一致，独立成静态方法
-        是为了不在每个调用点各写一遍同样的判断（PR #66 复审 P1：`competitor_new`
-        读取的是竞对私有数据，只挂 `analysis:view`/`analysis:export` 不够）。
+        是为了不在每个调用点各写一遍同样的判断（来源：PR #66 复审 P1——读取另一个域
+        私有数据的筛选，只挂本域的静态权限不够）。
         """
         if user.is_super or permission in user.permission_codes:
             return

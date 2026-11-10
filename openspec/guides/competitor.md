@@ -8,7 +8,6 @@
 - [competitor-storefront-watch](../specs/competitor-storefront-watch/spec.md)
 - [competitor-asin-ingest](../specs/competitor-asin-ingest/spec.md)
 - [dtc-store-monitoring](../specs/dtc-store-monitoring/spec.md)
-- [competitor-keyword-crosslink](../specs/competitor-keyword-crosslink/spec.md)
 - [competitor-browser-collector](../specs/competitor-browser-collector/spec.md)
 
 ## 设计依据

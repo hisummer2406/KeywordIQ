@@ -14,10 +14,9 @@ paths:
 - 默认工厂共用；草稿与生效条件分离，导出/数量/加入词库跟已加载作用域，不能跟未应用的草稿。
 - 首屏初始化用 reloadScopeMeta 返回值，恢复类目传 keepCategories；不能用尚未落位的 React state 组请求。
 - 会话快照优先于按 userId 保存条件再到默认；快照 logout 清，保存条件跨 logout，缺 userId 不回退共享键。
-- 保存生效条件，不存绝对日期/检索词；dirty 拒绝保存。改会话快照形状提升 `CACHE_VERSION`，改保存条件形状提升 `SAVED_MODE_VERSION`（均在 Analysis/index.tsx），旧 payload 不迁移，按规格丢弃。
+- 保存生效条件，不存绝对日期/检索词；dirty 拒绝保存。改会话快照形状提升 `CACHE_VERSION`，改保存条件形状提升 `SAVED_MODE_VERSION`（分别在 Analysis/stateCache.ts、savedMode.ts），旧 payload 不迁移，按规格丢弃。仅删除字段时在读取处剔除（savedMode 的 `RETIRED_FILTER_KEYS`），不提升版本，免得整份丢掉用户其余有效条件（来源 #166 design D4）。
 - 恢复快照只短路首次初始化，立即查询/翻页/排序仍请求；测试前 clearSnapshot，滚动恢复等结果 DOM。
 - 滚动位置靠 scroll 监听，不在卸载 cleanup 才读；重置范围和跨账号缓存不凭直觉修改。
-- competitorNew 在草稿初值、首屏初始化和 apply 各按当前权限规范化；读私有数据同时按后端权限限制。
 - 新筛选同步 request_has_filters/FILTER_KEYS 与计数/导出；缺失、未查询、真零与权限失败分别呈现。
 - 关键词模式/品牌排除/黑名单/7日变化率按 site-scoped-query 与 analysis-screen-layout 的契约，不在 UI 再造公式。
 - 检索目标只由所选搜索方式决定，不按输入格式推断；ASIN 前后端都不做格式校验（ISBN-10 也可能是 ASIN）（#150）。

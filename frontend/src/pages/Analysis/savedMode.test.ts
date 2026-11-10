@@ -19,7 +19,6 @@ const MODE: Omit<SavedMode, 'version'> = {
     firstListed: undefined,
     brands: [],
     productTitle: '',
-    competitorNew: false,
   },
   sort: { field: 'current_ranking', dir: 'asc' },
 };
@@ -38,6 +37,20 @@ describe('savedMode', () => {
   it('写进去能原样读出来', () => {
     expect(writeSavedMode(1, MODE)).toBe(true);
     expect(readSavedMode(1)).toEqual({ ...MODE, version: SAVED_MODE_VERSION });
+  });
+
+  it('旧 payload 里已下架的 competitorNew 读取时剔除，其余条件原样保留（#166）', () => {
+    window.localStorage.setItem(
+      KEY(1),
+      JSON.stringify({
+        ...MODE,
+        filters: { ...MODE.filters, competitorNew: true },
+        version: SAVED_MODE_VERSION,
+      }),
+    );
+    const read = readSavedMode(1);
+    expect(read).toEqual({ ...MODE, version: SAVED_MODE_VERSION });
+    expect(read?.filters).not.toHaveProperty('competitorNew');
   });
 
   it('没存过读到 null', () => {
