@@ -17,7 +17,7 @@
 
 - [x] 3.1 `importer._upsert_keywords`：新词写本周期 IMPORTED、另一周期 ABSENT；存量按表规则推进（相等不写）；SQL 抽成与回填共用的函数
 - [x] 3.2 真 PG 测试：先周后日（#178 样例形态）、两日一周全排列、重复导入夹在中间、补更早日报、失败回滚、跨站点独立；共享记录逐行与改前相同。`test/test_period_first_integration.py`；反向变异（ABSENT→最早可观测、相等也写）对应用例失败
-- [ ] 3.3 `verify-import` 跑真实 CSV（日、周各一份），核对周期证据与批次计数
+- [x] 3.3 真实报表验证（2026-11-10/11，一次性库 `keywordiq_verify_pfl_a/b`，经 `run_import` + LocalFileSource）：US 周 08-01/08-08（1.4G/1.2G）+ 日 08-02/03/09。A 按时间顺序、B 乱序且日 08-03 重复导入；11 个批次均 COMPLETED、total=written（2,730,758/2,316,515/451,823/426,011/452,662）；两库 2,904,950 个词的日/周/共享三组证据逐行相同（sha256 一致）。未覆盖：GB/DE、OSS 入口
 
 ## 4. 查询与 API（D3～D5；keyword-first-seen「首次进入当前榜单按周期独立派生」、site-scoped-query）
 
@@ -26,7 +26,7 @@
 - [x] 4.3 `GET /first-listed?mode=`：PERIOD 数量、不可判断、`previous_period_missing`（读 `import_batch`）
 - [x] 4.4 导出：「首次入榜」后固定加「首次进入日榜/周榜」列（design D5 已改为两列固定都出）；慢请求摘要字段改为 `first_listing`
 - [x] 4.5 测试：数量 = 列表总数（日/周、两口径）；周期不映射；`d ≤ B_P` 不可判断；矛盾 422（含导出开流前）；缓存键；缺期提示；旧调用响应不变。`test_period_first_integration.py`（查询部分）、`test_first_listing_mode_unit.py`、`test_result_key.py`、`test_site_scoped_query_integration.py::test_first_listed_summary_period_mode`
-- [ ] 4.6 本地真实规模 `EXPLAIN (ANALYZE, BUFFERS)`：US 日视图与周视图 PERIOD 计数、`B_P`，确认走部分索引、无 dim_keyword 全表扫描
+- [x] 4.6 本地真实规模（A 库，290 万词） `EXPLAIN (ANALYZE, BUFFERS)`：US 日视图与周视图 PERIOD 计数、`B_P`，确认走部分索引、无 dim_keyword 全表扫描。结果：`B_P` 为 `idx_dim_keyword_day_first` Index Only Scan，命中为同索引等值扫描；热缓存耗时 日 PERIOD 749ms（命中 4.5 万）/ MONITOR 7ms，周 PERIOD 2.6s / MONITOR 1.7s，随命中数增长。本地日报仅 3 天历史，日榜首次数（3.8～4.2 万/天）远大于生产预期
 
 ## 5. 回填脚本（D7；keyword-first-seen「周期首次证据可按证据重放回填」）
 
@@ -38,7 +38,7 @@
 - [x] 6.1 `filters.ts` 草稿 `firstListing`、旧快照 `firstListed:true` 读为 MONITOR、`toSearchBody`、品牌排除随两种口径；不提升 `SAVED_MODE_VERSION`（读取时 `normalizeFirstListing`）；会话快照 `CACHE_VERSION` 4→5
 - [x] 6.2 `FilterPanel` 三选一实心按钮组，PERIOD 文案随视图；`columns.tsx` 标签随口径；`FirstListedSummary` 标题、说明、缺期提示；「全部」选项值用小写 `all`，避免与行集合的 `ALL` 在测试按值定位时撞车
 - [x] 6.3 趋势详情三项证据文案（后端 `KeywordTrendResponse.first_evidence` 已提供，`test_keyword_trend_integration.py::test_first_evidence_lists_day_week_and_monitor`）
-- [ ] 6.4 前端单测已改写/新增（`filters.test.ts`、`defaultsAndFirstPaint.test.tsx`、`columns.test.tsx`、`FirstListedSummary.test.tsx`、`savedMode.test.ts`）；**未在本会话运行**——按约定由用户运行 `pnpm lint && pnpm tsc && pnpm test`
+- [x] 6.4 前端单测已改写/新增（`filters.test.ts`、`defaultsAndFirstPaint.test.tsx`、`columns.test.tsx`、`FirstListedSummary.test.tsx`、`savedMode.test.ts`）；提交门禁（ccf797e）实际运行 eslint、tsc、vitest 均通过
 
 ## 7. 交付与生产（各步单独授权）
 
