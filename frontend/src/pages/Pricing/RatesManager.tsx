@@ -34,7 +34,7 @@ interface Props {
   onChanged?: () => void;
 }
 
-export default function RatesTab({ meta, canManage, onChanged }: Props) {
+export default function RatesManager({ meta, canManage, onChanged }: Props) {
   const [kind, setKind] = useState<RuleKind>('market_params');
   const [status, setStatus] = useState<RuleStatus | undefined>();
   const [rows, setRows] = useState<Rule[]>([]);
