@@ -7,16 +7,19 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# 主表格状态**两态**，由该卖家有没有基线决定：无基线 PENDING_BASELINE、有基线 MONITORING。
+# Amazon 卖家行状态**三态**（#166，competitor-storefront-watch「Amazon 卖家行展示手动采集与三态
+# 数据状态」），由服务端判定：无基线 NOT_COLLECTED；有基线且最近上报在新发现窗口内 COLLECTED；
+# 否则 STALE。此前的两态「待建立基线 / 监控中」里，「监控中」会被读成后台在自动检查，而 Amazon
+# 侧只随人工采集更新。
 #
-# 曾经还有第三个 PAUSED，是 P0 为「后续数据获取层」预留的占位取值。它被删掉不是因为没用上，
+# 曾经还有一个 PAUSED，是 P0 为「后续数据获取层」预留的占位取值。它被删掉不是因为没用上，
 # 而是因为**没有任何字段或端点能让一行进入该状态**——一个永远取不到值的状态比没有更糟，
 # 它让读界面的人以为系统能暂停某个卖家。预留一个取值的成本看起来是零，实际成本是它会一直
 # 谎报一项不存在的能力，且没有任何地方会报错。
 #
 # 真要做暂停，它属于**私有层** `user_seller_watch`（「我暂时不想看这家」是个人意愿，不是
 # 卖家的客观属性），连同暂停/恢复端点是另一次变更。
-WatchStatus = Literal["PENDING_BASELINE", "MONITORING"]
+WatchStatus = Literal["NOT_COLLECTED", "COLLECTED", "STALE"]
 
 # 单次批量操作（移除/改分组）的条数上限，防止一次请求体过大。
 MAX_ITEMS_PER_REQUEST = 500
@@ -92,6 +95,34 @@ class WatchOut(BaseModel):
             "「很久没采过」与「确实没有新发现」在界面上长得一模一样"
         ),
     )
+    last_report_item_count: int | None = Field(
+        default=None,
+        description="最近一次上报的条目数，无上报时为 None。**不代表全店总量**，界面必须注明",
+    )
+    seller_name: str | None = Field(
+        default=None, description="卖家店名（插件尽力解析），取不到时为 None，界面回落显示 seller_id"
+    )
+
+
+class SellerAsinsRequest(BaseModel):
+    page: int = Field(1, ge=1)
+    perPage: int = Field(50, ge=1, le=200)
+
+
+class SellerAsinOut(BaseModel):
+    asin: str
+    title: str | None
+    image_url: str | None
+    first_seen_at: datetime = Field(description="首次发现于；不是上架时间")
+    is_baseline: bool = Field(description="属于首次采集时就已存在的基线批次")
+
+
+class SellerAsinsResponse(BaseModel):
+    """一个卖家已采集到的商品。``total`` 是已采集到的条数，**不是该卖家的全部在售商品**。"""
+
+    data: list[SellerAsinOut]
+    total: int
+    success: bool = True
 
 
 class AsinDetailResponse(BaseModel):

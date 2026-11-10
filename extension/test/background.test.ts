@@ -4,6 +4,9 @@ import { installChromeStub } from './chrome-stub';
 vi.mock('../src/report-client', () => ({
   sendReport: vi.fn(),
 }));
+vi.mock('../src/collector-config', () => ({
+  fetchCollectorConfig: vi.fn(),
+}));
 
 // chrome.runtime.onMessage 必须在 import '../src/background' 之前存在，因为
 // background.ts 顶层就调用了 addListener。
@@ -234,5 +237,48 @@ describe('handleCapture', () => {
 
     vi.mocked(sendReport).mockResolvedValueOnce({ kind: 'network_error' });
     expect(await handleCapture(baseMessage)).toEqual({ outcome: 'network_error' });
+  });
+});
+
+describe('handleGetConfig（#166 D4：上限只来自服务端）', () => {
+  beforeEach(() => {
+    installChromeStub();
+    stubRuntimeMessaging();
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('取到服务端上限时原样返回', async () => {
+    const { setAuthToken, setApiBaseUrl } = await import('../src/auth');
+    const { fetchCollectorConfig } = await import('../src/collector-config');
+    const { handleGetConfig } = await import('../src/background');
+    await setAuthToken('tok');
+    await setApiBaseUrl('http://localhost:8000');
+    vi.mocked(fetchCollectorConfig).mockResolvedValue({ kind: 'ok', maxReportItems: 1000 });
+
+    expect(await handleGetConfig()).toEqual({ outcome: 'ok', maxReportItems: 1000 });
+    expect(vi.mocked(fetchCollectorConfig).mock.calls[0]).toEqual(['http://localhost:8000', 'tok']);
+  });
+
+  it('没有 API 地址或取不到时一律 unavailable，不回落到任何本地默认值', async () => {
+    const { setAuthToken, setApiBaseUrl } = await import('../src/auth');
+    const { fetchCollectorConfig } = await import('../src/collector-config');
+    const { handleGetConfig } = await import('../src/background');
+    await setAuthToken('tok');
+
+    expect(await handleGetConfig()).toEqual({ outcome: 'unavailable' });
+    expect(fetchCollectorConfig).not.toHaveBeenCalled();
+
+    await setApiBaseUrl('http://localhost:8000');
+    vi.mocked(fetchCollectorConfig).mockResolvedValue({ kind: 'unavailable' });
+    expect(await handleGetConfig()).toEqual({ outcome: 'unavailable' });
+  });
+
+  it('没有令牌也同步不到时 unavailable，不发请求', async () => {
+    const { fetchCollectorConfig } = await import('../src/collector-config');
+    const { handleGetConfig } = await import('../src/background');
+
+    expect(await handleGetConfig()).toEqual({ outcome: 'unavailable' });
+    expect(fetchCollectorConfig).not.toHaveBeenCalled();
   });
 });

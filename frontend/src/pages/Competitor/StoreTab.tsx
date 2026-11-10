@@ -14,6 +14,7 @@ import {
   Typography,
   message,
 } from 'antd';
+import { history } from '@umijs/max';
 import { useRef, useState } from 'react';
 import {
   addStore,
@@ -32,7 +33,7 @@ import BatchAddResult from './BatchAddResult';
 import { buildStoreColumns, formatMoney } from './storeColumns';
 
 /**
- * 独立站（Shopify）监控。
+ * Shopify 店铺监控（自动检查）。界面一律称「Shopify 店铺」，不用「独立站」暗示支持任意建站平台（#166 D7）。
  *
  * 与 Amazon 卖家清单分成两个 tab 而不是并进一张表：两类对象能拿到的字段几乎不重叠，
  * 合表会让一半的列对另一类恒为空。分组是共用的（同一个 `user_seller_group`），所以
@@ -164,14 +165,16 @@ export default function StoreTab({
     <>
       <Space style={{ marginBottom: 12 }}>
         <Button type="primary" onClick={() => setAddOpen(true)}>
-          添加独立站
+          添加 Shopify 店铺
         </Button>
       </Space>
 
       <ProTable<StoreRow>
         actionRef={actionRef}
         rowKey="domain"
-        columns={buildStoreColumns(groups, onChangeGroup, onRemove, onOpenProducts)}
+        columns={buildStoreColumns(groups, onChangeGroup, onRemove, onOpenProducts, (r) =>
+          history.push(`/competitor/discovery?domain=${encodeURIComponent(r.domain)}`),
+        )}
         search={false}
         options={false}
         dateFormatter="string"
@@ -179,8 +182,8 @@ export default function StoreTab({
         locale={{
           emptyText:
             activeGroupId === undefined
-              ? '还没有关注任何独立站。点击「添加独立站」粘贴店铺域名'
-              : '这个分组里还没有独立站',
+              ? '还没有关注任何 Shopify 店铺。点击「添加 Shopify 店铺」粘贴店铺域名'
+              : '这个分组里还没有 Shopify 店铺',
         }}
         request={async (params) => {
           const res = await listStores({
@@ -193,7 +196,7 @@ export default function StoreTab({
       />
 
       <Modal
-        title="添加独立站"
+        title="添加 Shopify 店铺"
         open={addOpen}
         confirmLoading={adding}
         onCancel={closeAddModal}
@@ -205,7 +208,7 @@ export default function StoreTab({
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="目前只支持 Shopify 建站的独立站"
+          message="只支持 Shopify 建站的店铺，其他建站平台暂不支持"
           description="粘贴店铺地址即可，带不带 https:// 和 www. 都行。加入时会立即校验——不是 Shopify 会当场告诉你，不会等到明天才失败。"
         />
         <Tabs

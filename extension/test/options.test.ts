@@ -10,7 +10,6 @@ function renderOptionsDom(): void {
     <button id="sync-token"></button>
     <input id="token" type="password" />
     <button id="save-token"></button>
-    <input id="max-report-items" type="number" />
     <button id="save"></button>
     <p id="status"></p>
   `;
@@ -42,7 +41,6 @@ describe('options page', () => {
 
     (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
     (document.getElementById('token') as HTMLInputElement).value = 'tok';
-    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
     document.getElementById('save')!.dispatchEvent(new Event('click'));
     await flush();
 
@@ -56,7 +54,6 @@ describe('options page', () => {
 
     (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
     (document.getElementById('token') as HTMLInputElement).value = 'tok';
-    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
     document.getElementById('save')!.dispatchEvent(new Event('click'));
     await flush();
 
@@ -72,7 +69,6 @@ describe('options page', () => {
 
     (document.getElementById('api-base') as HTMLInputElement).value = 'not-a-url';
     (document.getElementById('token') as HTMLInputElement).value = 'tok';
-    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
     document.getElementById('save')!.dispatchEvent(new Event('click'));
     await flush();
 
@@ -91,7 +87,6 @@ describe('options page', () => {
 
     (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
     (document.getElementById('token') as HTMLInputElement).value = 'tok';
-    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
     document.getElementById('save')!.dispatchEvent(new Event('click'));
     await flush();
 
@@ -106,7 +101,6 @@ describe('options page', () => {
     // 第一次保存：API :8000 + 独立网页地址 :8001
     (document.getElementById('api-base') as HTMLInputElement).value = 'http://localhost:8000';
     (document.getElementById('web-origin') as HTMLInputElement).value = 'http://localhost:8001';
-    (document.getElementById('max-report-items') as HTMLInputElement).value = '200';
     document.getElementById('save')!.dispatchEvent(new Event('click'));
     await flush();
 

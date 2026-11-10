@@ -22,6 +22,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.table.analysis.column_comments import SITE_COLUMN_COMMENT
 from database import Base
 
+# 与迁移 e8b2c6d4f1a3 的列注释保持一字不差（模型与库一致性检查会比对注释）。
+SELLER_NAME_COMMENT = (
+    "卖家店名：插件从公开店铺页尽力解析后随上报带来，非重放且非空时按最新值覆盖；"
+    "NULL 表示从未取到，界面回落显示 seller_id。不参与任何判定"
+)
+
+#: 店名长度上限（超长截断，与标题等展示属性同一处理方式）。
+MAX_SELLER_NAME_LEN = 200
+
 
 class CompetitorSeller(Base):
     """卖家主体：``(seller_id, site)`` 全局唯一，抓取只做一次，不因谁在看而重复存储。"""
@@ -36,6 +45,9 @@ class CompetitorSeller(Base):
         DateTime(timezone=True),
         nullable=True,
         comment="基线建立时间，NULL 表示尚未建立（本变更恒为 NULL，由数据获取层写入）",
+    )
+    seller_name: Mapped[str | None] = mapped_column(
+        String(MAX_SELLER_NAME_LEN), nullable=True, comment=SELLER_NAME_COMMENT
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

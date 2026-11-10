@@ -24,7 +24,7 @@ const STATUS_META: Record<StoreStatus, { color: string; text: string; hint: stri
     text: '待首次拉取',
     hint: '刚加入，还没到拉取时间。不是故障，等下一轮即可。',
   },
-  OK: { color: 'green', text: '监控中', hint: '上次拉取完整成功。' },
+  OK: { color: 'green', text: '自动检查正常', hint: '后台定时自动检查，上次拉取完整成功。' },
   INCOMPLETE: {
     color: 'gold',
     text: '数据不完整',

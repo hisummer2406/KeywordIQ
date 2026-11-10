@@ -192,3 +192,21 @@ def set_baseline_stmt(seller_id: str, site: str):
         .values(baseline_at=func.now())
         .returning(CompetitorSeller.baseline_at)
     )
+
+
+def update_seller_name_stmt(seller_id: str, site: str, seller_name: str):
+    """店名按最新非空值覆盖（#166 D5）。
+
+    调用方只在**非重放且带了非空店名**时调用；``IS DISTINCT FROM`` 让店名没变的常态上报不写
+    行——与 ``set_baseline_stmt`` 只在 NULL 时写是同一笔账：每次 UPDATE 都会标死旧元组、重写
+    索引条目，而绝大多数上报带来的店名与库里一致。
+    """
+    return (
+        update(CompetitorSeller)
+        .where(
+            CompetitorSeller.seller_id == seller_id,
+            CompetitorSeller.site == site,
+            CompetitorSeller.seller_name.is_distinct_from(seller_name),
+        )
+        .values(seller_name=seller_name)
+    )

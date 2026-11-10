@@ -12,7 +12,7 @@ const { listStores, addStore, addStoresBatch, updateStore, removeStore, listStor
     listStoreProducts: vi.fn(),
   }));
 
-vi.mock('@umijs/max', () => ({ useAccess: () => ({}) }));
+vi.mock('@umijs/max', () => ({ useAccess: () => ({}), history: { push: vi.fn() } }));
 vi.mock('@/services/competitor', () => ({
   listStores,
   addStore,
@@ -120,12 +120,12 @@ describe('畅销榜解析异常独立呈现', () => {
 
     expect(await screen.findByText('畅销榜解析异常')).toBeTruthy();
     // 目录仍然是好的——两个标记相互独立
-    expect(screen.getByText('监控中')).toBeTruthy();
+    expect(screen.getByText('自动检查正常')).toBeTruthy();
   });
 
   it('一切正常时不打这个标', async () => {
     renderTab();
-    await screen.findByText('监控中');
+    await screen.findByText('自动检查正常');
 
     expect(screen.queryByText('畅销榜解析异常')).toBeNull();
   });
@@ -134,7 +134,7 @@ describe('畅销榜解析异常独立呈现', () => {
 describe('近 7 日上架显示真实数字', () => {
   it('拉过之后显示真实的 0，不是占位符', async () => {
     renderTab();
-    await screen.findByText('监控中');
+    await screen.findByText('自动检查正常');
 
     // 独立站有真实数据源，0 就是「这周没上新」；Amazon 卖家那张表相反（必须占位符）
     await waitFor(() => expect(screen.getByText('0')).toBeTruthy());
@@ -143,11 +143,11 @@ describe('近 7 日上架显示真实数字', () => {
 });
 
 describe('空状态分两种成因', () => {
-  it('一个都没关注时指路「添加独立站」', async () => {
+  it('一个都没关注时指路「添加 Shopify 店铺」', async () => {
     listStores.mockResolvedValue({ success: true, data: [], total: 0 });
     renderTab();
 
-    expect(await screen.findByText(/点击「添加独立站」粘贴店铺域名/)).toBeTruthy();
+    expect(await screen.findByText(/点击「添加 Shopify 店铺」粘贴店铺域名/)).toBeTruthy();
   });
 
   it('选中分组为空时说的是这个分组里没有', async () => {
@@ -156,7 +156,7 @@ describe('空状态分两种成因', () => {
       <StoreTab groups={[]} activeGroupId={7} onGroupsChanged={async () => undefined} />,
     );
 
-    expect(await screen.findByText('这个分组里还没有独立站')).toBeTruthy();
+    expect(await screen.findByText('这个分组里还没有 Shopify 店铺')).toBeTruthy();
   });
 });
 
@@ -177,9 +177,9 @@ describe('批量粘贴', () => {
   it('弹窗里有「批量粘贴」tab，与单条添加并存', async () => {
     const user = userEvent.setup();
     renderTab();
-    await screen.findByText('监控中');
+    await screen.findByText('自动检查正常');
 
-    await user.click(screen.getByRole('button', { name: '添加独立站' }));
+    await user.click(screen.getByRole('button', { name: '添加 Shopify 店铺' }));
 
     expect(await screen.findByRole('tab', { name: '添加一个' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: '批量粘贴' })).toBeTruthy();
@@ -188,9 +188,9 @@ describe('批量粘贴', () => {
   it('按钮上带出解析到的条数，提交前就能看出粘对了没有', async () => {
     const user = userEvent.setup();
     renderTab();
-    await screen.findByText('监控中');
+    await screen.findByText('自动检查正常');
 
-    await user.click(screen.getByRole('button', { name: '添加独立站' }));
+    await user.click(screen.getByRole('button', { name: '添加 Shopify 店铺' }));
     await user.click(await screen.findByRole('tab', { name: '批量粘贴' }));
     await user.type(
       screen.getByPlaceholderText(/一行一个/),
@@ -209,9 +209,9 @@ describe('批量粘贴', () => {
       rejected: [{ input: 'b.example', reason: '这个站点不是 Shopify 建站，暂时无法监控' }],
     });
     renderTab();
-    await screen.findByText('监控中');
+    await screen.findByText('自动检查正常');
 
-    await user.click(screen.getByRole('button', { name: '添加独立站' }));
+    await user.click(screen.getByRole('button', { name: '添加 Shopify 店铺' }));
     await user.click(await screen.findByRole('tab', { name: '批量粘贴' }));
     await user.type(screen.getByPlaceholderText(/一行一个/), 'a.example{enter}b.example');
     await user.click(screen.getByRole('button', { name: '加入这 2 个' }));
