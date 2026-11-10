@@ -51,6 +51,12 @@ OPPORTUNITY_VIEW: Final = "opportunity:view"
 # 一个权限点，只默认给 admin。读取费率不需要 manage 权限——核价明细本来就要展示所用规则。
 PRICING_VIEW: Final = "pricing:view"
 PRICING_MANAGE_RATES: Final = "pricing:manage-rates"
+# 外观专利核查（change add-patent-risk-check，#24）。三种授权分开：看自己的记录、发起会计费的
+# 智慧芽调用、签署人工意见。只默认给 admin（admin 隐含全部非 super-only 权限），运营/分析师由
+# 超管显式授予——检索按次计费，不能随角色默认铺开。记录按创建人私有，与权限点无关。
+RISK_VIEW: Final = "risk:view"
+RISK_SEARCH: Final = "risk:search"
+RISK_REVIEW: Final = "risk:review"
 
 # code -> 中文名
 PERMISSIONS: Final[dict[str, str]] = {
@@ -62,6 +68,9 @@ PERMISSIONS: Final[dict[str, str]] = {
     OPPORTUNITY_VIEW: "查看机会中心",
     PRICING_VIEW: "定价核算",
     PRICING_MANAGE_RATES: "维护核价费用配置",
+    RISK_VIEW: "查看风险核查",
+    RISK_SEARCH: "发起专利检索（计费）",
+    RISK_REVIEW: "提交风险审核意见",
 }
 
 # 默认不授予任何内置角色（含 admin）的权限点——只有 is_super 能用。

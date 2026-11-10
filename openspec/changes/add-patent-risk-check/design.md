@@ -1,7 +1,7 @@
 ## Context
 
 - 现状：`frontend/src/pages/IP/*` 四屏都是占位页，路由挂 `canViewUnreleased`（仅超管可见），后端没有任何专利代码。业务草案见 `docs/product-monitoring-risk/01-functional-design.md`（第 7–10 节，设计稿，未实现）。执行依据是 #24 正文的「2026-11-10 已确认方向」。
-- 用户决策（2026-11-10）：只用智慧芽 Data REST API，不接官方 MCP、不买网页账号、不调 AI39 外观 FTO 工作流；Key 由用户在 KeywordIQ 配置页填写，不进入聊天、Issue 或代码。
+- 用户决策（2026-11-10）：只用智慧芽 Data REST API，不接官方 MCP、不买网页账号、不调 AI39 外观 FTO 工作流；Key 直接写在服务端 `.env`（`ZHIHUIYA_API_KEY`），不做页面录入或加密入库（用户 2026-11-10 明确否决了 Issue 方案中的配置页）。
 - 供应商契约（2026-11-10 按官方文档核对，精简版见 `app/table/risk/provider_contract.md`）：
   - 源站固定为 `https://connect.zhihuiya.com`，鉴权头是 `Authorization: Bearer sk-...`。另有 `apikey` 查询参数方式，官方说明它会进 URL 日志，本期不用。
   - P010 `POST /image-search/image-upload`：multipart 字段 `image`，JPG/PNG，不超过 4096 KB；返回 `data.url`、`data.expire`（32400 秒）。
@@ -25,14 +25,11 @@
 
 ## Decisions
 
-### 决策 1：Key 用 Fernet 加密，主密钥来自独立环境变量
+### 决策 1：Key 从 `.env` 读取
 
-- `RISK_CREDENTIAL_KEYS`：一个或多个 Fernet 密钥，逗号分隔。第一个用于加密，全部可用于解密（`MultiFernet`）。轮换方法：把新密钥放到最前面，在配置页重新保存一次 Key，再删掉旧密钥。
-- 不复用 `ADMIN_SECRET_KEY`：那是会话签名密钥，轮换时会让所有人重新登录；两者的生命周期不应绑在一起。
-- 主密钥未配置时，配置页显示「服务端未配置加密主密钥」，保存请求返回 503，检索阻断。不会退回明文存储。
-- 解密失败（主密钥被换掉、密文损坏）时，配置状态显示为「凭证不可读」，检索阻断并提示超管重新保存 Key。不会把这种情况当成未配置而静默清空。
-- 库里只存密文和一个指纹（`sk-…` 的末 4 位），用于界面识别是哪一把 Key。明文只在发起调用的那一刻、在内存中解密。审计记录只写动作、操作人、时间和指纹。
-- 新增依赖 `cryptography`。备选是自己用 AES-GCM 实现，但 Fernet 自带版本号和完整性校验，不选自实现。
+- `config.py` 读 `ZHIHUIYA_API_KEY`（默认空字符串）。为空即「未配置」，前端经 `/api/risk/meta` 的 `provider_configured` 得知，提交和认领都阻断。
+- 与 OSS、钉钉、飞书凭证一致，只在服务端 `.env` 持有。不存库、不回显、不做配置页、不做审计、不做验证按钮（Issue 原方案中的这些部分由用户否决）。
+- 日志：客户端只记接口编号、HTTP 状态、错误码；httpx 的请求日志不含请求头。
 
 ### 决策 2：原图存进数据库的独立表
 
@@ -48,7 +45,7 @@
 - 认领：`SELECT … WHERE status='queued' ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1`，在同一个短事务里改成 `running`，写入 `lease_until = now + RISK_TASK_LEASE_SECONDS`，然后提交。**调用供应商期间不持有任何数据库事务或连接**；拿到结果后再开一个新事务写入证据并收尾。
 - 轮询：`main.py` 另起一个 `run_poller([reap_risk_tasks_round, run_one_risk_task_round], RISK_TASK_POLL_SECONDS)`，不挂到导入队列上。导入批次可能占用几分钟，挂上去会让核查任务排在它后面。
 - 中断：`queued` 任务重启后照常被认领，因为它还没有调用过供应商。`running` 任务租约过期时，回收器把它改为 `unknown`，**不自动重发**（扣费可能已经发生）。用户可以在详情页显式「重新检索」，这会生成一个新任务和新的调用记录。
-- 认领时如果供应商已停用或未配置，任务直接记为 `failed(provider_disabled / not_configured)`，不发起调用。
+- 认领时如果 Key 未配置，任务直接记为 `failed(not_configured)`，不发起调用。
 - 客户端：`httpx.AsyncClient`，`base_url` 固定，`RISK_PROVIDER_TIMEOUT_SECONDS` 默认 30 秒（官方给的最大响应时间是 10 秒）。请求和异常日志只记接口编号、HTTP 状态和错误码，不记请求头。
 
 ### 决策 4：调用留痕与错误分类
@@ -97,7 +94,6 @@
 ### 决策 9：权限
 
 - `risk:view`：看自己的核查记录和页面。`risk:search`：发起任何付费调用（创建、翻页、详情）。`risk:review`：提交人工意见。迁移种子只授予 admin 角色（admin 默认获得全部非 super-only 权限，因此不放进 `SUPER_ONLY_PERMISSIONS`），运营和分析师需要超管显式授予。
-- 供应商配置的读写和验证只认 `is_super`（`require_super`），不做成可授予的权限点。
 - 归属：所有 `/checks/{id}` 系列接口按 `owner_id = 当前用户` 查询，查不到就返回 404。超管也不能隐式跨用户读取。
 
 ### 决策 10：人工意见追加保存
@@ -121,4 +117,4 @@
 ## Migration Plan
 
 - 手写 Alembic 迁移：创建 `risk_*` 表，插入三个权限点和 admin 的角色授权；downgrade 删除这些。用一次性库做升级、降级、再升级，并检查模型与库的差异。
-- 发布前用户需要在 ECS `.env` 写入 `RISK_CREDENTIAL_KEYS`（生成方法写在 `.env.example` 注释里）。没写也能发布，只是配置页会显示未就绪。
+- 发布前在 ECS `.env` 写入 `ZHIHUIYA_API_KEY`。没写也能发布，外观专利页会显示「未配置」。

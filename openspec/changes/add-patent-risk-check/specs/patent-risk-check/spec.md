@@ -39,7 +39,7 @@
 
 提交核查单 SHALL 返回 202 和核查 ID，并创建一个排队中的检索任务；页面首屏、输入变化、刷新、轮询详情 MUST NOT 触发任何外部调用。提交前界面 SHALL 说明图片会发送给智慧芽，并列出本次调用组成（P010 上传与 P060 检索），金额未知时不编造金额。
 
-任务 SHALL 由后台轮询认领，多个 worker 之间的认领 SHALL 是原子的（同一任务只能被一个 worker 执行）。任务状态 SHALL 区分 `queued`、`running`、`completed`、`failed`、`unknown`。认领时供应商未配置、已停用或凭证不可读，任务 SHALL 直接失败且不发起调用。
+任务 SHALL 由后台轮询认领，多个 worker 之间的认领 SHALL 是原子的（同一任务只能被一个 worker 执行）。任务状态 SHALL 区分 `queued`、`running`、`completed`、`failed`、`unknown`。认领时 Key 未配置，任务 SHALL 直接失败为 `not_configured` 且不发起调用。
 
 `running` 任务租约过期后 SHALL 转为 `unknown`，MUST NOT 自动重发；`queued` 任务在重启后 SHALL 被继续认领。用户显式「重新检索」SHALL 创建新任务并产生新的调用记录。
 
@@ -61,7 +61,7 @@
 #### Scenario: 未配置 Key
 
 - **WHEN** 普通用户提交核查而供应商未配置
-- **THEN** 表单提示需要超管配置接口，若任务已入队则失败为 `not_configured`，外部调用次数为 0
+- **THEN** 表单提示联系管理员配置接口，若任务已入队则失败为 `not_configured`，外部调用次数为 0
 
 ### Requirement: 检索结果按页留存，显示真实读取范围
 

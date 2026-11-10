@@ -123,6 +123,17 @@ class Settings(BaseSettings):
     # 89 站只有 26 站拿到完整目录；等满 Retry-After 后以 2 秒间隔连拉三页均为 200。
     DTC_REQUEST_DELAY_MS: int = 2000
 
+    # 外观专利核查（change add-patent-risk-check）。Key 只在服务端 .env 持有，为空即「未配置」：
+    # 提交被拒、已排队任务认领时直接失败，不发起任何外部调用。
+    ZHIHUIYA_API_KEY: str = ""
+    # 核查任务轮询间隔（秒）。独立于导入队列：导入一跑几分钟，挂在一起检索会被卡住。0 关闭。
+    RISK_TASK_POLL_SECONDS: float = 3
+    # 任务租约（秒）。running 超过它即视为执行中断，转 unknown 且不自动重发（可能已计费）。
+    # 一个任务最多三次外部调用，须大于 3 × RISK_PROVIDER_TIMEOUT_SECONDS。
+    RISK_TASK_LEASE_SECONDS: int = 180
+    # 单次智慧芽调用超时（秒）。官方给的最大响应时间是 10 秒。
+    RISK_PROVIDER_TIMEOUT_SECONDS: float = 30
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files
