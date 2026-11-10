@@ -44,6 +44,7 @@ from app.table.competitor import (  # noqa: F401
 )
 from app.table.keyword import library_model  # noqa: F401
 from app.table.pricing import pricing_model  # noqa: F401
+from app.table.risk import risk_model  # noqa: F401
 from app.table.upload import import_batch_model  # noqa: F401
 from app.user import user_model  # noqa: F401
 from config import settings

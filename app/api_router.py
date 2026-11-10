@@ -9,6 +9,7 @@ from app.table.keyword.growth_api import growth_router
 from app.table.keyword.library_api import library_router
 from app.table.keyword.trend_api import trend_router
 from app.table.pricing.pricing_api import pricing_router
+from app.table.risk.risk_api import risk_router
 from app.table.upload.upload_api import upload_router
 from app.user.user_api import user_router
 
@@ -82,6 +83,12 @@ api_router.include_router(
     pricing_router,
     prefix="/pricing",
     tags=["定价核算"]
+)
+
+api_router.include_router(
+    risk_router,
+    prefix="/risk",
+    tags=["风险核查"]
 )
 
 api_router.include_router(

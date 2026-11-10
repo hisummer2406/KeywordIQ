@@ -93,13 +93,11 @@ describe('权限', () => {
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });
 
-  it('产品档案、风险核查是占位屏，挂 canViewUnreleased（仅超管）', () => {
+  it('产品档案是占位屏，挂 canViewUnreleased（仅超管）', () => {
     // 没有后端端点，所以挂的是占位屏守卫而不是权限点——权限矩阵里没有对应项，
     // 就不会有「勾了也不生效」的复选框。有了真实端点再按数据域加权限点。
-    for (const name of ['产品档案', '风险核查']) {
-      const node = topLevel.find((r) => r.name === name)!;
-      expect(node.access).toBe('canViewUnreleased');
-    }
+    const node = topLevel.find((r) => r.name === '产品档案')!;
+    expect(node.access).toBe('canViewUnreleased');
   });
 
   it('定价核算接入真实端点后挂 canViewPricing（pricing:view），不再是占位守卫', () => {
@@ -118,9 +116,18 @@ describe('权限', () => {
     expect(node.routes!.find((c) => c.path === '/pricing')?.redirect).toBe('/pricing/calculate');
   });
 
-  it('风险核查的子屏继承父级，不再各挂一个', () => {
+  it('风险核查接入外观专利后挂 canViewRisk；商标、案例仍是占位屏只给超管（add-patent-risk-check）', () => {
     const node = topLevel.find((r) => r.name === '风险核查')!;
-    expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
+    expect(node.access).toBe('canViewRisk');
+    expect(node.routes!.filter((c) => c.name).map((c) => [c.name, c.path, c.access])).toEqual([
+      ['审核待办', '/ip/review', undefined],
+      ['外观专利', '/ip/patent', undefined],
+      ['商标查询', '/ip/trademark', 'canViewUnreleased'],
+      ['风险案例', '/ip/cases', 'canViewUnreleased'],
+    ]);
+    const detail = node.routes!.find((c) => c.path === '/ip/review/:id')!;
+    expect(detail.hideInMenu).toBe(true);
+    expect((detail as { component?: string }).component).toBe('./IP/ReviewDetail');
   });
 });
 
