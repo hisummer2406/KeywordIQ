@@ -18,6 +18,8 @@ export interface AsinReportRequest {
   captured_at?: string;
   ship_to_region?: string;
   page_context?: string;
+  /** 可选的卖家店名（#166 D5）：服务端截断、不计入幂等摘要，只在非重放时覆盖。 */
+  seller_name?: string;
   items: AsinReportItem[];
 }
 
@@ -48,6 +50,7 @@ export interface BuildReportInput {
   capturedAt: string;
   shipToRegion?: string;
   pageContext?: string;
+  sellerName?: string;
 }
 
 export function buildReportRequest(input: BuildReportInput): AsinReportRequest {
@@ -58,6 +61,7 @@ export function buildReportRequest(input: BuildReportInput): AsinReportRequest {
     captured_at: input.capturedAt,
     ship_to_region: input.shipToRegion,
     page_context: input.pageContext,
+    seller_name: input.sellerName?.trim() || undefined,
     items: dedupeItems(input.items),
   };
 }

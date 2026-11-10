@@ -1,6 +1,7 @@
 """竞对卖家 ASIN 上报 API。瘦控制器：调 service，异常交给全局处理器。
 
 `POST /competitor/asin-reports` —— 采集端（浏览器插件）主动上报某卖家名下见到的 ASIN。
+`GET /competitor/collector-config` —— 采集端读取服务端当前生效的单批上限（#166 D4）。
 
 **`user_id` 一律取自访问令牌**，请求体里的同名字段被 schema 无视。在售数据是共享层，
 归属若能从请求体指定，任何持有令牌的用户都能以别人的名义写入。
@@ -16,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.permissions import COMPETITOR_VIEW
 from app.auth.simple_auth import simple_auth
 from app.table.competitor import asin_service as service
-from app.table.competitor.asin_schemas import AsinReportRequest, AsinReportResponse
+from app.table.competitor.asin_schemas import (
+    AsinReportRequest,
+    AsinReportResponse,
+    CollectorConfigResponse,
+)
 from database import get_async_db
 
 logger = logging.getLogger(__name__)
@@ -42,3 +47,9 @@ async def submit_asin_report(
     - **键被复用**（幂等键命中但摘要不同）→ 409。静默回放会把一次真实观测丢掉。
     """
     return await service.submit_report(db, user.id, req)
+
+
+@asin_router.get("/collector-config", response_model=CollectorConfigResponse)
+async def get_collector_config(_user=Depends(_require_view)) -> CollectorConfigResponse:
+    """插件打开采集面板时读取；取不到就禁止开始采集，不回落到本地默认值（design D4）。"""
+    return service.collector_config()

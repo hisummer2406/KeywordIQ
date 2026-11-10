@@ -1,8 +1,20 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listGroups, listWatches, createGroup, renameGroup, deleteGroup, updateWatch, removeWatches, getSites } =
-  vi.hoisted(() => ({
+const {
+  listGroups,
+  listWatches,
+  createGroup,
+  renameGroup,
+  deleteGroup,
+  updateWatch,
+  removeWatches,
+  listSellerAsins,
+  getSites,
+  setSearchParams,
+  historyPush,
+  searchState,
+} = vi.hoisted(() => ({
     listGroups: vi.fn(),
     listWatches: vi.fn(),
     createGroup: vi.fn(),
@@ -10,10 +22,21 @@ const { listGroups, listWatches, createGroup, renameGroup, deleteGroup, updateWa
     deleteGroup: vi.fn(),
     updateWatch: vi.fn(),
     removeWatches: vi.fn(),
+    listSellerAsins: vi.fn(),
     getSites: vi.fn(),
+    setSearchParams: vi.fn(),
+    historyPush: vi.fn(),
+    // 店铺类型写在 URL 里；测试里用一个可改的 URLSearchParams 模拟当前地址栏
+    searchState: { params: new URLSearchParams() },
   }));
 
-vi.mock('@umijs/max', () => ({ useAccess: () => ({}) }));
+vi.mock('@umijs/max', () => ({
+  useAccess: () => ({}),
+  useSearchParams: () => [searchState.params, setSearchParams],
+  history: { push: historyPush },
+}));
+// Shopify 那张表有自己的测试（StoreTab.test.tsx），这里只验证类型切换把它换上来
+vi.mock('./StoreTab', () => ({ default: () => <div>Shopify 店铺表</div> }));
 vi.mock('@/services/competitor', () => ({
   listGroups,
   listWatches,
@@ -22,10 +45,11 @@ vi.mock('@/services/competitor', () => ({
   deleteGroup,
   updateWatch,
   removeWatches,
+  listSellerAsins,
 }));
 vi.mock('@/services/upload', () => ({ getSites }));
 
-import CompetitorPage from './index';
+import CompetitorPage from './Stores';
 
 const GROUP = {
   group_id: 1,
@@ -44,12 +68,14 @@ function watch(overrides: Record<string, unknown> = {}) {
     group_name: '头部竞对',
     priority: 1,
     note: null,
-    status: 'PENDING_BASELINE',
+    status: 'NOT_COLLECTED',
     created_at: '2026-08-01T00:00:00Z',
-    // 默认按「无基线」两态一起给：新关注的卖家两个指标恒为 null，不是 0 或空对象——
+    // 默认按「未采集」给：新关注的卖家各指标恒为 null，不是 0 或空对象——
     // 与后端 watch_crud 的相关子查询在无基线时返回 NULL（不是 count(*) 的 0）保持一致。
     new_discoveries_7d: null,
     last_reported_at: null,
+    last_report_item_count: null,
+    seller_name: null,
     ...overrides,
   };
 }
@@ -62,6 +88,7 @@ async function renderSettled() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  searchState.params = new URLSearchParams();
   getSites.mockResolvedValue([{ code: 'US', name_zh: '美国', domain: 'amazon.com' }]);
   listGroups.mockResolvedValue([GROUP]);
   listWatches.mockResolvedValue({
@@ -129,24 +156,26 @@ describe('分组区', () => {
   });
 });
 
-describe('状态列与占位指标', () => {
-  it('新关注的卖家显示待建立基线,新发现数是占位符不是 0,最近采集于显示未采集', async () => {
+describe('状态列：手动采集与三态（#166）', () => {
+  it('新关注的卖家显示未采集与手动采集，新发现数是占位符不是 0', async () => {
     await renderSettled();
-    // 「待建立基线」在状态列与指标列各出现一次，都对应同一个判据（有没有基线），
-    // 所以用 getAllByText 而不是 getByText——后者遇到多个匹配会抛错。
-    await waitFor(() => expect(screen.getAllByText('待建立基线').length).toBe(2));
-    // 0 会被读成"没有新发现",占位符才准确表达"这个指标还没有数据来源"
-    expect(screen.getByText('未采集')).toBeTruthy();
+    // 「未采集」在状态列与最近采集列各出现一次，都对应同一个判据（有没有基线）
+    await waitFor(() => expect(screen.getAllByText('未采集').length).toBe(2));
+    expect(screen.getByText('手动采集')).toBeTruthy();
+    // 不能出现会被读成后台在自动检查的「监控中」
+    expect(screen.queryByText('监控中')).toBeNull();
+    expect(screen.queryByText('0')).toBeNull();
   });
 
-  it('已有基线的卖家显示真实数字含 0,与最近采集时刻', async () => {
+  it('已采集的卖家显示真实数字含 0、最近采集时刻与「不代表全店总量」的上报条数', async () => {
     listWatches.mockResolvedValue({
       success: true,
       data: [
         watch({
-          status: 'MONITORING',
+          status: 'COLLECTED',
           new_discoveries_7d: 0,
-          last_reported_at: new Date().toISOString(), // 刚采集过，不陈旧
+          last_reported_at: new Date().toISOString(),
+          last_report_item_count: 480,
         }),
       ],
       total: 1,
@@ -154,30 +183,75 @@ describe('状态列与占位指标', () => {
       max_watch: 3000,
     });
     await renderSettled();
-    await waitFor(() => expect(screen.getByText('监控中')).toBeTruthy());
-    // 真实的 0：不是空白、不是「待建立基线」占位符
+    await waitFor(() => expect(screen.getByText('已采集')).toBeTruthy());
     expect(screen.getByText('0')).toBeTruthy();
-    expect(screen.queryByText('待建立基线')).toBeNull();
+    expect(screen.getByText('上报 480 条（不代表全店总量）')).toBeTruthy();
   });
 
-  it('很久没采集的卖家在最近采集于旁边给出陈旧提示', async () => {
-    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  it('数据陈旧由后端判定，时刻用 warning 语义色提示', async () => {
     listWatches.mockResolvedValue({
       success: true,
       data: [
-        watch({ status: 'MONITORING', new_discoveries_7d: 0, last_reported_at: eightDaysAgo }),
+        watch({
+          status: 'STALE',
+          new_discoveries_7d: 0,
+          last_reported_at: '2026-08-01T00:00:00Z',
+          last_report_item_count: 60,
+        }),
       ],
       total: 1,
       watch_count: 1,
       max_watch: 3000,
     });
     await renderSettled();
-    // 陈旧提示用 warning 语义色渲染时刻文本，而不是普通文本——用户要能一眼分辨
-    // 「确实没有新发现」与「很久没采过、这个 0 不可信」
-    await waitFor(() => {
-      const warned = document.querySelector('.ant-typography-warning');
-      expect(warned).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('数据陈旧')).toBeTruthy());
+    expect(document.querySelector('.ant-typography-warning')).toBeTruthy();
+  });
+
+  it('有店名时显示店名并保留 seller_id，没有时回落 seller_id', async () => {
+    listWatches.mockResolvedValue({
+      success: true,
+      data: [watch({ seller_name: 'Acme Store' }), watch({ watch_id: 12, seller_id: 'A2NONAME00001' })],
+      total: 2,
+      watch_count: 2,
+      max_watch: 3000,
     });
+    await renderSettled();
+    await waitFor(() => expect(screen.getByText('Acme Store')).toBeTruthy());
+    expect(screen.getByText('A1TZ946F8HZTNY')).toBeTruthy();
+    expect(screen.getByText('A2NONAME00001')).toBeTruthy();
+  });
+
+  it('「看新商品」带着卖家和站点跳到商品发现', async () => {
+    await renderSettled();
+    const link = await screen.findByText('看新商品');
+    await act(async () => {
+      link.click();
+    });
+    expect(historyPush).toHaveBeenCalledWith('/competitor/discovery?seller=A1TZ946F8HZTNY&site=US');
+  });
+});
+
+describe('店铺类型切换（写在 URL 里）', () => {
+  it('缺省是 Amazon 卖家', async () => {
+    await renderSettled();
+    await waitFor(() => expect(listWatches).toHaveBeenCalled());
+    expect(screen.queryByText('Shopify 店铺表')).toBeNull();
+  });
+
+  it('URL 带 type=shopify 时直接显示 Shopify 店铺表，刷新不丢', async () => {
+    searchState.params = new URLSearchParams('type=shopify');
+    await renderSettled();
+    expect(await screen.findByText('Shopify 店铺表')).toBeTruthy();
+  });
+
+  it('点「Shopify 店铺」把类型写进 URL', async () => {
+    await renderSettled();
+    const option = await screen.findByText('Shopify 店铺');
+    await act(async () => {
+      option.click();
+    });
+    expect(setSearchParams).toHaveBeenCalledWith({ type: 'shopify' });
   });
 });
 

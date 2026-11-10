@@ -44,3 +44,23 @@ export function parseStorefrontPage(doc: Document): ParsedItem[] {
 export function hasNextPage(doc: Document): boolean {
   return doc.querySelector(NEXT_PAGE_SELECTOR) !== null;
 }
+
+// 卖家店名（#166 D5）。**以下候选选择器同样未在真实页面验证过**（与上面的商品选择器同一处境），
+// 由 tasks 11.4 的真实页面人工验收确认；对不上只需要改这个列表。取不到就返回 undefined——
+// 店名缺失不是失败，界面会回落显示 seller_id，绝不拿 seller_id、页面标题等文本拼凑一个店名。
+const SELLER_NAME_SELECTORS = [
+  // 店铺列表页左侧「卖家」筛选里当前选中的那一项
+  '#p_6 li .a-text-bold',
+  '#sellerName',
+  '[data-testid="seller-name"]',
+];
+const MAX_SELLER_NAME_LEN = 200;
+
+/** 尽力解析当前店铺页上的卖家店名。纯函数，只读 `Document`。 */
+export function parseSellerName(doc: Document): string | undefined {
+  for (const selector of SELLER_NAME_SELECTORS) {
+    const text = doc.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim();
+    if (text && text.length <= MAX_SELLER_NAME_LEN) return text;
+  }
+  return undefined;
+}

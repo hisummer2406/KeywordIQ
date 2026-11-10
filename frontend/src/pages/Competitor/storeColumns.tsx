@@ -1,5 +1,5 @@
 import type { ProColumns } from '@ant-design/pro-components';
-import { Popconfirm, Select, Space, Typography } from 'antd';
+import { Popconfirm, Select, Space, Tooltip, Typography } from 'antd';
 import type { CompetitorGroup, StoreRow } from '@/services/competitor';
 import { renderRankHealth, renderStoreStatus } from './storeStatus';
 
@@ -35,6 +35,7 @@ export function buildStoreColumns(
   onChangeGroup: (domain: string, groupId: number | null) => void,
   onRemove: (domain: string) => void,
   onOpenProducts: (row: StoreRow) => void,
+  onOpenDiscovery?: (row: StoreRow) => void,
 ): ProColumns<StoreRow>[] {
   return [
     {
@@ -46,6 +47,17 @@ export function buildStoreColumns(
           {renderStoreStatus(row)}
           {renderRankHealth(row)}
         </Space>
+      ),
+    },
+    {
+      title: '采集方式',
+      key: 'collect_mode',
+      width: 100,
+      align: 'center',
+      render: () => (
+        <Tooltip title="后台按固定间隔自动检查商品目录，不需要你操作">
+          <Typography.Text>自动检查</Typography.Text>
+        </Tooltip>
       ),
     },
     {
@@ -135,8 +147,13 @@ export function buildStoreColumns(
     {
       title: '操作',
       valueType: 'option',
-      width: 90,
+      width: 170,
       render: (_, row) => [
+        onOpenDiscovery ? (
+          <Typography.Link key="discovery" onClick={() => onOpenDiscovery(row)}>
+            看新商品
+          </Typography.Link>
+        ) : null,
         <Popconfirm
           key="remove"
           title="取消关注"

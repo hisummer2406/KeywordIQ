@@ -1,4 +1,4 @@
-import { Drawer, Typography } from 'antd';
+import { Drawer, Image, Space, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { getAsinDetail, type AsinDetailResponse } from '@/services/competitor';
 
@@ -21,10 +21,22 @@ interface Props {
   site: string | null;
   asin: string | null;
   title: string;
+  /** 主图与原商品链接（来自商品发现那一行）；缺失时不显示，不编造。 */
+  imageUrl?: string | null;
+  productUrl?: string | null;
   onClose: () => void;
 }
 
-export default function AsinDetailDrawer({ open, sellerId, site, asin, title, onClose }: Props) {
+export default function AsinDetailDrawer({
+  open,
+  sellerId,
+  site,
+  asin,
+  title,
+  imageUrl,
+  productUrl,
+  onClose,
+}: Props) {
   const [data, setData] = useState<AsinDetailResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,13 +66,26 @@ export default function AsinDetailDrawer({ open, sellerId, site, asin, title, on
 
   return (
     <Drawer title={title} open={open} width={480} onClose={onClose} destroyOnHidden>
+      {(imageUrl || asin) && (
+        <Space align="start" style={{ marginBottom: 12 }}>
+          {imageUrl ? <Image src={imageUrl} width={96} height={96} style={{ objectFit: 'contain' }} /> : null}
+          <Space direction="vertical" size={2}>
+            {asin ? <Typography.Text type="secondary">ASIN {asin}</Typography.Text> : null}
+            {productUrl ? (
+              <a href={productUrl} target="_blank" rel="noreferrer">
+                打开原商品
+              </a>
+            ) : null}
+          </Space>
+        </Space>
+      )}
       {loading && <Typography.Text type="secondary">加载中…</Typography.Text>}
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
 
       {data && (
         <>
           <Typography.Paragraph>
-            <Typography.Text strong>首次发现于：</Typography.Text>
+            <Typography.Text strong>首次发现于（不是上架时间）：</Typography.Text>
             {new Date(data.first_seen_at).toLocaleString('zh-CN')}
           </Typography.Paragraph>
 

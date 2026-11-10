@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import case, delete, func, select, text, tuple_, update
+from sqlalchemy import case, delete, func, literal, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.table.competitor.asin_model import CompetitorAsinReport, CompetitorSellerAsin
@@ -153,6 +153,40 @@ def _last_reported_at_subq():
     )
 
 
+def _last_report_item_count_subq():
+    """最近一次上报的条目数（#166 D2）。**只表示那次见到了多少，不代表全店总量**。
+
+    与 ``_last_reported_at_subq`` 取同一行（同卖家最新 ``reported_at``，平局按 ``report_id``），
+    走 ``idx_competitor_asin_report_latest``。无上报时为 NULL。
+    """
+    return (
+        select(CompetitorAsinReport.item_count)
+        .where(
+            CompetitorAsinReport.seller_id == CompetitorSeller.seller_id,
+            CompetitorAsinReport.site == CompetitorSeller.site,
+        )
+        .order_by(CompetitorAsinReport.reported_at.desc(), CompetitorAsinReport.report_id.desc())
+        .limit(1)
+        .correlate(CompetitorSeller)
+        .scalar_subquery()
+    )
+
+
+def _status_expr(last_reported_at):
+    """三态（competitor-storefront-watch「Amazon 卖家行展示手动采集与三态数据状态」）。
+
+    在 SQL 里判、用数据库的 ``now()``：与「近 N 日新发现」同一个时钟、同一个窗口常量，
+    不会出现「新发现数按库时钟算、陈旧按应用时钟算」的两套口径。有基线却没有上报记录在
+    正常写入路径下不会出现（基线在首次上报时落定），出现就按陈旧处理，不当成已采集。
+    """
+    window = func.now() - text(f"interval '{NEW_DISCOVERY_WINDOW_DAYS} days'")
+    return case(
+        (CompetitorSeller.baseline_at.is_(None), literal("NOT_COLLECTED")),
+        (or_(last_reported_at.is_(None), last_reported_at <= window), literal("STALE")),
+        else_=literal("COLLECTED"),
+    )
+
+
 def watches_stmt(user_id: int, group_id: int | None, offset: int, limit: int):
     stmt = (
         select(
@@ -165,8 +199,11 @@ def watches_stmt(user_id: int, group_id: int | None, offset: int, limit: int):
             UserSellerWatch.note,
             UserSellerWatch.created_at,
             CompetitorSeller.baseline_at,
+            CompetitorSeller.seller_name,
+            _status_expr(_last_reported_at_subq()).label("status"),
             _new_discoveries_subq().label("new_discoveries_7d"),
             _last_reported_at_subq().label("last_reported_at"),
+            _last_report_item_count_subq().label("last_report_item_count"),
         )
         .select_from(UserSellerWatch)
         .join(
@@ -216,6 +253,52 @@ def asin_detail_stmt(user_id: int, seller_id: str, site: str, asin: str):
             CompetitorSellerAsin.site == site,
             CompetitorSellerAsin.asin == asin,
         )
+    )
+
+
+def owned_watch_stmt(user_id: int, watch_id: int):
+    """本人的一条关注及其卖家基线。不是本人的一律查不到（调用方据此 404，不是 403）。"""
+    return (
+        select(UserSellerWatch.seller_id, UserSellerWatch.site, CompetitorSeller.baseline_at)
+        .join(
+            CompetitorSeller,
+            (CompetitorSeller.seller_id == UserSellerWatch.seller_id)
+            & (CompetitorSeller.site == UserSellerWatch.site),
+        )
+        .where(UserSellerWatch.user_id == user_id, UserSellerWatch.watch_id == watch_id)
+    )
+
+
+def seller_asins_stmt(seller_id: str, site: str, baseline_at, offset: int, limit: int):
+    """该卖家在该站点下已采集到的商品，按首次发现倒序（#166 D3）。
+
+    只读共享观测，不复制、不新建产品库。``is_baseline``：首批与基线同一事务写入，
+    ``first_seen_at`` 与 ``baseline_at`` 严格相等（见 ``asin_service`` 模块文档）。
+    次级排序键 ``asin`` 保证同一时刻的多条翻页稳定。走 ``idx_competitor_seller_asin_new``。
+    """
+    is_baseline = (
+        CompetitorSellerAsin.first_seen_at == baseline_at if baseline_at is not None else literal(False)
+    )
+    return (
+        select(
+            CompetitorSellerAsin.asin,
+            CompetitorSellerAsin.title,
+            CompetitorSellerAsin.image_url,
+            CompetitorSellerAsin.first_seen_at,
+            is_baseline.label("is_baseline"),
+        )
+        .where(CompetitorSellerAsin.seller_id == seller_id, CompetitorSellerAsin.site == site)
+        .order_by(CompetitorSellerAsin.first_seen_at.desc(), CompetitorSellerAsin.asin)
+        .offset(offset)
+        .limit(limit)
+    )
+
+
+def seller_asins_count_stmt(seller_id: str, site: str):
+    return (
+        select(func.count())
+        .select_from(CompetitorSellerAsin)
+        .where(CompetitorSellerAsin.seller_id == seller_id, CompetitorSellerAsin.site == site)
     )
 
 
