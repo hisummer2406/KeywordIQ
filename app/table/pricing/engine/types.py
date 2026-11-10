@@ -143,6 +143,8 @@ class FbaSizeTier:
     use_dim_weight: bool
     storage_group: str
     packaging_weight: Decimal = Decimal("0")
+    max_dim_weight: Decimal | None = None
+    """体积重上限（费率卡重量单位）。EU 小号包裹等尺寸段同时限定体积重。"""
 
 
 @dataclass(frozen=True)

@@ -275,6 +275,17 @@ def test_fba_dim_weight_used_for_large_tier():
     assert m.shipping_weight == D("4.8")
 
 
+def test_fba_dim_weight_cap_moves_to_next_tier():
+    small = FbaSizeTier("small_parcel", "小号包裹", D("35"), D("25"), D("12"), None, D("3.9"), True, "standard",
+                        max_dim_weight=D("2.10"))
+    std = FbaSizeTier("std_parcel", "标准包裹", D("45"), D("34"), D("26"), None, D("11.9"), True, "standard")
+    card = FbaRateCard("metric", D("5000"), (small, std), (), D("0"), (), "m3", (), {})
+    # 35×25×12 = 10500 cm³ → 体积重 2.1 kg：恰好在上限内
+    assert classify(card, make_package(D("0.5"), D("35"), D("25"), D("12"))).tier.key == "small_parcel"
+    # 35×25×12.5 不在小号包裹尺寸内；34×25×12.4 体积重 2.108 > 2.10 → 落到标准包裹
+    assert classify(card, make_package(D("0.5"), D("34"), D("25"), D("12.4"))).tier.key == "std_parcel"
+
+
 def test_fba_oversize_not_applicable_without_override():
     sc = fba_scenario(target_profit=D("10"))
     sc = Scenario(**{**sc.__dict__, "length_cm": D("200")})

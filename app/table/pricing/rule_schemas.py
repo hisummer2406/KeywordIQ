@@ -139,6 +139,7 @@ class FbaTierPayload(_Strict):
     use_dim_weight: bool = True
     storage_group: str = "standard"
     packaging_weight: NonNeg = Decimal("0")
+    max_dim_weight: Pos | None = None
 
 
 class FbaBracketPayload(_Strict):
@@ -336,7 +337,8 @@ def to_fba(m: FbaRateCardPayload, ref: t.RuleRef | None) -> t.FbaRateCard:
     return t.FbaRateCard(
         unit_system=m.unit_system, dim_divisor=m.dim_divisor,
         tiers=tuple(t.FbaSizeTier(x.key, x.name, x.max_longest, x.max_median, x.max_shortest, x.max_length_girth,
-                                  x.max_unit_weight, x.use_dim_weight, x.storage_group, x.packaging_weight)
+                                  x.max_unit_weight, x.use_dim_weight, x.storage_group, x.packaging_weight,
+                                  x.max_dim_weight)
                     for x in m.tiers),
         fees=tuple(t.FbaFeeTable(
             f.tier, f.price_min, f.price_max, tuple(t.FbaWeightBracket(b.max_weight, b.fee) for b in f.brackets),
