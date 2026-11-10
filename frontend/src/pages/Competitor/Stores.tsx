@@ -1,7 +1,7 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { history, useSearchParams } from '@umijs/max';
-import { Button, Card, Progress, Segmented, Space, Typography, message } from 'antd';
+import { Button, Card, Progress, Radio, Space, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   createGroup,
@@ -203,11 +203,13 @@ export default function CompetitorStoresPage() {
         onDelete={(group) => deleteGroup(group.group_id)}
       />
 
-      <Segmented
+      <Radio.Group
+        optionType="button"
+        buttonStyle="solid"
         style={{ marginTop: 12, marginBottom: 12 }}
         value={storeType}
         options={TYPE_OPTIONS}
-        onChange={(value) => setSearchParams(value === 'shopify' ? { type: 'shopify' } : {})}
+        onChange={(e) => setSearchParams(e.target.value === 'shopify' ? { type: 'shopify' } : {})}
       />
 
       {storeType === 'amazon' ? (

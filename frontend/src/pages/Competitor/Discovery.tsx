@@ -1,7 +1,7 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
 import { useSearchParams } from '@umijs/max';
-import { Alert, Image, Segmented, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Card, Image, Radio, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { SiteCodeLabel } from '@/pages/Analysis/siteLabel';
 import {
@@ -147,55 +147,62 @@ export default function CompetitorDiscoveryPage() {
         description="刚加入一家店时，它已有的存量商品不会涌进来。Amazon 的时间是我们首次发现它的时刻，取决于你何时采集，不是上架时间；Shopify 店铺另有数据源给的上架时间。"
       />
 
-      <Space wrap style={{ marginBottom: 12 }}>
-        <Segmented
-          value={filters.days ?? 7}
-          options={DAY_OPTIONS}
-          onChange={(value) => update({ days: value as number })}
-        />
-        <Segmented<SourceValue>
-          value={sourceValue}
-          options={[
-            { label: '全部来源', value: 'ALL' },
-            { label: 'Amazon', value: 'AMAZON' },
-            { label: 'Shopify 店铺', value: 'DTC' },
-          ]}
-          onChange={(value) =>
-            // 切来源时清掉另一侧独有的条件：Shopify 没有站点和 Amazon 卖家，Amazon 没有店铺域名。
-            // 后端在 UNION 前分侧施加筛选，留着另一侧的条件会让两侧都被排除、结果恒为空
-            // （PR #174 Codex P2：从店铺管理「看新商品」进来后再切来源）。
-            update(
-              value === 'ALL'
-                ? { source: undefined }
-                : value === 'DTC'
-                  ? { source: 'DTC', site: undefined, sellerId: undefined }
-                  : { source: 'AMAZON', domain: undefined },
-            )
-          }
-        />
-        <Select
-          allowClear
-          placeholder="Amazon 站点"
-          style={{ width: 140 }}
-          disabled={filters.source === 'DTC' || Boolean(filters.domain)}
-          value={filters.site}
-          onChange={(value) => update({ site: value })}
-          options={sites.map((s) => ({ label: <SiteCodeLabel code={s.code} />, value: s.code }))}
-        />
-        <Select
-          allowClear
-          placeholder="全部分组"
-          style={{ width: 180 }}
-          value={filters.groupId}
-          onChange={(value) => update({ groupId: value })}
-          options={groups.map((g) => ({ label: g.name, value: g.group_id }))}
-        />
-        {storeTag ? (
-          <Tag closable onClose={() => update({ sellerId: undefined, domain: undefined })}>
-            {storeTag}
-          </Tag>
-        ) : null}
-      </Space>
+      <Card size="small" style={{ marginBottom: 12 }} styles={{ body: { padding: 12 } }}>
+        <Space wrap>
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            value={filters.days ?? 7}
+            options={DAY_OPTIONS}
+            onChange={(e) => update({ days: e.target.value as number })}
+          />
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            value={sourceValue}
+            options={[
+              { label: '全部来源', value: 'ALL' },
+              { label: 'Amazon', value: 'AMAZON' },
+              { label: 'Shopify 店铺', value: 'DTC' },
+            ]}
+            onChange={(e) => {
+              const value = e.target.value as SourceValue;
+              // 切来源时清掉另一侧独有的条件：Shopify 没有站点和 Amazon 卖家，Amazon 没有店铺域名。
+              // 后端在 UNION 前分侧施加筛选，留着另一侧的条件会让两侧都被排除、结果恒为空
+              // （PR #174 Codex P2：从店铺管理「看新商品」进来后再切来源）。
+              update(
+                value === 'ALL'
+                  ? { source: undefined }
+                  : value === 'DTC'
+                    ? { source: 'DTC', site: undefined, sellerId: undefined }
+                    : { source: 'AMAZON', domain: undefined },
+              );
+            }}
+          />
+          <Select
+            allowClear
+            placeholder="Amazon 站点"
+            style={{ width: 140 }}
+            disabled={filters.source === 'DTC' || Boolean(filters.domain)}
+            value={filters.site}
+            onChange={(value) => update({ site: value })}
+            options={sites.map((s) => ({ label: <SiteCodeLabel code={s.code} />, value: s.code }))}
+          />
+          <Select
+            allowClear
+            placeholder="全部分组"
+            style={{ width: 180 }}
+            value={filters.groupId}
+            onChange={(value) => update({ groupId: value })}
+            options={groups.map((g) => ({ label: g.name, value: g.group_id }))}
+          />
+          {storeTag ? (
+            <Tag closable onClose={() => update({ sellerId: undefined, domain: undefined })}>
+              {storeTag}
+            </Tag>
+          ) : null}
+        </Space>
+      </Card>
 
       <ProTable<NewArrivalRow>
         actionRef={actionRef}
