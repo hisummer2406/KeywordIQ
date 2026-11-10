@@ -35,10 +35,10 @@
 
 ## 6. 前端（D6；analysis-screen-layout、keyword-trend-detail）
 
-- [ ] 6.1 `filters.ts` 草稿 `firstListing`、旧快照 `firstListed:true` 读为 MONITOR、`toSearchBody`、品牌排除随两种口径；不提升 `SAVED_MODE_VERSION`
-- [ ] 6.2 `FilterPanel` 三选一实心按钮组，PERIOD 文案随视图；`columns.tsx` 标签随口径；`FirstListedSummary` 标题、说明、缺期提示
-- [ ] 6.3 趋势详情三项证据文案（后端 `KeywordTrendResponse.first_evidence` 已提供，`test_keyword_trend_integration.py::test_first_evidence_lists_day_week_and_monitor`）
-- [ ] 6.4 前端单测（草稿/保存兼容、请求体、标签、数量标题）——按约定由用户运行 `pnpm lint && pnpm tsc && pnpm test`
+- [x] 6.1 `filters.ts` 草稿 `firstListing`、旧快照 `firstListed:true` 读为 MONITOR、`toSearchBody`、品牌排除随两种口径；不提升 `SAVED_MODE_VERSION`（读取时 `normalizeFirstListing`）；会话快照 `CACHE_VERSION` 4→5
+- [x] 6.2 `FilterPanel` 三选一实心按钮组，PERIOD 文案随视图；`columns.tsx` 标签随口径；`FirstListedSummary` 标题、说明、缺期提示；「全部」选项值用小写 `all`，避免与行集合的 `ALL` 在测试按值定位时撞车
+- [x] 6.3 趋势详情三项证据文案（后端 `KeywordTrendResponse.first_evidence` 已提供，`test_keyword_trend_integration.py::test_first_evidence_lists_day_week_and_monitor`）
+- [ ] 6.4 前端单测已改写/新增（`filters.test.ts`、`defaultsAndFirstPaint.test.tsx`、`columns.test.tsx`、`FirstListedSummary.test.tsx`、`savedMode.test.ts`）；**未在本会话运行**——按约定由用户运行 `pnpm lint && pnpm tsc && pnpm test`
 
 ## 7. 交付与生产（各步单独授权）
 

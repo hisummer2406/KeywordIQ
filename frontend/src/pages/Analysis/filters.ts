@@ -1,4 +1,4 @@
-import type { Include, KeywordMode, SearchBody, View } from '@/services/analysis';
+import type { FirstListingMode, Include, KeywordMode, SearchBody, View } from '@/services/analysis';
 
 /**
  * 分析查询屏的条件模型与转换。
@@ -41,14 +41,18 @@ export interface FilterDraft {
   change: Range;
   clickShare: Range;
   conversionShare: Range;
-  /** 只看所选期次首次入榜的词；`undefined` = 全部。两态：不存在「只看非首次入榜」。 */
-  firstListed?: boolean;
+  /**
+   * 首次口径（#178），互斥三选一：`undefined` 全部；`'PERIOD'` 首次进入当前榜单（日视图日榜、
+   * 周视图周榜）；`'MONITOR'` 首次进入监测（原「只看首次入榜」）。旧快照的 `firstListed: true`
+   * 读取时由 `normalizeFirstListing` 转成 `'MONITOR'`，含义不变。
+   */
+  firstListing?: FirstListingMode;
   /** 品牌精确多选（前三任一命中），与 categories 对称 */
   brands: string[];
   productTitle: string;
   /**
    * 排除关键词里带有自己前三品牌名的词（issue #119）。**缺省视同开启**（`!== false`）：
-   * 旧快照没有这个字段，行为应与新进屏一致。只在「只看首次入榜」时才随请求发出，见 toSearchBody。
+   * 旧快照没有这个字段，行为应与新进屏一致。只在选了任一首次口径时才随请求发出，见 toSearchBody。
    */
   excludeBrandWords?: boolean;
   /**
@@ -61,13 +65,14 @@ export interface FilterDraft {
 /**
  * 筛选草稿的默认值——**进屏看到的**与**「重置」清成的**是同一份。
  *
- * `firstListed: true` 是默认值而不是空值：用户进这一屏最常问的第一个问题是「本期
+ * `firstListing: 'MONITOR'` 是默认值而不是空值：用户进这一屏最常问的第一个问题是「本期
  * 首次入榜了哪些词」，不是「今天的榜单长什么样」。首屏自动查询用的也是这一份，两者必须同源，
- * 否则会出现表格里是首次入榜、而筛选控件显示「全部」的错位。
+ * 否则会出现表格里是首次入榜、而筛选控件显示「全部」的错位。#178 新增的「首次进入当前榜单」
+ * **不改这个内置默认**：上线后静默换口径会让所有人的结果范围悄悄变化；需要的用户自己保存。
  *
- * 这个函数从前叫 `emptyFilters`。带上 `firstListed: true` 之后那个名字与事实相反，而
+ * 这个函数从前叫 `emptyFilters`。带上首次筛选之后那个名字与事实相反，而
  * 它正被测试当作「中性基线」使用——名不副实的工厂函数会被下一个人当空值直接用。
- * 要真正的中性值请显式写 `{ ...defaultFilters(), firstListed: undefined }`。
+ * 要真正的中性值请显式写 `{ ...defaultFilters(), firstListing: undefined }`。
  */
 export const defaultFilters = (): FilterDraft => ({
   q: '',
@@ -77,11 +82,33 @@ export const defaultFilters = (): FilterDraft => ({
   change: {},
   clickShare: {},
   conversionShare: {},
-  firstListed: true,
+  firstListing: 'MONITOR',
   brands: [],
   productTitle: '',
   excludeBrandWords: true,
 });
+
+/**
+ * 把旧形状的首次筛选读成新口径（#178）：旧快照/保存条件只有 `firstListed: true`（只看首次入榜，
+ * 即共享口径）→ `firstListing: 'MONITOR'`；`firstListed` 一律剔除。已有 `firstListing` 的原样保留。
+ *
+ * 读取时转换而不提升 `SAVED_MODE_VERSION`：提升版本会把每个用户保存的整组条件丢掉，而 #178 要求
+ * 「旧保存条件的含义不变」——这是一个字段到另一个字段的一一映射，不是形状不符。
+ */
+export function normalizeFirstListing<T extends object>(filters: T): T {
+  const legacy = filters as T & { firstListed?: boolean; firstListing?: FirstListingMode };
+  if (!('firstListed' in legacy)) return filters;
+  const { firstListed, ...rest } = legacy;
+  const next = rest as T & { firstListing?: FirstListingMode };
+  if (next.firstListing === undefined && firstListed === true) next.firstListing = 'MONITOR';
+  return next;
+}
+
+/** 首次口径在界面上的名称：「首次进入当前榜单」随视图写成日榜/周榜。 */
+export function firstListingLabel(mode: FirstListingMode, view: View): string {
+  if (mode === 'MONITOR') return '首次进入监测';
+  return view === 'WEEK' ? '首次进入周榜' : '首次进入日榜';
+}
 
 // --------------------------------------------------------------------------
 // 检索方式与 ASIN 批量输入
@@ -204,11 +231,11 @@ export function toSearchBody(scope: ScopeDraft, filters: FilterDraft): SearchBod
     click_share_max: onlyDropped ? undefined : filters.clickShare.max,
     conversion_share_min: onlyDropped ? undefined : filters.conversionShare.min,
     conversion_share_max: onlyDropped ? undefined : filters.conversionShare.max,
-    first_listed: onlyDropped ? undefined : filters.firstListed,
-    // 默认开启、且只在「只看首次入榜」时生效：品牌词对找新机会没价值，但对「全部词」榜单是
+    first_listing: onlyDropped ? undefined : filters.firstListing,
+    // 默认开启、且只在选了首次口径时生效：品牌词对找新机会没价值，但对「全部词」榜单是
     // 额外的数据缩减，用户没要求就不该替他缩。
     exclude_brand_in_keyword:
-      !onlyDropped && filters.firstListed === true && filters.excludeBrandWords !== false
+      !onlyDropped && filters.firstListing !== undefined && filters.excludeBrandWords !== false
         ? true
         : undefined,
   };

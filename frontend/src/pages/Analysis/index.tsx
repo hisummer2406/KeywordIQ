@@ -288,6 +288,14 @@ export default function AnalysisPage() {
     }),
     [visitedStore, loadedSite],
   );
+  /**
+   * 生效的首次口径（#178）：行标签与数量标题都跟它走，不跟草稿——草稿改了没查询时，表格还是
+   * 上一次口径筛出的行，标签换成新口径会和行对不上。`appliedSig` 变化时重读。
+   */
+  const appliedFirstListing = useMemo(
+    () => appliedRef.current?.first_listing,
+    [appliedRef, query.appliedSig],
+  );
   const columns = useMemo(
     () =>
       buildColumns(
@@ -297,8 +305,9 @@ export default function AnalysisPage() {
         appliedRef.current?.site,
         historyScope,
         visited,
+        appliedFirstListing,
       ),
-    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend, historyScope, visited],
+    [appliedView, appliedDomain, appliedRef, query.appliedSig, openTrend, historyScope, visited, appliedFirstListing],
   );
 
   return (
@@ -318,7 +327,12 @@ export default function AnalysisPage() {
           onSubmit={query.submitScope}
         />
         <div style={{ marginTop: 8 }}>
-          <FirstListedSummary site={loadedSite} view={loadedView} date={loadedDate} />
+          <FirstListedSummary
+            site={loadedSite}
+            view={loadedView}
+            date={loadedDate}
+            mode={appliedFirstListing === 'PERIOD' ? 'PERIOD' : 'MONITOR'}
+          />
         </div>
       </Card>
 
@@ -396,6 +410,7 @@ export default function AnalysisPage() {
                 <FilterPanel
                   value={query.filters}
                   onChange={query.setFilters}
+                  view={scope.view}
                 />
               </Col>
             </Row>

@@ -1,7 +1,7 @@
 import { BarChartOutlined, FacebookOutlined, GoogleOutlined, TikTokOutlined } from '@ant-design/icons';
 import type { ProColumns } from '@ant-design/pro-components';
 import { Tag } from 'antd';
-import type { AnalysisRow, View } from '@/services/analysis';
+import type { AnalysisRow, FirstListingMode, View } from '@/services/analysis';
 import TrendSparkline from '@/components/TrendSparkline';
 import { TREND_COLORS } from '@/components/trendColors';
 import RankedList from './RankedList';
@@ -118,6 +118,22 @@ function renderChangeRate(row: AnalysisRow, view: View) {
 }
 
 /**
+ * 首次标签随**生效**首次口径（#178，analysis-screen-layout「现排名列承载首次入榜与掉榜标签」）：
+ * 选「首次进入当前榜单」时只看 `period_first_listed`，文案「首次上日榜/周榜」；其余口径（含全部）
+ * 只看 `first_listed`，文案「首次进入监测」。两种标签不同时出现——同一行挂两个「首次」只会让人
+ * 去猜哪个算数。
+ */
+function firstTag(row: AnalysisRow, view: View, firstMode?: FirstListingMode) {
+  const style = { marginInlineStart: 6 };
+  if (firstMode === 'PERIOD') {
+    return row.period_first_listed ? (
+      <Tag color="gold" style={style}>{view === 'WEEK' ? '首次上周榜' : '首次上日榜'}</Tag>
+    ) : null;
+  }
+  return row.first_listed ? <Tag color="gold" style={style}>首次进入监测</Tag> : null;
+}
+
+/**
  * 现排名单元格：排名数值 + 状态标签。
  *
  * 「首次入榜」与「已掉榜」**互斥**，掉榜优先：一行要么是本期首次进入监测范围的，要么是本期
@@ -125,7 +141,7 @@ function renderChangeRate(row: AnalysisRow, view: View) {
  *
  * 掉榜行没有当期排名（一律为空，不用最后在榜期的值顶替），故显示最后在榜期而非数字。
  */
-function renderRanking(row: AnalysisRow) {
+function renderRanking(row: AnalysisRow, view: View, firstMode?: FirstListingMode) {
   if (row.is_dropped) {
     return (
       <span>
@@ -137,7 +153,7 @@ function renderRanking(row: AnalysisRow) {
   return (
     <span>
       {row.current_ranking ?? PLACEHOLDER}
-      {row.first_listed ? <Tag color="gold" style={{ marginInlineStart: 6 }}>首次入榜</Tag> : null}
+      {firstTag(row, view, firstMode)}
     </span>
   );
 }
@@ -171,13 +187,14 @@ export function buildColumns(
   siteCode?: string,
   historyScope?: HistoryScope,
   visited?: VisitedKeywords,
+  firstMode?: FirstListingMode,
 ): ProColumns<AnalysisRow>[] {
   return alignColumns([
     {
       title: '排名',
       dataIndex: 'current_ranking',
       width: 100,
-      render: (_, r) => renderRanking(r),
+      render: (_, r) => renderRanking(r, view, firstMode),
     },
     // 关键词与商品标题是两列「要读内容」的列，其余自适应列给定宽，把剩余横向空间
     // 让给这两列。

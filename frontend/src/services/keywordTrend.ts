@@ -37,6 +37,22 @@ export interface KeywordTrendResponse {
   points: KeywordTrendPoint[];
   best_ranking: KeywordTrendStat | null;
   latest_available: KeywordTrendStat | null;
+  /** 三项首次证据（#178），取自关键词维度，不随视图变；旧后端没有该字段 */
+  first_evidence?: KeywordFirstEvidence | null;
+}
+
+/** 一项首次证据。basis：IMPORTED 确认首次 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知 / ABSENT 未上过该榜 */
+export interface FirstEvidence {
+  date: string | null;
+  basis: string;
+  /** 仅共享监测首次：日期来自日报还是周报 */
+  period_type?: View | null;
+}
+
+export interface KeywordFirstEvidence {
+  day: FirstEvidence;
+  week: FirstEvidence;
+  monitor: FirstEvidence;
 }
 
 export interface KeywordTrendQuery {
