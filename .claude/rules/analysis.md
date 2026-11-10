@@ -36,9 +36,9 @@ paths:
 - 导出与 search 同口径、超 `EXPORT_ROW_CAP`（config.py）在开流前 413，不静默截断；流式会话遵守 backend 规则。
 - 单关键词历史使用 keyword_history 索引；掉榜不走日期先于 keyword_id 的主键，避免扫描全站掉榜窗口。
 - 趋势先排除保留下界再判断导入；on 来自来源期次，切视图复用原值，解析只在后端。
-- 首次证据永久保留于 dim_keyword，导入顺序/重复不改变最终结果；查询复用 first_listed_expr，不另存按期计数。
+- 首次证据（共享与日/周周期证据）永久保留于 dim_keyword，导入顺序/重复不改变最终结果；查询复用 first_listed_expr/周期判定并先规范有效首次口径，不另存按期计数。
 - **`fact_daily/weekly.is_new` 已弃用，但列、DEFAULT false 与其部分索引当前必须保留**：旧容器仍引用，提前 drop 会让旧版本直接报错。新请求只用 `first_listed`；删除须走独立 contract 迁移。
-- UNKNOWN/最早可观测不伪装成确认首次，周精度不捏造日日期；兼容期旧事实列按获批迁移计划退役。
+- UNKNOWN/最早可观测不伪装成确认首次，周精度不捏造日日期；周期证据不跨日周映射，「已确认未出现」只在新建词或证据完整回填时写；兼容期旧事实列按获批迁移计划退役。
 - 词库条目驱动行集合，LEFT JOIN 补数；分组站点、私有性及限额按 keyword-library 规格，不照抄竞对标签模型。
 - 保留窗口 `HOT_WINDOW_MONTHS` 按自然月整分区 DROP，日/周同口径。保留清理无条件清超期 site_data_stats/category_stats/brand_stats，不依赖本轮 DROP；保留 report_date 单列清理索引。
 - 清理写路径与导入共用 import_lock/IMPORT_LOCK_KEY；拿不到记 lock_skipped，不阻塞/重试，防事实与统计错位。
