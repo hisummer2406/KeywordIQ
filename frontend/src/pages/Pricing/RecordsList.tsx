@@ -23,7 +23,7 @@ interface Props {
   onOpen: (sheetId: number, versionId?: number | null) => void;
 }
 
-export default function RecordsTab({ meta, reloadKey, onOpen }: Props) {
+export default function RecordsList({ meta, reloadKey, onOpen }: Props) {
   const [rows, setRows] = useState<Sheet[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
