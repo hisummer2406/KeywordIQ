@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -111,7 +111,9 @@ describe('两类来源的时间语义必须分开说', () => {
     render(<DiscoveryPage />);
 
     expect(await screen.findByText('Shopify')).toBeTruthy();
-    expect(screen.getByText('Amazon')).toBeTruthy();
+    // 「Amazon」也是来源切换器的选项，来源标记只在表格行里断言
+    const tbody = document.querySelector('.ant-table-tbody') as HTMLElement;
+    expect(within(tbody).getByText('Amazon')).toBeTruthy();
     expect(screen.queryByText(/独立站/)).toBeNull();
   });
 });
@@ -193,6 +195,24 @@ describe('筛选都传到后端，并写在 URL 里', () => {
 
     await user.click(await screen.findByText('Shopify 店铺'));
     expect(setSearchParams).toHaveBeenCalledWith({ source: 'DTC' });
+  });
+
+  it('从 Amazon 卖家进来再切到 Shopify，清掉卖家条件——否则两侧都被排除、恒为空', async () => {
+    searchState.params = new URLSearchParams('seller=A1X&site=DE');
+    const user = userEvent.setup();
+    render(<DiscoveryPage />);
+
+    await user.click(await screen.findByText('Shopify 店铺'));
+    expect(setSearchParams).toHaveBeenCalledWith({ source: 'DTC' });
+  });
+
+  it('从 Shopify 店铺进来再切到 Amazon，清掉店铺域名', async () => {
+    searchState.params = new URLSearchParams('domain=example.com');
+    const user = userEvent.setup();
+    render(<DiscoveryPage />);
+
+    await user.click(await screen.findByText('Amazon'));
+    expect(setSearchParams).toHaveBeenCalledWith({ source: 'AMAZON' });
   });
 });
 

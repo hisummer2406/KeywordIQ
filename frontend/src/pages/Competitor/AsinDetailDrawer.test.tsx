@@ -33,7 +33,7 @@ describe('AsinDetailDrawer', () => {
     );
 
     expect(getAsinDetail).toHaveBeenCalledWith('AS2G99DA1EUF', 'US', 'B0AAAAAAAA');
-    expect(await screen.findByText('首次发现于：')).toBeInTheDocument();
+    expect(await screen.findByText('首次发现于（不是上架时间）：')).toBeInTheDocument();
     expect(await screen.findByText('该卖家最近一次采集于：')).toBeInTheDocument();
     // 免责说明必须常驻显示，不是靠 hover 才看得到
     expect(
