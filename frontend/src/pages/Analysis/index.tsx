@@ -20,7 +20,7 @@ import FirstListedSummary from './FirstListedSummary';
 import ScopeBar from './ScopeBar';
 import './AnalysisTable.less';
 import { buildColumns, totalColumnWidth } from './columns';
-import { defaultFilters, sanitizeCompetitorNew, toSearchBody } from './filters';
+import { defaultFilters, toSearchBody } from './filters';
 import { clearSavedMode, readSavedMode } from './savedMode';
 import { useCachedState } from './useCachedState';
 import { useAnalysisQuery } from './useAnalysisQuery';
@@ -131,7 +131,6 @@ export default function AnalysisPage() {
     session,
     saved,
     userId,
-    canViewCompetitor: access.canViewCompetitor,
   });
   clearCategoryFiltersRef.current = query.clearCategoryFilters;
 
@@ -202,7 +201,7 @@ export default function AnalysisPage() {
       });
       return {
         scope: s,
-        filters: sanitizeCompetitorNew({ ...saved.filters, q: '', qMode: 'ALL_TERMS' }, access.canViewCompetitor),
+        filters: { ...saved.filters, q: '', qMode: 'ALL_TERMS' as const },
         view: saved.view,
       };
     } catch {
@@ -397,7 +396,6 @@ export default function AnalysisPage() {
                 <FilterPanel
                   value={query.filters}
                   onChange={query.setFilters}
-                  canCompetitorNew={access.canViewCompetitor}
                 />
               </Col>
             </Row>

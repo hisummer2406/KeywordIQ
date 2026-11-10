@@ -63,7 +63,7 @@ error_before_response|cancelled`），以及（如果失败）`error_handlers.py
   - `site`/`view`/`on`：**实际生效的作用域**，不是请求携带的草稿值——按这个去复现，
     不要按用户描述的"我选的是昨天"去复现（前端有生效条件与草稿的区分，两者可能不同）。
   - `filters`：白名单摘要（`has_keyword_search`/`has_asin_filter`/`categories_count`/
-    `brands_count`/`is_new`/`competitor_new`/`include`），**不含检索词或 ASIN 原文**——
+    `brands_count`/`is_new`/`include`），**不含检索词或 ASIN 原文**——
     不能靠这条日志反查用户具体搜了什么，只能看"是不是带了筛选、带了几类"。
   - `stage_ms`：`scope_ms`（解析可用日期与锚定期）/ `count_ms`（计数）/
     `rows_ms`（取行）/ `trend_ms`（趋势与历史排名回溯）/ `brand_probe_ms`（品牌数据

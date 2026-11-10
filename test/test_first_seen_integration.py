@@ -190,10 +190,10 @@ def test_filter_total_equals_summary_count_and_rows_carry_flags(session, tmp_pat
     _imp(session, tmp_path, "d2", ["base", "n1", "n2"], D(2026, 7, 11))
     req = AnalysisSearchRequest(site="US", view="DAY", date=D(2026, 7, 11), first_listed=True)
 
-    total = session.execute(crud.count_filtered_stmt("US", "DAY", D(2026, 7, 11), req, 1)).scalar_one()
+    total = session.execute(crud.count_filtered_stmt("US", "DAY", D(2026, 7, 11), req)).scalar_one()
     assert total == _count(session, "DAY", D(2026, 7, 11)) == 2
 
-    page = crud.search_stmt("US", "DAY", D(2026, 7, 11), req, user_id=1)
+    page = crud.search_stmt("US", "DAY", D(2026, 7, 11), req)
     rows = session.execute(page).all()
     assert {r.keyword for r in rows} == {"n1", "n2"}
     assert all(r.first_listed and r.first_seen_basis == "IMPORTED" for r in rows)
@@ -201,7 +201,7 @@ def test_filter_total_equals_summary_count_and_rows_carry_flags(session, tmp_pat
     # 不带筛选时全部行都在，只有首次入榜的两行带标记
     all_rows = session.execute(
         crud.search_stmt("US", "DAY", D(2026, 7, 11),
-                         AnalysisSearchRequest(site="US", view="DAY", date=D(2026, 7, 11)), user_id=1)
+                         AnalysisSearchRequest(site="US", view="DAY", date=D(2026, 7, 11)))
     ).all()
     flags = {r.keyword: (r.first_listed, r.first_seen_basis) for r in all_rows}
     assert flags["base"] == (False, "IMPORTED")  # 监测起点当天的词，没有对照期

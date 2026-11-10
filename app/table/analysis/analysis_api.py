@@ -27,7 +27,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW, COMPETITOR_VIEW
+from app.auth.permissions import ANALYSIS_EXPORT, ANALYSIS_VIEW
 from app.auth.simple_auth import simple_auth
 from app.common.disconnect import cancel_on_disconnect
 from app.table.analysis import analysis_service as service
@@ -56,29 +56,25 @@ async def search_data(
     req: AnalysisSearchRequest,
     request: Request,
     db: AsyncSession = Depends(get_async_db),
-    user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
+    _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> AnalysisSearchResponse | Response:
     """作用域内分页查询。
 
     作用域非法时抛 `ScopeError` → 422。此前是返 HTTP 200 + `success:false`，
     前端只能表现为一个没有解释的空表格。
 
-    **`competitor_new` 额外要求 `competitor:view`。** 这个筛选读取的是用户私有的
-    竞对关注数据，`analysis:view` 只授权分析域本身——只有 `analysis:view` 没有
-    `competitor:view` 的用户不该借这个筛选开关绕道看见"我关注了哪些卖家"这层信息
-    （PR #66 复审 P1）。
+    结果与查询者无关（已下架的 `competitor_new` 在请求模型解析阶段 422，见 #166），
+    `user` 只用于鉴权。
     """
-    if req.competitor_new:
-        simple_auth.check_permission(user, COMPETITOR_VIEW)
     # 请求摘要带视图与结果键指纹，重采可分日周统计、估算重复率（由请求日志中间件输出）。
-    request.state.summary_fields = service.search_summary_fields(req, user.id)
+    request.state.summary_fields = service.search_summary_fields(req)
     # 完整请求预算从排队之前起算，排队等待也计入（超出 503 db.query_timeout）。
     deadline = service.request_deadline()
 
     async def run() -> AnalysisSearchResponse:
         # 并发有上限、排队有界（排不上 503 analysis.busy），排队前释放鉴权占的连接，见 service.search_slot。
         async with service.search_slot(db):
-            return await service.search(db, req, user.id, deadline=deadline)
+            return await service.search(db, req, deadline=deadline)
 
     if not settings.ANALYSIS_CANCEL_ON_DISCONNECT_ENABLED:
         return await run()
@@ -90,7 +86,7 @@ async def search_data(
 def export_data(
     req: AnalysisSearchRequest,
     db: Session = Depends(get_db),
-    user=Depends(simple_auth.require_permission(ANALYSIS_EXPORT)),
+    _user=Depends(simple_auth.require_permission(ANALYSIS_EXPORT)),
 ) -> StreamingResponse:
     """把当前作用域与筛选下的结果流式导出为 CSV。
 
@@ -98,18 +94,14 @@ def export_data(
 
     `resolve_export_scope` 的全部校验（作用域、规模上限）都在返回 `StreamingResponse`
     **之前**完成——一旦开流，状态码与响应头已发出，之后再抛异常只会得到一份被截断的
-    200 CSV，而它会被当成完整数据使用。
-
-    **`competitor_new` 额外要求 `competitor:view`**，与 `/search` 同一条纪律（见那边
-    的注释），且必须在开流之前检查——理由与规模上限检查放在开流前完全一样。
+    200 CSV，而它会被当成完整数据使用。已下架的 `competitor_new=true` 在请求模型
+    解析阶段就 422，同样早于开流。
     """
-    if req.competitor_new:
-        simple_auth.check_permission(user, COMPETITOR_VIEW)
-    site, view, on = service.resolve_export_scope(db, req, user.id)
+    site, view, on = service.resolve_export_scope(db, req)
 
     filename = service.export_filename(site, view, on)
     return StreamingResponse(
-        service.iter_export_csv(site, view, on, req, user.id),
+        service.iter_export_csv(site, view, on, req),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
