@@ -37,5 +37,5 @@
 ## 6. 验收
 
 - [x] 6.1 提交门禁在 `088cb58` 上执行 `uv run ruff check .`、`uv run pytest test/ -q`（`TEST_DATABASE_URL` 指向 5433 的 `keywordiq_test`），并执行前端三项检查，全部通过。首次提交被拦下两类问题：`test_interactive_query_budget.py` 有一处按位置传 `user_id`，报 TypeError，已修；另有 7 例连接失败，原因是 worktree 的 `.env` 复制自主仓、指向 5432 的其他实例，改指 5433 后通过。这属于环境问题，与本次代码无关。另手工运行 `openspec validate --strict --all`（40 项）与 `git diff --check`，均通过
-- [ ] 6.2 浏览器验收交给用户：分析查询屏没有「竞对新发现」开关；已保存的条件恢复后其余项不变；日/周视图的查询、数量和导出正常
-- [ ] 6.3 归档时：如果 `competitor-keyword-crosslink` 留下空规格，按 design D5 删除该目录
+- [ ] 6.2 （已转入 #166 评论）浏览器验收交给用户：分析查询屏没有「竞对新发现」开关；已保存的条件恢复后其余项不变；日/周视图的查询、数量和导出正常
+- [x] 6.3 归档时（CLI 拒绝 MODIFIED 删场景，改 --skip-specs 并手工合并三份 delta；已删除空规格目录）：如果 `competitor-keyword-crosslink` 留下空规格，按 design D5 删除该目录
