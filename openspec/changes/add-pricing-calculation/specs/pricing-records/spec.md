@@ -66,7 +66,17 @@
 
 ### Requirement: 工作台页面
 
-「定价核算」页面 SHALL 有三个页签：快速核价、核价记录、费用配置。快速核价从上到下依次是产品与成本、核价条件、结果摘要、按市场分组的方案比较表，比较表的明细可以展开。首次进入页面 MUST NOT 显示任何伪造的示例结果。核价记录 SHALL 支持分页、按产品搜索、按市场和状态筛选、查看、复制、重新核价。费用配置 SHALL 按规则类别列出版本和状态，维护按钮只对拥有 `pricing:manage-rates` 的用户显示。
+「定价核算」SHALL 是一级菜单，下设三个左侧二级菜单：快速核价（`/pricing/calculate`，默认）、核价记录（`/pricing/records`）、费用配置（`/pricing/rates`），三者是互不相关的功能，MUST NOT 做成同一页面里的页签。访问 `/pricing` SHALL 重定向到快速核价；子菜单继承 `pricing:view`，MUST NOT 另设逐页权限点。从核价记录打开某条记录 SHALL 跳到 `/pricing/calculate?sheet=<id>`（查看历史版本时再带 `&version=<id>`），地址可收藏、刷新后仍停在该记录；不带版本号时表单取最新草稿、结果取最新已保存版本。快速核价从上到下依次是产品与成本、核价条件、结果摘要、按市场分组的方案比较表，比较表的明细可以展开。首次进入页面 MUST NOT 显示任何伪造的示例结果。核价记录 SHALL 支持分页、按产品搜索、按市场和状态筛选、查看、复制、重新核价。费用配置 SHALL 按规则类别列出版本和状态，维护按钮只对拥有 `pricing:manage-rates` 的用户显示。
+
+#### Scenario: 打开定价核算
+
+- **WHEN** 拥有 `pricing:view` 的用户点击顶栏「定价核算」或访问 `/pricing`
+- **THEN** 进入 `/pricing/calculate`，左侧菜单有「快速核价」「核价记录」「费用配置」三项
+
+#### Scenario: 从记录打开
+
+- **WHEN** 用户在核价记录中点击某条记录的「打开」
+- **THEN** 地址变为 `/pricing/calculate?sheet=<id>`，表单载入该记录，刷新页面后仍是这条记录
 
 #### Scenario: 区分无结果的原因
 

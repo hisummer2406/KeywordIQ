@@ -55,6 +55,8 @@ interface Props {
   meta: PricingMeta;
   openTarget?: OpenTarget | null;
   onSheetChanged?: () => void;
+  /** 当前核价单变化时同步到地址（保存后可刷新、可收藏；新建时清空）。 */
+  onLocate?: (sheetId: number | null, versionId?: number | null) => void;
 }
 
 const MODE_OPTIONS = [
@@ -77,7 +79,7 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function CalculatorTab({ meta, openTarget, onSheetChanged }: Props) {
+export default function CalculatorView({ meta, openTarget, onSheetChanged, onLocate }: Props) {
   const [form] = Form.useForm<PricingFormValues>();
   const values = Form.useWatch([], form) as PricingFormValues | undefined;
   const [result, setResult] = useState<CalcResult | null>(null);
@@ -109,21 +111,26 @@ export default function CalculatorTab({ meta, openTarget, onSheetChanged }: Prop
     async (sheetId: number, wantVersion?: number | null) => {
       const s = await getSheet(sheetId);
       setSheet(s);
+      const metaFields = {
+        product_name: s.product_name,
+        sku: s.sku ?? '',
+        asin: s.asin ?? '',
+        source_url: s.source_url ?? '',
+      };
       const vid = wantVersion ?? s.current_version_id;
-      if (vid) {
-        const v = await getVersion(sheetId, vid);
-        const { values: fv, priceOverrides: po } = fromPricingInput(v.input);
-        form.setFieldsValue({ ...fv, product_name: s.product_name, sku: s.sku ?? '', asin: s.asin ?? '',
-          source_url: s.source_url ?? '' });
-        setPriceOverrides(po);
-        setResult(v.result);
-        setLastInput(toPricingInput(fv, currencies, po));
-        setVersionId(v.id);
+      const ver = vid ? await getVersion(sheetId, vid) : null;
+      // 指定了版本：表单与结果都取该版本。没指定：表单取最新草稿（保存版本时会同步更新），
+      // 结果取最新版本——二者不一致时页面自动标「条件已修改」，不会把草稿悄悄覆盖掉。
+      const formSource = wantVersion && ver ? ver.input : s.draft_input ?? ver?.input;
+      const { values: fv, priceOverrides: po } = fromPricingInput(formSource);
+      form.setFieldsValue({ ...fv, ...metaFields });
+      setPriceOverrides(po);
+      if (ver) {
+        const vv = fromPricingInput(ver.input);
+        setResult(ver.result);
+        setLastInput(toPricingInput(vv.values, currencies, vv.priceOverrides));
+        setVersionId(ver.id);
       } else {
-        const { values: fv, priceOverrides: po } = fromPricingInput(s.draft_input);
-        form.setFieldsValue({ ...fv, product_name: s.product_name, sku: s.sku ?? '', asin: s.asin ?? '',
-          source_url: s.source_url ?? '' });
-        setPriceOverrides(po);
         setResult(null);
         setLastInput(null);
         setVersionId(null);
@@ -187,6 +194,7 @@ export default function CalculatorTab({ meta, openTarget, onSheetChanged }: Prop
       s = await updateSheet(s.id, { lock_version: s.lock_version, draft_input: draft });
       setSheet(s);
       message.success('草稿已保存');
+      onLocate?.(s.id);
       onSheetChanged?.();
     } finally {
       setBusy(null);
@@ -206,6 +214,7 @@ export default function CalculatorTab({ meta, openTarget, onSheetChanged }: Prop
       setResult(ver.result);
       setVersionId(ver.id);
       message.success(`已保存为 v${ver.version_no}（服务端已按输入重新计算）`);
+      onLocate?.(fresh.id, ver.id);
       onSheetChanged?.();
     } finally {
       setBusy(null);
@@ -245,6 +254,7 @@ export default function CalculatorTab({ meta, openTarget, onSheetChanged }: Prop
     setLastInput(null);
     setVersionId(null);
     setPriceOverrides({});
+    onLocate?.(null);
   };
 
   const mode = values?.mode ?? 'target_profit';

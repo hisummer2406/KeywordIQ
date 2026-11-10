@@ -160,13 +160,19 @@ export const routes = [
     ],
   },
   {
-    // 计算、记录和费用配置用页内 Tab，渠道比较保留全宽。
-    // 真实端点上线后由占位守卫换成权限点 pricing:view（change add-pricing-calculation）。
+    // 快速核价、核价记录、费用配置是三个互不相关的功能，按全系统约定走左侧二级菜单
+    // （各有独立地址），不做页内 Tab。整个模块只挂 pricing:view，子屏继承；
+    // 费用配置的维护按钮另按 pricing:manage-rates 显示，后端逐端点再校验。
     name: '定价核算',
     path: '/pricing',
-    component: './Pricing',
     icon: 'CalculatorOutlined',
     access: 'canViewPricing',
+    routes: [
+      { path: '/pricing', redirect: '/pricing/calculate' },
+      { name: '快速核价', path: '/pricing/calculate', component: './Pricing/Calculate', icon: 'Calculator' },
+      { name: '核价记录', path: '/pricing/records', component: './Pricing/Records', icon: 'History' },
+      { name: '费用配置', path: '/pricing/rates', component: './Pricing/Rates', icon: 'Setting' },
+    ],
   },
   // 旧「工具箱」地址不落空。只给有真实数据的两屏留重定向——没有人会去书签一个写着
   // 「数据源尚未接入」的屏，逐条保留只会让这份路由表越来越长。

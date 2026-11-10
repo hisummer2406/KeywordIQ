@@ -43,7 +43,8 @@ describe('顶栏一级菜单', () => {
 
   it('市场分析与机会中心是单页顶层，没有子项', () => {
     // 有子项就长出左侧栏，见本文件头部注释与 design.md 决策 2。竞对监控是 #166 定下的例外，见下一条
-    for (const name of ['机会中心', '市场分析', '产品档案', '定价核算']) {
+    // 定价核算不在此列：它的三个独立功能按全系统约定走左侧二级菜单（见下方专门用例）
+    for (const name of ['机会中心', '市场分析', '产品档案']) {
       const node = topLevel.find((r) => r.name === name)!;
       expect(node.routes).toBeUndefined();
     }
@@ -58,6 +59,7 @@ describe('顶栏一级菜单', () => {
       ['/keyword', '/keyword/growth'],
       ['/competitor', '/competitor/discovery'],
       ['/ip', '/ip/review'],
+      ['/pricing', '/pricing/calculate'],
       ['/upload', '/upload/file'],
     ]);
   });
@@ -103,6 +105,17 @@ describe('权限', () => {
   it('定价核算接入真实端点后挂 canViewPricing（pricing:view），不再是占位守卫', () => {
     const node = topLevel.find((r) => r.name === '定价核算')!;
     expect(node.access).toBe('canViewPricing');
+  });
+
+  it('定价核算三个独立功能走左侧二级菜单，子屏继承权限，/pricing 重定向到快速核价', () => {
+    const node = topLevel.find((r) => r.name === '定价核算')!;
+    expect(node.routes!.filter((c) => c.name).map((c) => [c.name, c.path])).toEqual([
+      ['快速核价', '/pricing/calculate'],
+      ['核价记录', '/pricing/records'],
+      ['费用配置', '/pricing/rates'],
+    ]);
+    expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
+    expect(node.routes!.find((c) => c.path === '/pricing')?.redirect).toBe('/pricing/calculate');
   });
 
   it('风险核查的子屏继承父级，不再各挂一个', () => {
