@@ -439,6 +439,95 @@ async def test_标题只在首次落定(db):
     assert title == "首次见到"
 
 
+# ---------- 单批上限 1000（#166 D4：一次提交建立基线，规模放大不改语义） ----------
+
+
+def _asins(start: int, n: int) -> list[str]:
+    return [f"B0{i:08d}" for i in range(start, start + n)]
+
+
+async def test_一千条一次提交落定基线_之后只有真正的新品算新发现(db, monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "COMPETITOR_MAX_REPORT_ITEMS", 1000)
+    seed = await db.run_sync(_seed)
+    first = await service.submit_report(db, seed["owner"], _req(request_id="big-1", asins=_asins(0, 1000)))
+    assert first.accepted == 1000 and first.baseline_established is True
+    # 再报其中 999 条 + 1 条从未见过的：只有那 1 条是新发现，基线不动
+    second = await service.submit_report(
+        db, seed["owner"], _req(request_id="big-2", asins=_asins(1, 999) + ["B0NEWNEW01"])
+    )
+    assert second.new_asins == 1 and second.baseline_established is False
+    assert await _count(db, "SELECT count(*) FROM analysis.competitor_seller_asin") == 1001
+    new_after_baseline = await _count(
+        db,
+        "SELECT count(*) FROM analysis.competitor_seller_asin a "
+        "JOIN analysis.competitor_seller s USING (seller_id, site) WHERE a.first_seen_at > s.baseline_at",
+    )
+    # 同一事务内两次提交共用 now()，这里只能断言「没有多出来」；跨事务的严格大于由
+    # test_跨事务下第二次上报的新品晚于基线 覆盖。
+    assert new_after_baseline <= 1
+
+
+def test_超过上限整批拒绝不截断(monkeypatch):
+    from pydantic import ValidationError
+
+    from config import settings
+
+    monkeypatch.setattr(settings, "COMPETITOR_MAX_REPORT_ITEMS", 1000)
+    with pytest.raises(ValidationError, match="最多 1000 条"):
+        _req(request_id="big-x", asins=_asins(0, 1001))
+
+
+# ---------- 卖家店名（#166 D5：最新非空值覆盖、不进摘要、重放不改） ----------
+
+
+async def _seller_name(db) -> str | None:
+    return (
+        await db.execute(
+            text("SELECT seller_name FROM analysis.competitor_seller WHERE seller_id=:s AND site=:t"),
+            {"s": _SELLER, "t": _SITE},
+        )
+    ).scalar()
+
+
+async def test_店名首次写入且带首尾空白被去掉(db):
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1", seller_name="  Acme Store  "))
+    assert await _seller_name(db) == "Acme Store"
+
+
+async def test_没带店名的上报不清空已有店名(db):
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1", seller_name="Acme Store"))
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-2"))
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-3", seller_name="   "))
+    assert await _seller_name(db) == "Acme Store"
+
+
+async def test_新店名覆盖旧店名(db):
+    """与标题「首次落定」相反：店名是卖家主体当前的展示属性，改名后应当跟随。"""
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1", seller_name="Old Name"))
+    await service.submit_report(db, seed["other"], _req(request_id="rq-1", seller_name="New Name"))
+    assert await _seller_name(db) == "New Name"
+
+
+async def test_重放带了不同店名_按重放处理且店名不变(db):
+    """店名不进摘要：只有店名不同不是 409；而重放路径 MUST NOT 改共享行。"""
+    seed = await db.run_sync(_seed)
+    first = await service.submit_report(db, seed["owner"], _req(request_id="rq-x", seller_name="Acme"))
+    replay = await service.submit_report(db, seed["owner"], _req(request_id="rq-x", seller_name="Other"))
+    assert replay.duplicate_of == first.report_id
+    assert await _seller_name(db) == "Acme"
+
+
+async def test_店名超长截断而不是拒绝(db):
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1", seller_name="S" * 500))
+    assert await _seller_name(db) == "S" * 200
+
+
 # ---------- 溯源 ----------
 
 
@@ -884,9 +973,10 @@ async def test_无基线的卖家两个指标都是None而不是0(db):
     故事就地塌掉——0 会被读成"这家店没有新发现"，而事实是"这个卖家还没有被采集过"。"""
     seed = await db.run_sync(_seed)
     row = await _watch_row(db, seed["owner"])
-    assert row.status == "PENDING_BASELINE"
+    assert row.status == "NOT_COLLECTED"
     assert row.new_discoveries_7d is None
     assert row.last_reported_at is None
+    assert row.last_report_item_count is None
 
 
 async def test_有基线但窗口内无新发现时是真实的0(db):
@@ -895,7 +985,7 @@ async def test_有基线但窗口内无新发现时是真实的0(db):
     await service.submit_report(db, seed["owner"], _req())  # 首批，恒不算新发现
 
     row = await _watch_row(db, seed["owner"])
-    assert row.status == "MONITORING"
+    assert row.status == "COLLECTED"
     assert row.new_discoveries_7d == 0
     assert row.last_reported_at is not None
 
@@ -959,5 +1049,189 @@ async def test_别人的上报也算数指标是共享的(db):
     seed = await db.run_sync(_seed)
     await service.submit_report(db, seed["owner"], _req())
     row = await _watch_row(db, seed["other"])
-    assert row.status == "MONITORING"
+    assert row.status == "COLLECTED"
     assert row.new_discoveries_7d == 0  # 是 0 不是 None：这个卖家已经有基线了
+
+
+# ---------- 三态边界、最近上报条数、已采集商品（#166 D2/D3） ----------
+
+
+async def _age_reports(db, days: int):
+    await db.execute(
+        text("UPDATE analysis.competitor_asin_report SET reported_at = now() - make_interval(days => :d)"),
+        {"d": days},
+    )
+
+
+async def test_最近上报在窗口内是已采集_超出窗口是数据陈旧(db):
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req())
+    await _age_reports(db, 6)
+    assert (await _watch_row(db, seed["owner"])).status == "COLLECTED"
+    await _age_reports(db, 8)
+    assert (await _watch_row(db, seed["owner"])).status == "STALE"
+
+
+async def test_最近上报条数取最新一次而不是累计(db):
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-1", asins=("B0AAAAAAAA", "B0BBBBBBBB", "B0CCCCCCCC")))
+    await _age_reports(db, 1)  # 让第二次严格更新
+    await service.submit_report(db, seed["owner"], _req(request_id="rq-2", asins=("B0AAAAAAAA",)))
+    assert (await _watch_row(db, seed["owner"])).last_report_item_count == 1
+
+
+async def test_清单带出店名(db):
+    seed = await db.run_sync(_seed)
+    await service.submit_report(db, seed["owner"], _req(seller_name="Acme Store"))
+    assert (await _watch_row(db, seed["owner"])).seller_name == "Acme Store"
+
+
+async def test_已采集商品分页且标明基线批次(db):
+    from app.table.competitor.watch_schemas import SellerAsinsRequest
+
+    seed = await db.run_sync(_seed)
+    await db.execute(
+        text("UPDATE analysis.competitor_seller SET baseline_at=:t WHERE seller_id=:s"),
+        {"t": _day(1), "s": _SELLER},
+    )
+    for asin, day in (("B0BASE0001", 1), ("B0BASE0002", 1), ("B0NEW00001", 5)):
+        await db.execute(
+            text(
+                "INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) "
+                "VALUES (:s,:t,:a,:at)"
+            ),
+            {"s": _SELLER, "t": _SITE, "a": asin, "at": _day(day)},
+        )
+    watch_id = (await _watch_row(db, seed["owner"])).watch_id
+    p1 = await service_watch.list_seller_asins(db, seed["owner"], watch_id, SellerAsinsRequest(page=1, perPage=2))
+    p2 = await service_watch.list_seller_asins(db, seed["owner"], watch_id, SellerAsinsRequest(page=2, perPage=2))
+    assert p1.total == 3
+    rows = p1.data + p2.data
+    assert [r.asin for r in rows] == ["B0NEW00001", "B0BASE0001", "B0BASE0002"]
+    assert [r.is_baseline for r in rows] == [False, True, True]
+
+
+async def test_已采集商品_别人的关注返回404(db):
+    from app.common.errors import NotFoundError
+    from app.table.competitor.watch_schemas import SellerAsinsRequest
+
+    seed = await db.run_sync(_seed)
+    watch_id = (await _watch_row(db, seed["owner"])).watch_id
+    await db.execute(
+        text("DELETE FROM analysis.user_seller_watch WHERE user_id=:u"), {"u": seed["other"]}
+    )
+    with pytest.raises(NotFoundError):
+        await service_watch.list_seller_asins(db, seed["other"], watch_id, SellerAsinsRequest())
+
+
+
+# ---------- 商品发现的筛选与看品字段（#166 D6） ----------
+
+
+async def _feed_all(db, user_id, **kw):
+    """翻完所有页，返回 (总数, 全部行)。用来断言「总数 == 实际能翻到的行数」。"""
+    first = await service_store.new_arrivals(db, user_id, NewArrivalRequest(days=90, page=1, per_page=2, **kw))
+    rows = list(first.data)
+    page = 2
+    while len(rows) < first.total and page < 50:
+        nxt = await service_store.new_arrivals(db, user_id, NewArrivalRequest(days=90, page=page, per_page=2, **kw))
+        rows.extend(nxt.data)
+        page += 1
+    return first.total, rows
+
+
+async def _seed_mixed(db):
+    """owner：US 卖家 3 条新发现 + GB 卖家 1 条 + Shopify 店 3 条；分组只含 US 卖家与 Shopify 店。"""
+    seed = await db.run_sync(_seed)
+    await _seed_amazon_arrivals(db, seed["owner"], n=3)
+    await db.execute(
+        text("INSERT INTO analysis.competitor_seller(seller_id,site,baseline_at,seller_name) VALUES (:s,'GB',:b,'GB 店')"),
+        {"s": _SELLER, "b": _day(1)},
+    )
+    await db.execute(
+        text("INSERT INTO analysis.user_seller_watch(user_id,seller_id,site,priority) VALUES (:u,:s,'GB',1)"),
+        {"u": seed["owner"], "s": _SELLER},
+    )
+    await db.execute(
+        text("INSERT INTO analysis.competitor_seller_asin(seller_id,site,asin,first_seen_at) VALUES (:s,'GB','B0GBONLY01',:at)"),
+        {"s": _SELLER, "at": _day(3)},
+    )
+    await _seed_dtc(db, seed["owner"])
+    group_id = (
+        await db.execute(
+            text("INSERT INTO analysis.user_seller_group(user_id,name) VALUES (:u,'重点') RETURNING group_id"),
+            {"u": seed["owner"]},
+        )
+    ).scalar()
+    await db.execute(
+        text("UPDATE analysis.user_seller_watch SET group_id=:g WHERE user_id=:u AND site='US'"),
+        {"g": group_id, "u": seed["owner"]},
+    )
+    await db.execute(
+        text("UPDATE analysis.user_store_watch SET group_id=:g WHERE user_id=:u"),
+        {"g": group_id, "u": seed["owner"]},
+    )
+    return seed, group_id
+
+
+@pytest.mark.parametrize(
+    "kw,expect",
+    [
+        ({}, 7),
+        ({"source": "AMAZON"}, 4),
+        ({"source": "DTC"}, 3),
+        ({"site": "GB"}, 1),
+        ({"source": "DTC", "site": "US"}, 0),  # Shopify 没有站点：两侧都被排除，结果为空而不是报错
+        ({"seller_id": _SELLER}, 4),
+        ({"seller_id": _SELLER, "site": "US"}, 3),
+        ({"domain": "mixed-shop.com"}, 3),
+    ],
+)
+async def test_每种筛选的总数等于实际能翻到的行数(db, kw, expect):
+    seed, _ = await _seed_mixed(db)
+    total, rows = await _feed_all(db, seed["owner"], **kw)
+    assert total == expect == len(rows)
+    assert len({(r.source, r.site, r.source_key, r.product_key) for r in rows}) == len(rows)
+    if "site" in kw:
+        assert all(r.source == "AMAZON" and r.site == kw["site"] for r in rows)
+
+
+async def test_分组筛选两类来源都按分组过滤(db):
+    seed, group_id = await _seed_mixed(db)
+    total, rows = await _feed_all(db, seed["owner"], group_id=group_id)
+    assert total == 6 == len(rows)  # US 卖家 3 + Shopify 3，GB 卖家不在组里
+    assert not any(r.site == "GB" for r in rows)
+
+
+async def test_别人的分组返回404而不是空列表(db):
+    from app.common.errors import NotFoundError
+
+    seed, group_id = await _seed_mixed(db)
+    with pytest.raises(NotFoundError):
+        await service_store.new_arrivals(db, seed["other"], NewArrivalRequest(group_id=group_id))
+
+
+async def test_非法站点码返回422(db):
+    seed = await db.run_sync(_seed)
+    with pytest.raises(UnprocessableError):
+        await service_store.new_arrivals(db, seed["owner"], NewArrivalRequest(site="ZZ"))
+
+
+async def test_看品字段_链接店名与两个时间(db):
+    seed, _ = await _seed_mixed(db)
+    _, rows = await _feed_all(db, seed["owner"])
+    gb = next(r for r in rows if r.site == "GB")
+    assert gb.product_url == "https://www.amazon.co.uk/dp/B0GBONLY01"
+    assert gb.source_name == "GB 店"
+    assert gb.published_at is None and gb.discovered_at == gb.at
+    dtc = next(r for r in rows if r.source == "DTC")
+    assert dtc.product_url == f"https://mixed-shop.com/products/h{int(dtc.product_key) - 1000}"
+    assert dtc.published_at is not None and dtc.discovered_at is not None
+    us = next(r for r in rows if r.site == "US")
+    assert us.source_name is None  # US 行从未取到店名：回落由界面负责，不拿备注顶替
+
+
+async def test_不传新字段时与改动前一致(db):
+    seed, _ = await _seed_mixed(db)
+    plain = await service_store.new_arrivals(db, seed["owner"], NewArrivalRequest(days=90, per_page=50))
+    assert plain.total == 7

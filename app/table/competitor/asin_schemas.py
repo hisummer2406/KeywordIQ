@@ -87,6 +87,11 @@ class AsinReportRequest(BaseModel):
     page_context: str | None = Field(
         default=None, description="采集时的页面上下文（排序方式、页码等），超长截断"
     )
+    # 店名是公开的展示属性（#166 D5）：超长截断、空白视同没给；**不进 request_hash**
+    # （与标题、图片同理，易变且不参与任何判定），只在非重放且非空时覆盖共享卖家行。
+    seller_name: str | None = Field(
+        default=None, description="卖家店名（插件尽力解析，取不到不传），超长截断，不参与任何判定"
+    )
     items: list[AsinReportItem] = Field(
         default_factory=list, description="本次见到的条目；不承诺是该卖家的全部商品"
     )
@@ -101,6 +106,12 @@ class AsinReportRequest(BaseModel):
                 f"单次上报最多 {cap} 条，本次 {len(value)} 条；超限整批拒绝，不会截断后写入"
             )
         return value
+
+
+class CollectorConfigResponse(BaseModel):
+    """采集端配置（competitor-asin-ingest「服务端公布单批上限」）。只含运行时配置，不含任何用户或卖家数据。"""
+
+    max_report_items: int = Field(description="单次上报条目数上限；超限整批 422，不截断")
 
 
 class RejectedItem(BaseModel):

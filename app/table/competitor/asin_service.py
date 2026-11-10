@@ -38,9 +38,12 @@ from app.table.competitor.asin_schemas import (
     MAX_TITLE_LEN,
     AsinReportRequest,
     AsinReportResponse,
+    CollectorConfigResponse,
     RejectedItem,
     truncate,
 )
+from app.table.competitor.seller_model import MAX_SELLER_NAME_LEN
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,11 @@ CODE_IDEMPOTENCY_KEY_REUSED = CODE_COMPETITOR_IDEMPOTENCY_KEY_REUSED
 CODE_SELLER_NOT_WATCHED = CODE_COMPETITOR_SELLER_NOT_WATCHED
 CODE_REPORT_EMPTY = CODE_COMPETITOR_REPORT_EMPTY
 CODE_SITE_INVALID = CODE_COMPETITOR_SITE_INVALID
+
+
+def collector_config() -> CollectorConfigResponse:
+    """采集端唯一的上限来源：插件据此提前拦截，不再手工镜像（#166 D4）。"""
+    return CollectorConfigResponse(max_report_items=settings.COMPETITOR_MAX_REPORT_ITEMS)
 
 
 async def submit_report(
@@ -121,6 +129,12 @@ async def submit_report(
     baseline_established = (
         await db.execute(crud.set_baseline_stmt(seller_id, site))
     ).scalar_one_or_none() is not None
+
+    # 店名只在这条非重放路径上更新：重放（上面 report_id 为空那支）MUST NOT 改共享行，
+    # 没带店名的上报也不清空已有值（#166 D5）。
+    seller_name = truncate((req.seller_name or "").strip() or None, MAX_SELLER_NAME_LEN)
+    if seller_name:
+        await db.execute(crud.update_seller_name_stmt(seller_id, site, seller_name))
 
     await db.commit()
     return AsinReportResponse(

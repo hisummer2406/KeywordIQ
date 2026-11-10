@@ -3,7 +3,8 @@
 
 import { getApiBaseUrl, getAuthToken, getWebOrigin } from './auth';
 import { buildReportRequest } from './build-report';
-import type { CaptureMessage, CaptureResult } from './messages';
+import { fetchCollectorConfig } from './collector-config';
+import type { CaptureMessage, CaptureResult, ConfigMessage, ConfigResult } from './messages';
 import { sendReport } from './report-client';
 import { syncTokenFromWeb, type SyncOutcome, type SyncResult } from './session-sync';
 
@@ -16,12 +17,45 @@ chrome.action?.onClicked.addListener(() => {
   void chrome.runtime.openOptionsPage();
 });
 
-chrome.runtime.onMessage.addListener((message: CaptureMessage, _sender, sendResponse) => {
-  if (message?.type !== 'CAPTURE_REPORT') return undefined;
+chrome.runtime.onMessage.addListener(
+  (message: CaptureMessage | ConfigMessage, _sender, sendResponse) => {
+    if (message?.type === 'CAPTURE_REPORT') {
+      handleCapture(message).then(sendResponse);
+      return true; // 告知 Chrome 这是异步响应，保持消息通道打开
+    }
+    if (message?.type === 'GET_COLLECTOR_CONFIG') {
+      handleGetConfig().then(sendResponse);
+      return true;
+    }
+    return undefined;
+  },
+);
 
-  handleCapture(message).then(sendResponse);
-  return true; // 告知 Chrome 这是异步响应，保持消息通道打开
-});
+/**
+ * 读取服务端单批上限。令牌缺失或过期时与上报同一套自愈（从网页会话同步、至多重试一次）；
+ * 任何一步失败都给 `unavailable`，**不回落到本地默认值**（#166 D4）。
+ */
+export async function handleGetConfig(): Promise<ConfigResult> {
+  let token = await getAuthToken();
+  if (!token) {
+    const synced = await trySync();
+    if (synced.outcome !== 'ok' || !synced.token) return { outcome: 'unavailable' };
+    token = synced.token;
+  }
+  const baseUrl = await getApiBaseUrl();
+  if (!baseUrl) return { outcome: 'unavailable' };
+
+  let result = await fetchCollectorConfig(baseUrl, token);
+  if (result.kind === 'auth_error') {
+    const synced = await trySync();
+    if (synced.outcome === 'ok' && synced.token && synced.token !== token) {
+      result = await fetchCollectorConfig(baseUrl, synced.token);
+    }
+  }
+  return result.kind === 'ok'
+    ? { outcome: 'ok', maxReportItems: result.maxReportItems }
+    : { outcome: 'unavailable' };
+}
 
 /** 同步失败的三种成因 → 各自的结局，不合并（messages.ts 有理由）。 */
 function syncFailureResult(outcome: SyncOutcome): CaptureResult {
@@ -75,6 +109,7 @@ export async function handleCapture(message: CaptureMessage): Promise<CaptureRes
     requestId: message.requestId,
     capturedAt: message.capturedAt,
     pageContext: message.pageContext,
+    sellerName: message.sellerName,
   });
 
   let outcome = await sendReport(baseUrl, token, body);

@@ -11,3 +11,4 @@ paths:
 - 跨域用 optional_host_permissions 随 API 地址申请；不依赖后端 CORS，不写死固定 API host_permissions。
 - 同步网页 JWT 不等于独立可吊销凭证；不把现有全权限 token 描述成已收窄。
 - 分发/打包/升级按 README 操作；DOM 选择器必须真实页面验证，旧真机记录不代表当前全部站点通过。
+- 单批上限只从服务端 `collector-config` 读取，读不到即禁止开始采集，不回落本地常量或手填值；超限整批拒绝并说明支持规模，不截断、不分批（#166 D4）。

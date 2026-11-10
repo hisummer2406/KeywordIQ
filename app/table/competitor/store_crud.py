@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import NamedTuple
@@ -11,6 +12,7 @@ from sqlalchemy import (
     case,
     cast,
     delete,
+    false,
     func,
     literal,
     null,
@@ -510,7 +512,33 @@ def _window(days: int):
     return func.now() - text(f"interval '{days} days'")
 
 
-def _dtc_arrivals_select(user_id: int, days: int):
+@dataclass(frozen=True)
+class ArrivalFilters:
+    """商品发现的筛选（#166 D6）。全部可选；每一项都在 UNION **之前**施加到两侧。
+
+    - ``source``：只看一侧。
+    - ``site``：只作用于 Amazon 侧；给了站点时 DTC 侧整体不参与（Shopify 没有站点概念）。
+    - ``group_id``：经各自的 watch 表过滤，天然限定在当前用户名下（调用方另核分组归属）。
+    - ``seller_id`` / ``domain``：单个店铺。给了 ``seller_id`` 只剩 Amazon 侧，给了 ``domain``
+      只剩 DTC 侧。
+    """
+
+    source: str | None = None
+    site: str | None = None
+    group_id: int | None = None
+    seller_id: str | None = None
+    domain: str | None = None
+
+    @property
+    def wants_dtc(self) -> bool:
+        return self.source in (None, "DTC") and self.site is None and self.seller_id is None
+
+    @property
+    def wants_amazon(self) -> bool:
+        return self.source in (None, "AMAZON") and self.domain is None
+
+
+def _dtc_arrivals_select(user_id: int, days: int, filters: ArrivalFilters = ArrivalFilters()):
     """独立站那一侧的统一投影。
 
     **排除基线前那批**：判据是 ``first_seen_at > baseline_at``，基线是首次**完整**拿到
@@ -535,6 +563,9 @@ def _dtc_arrivals_select(user_id: int, days: int):
             cast(CompetitorStoreProduct.product_id, Text).label("product_key"),
             cast(CompetitorStoreProduct.title, Text).label("title"),
             cast(CompetitorStoreProduct.image_url, Text).label("image_url"),
+            cast(CompetitorStoreProduct.handle, Text).label("product_handle"),
+            CompetitorStoreProduct.first_seen_at.label("discovered_at"),
+            CompetitorStoreProduct.published_at.label("published_at"),
             at.label("at"),
             case(
                 (CompetitorStoreProduct.published_at.is_not(None), literal("PUBLISHED")),
@@ -550,11 +581,13 @@ def _dtc_arrivals_select(user_id: int, days: int):
             CompetitorStore.baseline_at.is_not(None),
             CompetitorStoreProduct.first_seen_at > CompetitorStore.baseline_at,
             CompetitorStoreProduct.first_seen_at > _window(days),
+            *([UserStoreWatch.group_id == filters.group_id] if filters.group_id is not None else []),
+            *([CompetitorStoreProduct.domain == filters.domain] if filters.domain is not None else []),
         )
     )
 
 
-def _amazon_arrivals_select(user_id: int, days: int):
+def _amazon_arrivals_select(user_id: int, days: int, filters: ArrivalFilters = ArrivalFilters()):
     """Amazon 卖家那一侧的统一投影。
 
     判据与独立站同构，只是基线列不同：``first_seen_at > baseline_at``（首次上报落定基线，
@@ -582,13 +615,16 @@ def _amazon_arrivals_select(user_id: int, days: int):
         select(
             cast(literal("AMAZON"), Text).label("source"),
             cast(CompetitorSellerAsin.seller_id, Text).label("source_key"),
-            cast(null(), Text).label("source_name"),
+            cast(CompetitorSeller.seller_name, Text).label("source_name"),
             cast(CompetitorSellerAsin.site, Text).label("site"),
             cast(CompetitorSellerAsin.asin, Text).label("product_key"),
             cast(func.coalesce(CompetitorSellerAsin.title, CompetitorSellerAsin.asin), Text).label(
                 "title"
             ),
             cast(CompetitorSellerAsin.image_url, Text).label("image_url"),
+            cast(null(), Text).label("product_handle"),
+            CompetitorSellerAsin.first_seen_at.label("discovered_at"),
+            cast(null(), CompetitorStoreProduct.published_at.type).label("published_at"),
             CompetitorSellerAsin.first_seen_at.label("at"),
             cast(literal("DISCOVERED"), Text).label("time_kind"),
         )
@@ -607,11 +643,14 @@ def _amazon_arrivals_select(user_id: int, days: int):
             CompetitorSeller.baseline_at.is_not(None),
             CompetitorSellerAsin.first_seen_at > CompetitorSeller.baseline_at,
             CompetitorSellerAsin.first_seen_at > _window(days),
+            *([CompetitorSellerAsin.site == filters.site] if filters.site is not None else []),
+            *([UserSellerWatch.group_id == filters.group_id] if filters.group_id is not None else []),
+            *([CompetitorSellerAsin.seller_id == filters.seller_id] if filters.seller_id is not None else []),
         )
     )
 
 
-def new_arrivals_stmt(user_id: int, *, days: int):
+def new_arrivals_stmt(user_id: int, *, days: int, filters: ArrivalFilters = ArrivalFilters()):
     """上新流：两类来源**在同一次查询内**合并后统一排序分页。
 
     **MUST NOT 各查一页再在应用层归并。** 各来源自己的偏移量与合并后的全局序号对不上，
@@ -635,9 +674,17 @@ def new_arrivals_stmt(user_id: int, *, days: int):
     恢复确定顺序。``site`` 对 DTC 侧恒为 NULL，Postgres 排序里 NULL 参与比较不影响
     Amazon 侧内部的确定性，两侧本就先按 ``source`` 分开。
     """
-    unified = union_all(
-        _dtc_arrivals_select(user_id, days), _amazon_arrivals_select(user_id, days)
-    ).subquery()
+    # 被筛掉的一侧**不参与 UNION**（而不是两侧都查、外层再滤）：外层滤会让排序/分页在更大
+    # 的集合上做，且两侧的过滤口径会分散到两处。两侧都被排除时（如来源=Shopify 又选了站点）
+    # 保留一侧加恒假条件，让结果形状与计数路径不变、只是为空。
+    sides = []
+    if filters.wants_dtc:
+        sides.append(_dtc_arrivals_select(user_id, days, filters))
+    if filters.wants_amazon:
+        sides.append(_amazon_arrivals_select(user_id, days, filters))
+    if not sides:
+        sides.append(_amazon_arrivals_select(user_id, days, filters).where(false()))
+    unified = (union_all(*sides) if len(sides) > 1 else sides[0]).subquery()
     return select(unified).order_by(
         unified.c.at.desc(),
         unified.c.source,

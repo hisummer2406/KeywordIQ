@@ -10,11 +10,11 @@ import { request } from '@umijs/max';
  */
 
 /**
- * 关注状态**两态**，由该卖家有没有基线决定。曾有第三个 `PAUSED`，删掉是因为没有任何字段
- * 或端点能让一行进入该状态——永远取不到值的状态会让人以为系统能暂停某个卖家。要做暂停，
- * 它属于私有层 `user_seller_watch`，是另一次变更。
+ * Amazon 卖家行状态**三态**，由服务端判定（#166）：未采集 / 已采集（最近上报在新发现窗口内）
+ * / 数据陈旧。Amazon 侧只随人工采集更新，不能用「监控中」暗示后台在自动检查。
+ * 曾有 `PAUSED`，删掉是因为没有任何字段或端点能让一行进入该状态。
  */
-export type WatchStatus = 'PENDING_BASELINE' | 'MONITORING';
+export type WatchStatus = 'NOT_COLLECTED' | 'COLLECTED' | 'STALE';
 
 export interface CompetitorGroup {
   group_id: number;
@@ -46,6 +46,10 @@ export interface WatchRow {
   /** 最近一次被采集的时刻，无上报时为 null。「很久没采过」与「确实没有新发现」在界面上
    * 长得一模一样，必须同屏展示它并在陈旧时提示。 */
   last_reported_at: string | null;
+  /** 最近一次上报的条目数。**只表示那次见到了多少，不代表全店总量**，界面必须注明。 */
+  last_report_item_count: number | null;
+  /** 卖家店名（插件尽力解析），取不到时为 null，界面回落显示 seller_id；不拿私有备注顶替。 */
+  seller_name: string | null;
 }
 
 export interface WatchListBody {
@@ -359,6 +363,22 @@ export interface NewArrivalRow {
   image_url: string | null;
   at: string;
   time_kind: 'PUBLISHED' | 'DISCOVERED';
+  /** 首次发现于（两类来源都有）。不是上架时间。 */
+  discovered_at: string;
+  /** 数据源给出的上架时间，仅 Shopify 行可能有值。 */
+  published_at: string | null;
+  /** 原商品链接；取不到时为 null（不现编）。 */
+  product_url: string | null;
+}
+
+/** 商品发现的筛选，全部可选，**都传到后端**——前端不在当前页上二次过滤，否则总数与页数对不上。 */
+export interface NewArrivalFilters {
+  days?: number;
+  source?: 'AMAZON' | 'DTC';
+  site?: string;
+  groupId?: number;
+  sellerId?: string;
+  domain?: string;
 }
 
 export interface NewArrivalResponse {
@@ -367,14 +387,41 @@ export interface NewArrivalResponse {
   total: number;
 }
 
-export async function listNewArrivals(body: {
-  days?: number;
-  page?: number;
-  perPage?: number;
-}) {
+export async function listNewArrivals(body: NewArrivalFilters & { page?: number; perPage?: number }) {
   return request<NewArrivalResponse>('/api/competitor/new-arrivals', {
     method: 'POST',
-    data: { days: body.days ?? 7, page: body.page ?? 1, per_page: body.perPage ?? 20 },
+    data: {
+      days: body.days ?? 7,
+      page: body.page ?? 1,
+      per_page: body.perPage ?? 20,
+      source: body.source,
+      site: body.site,
+      group_id: body.groupId,
+      seller_id: body.sellerId,
+      domain: body.domain,
+    },
+  });
+}
+
+/** 店铺管理点开一个 Amazon 卖家：已采集到的商品。`total` 是已采集条数，不是全店在售数。 */
+export interface SellerAsinRow {
+  asin: string;
+  title: string | null;
+  image_url: string | null;
+  first_seen_at: string;
+  is_baseline: boolean;
+}
+
+export interface SellerAsinsResponse {
+  success: boolean;
+  data: SellerAsinRow[];
+  total: number;
+}
+
+export async function listSellerAsins(watchId: number, body: { page?: number; perPage?: number }) {
+  return request<SellerAsinsResponse>(`/api/competitor/watches/${watchId}/asins`, {
+    method: 'POST',
+    data: { page: body.page ?? 1, perPage: body.perPage ?? 50 },
   });
 }
 

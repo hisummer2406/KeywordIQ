@@ -8,11 +8,10 @@
 // 服务端判成"新发现"（spec「采集当前已加载页面的 ASIN 清单，支持翻页」，
 // PR #68 复审 P1）。
 
-import { hasNextPage, parseStorefrontPage, type ParsedItem } from './parse-storefront';
+import { hasNextPage, parseSellerName, parseStorefrontPage, type ParsedItem } from './parse-storefront';
 import { resolveSite } from './site-map';
-import { getMaxReportItems } from './auth';
 import { buildPageContext, freezeRequest, mergeItemsWithCap, pendingItemsKey } from './capture-accumulator';
-import type { CaptureMessage, CaptureResult } from './messages';
+import type { CaptureMessage, CaptureResult, ConfigMessage, ConfigResult } from './messages';
 
 function getSellerId(url: URL): string | null {
   if (url.searchParams.get('i') !== 'merchant-items') return null;
@@ -152,13 +151,27 @@ function describeAccumulated(count: number, hasMore: boolean): string {
  * 采集剩余商品并再次提交时，那批会被服务端判成"新发现"。插件目前没有能安全
  * 分批建立基线的协议，只能在这里止步，让运营决定放弃采集这个卖家还是清空重来。
  */
-function describeCapExceeded(cap: number, currentCount: number): string {
+function describeCapExceeded(cap: number | null, currentCount: number): string {
+  const limit = cap === null ? '服务端上限' : `${cap} 条`;
   return (
-    `该卖家的商品数超过单次上报上限（${cap} 条），插件当前不支持完整采集这类` +
-    `大店铺。已采集的 ${currentCount} 条不会被提交——提交会用这部分数据给该` +
-    `卖家落定基线，之后继续采集剩下的商品并再次提交时，那批会被误判成"新发现"。` +
-    `请点"清空已采集，重新开始"放弃这次采集，或等待后续版本支持更大店铺。`
+    `本轮支持单个卖家最多 ${limit}，该卖家的商品数超过了这个范围，插件不支持完整采集。` +
+    `已采集的 ${currentCount} 条不会被提交——不能分批提交：第一批会单独给该卖家落定基线，` +
+    `之后采到的剩余商品会被误判成"新发现"。请点"清空已采集，重新开始"放弃这次采集。`
   );
+}
+
+/** 读不到服务端上限时的提示（#166 D4）：禁止开始采集，不按任何本地默认值继续累积。 */
+const CONFIG_UNAVAILABLE =
+  '无法获取服务端的单次上报上限，暂不能开始采集。请确认插件设置里的 API 地址正确、并已在 KeywordIQ 网页上登录，然后刷新本页';
+
+async function loadMaxReportItems(): Promise<number | null> {
+  try {
+    const message: ConfigMessage = { type: 'GET_COLLECTOR_CONFIG' };
+    const result = (await chrome.runtime.sendMessage(message)) as ConfigResult | undefined;
+    return result?.outcome === 'ok' ? result.maxReportItems : null;
+  } catch {
+    return null; // background 未响应：按取不到处理，不回落到默认值
+  }
 }
 
 async function init(): Promise<void> {
@@ -179,20 +192,26 @@ async function init(): Promise<void> {
   // 的 null 检查之后：TypeScript 只在这种写法下才会把外层已收窄的 `string | null`
   // → `string` 带进闭包，写成 hoisted 的 function 声明拿不到这份收窄。
 
-  // 上限是运行时配置，不是协议常量——服务端 COMPETITOR_MAX_REPORT_ITEMS 允许
-  // 部署方改成任意正整数，插件只能镜像运营在 options page 里手填的值
-  // （PR #68 三次复审 P2，auth.ts 的 getMaxReportItems 注释有完整解释）。
-  const maxReportItems = await getMaxReportItems();
-
+  // 上限**只来自服务端**（GET /api/competitor/collector-config，经 background 读取，#166 D4）。
+  // 读不到就禁止开始采集：按一个错的上限翻完很多页，提交时才被整批拒绝，比现在就停下更糟。
+  // 已累积、未提交的条目仍可提交——服务端会自己校验上限。
+  const maxReportItems = await loadMaxReportItems();
   let pending = await loadPendingCapture(site, sellerId);
-  panel.collectButton.disabled = pending.capped;
+  const collectBlocked = (): boolean => pending.capped || maxReportItems === null;
+  panel.collectButton.disabled = collectBlocked();
   panel.submitButton.disabled = pending.items.length === 0 || pending.capped;
   panel.status.textContent = pending.capped
     ? describeCapExceeded(maxReportItems, pending.items.length)
-    : describeAccumulated(pending.items.length, hasNextPage(document));
+    : maxReportItems === null
+      ? CONFIG_UNAVAILABLE
+      : describeAccumulated(pending.items.length, hasNextPage(document));
 
   const handleCollect = async (): Promise<void> => {
     if (pending.capped) return; // 已被硬性阻止，只能走"清空已采集，重新开始"
+    if (maxReportItems === null) {
+      panel.status.textContent = CONFIG_UNAVAILABLE;
+      return;
+    }
 
     const items = parseStorefrontPage(document);
     if (items.length === 0) {
@@ -250,6 +269,8 @@ async function init(): Promise<void> {
         requestId,
         capturedAt,
         pageContext: buildPageContext(url),
+        // 店名尽力而为：取不到就不带，不影响 ASIN 提交（#166 D5）
+        sellerName: parseSellerName(document),
       };
 
       const result = (await chrome.runtime.sendMessage(message)) as CaptureResult;
@@ -268,7 +289,7 @@ async function init(): Promise<void> {
       // P2——按钮不能因异常路径永久停在禁用态）。
       panel.status.textContent = '插件内部通信异常，已采集的数据仍会保留，可重新点"提交上报"';
     } finally {
-      panel.collectButton.disabled = false;
+      panel.collectButton.disabled = collectBlocked();
       panel.submitButton.disabled = pending.items.length === 0 || pending.capped;
     }
   };
@@ -276,9 +297,11 @@ async function init(): Promise<void> {
   const handleReset = async (): Promise<void> => {
     pending = { ...EMPTY_PENDING };
     await clearPendingCapture(site, sellerId);
-    panel.collectButton.disabled = false; // 撤销硬性阻止状态（若曾撞上单次上报上限）
+    // 撤销「撞上单次上报上限」的硬性阻止；读不到服务端上限时仍保持禁止
+    panel.collectButton.disabled = collectBlocked();
     panel.submitButton.disabled = true;
-    panel.status.textContent = describeAccumulated(0, hasNextPage(document));
+    panel.status.textContent =
+      maxReportItems === null ? CONFIG_UNAVAILABLE : describeAccumulated(0, hasNextPage(document));
   };
 
   panel.collectButton.addEventListener('click', () => {

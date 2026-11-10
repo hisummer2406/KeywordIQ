@@ -28,6 +28,8 @@ from app.table.competitor.watch_schemas import (
     GroupOut,
     GroupRenameRequest,
     PreviewResponse,
+    SellerAsinsRequest,
+    SellerAsinsResponse,
     WatchListRequest,
     WatchListResponse,
     WatchRemoveRequest,
@@ -109,6 +111,18 @@ async def get_asin_detail(
     """上新流点开一条 Amazon 行看到的详情：首次发现时刻（真实）+ 卖家级最近采集时刻
     （近似值，两者可信度不同，见 `AsinDetailResponse` 字段文档）。"""
     return await service.asin_detail(db, user.id, seller_id, site, asin)
+
+
+@competitor_router.post("/watches/{watch_id}/asins", response_model=SellerAsinsResponse)
+async def list_seller_asins(
+    watch_id: int,
+    req: SellerAsinsRequest,
+    db: AsyncSession = Depends(get_async_db),
+    user=Depends(_require_view),
+) -> SellerAsinsResponse:
+    """店铺管理点开一个 Amazon 卖家：已采集到的商品，首次发现倒序（#166 D3）。
+    ``total`` 是已采集到的条数，不是该卖家的全部在售商品。不是本人的关注 404。"""
+    return await service.list_seller_asins(db, user.id, watch_id, req)
 
 
 @competitor_router.patch("/watches/{watch_id}")

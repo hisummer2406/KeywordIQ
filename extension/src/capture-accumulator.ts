@@ -15,12 +15,10 @@ const PENDING_ITEMS_PREFIX = 'keywordiq_pending_capture_v1';
 // 改这个白名单。
 const PAGE_CONTEXT_ALLOWED_PARAMS = ['page', 's'];
 
-// 必须与服务端 `COMPETITOR_MAX_REPORT_ITEMS`（`.env.example`，默认 200）保持
-// 同步——这是手工镜像，不是自动读取，与 site-map.ts 对 site_registry.py 的
-// 镜像方式同一类风险。服务端对超限整批拒绝、不截断（`asin_service.py`），插件
-// 侧提前拦截是为了不让用户翻完好几页之后才撞上一个无法自行修复的 422
-// （PR #68 二次复审 P1）。
-export const MAX_REPORT_ITEMS = 200;
+// 单批上限**只来自服务端**（`GET /api/competitor/collector-config`，#166 D4），
+// 由 content-script 打开面板时经 background 读取后传入 `mergeItemsWithCap`。不再有
+// 本地镜像常量或手填值：手工镜像与服务端配置漂移时，插件要么过早拒绝、要么攒到
+// 超过真实上限才在提交时收到一个无法自行修复的 422（PR #68 二次复审 P1）。
 
 /** 同一 (site, sellerId) 的"已采集未提交"批次在 chrome.storage.local 里的键。 */
 export function pendingItemsKey(site: string, sellerId: string): string {
@@ -72,7 +70,7 @@ export interface MergeWithCapResult {
 export function mergeItemsWithCap(
   existing: ParsedItem[],
   incoming: ParsedItem[],
-  cap: number = MAX_REPORT_ITEMS,
+  cap: number,
 ): MergeWithCapResult {
   const merged = mergeItems(existing, incoming);
   if (merged.length > cap) {
