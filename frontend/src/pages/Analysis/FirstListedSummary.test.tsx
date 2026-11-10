@@ -23,7 +23,20 @@ describe('FirstListedSummary', () => {
     });
     render(<FirstListedSummary site="US" view="DAY" date="2026-07-18" />);
     expect(await screen.findByText('42')).toBeInTheDocument();
-    expect(getFirstListed).toHaveBeenCalledWith('US', 'DAY', '2026-07-18');
+    expect(getFirstListed).toHaveBeenCalledWith('US', 'DAY', '2026-07-18', 'MONITOR');
+    expect(screen.getByText('首次进入监测：')).toBeInTheDocument();
+  });
+
+  it('首次进入当前榜单口径：标题随视图、按 PERIOD 取数、上一期缺失时提示（#178）', async () => {
+    getFirstListed.mockResolvedValue({
+      site: 'US', view: 'DAY', on: '2026-10-31', mode: 'PERIOD', judgeable: true, count: 7,
+      earliest_known_date: '2026-09-14', previous_period_missing: true,
+    });
+    render(<FirstListedSummary site="US" view="DAY" date="2026-10-31" mode="PERIOD" />);
+    expect(await screen.findByText('7')).toBeInTheDocument();
+    expect(getFirstListed).toHaveBeenCalledWith('US', 'DAY', '2026-10-31', 'PERIOD');
+    expect(screen.getByText('首次进入日榜：')).toBeInTheDocument();
+    expect(screen.getByText(/上一期缺失/)).toBeInTheDocument();
   });
 
   it('真的是 0 时显示 0', async () => {

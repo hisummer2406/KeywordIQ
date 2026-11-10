@@ -1,5 +1,5 @@
 import type { View } from '@/services/analysis';
-import type { FilterDraft } from './filters';
+import { type FilterDraft, normalizeFirstListing } from './filters';
 
 /**
  * 用户保存的默认查询条件（对标卖家精灵的「保存当前模式」）。
@@ -96,7 +96,9 @@ export function readSavedMode(userId: number | undefined): SavedMode | null {
       clearSavedMode(userId);
       return null;
     }
-    return dropRetiredFilters(parsed as SavedMode);
+    const mode = dropRetiredFilters(parsed as SavedMode);
+    // #178：旧「只看首次入榜」读成「首次进入监测」，含义不变、不丢弃整组条件。
+    return mode.filters ? { ...mode, filters: normalizeFirstListing(mode.filters) } : mode;
   } catch {
     clearSavedMode(userId);
     return null;

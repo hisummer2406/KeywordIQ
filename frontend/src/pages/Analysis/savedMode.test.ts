@@ -16,7 +16,7 @@ const MODE: Omit<SavedMode, 'version'> = {
     change: {},
     clickShare: {},
     conversionShare: {},
-    firstListed: undefined,
+    firstListing: undefined,
     brands: [],
     productTitle: '',
   },

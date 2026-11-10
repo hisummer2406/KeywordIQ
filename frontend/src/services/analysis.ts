@@ -31,6 +31,11 @@ export interface AnalysisRow {
   first_seen_date?: string | null;
   /** IMPORTED 导入创建 / EARLIEST_OBSERVED 最早可观测 / UNKNOWN 未知 */
   first_seen_basis?: string | null;
+  /** 当前视图周期的首次（#178）：日视图=首次上日榜，周视图=首次上周榜；不做日周映射 */
+  period_first_listed?: boolean;
+  period_first_date?: string | null;
+  /** IMPORTED / EARLIEST_OBSERVED / UNKNOWN / ABSENT（未上过该榜） */
+  period_first_basis?: string | null;
   /**
    * 三个历史参照点的排名，顺序固定（日视图：昨天 / 3 天前 / 7 天前）。
    * 参照期缺失（未导入或已被保留清理移出）时该位为 `null`，不补齐、不用相邻期顶替。
@@ -94,7 +99,8 @@ export interface SearchBody {
   click_share_max?: number;
   conversion_share_min?: number;
   conversion_share_max?: number;
-  first_listed?: boolean;
+  /** 首次口径（#178）：PERIOD 首次进入当前榜单（日榜/周榜）；MONITOR 首次进入监测。不传不筛。 */
+  first_listing?: FirstListingMode;
   /** 排除关键词文本含该词前三品牌名（整词、不分大小写）的词；筛选条件，掉榜行随之消失 */
   exclude_brand_in_keyword?: boolean;
   /** 行集合维度，缺省 ALL。切到 DROPPED 时其余筛选在界面上必须置灰——它们会让掉榜段恒为空。 */
@@ -121,15 +127,21 @@ export interface ScopeInfo {
   available_dates: string[];
 }
 
-/** 所选期次「首次入榜」数量与统计范围。`judgeable=false` 时 `count` 为空——无法判断，不是 0。 */
+/** 首次口径：PERIOD 首次进入当前榜单（日视图日榜、周视图周榜）；MONITOR 首次进入监测（日周共享）。 */
+export type FirstListingMode = 'PERIOD' | 'MONITOR';
+
+/** 所选期次在某首次口径下的数量与统计范围。`judgeable=false` 时 `count` 为空——无法判断，不是 0。 */
 export interface FirstListedSummary {
   site: string;
   view: View;
   on: string;
+  mode?: FirstListingMode;
   judgeable: boolean;
   count: number | null;
-  /** 站点首次入榜统计的起点：最早的「已确认首次」期次 */
+  /** 统计起点：该口径下最早的「已确认首次」期次（PERIOD 为该榜单的监测起点） */
   earliest_known_date: string | null;
+  /** 仅 PERIOD：上一期同周期报告没有已完成导入，部分词可能更早已出现 */
+  previous_period_missing?: boolean;
 }
 
 export interface BrandOption {
@@ -187,11 +199,16 @@ export async function getCategories(site: string | undefined, view: View, date?:
   });
 }
 
-/** 所选期次的「首次入榜」数量；站点无数据时后端返回 null。 */
-export async function getFirstListed(site: string | undefined, view: View, date?: string | null) {
+/** 所选期次在首次口径 `mode` 下的数量；站点无数据时后端返回 null。 */
+export async function getFirstListed(
+  site: string | undefined,
+  view: View,
+  date?: string | null,
+  mode: FirstListingMode = 'MONITOR',
+) {
   return request<FirstListedSummary | null>('/api/analysis/first-listed', {
     method: 'GET',
-    params: { view, ...(site ? { site } : {}), ...(date ? { date } : {}) },
+    params: { view, mode, ...(site ? { site } : {}), ...(date ? { date } : {}) },
     skipErrorHandler: true,
   });
 }

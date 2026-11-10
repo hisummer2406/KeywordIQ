@@ -3,7 +3,9 @@ import {
   MAX_ASINS,
   RANGE_PRESETS,
   defaultFilters,
+  firstListingLabel,
   matchedPreset,
+  normalizeFirstListing,
   searchInputError,
   splitAsins,
   toSearchBody,
@@ -83,7 +85,7 @@ describe('toSearchBody', () => {
 
   it('空条件只带作用域，其余字段一律 undefined', () => {
     // 这里要的是真正的中性值，故显式关掉默认的首次入榜筛选（见 defaultFilters 的注释）。
-    const body = toSearchBody(scope, { ...defaultFilters(), firstListed: undefined });
+    const body = toSearchBody(scope, { ...defaultFilters(), firstListing: undefined });
     expect(body.site).toBe('US');
     expect(body.view).toBe('DAY');
     expect(body.date).toBe('2026-07-18');
@@ -137,10 +139,31 @@ describe('toSearchBody', () => {
     expect(body.change_min).toBeUndefined();
   });
 
-  it('首次入榜两态：true 传出，undefined 不传', () => {
-    // 两态都显式传值，不依赖默认值恰好是其中某一个——默认值改动时这条不该跟着变。
-    expect(toSearchBody(scope, { ...defaultFilters(), firstListed: true }).first_listed).toBe(true);
-    expect(toSearchBody(scope, { ...defaultFilters(), firstListed: undefined }).first_listed).toBeUndefined();
+  it('首次口径三选一：PERIOD/MONITOR 原样传出，undefined 不传；不再发旧 first_listed（#178）', () => {
+    // 三态都显式传值，不依赖默认值恰好是其中某一个——默认值改动时这条不该跟着变。
+    for (const mode of ['PERIOD', 'MONITOR'] as const) {
+      const body = toSearchBody(scope, { ...defaultFilters(), firstListing: mode });
+      expect(body.first_listing).toBe(mode);
+      expect('first_listed' in body).toBe(false);
+    }
+    expect(toSearchBody(scope, { ...defaultFilters(), firstListing: undefined }).first_listing).toBeUndefined();
+  });
+
+  it('旧形状 firstListed:true 读成 MONITOR，firstListed 被剔除（#178 旧保存条件含义不变）', () => {
+    const legacy = { ...defaultFilters(), firstListing: undefined, firstListed: true } as FilterDraft;
+    const next = normalizeFirstListing(legacy);
+    expect(next.firstListing).toBe('MONITOR');
+    expect('firstListed' in next).toBe(false);
+    const all = normalizeFirstListing({ ...defaultFilters(), firstListing: undefined, firstListed: undefined } as FilterDraft);
+    expect(all.firstListing).toBeUndefined();
+    // 已有新字段的原样保留
+    expect(normalizeFirstListing({ ...defaultFilters(), firstListing: 'PERIOD' }).firstListing).toBe('PERIOD');
+  });
+
+  it('首次口径文案随视图：日榜/周榜；监测不随视图', () => {
+    expect(firstListingLabel('PERIOD', 'DAY')).toBe('首次进入日榜');
+    expect(firstListingLabel('PERIOD', 'WEEK')).toBe('首次进入周榜');
+    expect(firstListingLabel('MONITOR', 'WEEK')).toBe('首次进入监测');
   });
 
   it('已下架的竞对新发现不再出现在请求体里（#166）', () => {
@@ -153,27 +176,28 @@ describe('toSearchBody', () => {
 });
 
 describe('defaultFilters', () => {
-  it('默认只看首次入榜', () => {
-    expect(defaultFilters().firstListed).toBe(true);
-    expect(toSearchBody(scope, defaultFilters()).first_listed).toBe(true);
+  it('默认只看首次入榜（首次进入监测；#178 不改内置默认）', () => {
+    expect(defaultFilters().firstListing).toBe('MONITOR');
+    expect(toSearchBody(scope, defaultFilters()).first_listing).toBe('MONITOR');
   });
 
   it('除首次入榜与排除品牌词外其余维度默认都不筛', () => {
     const body = toSearchBody(scope, defaultFilters());
     const rest = Object.entries(body).filter(
-      ([k]) => !['site', 'view', 'date', 'first_listed', 'exclude_brand_in_keyword'].includes(k),
+      ([k]) => !['site', 'view', 'date', 'first_listing', 'exclude_brand_in_keyword'].includes(k),
     );
     expect(rest.every(([, v]) => v === undefined)).toBe(true);
   });
 
-  it('排除品牌词默认开启，但只在「只看首次入榜」时随请求发出（issue #119）', () => {
+  it('排除品牌词默认开启，在任一首次口径下随请求发出（issue #119、#178）', () => {
     expect(toSearchBody(scope, defaultFilters()).exclude_brand_in_keyword).toBe(true);
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), firstListing: 'PERIOD' }).exclude_brand_in_keyword,
+    ).toBe(true);
     // 看全部：不替用户缩减榜单
-    for (const firstListed of [undefined]) {
-      expect(
-        toSearchBody(scope, { ...defaultFilters(), firstListed }).exclude_brand_in_keyword,
-      ).toBeUndefined();
-    }
+    expect(
+      toSearchBody(scope, { ...defaultFilters(), firstListing: undefined }).exclude_brand_in_keyword,
+    ).toBeUndefined();
     // 用户关掉、旧快照缺字段（视同开启）、仅掉榜
     expect(
       toSearchBody(scope, { ...defaultFilters(), excludeBrandWords: false }).exclude_brand_in_keyword,
@@ -273,7 +297,7 @@ describe('行集合开关', () => {
       change: { min: -50 },
       clickShare: { min: 10 },
       conversionShare: { min: 5 },
-      firstListed: true,
+      firstListing: 'PERIOD',
     });
     expect(body.include).toBe('DROPPED');
     expect(body.keyword).toBeUndefined();
@@ -286,7 +310,7 @@ describe('行集合开关', () => {
     expect(body.change_min).toBeUndefined();
     expect(body.click_share_min).toBeUndefined();
     expect(body.conversion_share_min).toBeUndefined();
-    expect(body.first_listed).toBeUndefined();
+    expect(body.first_listing).toBeUndefined();
   });
 
   it('ALL / LISTED 下其余筛选照常带上', () => {
