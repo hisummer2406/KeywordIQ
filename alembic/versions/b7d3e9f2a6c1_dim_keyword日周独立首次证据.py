@@ -1,7 +1,7 @@
 """dim_keyword 增加日报、周报各自的永久首次证据
 
 Revision ID: b7d3e9f2a6c1
-Revises: e8b2c6d4f1a3
+Revises: b8b59f9e172f
 Create Date: 2026-11-10
 
 issue #178，见 openspec/changes/add-period-first-listing（design D1、D2）。
@@ -24,7 +24,7 @@ from alembic import op
 from config import settings
 
 revision: str = "b7d3e9f2a6c1"
-down_revision: str | None = "e8b2c6d4f1a3"
+down_revision: str | None = "b8b59f9e172f"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
