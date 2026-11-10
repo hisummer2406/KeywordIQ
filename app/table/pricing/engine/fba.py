@@ -68,6 +68,8 @@ def classify(card: FbaRateCard, pkg: Package) -> TierMatch | None:
         if tier.max_unit_weight is not None and weight > tier.max_unit_weight:
             continue
         dim_weight = a * b * c / card.dim_divisor
+        if tier.max_dim_weight is not None and dim_weight > tier.max_dim_weight:
+            continue
         ship = (max(weight, dim_weight) if tier.use_dim_weight else weight) + tier.packaging_weight
         return TierMatch(tier=tier, unit_weight=weight, dim_weight=dim_weight, shipping_weight=ship,
                          weight_unit=wunit)
