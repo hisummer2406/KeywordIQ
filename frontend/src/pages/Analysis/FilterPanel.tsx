@@ -1,6 +1,8 @@
 import { Button, Input, InputNumber, Radio, Space, Switch, Tooltip, Typography } from 'antd';
+import type { FirstListingMode, View } from '@/services/analysis';
 import {
   RANGE_PRESETS,
+  firstListingLabel,
   matchedPreset,
   type FilterDraft,
   type Range,
@@ -35,7 +37,7 @@ export const LABEL_WIDTH = 88;
 export const TOP1_ONLY_HINT = '只匹配点击量第一名的商品；表格里展示的是前三名';
 
 const EXCLUDE_BRAND_HINT =
-  '排除关键词里带有该词自己前三品牌名（整词、不分大小写）的词。仅在「只看首次入榜」时生效，默认开启；关闭后首次入榜榜单会包含品牌词。';
+  '排除关键词里带有该词自己前三品牌名（整词、不分大小写）的词。仅在选了首次口径时生效，默认开启；关闭后首次榜单会包含品牌词。';
 
 function Row({
   label,
@@ -128,9 +130,15 @@ function RangeRow({ label, hint, disabled, suffix, presets, value, onChange }: R
 export interface FilterPanelProps {
   value: FilterDraft;
   onChange: (next: FilterDraft) => void;
+  /** 草稿视图：「首次进入当前榜单」在日视图叫日榜、周视图叫周榜。只改文案，不改草稿。 */
+  view?: View;
 }
 
-export default function FilterPanel({ value, onChange }: FilterPanelProps) {
+const FIRST_LISTING_HINT =
+  '首次进入日榜/周榜：该词第一次出现在本站点的日榜（或周榜），只看同一榜单的历史，先上过周榜也算日榜首次。' +
+  '首次进入监测：该词第一次被本系统看到（日报、周报合并），先上过周榜的词不算。';
+
+export default function FilterPanel({ value, onChange, view = 'DAY' }: FilterPanelProps) {
   const patch = (p: Partial<FilterDraft>) => onChange({ ...value, ...p });
   // 「仅掉榜」时其余筛选全部失效：筛选一律以锚定期那一行为准，而掉榜行在锚定期没有行
   // 可匹配，任何条件一生效结果必然为空。置灰是把这条规则摆到用户眼前，免得他填了条件、
@@ -192,26 +200,29 @@ export default function FilterPanel({ value, onChange }: FilterPanelProps) {
         value={value.conversionShare}
         onChange={(conversionShare) => patch({ conversionShare })}
       />
-      <Row label="首次入榜">
+      <Row label="首次入榜" hint={FIRST_LISTING_HINT}>
         <Radio.Group
           size="middle"
           optionType="button"
           buttonStyle="solid"
           disabled={onlyDropped}
-          value={value.firstListed ? 'true' : 'all'}
+          value={value.firstListing ?? 'all'}
           onChange={(e) =>
-            patch({ firstListed: e.target.value === 'true' ? true : undefined })
+            patch({
+              firstListing: e.target.value === 'all' ? undefined : (e.target.value as FirstListingMode),
+            })
           }
           options={[
             { label: '全部', value: 'all' },
-            { label: '只看首次入榜', value: 'true' },
+            { label: firstListingLabel('PERIOD', view), value: 'PERIOD' },
+            { label: firstListingLabel('MONITOR', view), value: 'MONITOR' },
           ]}
         />
       </Row>
       <Row label="排除品牌词" hint={EXCLUDE_BRAND_HINT}>
         <Switch
           aria-label="排除品牌词"
-          disabled={onlyDropped || value.firstListed !== true}
+          disabled={onlyDropped || value.firstListing === undefined}
           checked={value.excludeBrandWords !== false}
           onChange={(checked) => patch({ excludeBrandWords: checked })}
         />

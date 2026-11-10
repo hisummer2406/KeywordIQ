@@ -33,6 +33,7 @@ from app.table.analysis.keyword_match import (
     tokenize,
 )
 from app.table.search.search_schemas import AnalysisSearchRequest
+from app.table.upload.import_batch_model import STATUS_COMPLETED, ImportBatch
 from config import settings
 
 _SCHEMA = settings.DATABASE_SCHEMA
@@ -115,6 +116,62 @@ def first_listed_expr(site: str, view: str, on: date):
     )
 
 
+def period_first_cols(view: str):
+    """当前视图周期的首次证据列 (日期, 等级)：日视图看日榜，周视图看周榜。"""
+    if view == "WEEK":
+        return DimKeyword.week_first_date, DimKeyword.week_first_basis
+    return DimKeyword.day_first_date, DimKeyword.day_first_basis
+
+
+def period_imported_since_stmt(site: str, view: str):
+    """周期监测起点 ``B_P``：该周期证据为 ``IMPORTED`` 的最小日期（design D3）。
+
+    与 ``imported_since_stmt`` 同理只取 ``IMPORTED``，走部分索引 ``idx_dim_keyword_{day,week}_first``
+    最左项；只读永久维度，不读会被清理的统计表。站点该周期尚无导入创建的词时为 NULL。
+    """
+    first_date, basis = period_first_cols(view)
+    return select(func.min(first_date)).where(DimKeyword.site == site, basis == "IMPORTED")
+
+
+def period_first_listed_expr(site: str, view: str, on: date):
+    """「首次进入当前榜单」判定（keyword-first-seen「首次进入当前榜单按周期独立派生」）。
+
+    当前视图周期的证据恰为 ``(on, IMPORTED)``，且 ``on`` 晚于该周期的监测起点。**不做日周映射**：
+    日榜首次只看日报历史，周榜首次只看周报历史——这正是它与 ``first_listed_expr`` 的区别。
+    ``B_P`` 缺失时比较为 NULL，不命中；``on ≤ B_P`` 同样不命中（无法判断，不是 0）。
+    站点条件冗余但让部分索引两列都进索引条件（同 ``first_listed_expr``）。
+    """
+    first_date, basis = period_first_cols(view)
+    judgeable = period_imported_since_stmt(site, view).scalar_subquery() < on
+    return and_(DimKeyword.site == site, basis == "IMPORTED", first_date == on, judgeable)
+
+
+def first_listing_expr(mode: str, site: str, view: str, on: date):
+    """按首次口径取判定表达式；``mode`` 已由请求模型规范（旧 ``first_listed`` 已折叠）。"""
+    if mode == "PERIOD":
+        return period_first_listed_expr(site, view, on)
+    return first_listed_expr(site, view, on)
+
+
+def previous_period_missing_stmt(site: str, view: str, on: date):
+    """上一期同周期报告是否没有已完成导入（design D4）：日 ``d-1``、周 ``w-7``。
+
+    读 ``import_batch``（不参与保留清理），走 ``idx_import_batch_site_period``。
+    """
+    prev = on - timedelta(days=FIRST_SEEN_WEEK_SPAN_DAYS if view == "WEEK" else 1)
+    exists = (
+        select(ImportBatch.id)
+        .where(
+            ImportBatch.site == site,
+            ImportBatch.period_type == view,
+            ImportBatch.report_date == prev,
+            ImportBatch.status == STATUS_COMPLETED,
+        )
+        .exists()
+    )
+    return select(~exists)
+
+
 def fact_and_datecol(view: str):
     """按视图返回 (事实表模型, 日期列)。
 
@@ -134,8 +191,8 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
     "站点当期总词数"这个与筛选前一样的数字，分页页码全部对不上，且两条路径都能正常跑完、
     不会有任何报错或测试失败（issue #56 P2 design.md 决策 3）。
 
-    **两态布尔筛选用 `or None` 而不是裸值**：`first_listed`、`exclude_brand_in_keyword`
-    的 `False` 与 `None` 都不施加条件。裸传会让 `False` 被 `v is not None` 判成"带筛选"，
+    **两态布尔筛选用 `or None` 而不是裸值**：`exclude_brand_in_keyword`
+    的 `False` 与 `None` 都不施加条件（旧 `first_listed` 已由请求模型折叠进 `first_listing`）。裸传会让 `False` 被 `v is not None` 判成"带筛选"，
     从而错误地切到精确计数路径（PR #66 复审 P2 指出）。
 
     已下架的 `competitor_new` 不在这里：请求模型把 `true` 拒为 422，其余一律落回 `None`（#166）。
@@ -146,7 +203,7 @@ def request_has_filters(req: AnalysisSearchRequest) -> bool:
             req.keyword, req.asins, req.product_title,
             req.brands or None, req.categories or None, req.ranking_min, req.ranking_max, req.change_min,
             req.change_max, req.click_share_min, req.click_share_max,
-            req.conversion_share_min, req.conversion_share_max, req.first_listed or None,
+            req.conversion_share_min, req.conversion_share_max, req.first_listing,
             req.exclude_brand_in_keyword or None,
         )
     )
@@ -165,11 +222,11 @@ def imported_since_stmt(site: str):
     )
 
 
-def first_listed_count_stmt(site: str, view: str, on: date):
-    """所选期次「首次入榜」的数量，**与「仅 first_listed 筛选」的列表总数同一口径**：
+def first_listed_count_stmt(site: str, view: str, on: date, mode: str = "MONITOR"):
+    """所选期次在首次口径 ``mode`` 下的数量，**与「仅施加该口径」的列表总数同一口径**：
     走同一个计数 base query（含类目黑名单），数量与筛选结果因此不会各说各话。"""
     stmt, _ = _count_base_query(site, view, on, keyword=True, product=False)
-    capped = stmt.where(first_listed_expr(site, view, on)).subquery()
+    capped = stmt.where(first_listing_expr(mode, site, view, on)).subquery()
     return select(func.count()).select_from(capped)
 
 
@@ -299,6 +356,11 @@ def fact_metric_columns(fact, dims: FactRowDims, *, site: str, view: str, on: da
         and_(fact.keyword_id.is_not(None), first_listed_expr(site, view, on)).label("first_listed"),
         DimKeyword.first_seen_date.label("first_seen_date"),
         DimKeyword.first_seen_basis.label("first_seen_basis"),
+        # 同一道「事实行非空」门：词库盯盘的无数据行不能亮周期首次标记。
+        and_(fact.keyword_id.is_not(None), period_first_listed_expr(site, view, on))
+        .label("period_first_listed"),
+        period_first_cols(view)[0].label("period_first_date"),
+        period_first_cols(view)[1].label("period_first_basis"),
         DimProduct.asin.label("top1_asin"),
         DimProduct.title.label("top1_title"),
         fact.top1_click_share.label("top1_click_share"),
@@ -373,7 +435,7 @@ def _count_joins(req: AnalysisSearchRequest, *, brand_hits_ready: bool = False) 
     """
     by_text = bool(req.exclude_brand_in_keyword) and not brand_hits_ready
     return {
-        "keyword": bool(req.keyword or req.first_listed or by_text),
+        "keyword": bool(req.keyword or req.first_listing or by_text),
         "product": bool(req.product_title),
     }
 
@@ -597,8 +659,8 @@ def _apply_filters(
         stmt = stmt.where(fact.top1_conversion_share >= req.conversion_share_min)
     if req.conversion_share_max is not None:
         stmt = stmt.where(fact.top1_conversion_share <= req.conversion_share_max)
-    if req.first_listed:
-        stmt = stmt.where(first_listed_expr(site, view, on))
+    if req.first_listing:
+        stmt = stmt.where(first_listing_expr(req.first_listing, site, view, on))
     return stmt
 
 

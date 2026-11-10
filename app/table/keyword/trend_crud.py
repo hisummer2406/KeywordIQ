@@ -21,6 +21,17 @@ def keyword_site_stmt(keyword_id: int):
     return select(DimKeyword.site, DimKeyword.keyword).where(DimKeyword.keyword_id == keyword_id)
 
 
+def keyword_first_evidence_stmt(keyword_id: int):
+    """三项首次证据（#178，keyword-trend-detail「详情展示三项首次证据」）：日榜、周榜、共享监测。
+
+    同一行维度的主键查找，不扫事实历史。"""
+    return select(
+        DimKeyword.day_first_date, DimKeyword.day_first_basis,
+        DimKeyword.week_first_date, DimKeyword.week_first_basis,
+        DimKeyword.first_seen_date, DimKeyword.first_seen_basis, DimKeyword.first_seen_period_type,
+    ).where(DimKeyword.keyword_id == keyword_id)
+
+
 def keyword_history_stmt(site: str, view: str, keyword_id: int, start: date, end: date):
     """单关键词在 [start, end] 内的当期排名序列。
 

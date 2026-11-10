@@ -26,6 +26,8 @@ from app.table.analysis import analysis_crud
 from app.table.analysis.partitioning import retention_cutoff
 from app.table.keyword import trend_crud as crud
 from app.table.keyword.trend_schemas import (
+    FirstEvidence,
+    KeywordFirstEvidence,
     KeywordTrendCoverage,
     KeywordTrendPoint,
     KeywordTrendResponse,
@@ -79,6 +81,17 @@ async def _require_keyword_site(db: AsyncSession, keyword_id: int, site: str) ->
             f"该关键词属于 {actual_site} 站点，与请求的 {site} 不一致"
         )
     return keyword_text
+
+
+async def _first_evidence(db: AsyncSession, keyword_id: int) -> KeywordFirstEvidence:
+    """三项首次证据，取自关键词维度（不随视图变，详情切视图时同一份）。"""
+    row = (await db.execute(crud.keyword_first_evidence_stmt(keyword_id))).one()
+    day_d, day_b, week_d, week_b, fs_d, fs_b, fs_p = row
+    return KeywordFirstEvidence(
+        day=FirstEvidence(date=day_d, basis=day_b),
+        week=FirstEvidence(date=week_d, basis=week_b),
+        monitor=FirstEvidence(date=fs_d, basis=fs_b, period_type=fs_p),
+    )
 
 
 def _resolve_anchor(available_dates: list[date], on: date | None) -> date | None:
@@ -137,6 +150,7 @@ async def get_keyword_trend(
 ) -> KeywordTrendResponse:
     resolved_site = _resolve_site(site)
     keyword_text = await _require_keyword_site(db, keyword_id, resolved_site)
+    evidence = await _first_evidence(db, keyword_id)
 
     available_dates = list(
         (await db.execute(analysis_crud.available_dates_stmt(resolved_site, view))).scalars().all()
@@ -146,7 +160,7 @@ async def get_keyword_trend(
     if anchor is None:
         return KeywordTrendResponse(
             keyword_id=keyword_id, keyword=keyword_text, site=resolved_site,
-            view=view, range=range_, on=None,
+            view=view, range=range_, on=None, first_evidence=evidence,
         )
 
     cutoff = retention_cutoff(date.today(), settings.HOT_WINDOW_MONTHS)
@@ -205,5 +219,5 @@ async def get_keyword_trend(
     return KeywordTrendResponse(
         keyword_id=keyword_id, keyword=keyword_text, site=resolved_site,
         view=view, range=range_, on=anchor, coverage=coverage, points=points,
-        best_ranking=best_ranking, latest_available=latest_available,
+        best_ranking=best_ranking, latest_available=latest_available, first_evidence=evidence,
     )

@@ -17,3 +17,11 @@ FIRST_SEEN_PERIOD_COMMENT = "首次入榜的日期来自日报(DAY)还是周报(
 FIRST_SEEN_BASIS_COMMENT = (
     "首次入榜依据：IMPORTED 本系统导入创建 / EARLIEST_OBSERVED 最早可观测(此前可能见过) / UNKNOWN 无证据"
 )
+# 周期首次证据（keyword-first-seen「关键词按周期保存独立的永久首次证据」）：日、周各一组，
+# 只依据同周期的报告，与上面的共享记录互不覆盖。
+PERIOD_FIRST_DAY_DATE_COMMENT = "首次出现在本站点日报的期次日期；等级为 UNKNOWN 或 ABSENT 时为空"
+PERIOD_FIRST_WEEK_DATE_COMMENT = "首次出现在本站点周报的期次日期；等级为 UNKNOWN 或 ABSENT 时为空"
+PERIOD_FIRST_BASIS_COMMENT = (
+    "该周期首次依据：IMPORTED 本系统导入创建 / EARLIEST_OBSERVED 最早可观测(此前可能见过)"
+    " / UNKNOWN 无证据 / ABSENT 已确认从未出现在该周期"
+)

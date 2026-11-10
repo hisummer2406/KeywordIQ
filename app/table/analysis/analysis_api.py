@@ -39,6 +39,7 @@ from app.table.search.search_schemas import (
     BrandOption,
     CategoryOption,
     FirstListedSummary,
+    FirstListing,
     ScopeInfo,
 )
 from config import settings
@@ -123,14 +124,15 @@ async def get_first_listed(
     view: _View = Query("DAY"),
     site: str | None = Query(None),
     date: _Date | None = Query(None, description="报告日期，缺省取该作用域最新可用日期"),
+    mode: FirstListing = Query("MONITOR", description="首次口径：MONITOR 首次进入监测（缺省）；PERIOD 首次进入当前榜单"),
     db: AsyncSession = Depends(get_async_db),
     _user=Depends(simple_auth.require_permission(ANALYSIS_VIEW)),
 ) -> FirstListedSummary | None:
-    """所选期次的「首次入榜」数量与统计范围（keyword-first-seen）。
+    """所选期次在首次口径下的数量与统计范围（keyword-first-seen）。
 
-    所选期次是站点监测起点时 ``judgeable=false`` 且 ``count`` 为空——无法判断，不是 0。
+    所选期次不晚于（该口径的）监测起点时 ``judgeable=false`` 且 ``count`` 为空——无法判断，不是 0。
     """
-    return await service.get_first_listed(db, site, view, date)
+    return await service.get_first_listed(db, site, view, date, mode)
 
 
 @analysis_router.get("/categories", response_model=list[CategoryOption])

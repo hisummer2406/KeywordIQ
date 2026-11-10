@@ -37,7 +37,7 @@ const FILTER_KEYS = [
   'keyword', 'asins', 'product_title', 'brands', 'categories',
   'ranking_min', 'ranking_max', 'change_min', 'change_max',
   'click_share_min', 'click_share_max', 'conversion_share_min', 'conversion_share_max',
-  'first_listed', 'exclude_brand_in_keyword',
+  'first_listing', 'exclude_brand_in_keyword',
 ] as const satisfies readonly (keyof SearchBody)[];
 
 type SortDraft = { field: string; dir: 'asc' | 'desc' };

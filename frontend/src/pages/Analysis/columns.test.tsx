@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TREND_COLORS } from '@/components/trendColors';
 
@@ -173,8 +173,9 @@ const droppedRow = {
   history: [305, null, 210],
 } as any;
 
-function cell(view: 'DAY' | 'WEEK', title: string, row: any) {
-  const col: any = buildColumns(view).find((c) => c.title === title);
+function cell(view: 'DAY' | 'WEEK', title: string, row: any, firstMode?: 'PERIOD' | 'MONITOR') {
+  const col: any = buildColumns(view, undefined, undefined, undefined, undefined, undefined, firstMode)
+    .find((c) => c.title === title);
   expect(col, `找不到列: ${title}`).toBeTruthy();
   return render(<>{col.render(null, row)}</>);
 }
@@ -189,20 +190,36 @@ describe('现排名列吃掉独立的首次入榜列', () => {
   it('首次入榜以标签形式出现在排名列里', () => {
     const { getByText } = cell('DAY', '排名', { ...listedRow, first_listed: true });
     expect(getByText('120')).toBeTruthy();
-    expect(getByText('首次入榜')).toBeTruthy();
+    expect(getByText('首次进入监测')).toBeTruthy();
+  });
+
+  it('首次进入当前榜单口径只看 period_first_listed，文案随视图，两种标签不并存（#178）', () => {
+    const row = { ...listedRow, first_listed: false, period_first_listed: true };
+    expect(cell('DAY', '排名', row, 'PERIOD').getByText('首次上日榜')).toBeTruthy();
+    cleanup();
+    expect(cell('WEEK', '排名', row, 'PERIOD').getByText('首次上周榜')).toBeTruthy();
+    cleanup();
+    // 同一行在监测口径下不带标签（它不是监测首次）
+    expect(cell('DAY', '排名', row, 'MONITOR').queryByText(/首次/)).toBeNull();
+    cleanup();
+    // 两者都为真时也只出一个标签
+    const both = cell('DAY', '排名', { ...row, first_listed: true }, 'PERIOD');
+    expect(both.getAllByText(/首次/)).toHaveLength(1);
   });
 
   it('掉榜行显示「已掉榜」与最后在榜期，且不显示当期排名', () => {
     const { getByText, queryByText } = cell('DAY', '排名', droppedRow);
     expect(getByText('已掉榜')).toBeTruthy();
     expect(getByText(/2026-07-17/)).toBeTruthy();
-    expect(queryByText('首次入榜')).toBeNull();   // 两标签互斥
+    expect(queryByText(/首次/)).toBeNull();   // 两标签互斥
   });
 
   it('掉榜与首次入榜互斥——掉榜优先，不会同时出现', () => {
-    const { getByText, queryByText } = cell('DAY', '排名', { ...droppedRow, first_listed: true });
+    const { getByText, queryByText } = cell('DAY', '排名', {
+      ...droppedRow, first_listed: true, period_first_listed: true,
+    }, 'PERIOD');
     expect(getByText('已掉榜')).toBeTruthy();
-    expect(queryByText('首次入榜')).toBeNull();
+    expect(queryByText(/首次/)).toBeNull();
   });
 });
 
