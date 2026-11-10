@@ -8,6 +8,7 @@ from app.table.competitor.watch_api import competitor_router
 from app.table.keyword.growth_api import growth_router
 from app.table.keyword.library_api import library_router
 from app.table.keyword.trend_api import trend_router
+from app.table.pricing.pricing_api import pricing_router
 from app.table.upload.upload_api import upload_router
 from app.user.user_api import user_router
 
@@ -74,6 +75,13 @@ api_router.include_router(
     asin_router,
     prefix="/competitor",
     tags=["竞对监控"]
+)
+
+# 定价核算：独立数据域，不读写 ABA 事实表（change add-pricing-calculation）。
+api_router.include_router(
+    pricing_router,
+    prefix="/pricing",
+    tags=["定价核算"]
 )
 
 api_router.include_router(
