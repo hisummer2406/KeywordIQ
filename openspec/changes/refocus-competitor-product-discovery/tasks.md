@@ -42,13 +42,13 @@
 - [x] 6.1 `Stores.tsx` 用 `Segmented` 切换类型，`useSearchParams` 读写 `?type=shopify`（缺省为 Amazon）；Amazon 类型显示配额卡片和「添加卖家」，Shopify 类型显示 `StoreTab` 自带的「添加 Shopify 店铺」
 - [x] 6.2 `columns.tsx`：三态 Tag 加悬浮说明，未知值回落「未采集」；新增「采集方式：手动采集」列；卖家列显示店名并附 seller_id，没有店名时显示 seller_id，点击打开已采集抽屉；最近采集列显示时刻（陈旧时用 warning 色）和「上报 N 条（不代表全店总量）」；操作列有看新商品、打开商品列表、采集说明（`CollectGuide.tsx`：四步操作、分批提交的风险、风控说明）、取消关注。前端不再自行推算是否陈旧
 - [x] 6.3 `SellerAsinsDrawer.tsx`：Alert 写明「已采集的商品，不是全部在售商品」并附采集说明；分页表格显示主图（缺失时「无图」）、标题（缺失时显示 ASIN）、ASIN 链接、首次发现于和「基线」标记
-- [ ] 6.4 前端测试已写、**未运行**：`Stores.test.tsx` 新增或改写三态、手动采集、上报条数文案、店名回退、看新商品跳转、`?type=` 刷新保留、切换后写入 URL；`StoreTab.test.tsx` 中的文案断言改为「Shopify 店铺 / 自动检查正常」。抽屉的空列表和错误态还没有单独的用例。`pnpm lint && pnpm tsc && pnpm test` 由用户运行，或由提交门禁执行
+- [x] 6.4 前端测试已写，2026-11-10 提交门禁 `pnpm test` 已通过：`Stores.test.tsx` 新增或改写三态、手动采集、上报条数文案、店名回退、看新商品跳转、`?type=` 刷新保留、切换后写入 URL；`StoreTab.test.tsx` 中的文案断言改为「Shopify 店铺 / 自动检查正常」。抽屉的空列表和错误态还没有单独的用例。`pnpm lint && pnpm tsc && pnpm test` 由用户运行，或由提交门禁执行
 
 ## 7. 商品发现前端（design D6）
 
 - [x] 7.1 `Discovery.tsx`：时间范围、来源、Amazon 站点（来源为 Shopify 或已指定域名时禁用）、分组；店铺筛选不做成预加载全部关注的下拉框（最多 3000 个关注，预加载不全或很慢），改为从店铺管理的「看新商品」带 `seller`+`site` 或 `domain` 过来，显示为可关闭的 Tag。所有筛选写入 URL；`filtersFromParams` 把非法值落回缺省；request 通过 ref 读取最新筛选，首次挂载不重复请求
 - [x] 7.2 主图（缺失时「无图」）、商品（标题缺失时显示商品标识；ASIN 或商品 ID；「打开原商品」在新窗口打开，没有链接时不显示）、来源店铺（Amazon/Shopify Tag + 站点 + 店名，没有店名时显示 key）、时间（Shopify 显示上架于 + 首次发现于，Amazon 只显示首次发现于，悬浮说明补采老品的情况）；`AsinDetailDrawer` 补上主图、ASIN 和原商品链接，并在「首次发现于」后注明不是上架时间
-- [ ] 7.3 前端测试已写、**未运行**：`Discovery.test.tsx` 改写，覆盖时间措辞、来源标签不出现「独立站」、看品链接、缺图/缺店名/缺链接时的降级、有店名时的显示、URL 筛选进入请求体、非法参数落回缺省、店铺 Tag、切到 Shopify 时清掉站点、跨站点两行、首刷说明、空状态、两类详情抽屉
+- [x] 7.3 前端测试已写，2026-11-10 提交门禁 `pnpm test` 已通过：`Discovery.test.tsx` 改写，覆盖时间措辞、来源标签不出现「独立站」、看品链接、缺图/缺店名/缺链接时的降级、有店名时的显示、URL 筛选进入请求体、非法参数落回缺省、店铺 Tag、切到 Shopify 时清掉站点、跨站点两行、首刷说明、空状态、两类详情抽屉
 
 ## 8. 插件（competitor-browser-collector 两条 ADDED；design D4、D5）
 
@@ -70,7 +70,7 @@
 
 ## 11. 验收
 
-- [ ] 11.1 提交前：`uv run ruff check .`、`uv run pytest test/ -q`（门禁），前端三项（门禁），插件 `typecheck && test`（门禁），`openspec validate --strict --all`
+- [x] 11.1 （2026-11-10 提交 84ec7d6 时门禁在 `keywordiq_a_mig` 上通过 ruff、pytest 全量、前端 lint/tsc/test 及插件 typecheck/test；`openspec validate --strict --all` 40/40）提交前：`uv run ruff check .`、`uv run pytest test/ -q`（门禁），前端三项（门禁），插件 `typecheck && test`（门禁），`openspec validate --strict --all`
 - [x] 11.2 真库回归（2026-11-10）：共享 `keywordiq_test` 停在核价分支的迁移 `140193107685`，与本变更的 `e8b2c6d4f1a3` 是同一父迁移下的两个分叉，所以改在本机一次性库 `keywordiq_a_mig`（已迁到 head）上跑全量 `pytest test/`：1461 通过、1 跳过（`test_oss_ingestion_integration`，需要 TEST_OSS_*，属预期排除），竞对集成用例全部实际执行。worktree `.env` 已写 `TEST_DATABASE_URL` 指向该库，供门禁使用（#173）
 - [ ] 11.3 浏览器验收（用户）：左侧菜单与折叠；`/competitor` 的跳转；店铺管理的类型切换、三态、上报条数文案、采集说明、已采集商品抽屉；商品发现的筛选、看图、打开原商品、Shopify 双时间；Shopify 列表、详情和失败状态与改动前一致
 - [ ] 11.4 **真实 Amazon 页面人工验收**（用户，至少一个站点）。逐项记录站点、卖家规模和现象：
