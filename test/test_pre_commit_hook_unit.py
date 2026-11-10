@@ -134,16 +134,70 @@ def test_no_checks_is_not_an_error(hook):
 def test_postgres_up_requires_the_test_database(hook, monkeypatch):
     """端口通不等于测试库在。本机跑着别的 PostgreSQL 时端口一样是通的。"""
     monkeypatch.setattr(hook, "_port_open", lambda *a, **k: True)
-    monkeypatch.setattr(hook, "_test_db_reachable", lambda: False)
+    monkeypatch.setattr(hook, "_test_db_reachable", lambda *a, **k: False)
 
     assert hook.postgres_up() is False
 
 
 def test_postgres_up_true_when_test_database_answers(hook, monkeypatch):
     monkeypatch.setattr(hook, "_port_open", lambda *a, **k: True)
-    monkeypatch.setattr(hook, "_test_db_reachable", lambda: True)
+    monkeypatch.setattr(hook, "_test_db_reachable", lambda *a, **k: True)
 
     assert hook.postgres_up() is True
+
+
+def test_postgres_up_probes_the_given_url(hook, monkeypatch):
+    """覆盖库要探覆盖库本身，不能拿共享库的探活结果放行。"""
+    seen = []
+    monkeypatch.setattr(hook, "_port_open", lambda url: seen.append(("port", url)) or True)
+    monkeypatch.setattr(hook, "_test_db_reachable", lambda url: seen.append(("db", url)) or True)
+    url = "postgresql://u:p@localhost:5433/keywordiq_mine"
+
+    assert hook.postgres_up(url) is True
+    assert seen == [("port", url), ("db", url)]
+
+
+# ---------------- 测试库选择（test_db_url / override_rejection） ----------------
+
+
+def test_no_env_file_uses_shared_db(hook, tmp_path):
+    assert hook.test_db_url(tmp_path) == hook.TEST_DB_URL
+
+
+def test_env_without_key_uses_shared_db(hook, tmp_path):
+    """DATABASE_URL 是应用连接，可能指向开发库，不能拿来给会 TRUNCATE 的夹具用。"""
+    (tmp_path / ".env").write_text("DATABASE_URL=postgresql://u:p@localhost:5433/keywordiq_dev\n")
+
+    assert hook.test_db_url(tmp_path) == hook.TEST_DB_URL
+
+
+@pytest.mark.parametrize("line", [
+    "TEST_DATABASE_URL=postgresql://u:p@localhost:5433/keywordiq_mine",
+    'TEST_DATABASE_URL="postgresql://u:p@localhost:5433/keywordiq_mine"',
+    "export TEST_DATABASE_URL=postgresql://u:p@localhost:5433/keywordiq_mine  # 本 worktree 专用",
+])
+def test_env_key_overrides_shared_db(hook, tmp_path, line):
+    (tmp_path / ".env").write_text("APP_NAME=x\n" + line + "\n")
+
+    assert hook.test_db_url(tmp_path) == "postgresql://u:p@localhost:5433/keywordiq_mine"
+
+
+def test_empty_env_key_uses_shared_db(hook, tmp_path):
+    (tmp_path / ".env").write_text("TEST_DATABASE_URL=\n")
+
+    assert hook.test_db_url(tmp_path) == hook.TEST_DB_URL
+
+
+def test_local_override_is_accepted(hook):
+    assert hook.override_rejection("postgresql://u:p@127.0.0.1:5433/keywordiq_mine") is None
+    assert hook.override_rejection(hook.TEST_DB_URL) is None
+
+
+def test_remote_override_is_rejected(hook):
+    """夹具会 TRUNCATE 业务表，覆盖只接受本机地址。"""
+    reason = hook.override_rejection("postgresql://u:p@120.0.0.1:5432/keywordiq")
+
+    assert reason is not None and "不是本机" in reason
 
 
 # ---------------- 提交落地的仓库（target_repo） ----------------
