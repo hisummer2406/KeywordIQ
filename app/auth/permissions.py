@@ -46,6 +46,11 @@ COMPETITOR_VIEW: Final = "competitor:view"
 # 机会中心（issue #76）：承接确定性 Signal / 候选机会 / 验证推进 / 风险核查这条主动式
 # 工作流的入口。上线初期没有任何内置角色自动获得它，见下方 SUPER_ONLY_PERMISSIONS。
 OPPORTUNITY_VIEW: Final = "opportunity:view"
+# 定价核算（change add-pricing-calculation）。核价记录按创建人私有，费用规则是全员共享的。
+# 「能核价」与「能改共享费率」是两种授权：费率写错会让所有人的核价一起算错，所以单独
+# 一个权限点，只默认给 admin。读取费率不需要 manage 权限——核价明细本来就要展示所用规则。
+PRICING_VIEW: Final = "pricing:view"
+PRICING_MANAGE_RATES: Final = "pricing:manage-rates"
 
 # code -> 中文名
 PERMISSIONS: Final[dict[str, str]] = {
@@ -55,6 +60,8 @@ PERMISSIONS: Final[dict[str, str]] = {
     KEYWORD_VIEW: "查看关键词工具",
     COMPETITOR_VIEW: "查看竞对监控",
     OPPORTUNITY_VIEW: "查看机会中心",
+    PRICING_VIEW: "定价核算",
+    PRICING_MANAGE_RATES: "维护核价费用配置",
 }
 
 # 默认不授予任何内置角色（含 admin）的权限点——只有 is_super 能用。
@@ -66,9 +73,13 @@ ROLES: Final[dict[str, tuple[str, set[str]]]] = {
     "admin": ("超级管理员", set(PERMISSIONS.keys()) - SUPER_ONLY_PERMISSIONS),
     "operator": (
         "运营",
-        {ANALYSIS_VIEW, ANALYSIS_EXPORT, UPLOAD_IMPORT, KEYWORD_VIEW, COMPETITOR_VIEW},
+        {ANALYSIS_VIEW, ANALYSIS_EXPORT, UPLOAD_IMPORT, KEYWORD_VIEW, COMPETITOR_VIEW,
+         PRICING_VIEW},
     ),
-    "analyst": ("分析师", {ANALYSIS_VIEW, ANALYSIS_EXPORT, KEYWORD_VIEW, COMPETITOR_VIEW}),
+    "analyst": (
+        "分析师",
+        {ANALYSIS_VIEW, ANALYSIS_EXPORT, KEYWORD_VIEW, COMPETITOR_VIEW, PRICING_VIEW},
+    ),
 }
 
 # is_super 回填映射（见 design 决策 4b：保住老用户上传能力）

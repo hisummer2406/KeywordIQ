@@ -38,6 +38,15 @@ describe('access 权限派生', () => {
     expect(a.canViewUnreleased).toBe(true);
   });
 
+  it('定价核算：核价与维护共享费率分开授权', () => {
+    const op = build(['pricing:view']);
+    expect(op.canViewPricing).toBe(true);
+    expect(op.canManagePricingRates).toBe(false);
+    expect(build(['pricing:view', 'pricing:manage-rates']).canManagePricingRates).toBe(true);
+    expect(build([]).canViewPricing).toBe(false);
+    expect(build([], true).canManagePricingRates).toBe(true);
+  });
+
   it('占位屏只认 is_super：拥有全部权限点的普通账号也看不到', () => {
     const all = ['analysis:view', 'analysis:export', 'upload:import', 'keyword:view', 'competitor:view'];
     expect(build(all).canViewUnreleased).toBe(false);
