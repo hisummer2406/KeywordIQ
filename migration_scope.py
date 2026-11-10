@@ -57,6 +57,14 @@ V2_TABLES = frozenset(
         "competitor_store_rank",
         "competitor_store_product_event",
         "user_store_watch",
+        # 定价核算（change add-pricing-calculation）。五张普通表——**不要**登记进
+        # partitioning.PARTITIONED_TABLES：费率版本与核价快照是复核依据，按月 DROP 会让
+        # 已保存的方案无从复算。
+        "pricing_rule",
+        "pricing_sheet",
+        "pricing_sheet_version",
+        "pricing_selection",
+        "pricing_selection_log",
     }
 )
 
