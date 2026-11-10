@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { formatPct, pctToRate, rateToPct, roundDecimal, shiftDecimal } from '@/services/pricing';
 import { DEFAULT_FORM_VALUES, fromPricingInput, sameInput, toPricingInput } from './formInput';
+
+// services/pricing 引入 @umijs/max 的 request；不 mock 会把 Umi 打包器（esbuild）拉进 jsdom
+vi.mock('@umijs/max', () => ({ request: vi.fn() }));
 
 const CUR = { US: 'USD', GB: 'GBP', DE: 'EUR' };
 
