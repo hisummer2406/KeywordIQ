@@ -15,6 +15,7 @@
 - [2026-09-04-add-competitor-amazon-asin-ingest](../changes/archive/2026-09-04-add-competitor-amazon-asin-ingest/design.md)
 - [2026-09-01-add-competitor-dtc-monitoring](../changes/archive/2026-09-01-add-competitor-dtc-monitoring/design.md)
 - [2026-09-03-add-competitor-browser-collector](../changes/archive/2026-09-03-add-competitor-browser-collector/design.md)
+- [2026-11-10-refocus-competitor-product-discovery](../changes/archive/2026-11-10-refocus-competitor-product-discovery/design.md)（商品发现、店铺管理、Amazon 三态、单批上限 1000）
 
 归档记录是当时的决策证据；若与现规格/批准的后续决策冲突，不将旧参数或交付状态当作当前事实。
 
