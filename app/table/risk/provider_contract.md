@@ -6,7 +6,7 @@ image-upload、image-single、simple-bibliography、legal-status）。只记本�
 
 ## 公共约定
 
-- 源站固定为 `https://connect.zhihuiya.com`。
+- 源站固定为 `https://connect.zhihuiya.com`；客户端 `trust_env=False`，不走环境变量代理。
 - 鉴权方式：`Authorization: Bearer sk-...`。另有 `apikey` 查询参数方式，官方说明它会进 URL 日志，**不用**。
 - 响应外层：`status`（bool）、`error_code`（int，0 表示成功）、`error_msg`、`data`。
 - 官方标注的响应时间：正常 5000 ms，最大 10000 ms。文档没有给出 QPS 和价格。
@@ -39,6 +39,7 @@ image-upload、image-single、simple-bibliography、legal-status）。只记本�
 | bad_request | 67200012、68300004、68300007、68300010 |
 | upstream_error | 67200100、67200101、68300005、68300006、68300008 |
 | unexpected_code | 其他非 0 错误码 |
+| client_error / connect_failed（error，请求未发出） | 本地构造客户端失败、连接阶段失败 |
 | 结果未知（unknown） | 超时、网络中断、HTTP 5xx、返回非 JSON 或 HTML、`status=true` 但结构不符合契约 |
 
 ## 脱敏样例

@@ -43,3 +43,5 @@
 - [x] 7.3 `openspec validate --strict --all`、`git diff --check`
 - [ ] 7.4 开 PR（`--base v2`，Refs #24），分别列明：模拟联调通过、真实数据库通过、浏览器待验收、真实 Key 待联调
 - [ ] 7.5 （待用户配置 Key 后）最小样本真实联调：先报告调用项和预期消耗；核实 `country` 传法、EU/WO 取值、权益、计费方式与 QPS
+  - 2026-11-10 第一次（用户授权 4 次调用）：Key 有效（未返回 67200003），但 P010、P060、P011、P013 全部返回 67200004「无接口权限或超出套餐」。系统按设计分类为 no_permission，上传失败后没有继续检索。`country` 传法、EU/WO 取值、计费方式**仍未验证**，待智慧芽控制台开通四项 Data API 权益后重跑
+  - 同次发现本机 `all_proxy=socks5` 让 httpx 在构造客户端时抛 ImportError（请求未发出、不计费），任务却会卡在 running。已改为 `trust_env=False`，并新增 `client_error`/`connect_failed`（请求未发出）两类错误，不再误报为「可能已计费」

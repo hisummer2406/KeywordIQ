@@ -311,7 +311,8 @@ async def test_expired_lease_becomes_unknown(db, factory):
     await db.execute(update(RiskTask).where(RiskTask.id == snap.task_id)
                      .values(lease_until=datetime.now(UTC) - timedelta(seconds=1)))
     await db.commit()
-    assert await task_service.reap_expired(factory) == 1
+    # 只看本单：共享测试库里可能还有别的过期任务，回收总数不是本测试能控制的
+    assert await task_service.reap_expired(factory) >= 1
     detail = await check_service.get_check(db, owner, cid)
     assert detail["search_status"] == "unknown" and detail["tasks"][0]["error_category"] == "interrupted"
     vendor = Vendor()

@@ -50,6 +50,8 @@ const ERROR_CATEGORY: Record<string, string> = {
   bad_request: '请求被智慧芽拒绝（参数或图片不符合要求）',
   upstream_error: '智慧芽服务异常',
   unexpected_code: '智慧芽返回了未识别的错误',
+  client_error: '服务端未能发起请求（未调用智慧芽，不会计费）',
+  connect_failed: '无法连接智慧芽（请求未发出，不会计费）',
   timeout: '调用超时：结果未知，可能已计费',
   network: '网络中断：结果未知，可能已计费',
   upstream_5xx: '智慧芽服务异常：结果未知，可能已计费',
