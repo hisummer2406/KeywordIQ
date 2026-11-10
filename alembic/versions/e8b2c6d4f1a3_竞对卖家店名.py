@@ -1,7 +1,7 @@
 """竞对卖家店名：上报顺带的公开展示属性
 
 Revision ID: e8b2c6d4f1a3
-Revises: d7a3b5c9e2f1
+Revises: 140193107685
 Create Date: 2026-11-04
 
 change refocus-competitor-product-discovery（Refs #166）D5。``competitor_seller`` 加可空列
@@ -16,7 +16,7 @@ from alembic import op
 from config import settings
 
 revision: str = "e8b2c6d4f1a3"
-down_revision: str | None = "d7a3b5c9e2f1"
+down_revision: str | None = "140193107685"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
