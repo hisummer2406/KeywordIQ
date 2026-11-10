@@ -93,6 +93,14 @@ _TABLES_WITH_LATEST_COL = (
     ("pricing_sheet_version", None),
     ("pricing_selection", None),
     ("pricing_selection_log", None),
+    ("risk_check", None),
+    ("risk_check_image", None),
+    ("risk_task", None),
+    ("risk_provider_call", None),
+    ("risk_search_page", None),
+    ("risk_candidate", None),
+    ("risk_patent_detail", None),
+    ("risk_review", None),
     *((table, None) for table, _, _ in _FILTER_STATS),
 )
 # 上面这一截（`category_stats`/`brand_stats`）不在 `migration_scope.V2_TABLES` 里

@@ -1,46 +1,20 @@
 ## ADDED Requirements
 
-### Requirement: 智慧芽 API Key 只由超管在服务端配置，加密保存且不回显
+### Requirement: 智慧芽 API Key 只从服务端环境配置读取
 
-系统 SHALL 提供智慧芽供应商配置，只有 `is_super` 用户可以读取摘要、保存或替换 Key、停用、启用和清除；非超管调用这些端点 SHALL 返回 403。Key SHALL 使用服务端主密钥 `RISK_CREDENTIAL_KEYS` 加密后入库，库中 MUST NOT 出现明文。任何 API 响应、日志、审计记录、前端构建产物和浏览器存储 MUST NOT 包含完整 Key；摘要只显示末 4 位指纹。
+API Key SHALL 只来自服务端环境变量 `ZHIHUIYA_API_KEY`（`.env`），系统 MUST NOT 提供在页面上录入、回显或存库 Key 的入口。Key MUST NOT 出现在任何 API 响应、日志、数据库、前端构建产物或浏览器存储中。
 
-主密钥未配置时，保存 SHALL 返回 503 并提示「服务端未配置加密主密钥」，MUST NOT 退回明文存储。密文无法解密时，配置状态 SHALL 显示为「凭证不可读」并阻断调用，MUST NOT 被当作未配置而静默清空。
+`ZHIHUIYA_API_KEY` 为空时，系统 SHALL 视为「未配置」：`/api/risk/meta` 返回 `provider_configured=false`，外观专利页提示联系管理员配置，提交被拒绝（422）且 MUST NOT 发起任何外部调用；已排队的任务在认领时 SHALL 失败为 `not_configured`。去掉 Key MUST NOT 影响任何历史核查证据的读取。
 
-每次保存、替换、停用、启用、清除和验证都 SHALL 追加一条审计（动作、操作人、时间、指纹、验证结果），审计 MUST NOT 含密钥。清除 Key MUST NOT 删除任何历史核查证据。
+#### Scenario: 未配置 Key
 
-#### Scenario: 超管保存 Key
+- **WHEN** `ZHIHUIYA_API_KEY` 为空，用户打开外观专利页
+- **THEN** 页面显示「智慧芽接口未配置，请联系管理员」，提交按钮不可用，外部调用次数为 0
 
-- **WHEN** 超管在配置页输入 `sk-…` 并保存
-- **THEN** 库中只有密文与末 4 位指纹，响应和日志中没有完整 Key，输入框被清空，状态显示「已保存，未验证」
+#### Scenario: meta 不泄露 Key
 
-#### Scenario: 非超管尝试读写配置
-
-- **WHEN** 拥有 `risk:search` 但 `is_super=false` 的用户请求配置端点
-- **THEN** 返回 403，即使其角色勾选了全部权限点
-
-#### Scenario: 主密钥被换掉
-
-- **WHEN** 库中密文无法用当前 `RISK_CREDENTIAL_KEYS` 解密
-- **THEN** 配置状态为「凭证不可读」，新的检索任务失败并记为 `credential_unreadable`，不发起任何外部请求
-
-#### Scenario: 清除 Key
-
-- **WHEN** 超管清除 Key
-- **THEN** 密文被删除，审计留下一条清除记录，已有核查单的候选、详情和意见全部保留可读
-
-### Requirement: 「已保存」与「已验证」分开，验证必须是明确的付费动作
-
-配置摘要 SHALL 分别显示「是否已保存」「是否启用」「最近一次验证的时间、接口与结果」。保存 Key MUST NOT 自动发起验证调用。验证 SHALL 由超管点击按钮触发，按钮旁 SHALL 说明「将调用一次 P011 简单著录（可能计费）」，验证结果只代表 P011 当次可用，MUST NOT 被表述为四个接口都已开通。
-
-#### Scenario: 只保存不验证
-
-- **WHEN** 超管保存 Key 后没有点验证
-- **THEN** 状态为「已保存，未验证」，外部请求次数为 0
-
-#### Scenario: 验证返回无权限
-
-- **WHEN** 验证调用返回错误码 67200004
-- **THEN** 配置页显示「该 Key 没有此接口权限」，应用登录态不受影响
+- **WHEN** 已配置 Key，用户请求 `/api/risk/meta`
+- **THEN** 响应只含 `provider_configured=true`，不含 Key 的任何片段
 
 ### Requirement: 供应商客户端固定源站并按契约调用四个接口
 
