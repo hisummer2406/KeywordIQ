@@ -161,13 +161,15 @@ export default function CompetitorDiscoveryPage() {
             { label: 'Shopify 店铺', value: 'DTC' },
           ]}
           onChange={(value) =>
-            // 切到 Shopify 时清掉 Amazon 站点：Shopify 没有站点概念，留着只会让结果恒为空
+            // 切来源时清掉另一侧独有的条件：Shopify 没有站点和 Amazon 卖家，Amazon 没有店铺域名。
+            // 后端在 UNION 前分侧施加筛选，留着另一侧的条件会让两侧都被排除、结果恒为空
+            // （PR #174 Codex P2：从店铺管理「看新商品」进来后再切来源）。
             update(
               value === 'ALL'
                 ? { source: undefined }
                 : value === 'DTC'
-                  ? { source: 'DTC', site: undefined }
-                  : { source: 'AMAZON' },
+                  ? { source: 'DTC', site: undefined, sellerId: undefined }
+                  : { source: 'AMAZON', domain: undefined },
             )
           }
         />
