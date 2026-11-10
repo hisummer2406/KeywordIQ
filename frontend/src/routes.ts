@@ -161,12 +161,12 @@ export const routes = [
   },
   {
     // 计算、记录和费用配置用页内 Tab，渠道比较保留全宽。
-    // 仅超管可见（canViewUnreleased），见 access.ts。
+    // 真实端点上线后由占位守卫换成权限点 pricing:view（change add-pricing-calculation）。
     name: '定价核算',
     path: '/pricing',
     component: './Pricing',
     icon: 'CalculatorOutlined',
-    access: 'canViewUnreleased',
+    access: 'canViewPricing',
   },
   // 旧「工具箱」地址不落空。只给有真实数据的两屏留重定向——没有人会去书签一个写着
   // 「数据源尚未接入」的屏，逐条保留只会让这份路由表越来越长。

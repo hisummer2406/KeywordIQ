@@ -91,13 +91,18 @@ describe('权限', () => {
     expect(node.routes!.every((c) => c.access === undefined)).toBe(true);
   });
 
-  it('产品档案、风险核查、定价核算是占位屏，挂 canViewUnreleased（仅超管）', () => {
+  it('产品档案、风险核查是占位屏，挂 canViewUnreleased（仅超管）', () => {
     // 没有后端端点，所以挂的是占位屏守卫而不是权限点——权限矩阵里没有对应项，
     // 就不会有「勾了也不生效」的复选框。有了真实端点再按数据域加权限点。
-    for (const name of ['产品档案', '风险核查', '定价核算']) {
+    for (const name of ['产品档案', '风险核查']) {
       const node = topLevel.find((r) => r.name === name)!;
       expect(node.access).toBe('canViewUnreleased');
     }
+  });
+
+  it('定价核算接入真实端点后挂 canViewPricing（pricing:view），不再是占位守卫', () => {
+    const node = topLevel.find((r) => r.name === '定价核算')!;
+    expect(node.access).toBe('canViewPricing');
   });
 
   it('风险核查的子屏继承父级，不再各挂一个', () => {

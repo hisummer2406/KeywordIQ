@@ -88,6 +88,11 @@ _TABLES_WITH_LATEST_COL = (
     ("user_seller_watch", None),
     ("user_store_watch", None),
     ("competitor_watch_preview", None),
+    ("pricing_rule", None),
+    ("pricing_sheet", None),
+    ("pricing_sheet_version", None),
+    ("pricing_selection", None),
+    ("pricing_selection_log", None),
     *((table, None) for table, _, _ in _FILTER_STATS),
 )
 # 上面这一截（`category_stats`/`brand_stats`）不在 `migration_scope.V2_TABLES` 里
