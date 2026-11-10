@@ -19,6 +19,7 @@ from app.common.request_logging import RequestLoggingMiddleware
 from app.jobs.poller import run_poller
 from app.table.competitor.store_service import refresh_due_store_round
 from app.table.competitor.watch_service import purge_expired_previews_round
+from app.table.risk.task_service import reap_risk_tasks_round, run_one_risk_task_round
 from app.table.upload.import_queue import (
     drain_one_batch_round,
     reap_stale_uploads_round,
@@ -164,12 +165,34 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠️ IMPORT_QUEUE_POLL_SECONDS=0，排队批次不会自动接手")
 
+    # 外观专利核查任务：独立轮询，不挂在导入队列上——导入一跑几分钟，挂在一起检索会被卡住。
+    # 4 个 worker 都跑它，认领靠 SKIP LOCKED 保证同一任务只执行一次。先回收过期租约（转为
+    # 结果未知、不重发），再认领一个排队任务。
+    risk_runner: asyncio.Task | None = None
+    if settings.RISK_TASK_POLL_SECONDS > 0:
+        risk_runner = asyncio.create_task(
+            run_poller(
+                [reap_risk_tasks_round, run_one_risk_task_round],
+                settings.RISK_TASK_POLL_SECONDS,
+                name="核查任务",
+            )
+        )
+    else:
+        logger.warning("⚠️ RISK_TASK_POLL_SECONDS=0，外观专利核查任务不会执行")
+
     logger.info("🎉 应用启动完成，准备接收请求（版本: %s）", settings.VERSION)
 
     yield
 
     # ==================== 关闭事件 ====================
     logger.info("🛑 应用正在关闭...")
+
+    if risk_runner is not None:
+        risk_runner.cancel()
+        try:
+            await risk_runner
+        except asyncio.CancelledError:
+            logger.info("✅ 核查任务轮询已停止")
 
     if drainer is not None:
         drainer.cancel()

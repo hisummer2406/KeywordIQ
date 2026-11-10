@@ -65,6 +65,17 @@ V2_TABLES = frozenset(
         "pricing_sheet_version",
         "pricing_selection",
         "pricing_selection_log",
+        # 外观专利核查（change add-patent-risk-check）。八张普通表——**不要**登记进
+        # partitioning.PARTITIONED_TABLES：检索证据与人工意见是上架决策的依据，按月 DROP 会让
+        # 已签署的意见失去出处。
+        "risk_check",
+        "risk_check_image",
+        "risk_task",
+        "risk_provider_call",
+        "risk_search_page",
+        "risk_candidate",
+        "risk_patent_detail",
+        "risk_review",
     }
 )
 
