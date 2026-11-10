@@ -59,3 +59,12 @@
 - [x] 7.2 `openspec validate --strict --all`；全量后端测试由提交门禁执行（已在 7224f7d、79b45dd 通过）
 - [x] 7.3 PR #175（`--base v2`，Refs #171 #172），列出 spec delta
 - [ ] 7.4 人工验收（用户在浏览器中进行）：运行两个脚本生成草稿，录入 USD/GBP/EUR 汇率，在费用配置中核对并启用 US 一套规则，完成一次 FBA 和一次自发货核价，FBA 配送费和卖家后台收入计算器对比，误差不超过 $0.05
+
+## 8. 导航统一为左侧二级菜单（design 决策 16，Req「模块内互不相关的功能以左侧二级菜单组织」「工作台页面」）
+
+- [x] 8.1 `routes.ts`：定价核算拆成三个子路由，`/pricing` 重定向到快速核价；`routes.test.ts` 更新（子菜单、继承权限、重定向；定价核算移出「单页顶层」名单）
+- [x] 8.2 页面拆分：`Calculate.tsx`、`Records.tsx`、`Rates.tsx`、`usePricingMeta.tsx`；组件改名为 `CalculatorView`、`RecordsList`、`RatesManager`；删除带页签的 `index.tsx`
+- [x] 8.3 打开记录改为地址参数 `?sheet=&version=`；保存后把记录写回地址但不触发重新加载；不带版本号时表单取草稿、结果取最新版本
+- [x] 8.4 规格：`specs/top-nav-structure` 新增全系统约定，`specs/pricing-records` 修改「工作台页面」；`.claude/rules/frontend.md` 补一行
+- [ ] 8.5 浏览器核对（用户）：顶栏「定价核算」→ 左侧三项可折叠；从核价记录打开后刷新页面仍是同一条；新建核价后地址里的记录参数被清空
+
