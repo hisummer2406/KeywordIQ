@@ -24,7 +24,8 @@ import type { FilterDraft, ScopeDraft } from './filters';
  */
 // 4：`filters.qMode` 增加 'ASIN'，检索目标改由它决定（#150）。旧快照里 `q='B0…'` +
 // `qMode='ALL_TERMS'` 在新语义下会被当成关键词查询，与用户当初看到的不一致，直接丢弃。
-export const CACHE_VERSION = 4;
+// 5：`filters.firstListed` 改为 `filters.firstListing`，生效请求体 `first_listed` 改为 `first_listing`（#178）。
+export const CACHE_VERSION = 5;
 
 /** 走 `useCachedState` 的那些值。键是字面量联合类型——写错 key 即 TypeScript 报错。 */
 export interface CachedValues {

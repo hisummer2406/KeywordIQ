@@ -44,6 +44,25 @@ class KeywordTrendCoverage(BaseModel):
     end: _Date
 
 
+class FirstEvidence(BaseModel):
+    """一项首次证据。``basis``：IMPORTED 确认首次 / EARLIEST_OBSERVED 最早可观测（此前可能已出现）
+    / UNKNOWN 未知 / ABSENT 未上过该榜（仅日榜、周榜两项）。"""
+
+    date: _Date | None = None
+    basis: str
+    period_type: Literal["DAY", "WEEK"] | None = Field(
+        None, description="仅共享监测首次：日期来自日报还是周报"
+    )
+
+
+class KeywordFirstEvidence(BaseModel):
+    """日榜首次、周榜首次与首次进入监测（共享记录）三项，并列解释「为什么（不）是新词」。"""
+
+    day: FirstEvidence
+    week: FirstEvidence
+    monitor: FirstEvidence
+
+
 class KeywordTrendResponse(BaseModel):
     """趋势详情响应。"""
 
@@ -61,3 +80,4 @@ class KeywordTrendResponse(BaseModel):
     # 编码"无数据"，它在排名附近是一个合法的普通数字。
     best_ranking: KeywordTrendStat | None = None
     latest_available: KeywordTrendStat | None = None
+    first_evidence: KeywordFirstEvidence | None = None

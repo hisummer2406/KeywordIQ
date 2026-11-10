@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import AddToLibraryModal from '@/pages/Analysis/AddToLibraryModal';
 import { formatScopeDateLabel } from '@/pages/Analysis/scopeDateLabel';
 import type { View } from '@/services/analysis';
-import { getKeywordTrend, type KeywordTrendResponse } from '@/services/keywordTrend';
+import { type FirstEvidence, getKeywordTrend, type KeywordTrendResponse } from '@/services/keywordTrend';
 import TrendTimelineChart, { COMMON_STATUSES, STATUS_META } from './TrendTimelineChart';
 
 const { Text } = Typography;
@@ -71,6 +71,44 @@ function StatLine({ label, stat, view }: { label: string; stat: { date: string; 
         <Text type="secondary">无数据</Text>
       )}
     </div>
+  );
+}
+
+/**
+ * 一项首次证据的可读文案（keyword-trend-detail「详情展示三项首次证据」）。「最早可观测」必须说明
+ * 此前可能已出现——它只是库内最早能看到的日期，显示成确认首次就是把「不知道」说成「确定是新的」。
+ */
+export function describeFirstEvidence(ev: FirstEvidence, board: string): string {
+  const d = ev.date ?? '';
+  const via = ev.period_type ? `（${ev.period_type === 'WEEK' ? '周报' : '日报'}）` : '';
+  switch (ev.basis) {
+    case 'IMPORTED':
+      return `${d}${via}`;
+    case 'EARLIEST_OBSERVED':
+      return `最早可观测 ${d}${via}（此前可能已出现）`;
+    case 'ABSENT':
+      return `未上过${board}`;
+    default:
+      return '未知';
+  }
+}
+
+function FirstEvidenceLines({ evidence }: { evidence: NonNullable<KeywordTrendResponse['first_evidence']> }) {
+  return (
+    <>
+      <div>
+        <Text type="secondary">首次进入日榜：</Text>
+        <Text>{describeFirstEvidence(evidence.day, '日榜')}</Text>
+      </div>
+      <div>
+        <Text type="secondary">首次进入周榜：</Text>
+        <Text>{describeFirstEvidence(evidence.week, '周榜')}</Text>
+      </div>
+      <div>
+        <Text type="secondary">首次进入监测：</Text>
+        <Text>{describeFirstEvidence(evidence.monitor, '榜')}</Text>
+      </div>
+    </>
   );
 }
 
@@ -163,6 +201,7 @@ export default function KeywordTrendDrawer({
               </div>
               <StatLine label="区间最好排名" stat={data.best_ranking} view={data.view} />
               <StatLine label="最近可用排名" stat={data.latest_available} view={data.view} />
+              {data.first_evidence ? <FirstEvidenceLines evidence={data.first_evidence} /> : null}
             </Space>
           )}
 

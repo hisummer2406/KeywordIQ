@@ -55,7 +55,8 @@ _FIELDS: dict[str, str] = {
     "click_share_max": _AS_IS,
     "conversion_share_min": _AS_IS,
     "conversion_share_max": _AS_IS,
-    "first_listed": _FLAG,
+    "first_listed": _FLAG,  # 请求模型已把 true 折叠进 first_listing 并置 None，与 MONITOR 同键
+    "first_listing": _AS_IS,  # 枚举；PERIOD 与 MONITOR 是不同结果，必须不同键
     "competitor_new": _FLAG,  # 已下架：模型层恒落回 None，留在这里只为满足「每个字段都已归类」
     "exclude_brand_in_keyword": _FLAG,
 }
