@@ -130,20 +130,18 @@ export const routes = [
     // 原名「侵权查询」，issue #76 改名「风险核查」——为承接未来商标/专利之外的其他
     // 风险信号（如竞对监控的合规风险）留出更宽的名字，路由不变。
     //
-    // **只有超管可见**（`canViewUnreleased`，见 access.ts）。四个子屏没有后端端点，
-    // 因此挂的是「占位屏守卫」而不是权限点——给没有端点的屏开权限点，就是「勾了也不生效」
-    // 的复选框（`user:manage` 正是这样被删掉的）。access 挂在父级，子项继承。接上数据源、
-    // 有了真实端点再按数据域加权限点，那时是加法，不会留下失效的历史勾选。
-    //
-    // 进顶栏是自觉的取舍：产品最空的一块因此成了最显眼的一块，换来的是「这块在做」这个
-    // 路线图信号可见（对超管）。四个屏自己把「数据源尚未接入」写在脸上，不发请求。
+    // 外观专利与审核待办接入了智慧芽检索（#24，change add-patent-risk-check），整个模块改挂
+    // `risk:view`；发起检索（计费）与签署意见另由 risk:search / risk:review 在页面按钮与后端
+    // 逐端点把守。商标查询、风险案例仍是没有端点的占位屏，单独挂占位屏守卫（仅超管），
+    // 不因父级开放而让普通用户以为已经接入。核查详情是独立路由，不进菜单（刷新/书签可恢复）。
     name: '风险核查',
     path: '/ip',
     icon: 'SafetyCertificate',
-    access: 'canViewUnreleased',
+    access: 'canViewRisk',
     routes: [
       { path: '/ip', redirect: '/ip/review' },
       { name: '审核待办', path: '/ip/review', component: './IP/Review' },
+      { path: '/ip/review/:id', component: './IP/ReviewDetail', hideInMenu: true },
       {
         name: '外观专利',
         path: '/ip/patent',
@@ -155,8 +153,9 @@ export const routes = [
         path: '/ip/trademark',
         component: './IP/Trademark',
         icon: 'Trademark',
+        access: 'canViewUnreleased',
       },
-      { name: '风险案例', path: '/ip/cases', component: './IP/Cases' },
+      { name: '风险案例', path: '/ip/cases', component: './IP/Cases', access: 'canViewUnreleased' },
     ],
   },
   {

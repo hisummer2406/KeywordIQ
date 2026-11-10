@@ -33,7 +33,12 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     // 共享费率」分开授权——费率写错会让所有人的核价一起算错。后端逐端点校验，这里只管显隐。
     canViewPricing: has('pricing:view'),
     canManagePricingRates: has('pricing:manage-rates'),
-    // 「产品档案」「风险核查」：占位屏，没有后端端点，只有 is_super 能看到，
+    // 外观专利核查（change add-patent-risk-check）：看自己的记录、发起计费检索、签署意见三种
+    // 授权分开。默认只授 admin 角色，运营/分析师由超管显式授予。后端逐端点校验，这里只管显隐。
+    canViewRisk: has('risk:view'),
+    canSearchRisk: has('risk:search'),
+    canReviewRisk: has('risk:review'),
+    // 「产品档案」与风险核查下的商标查询、风险案例：占位屏，没有后端端点，只有 is_super 能看到，
     // 免得运营/分析师点进一个写着「尚未接入」的空屏。判据是 is_super，**不是权限点**：
     // 权限矩阵里没有对应的一项，因此不存在「勾了也不生效」的复选框（`user:manage` 的教训）。
     // 有了真实端点再按数据域各开权限点、把这里的守卫换掉——那时是加法。
