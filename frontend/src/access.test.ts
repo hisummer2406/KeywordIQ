@@ -47,6 +47,17 @@ describe('access 权限派生', () => {
     expect(build([], true).canManagePricingRates).toBe(true);
   });
 
+  it('外观专利核查：查看、计费检索、签署意见三种授权分开', () => {
+    const viewer = build(['risk:view']);
+    expect(viewer.canViewRisk).toBe(true);
+    expect(viewer.canSearchRisk).toBe(false);
+    expect(viewer.canReviewRisk).toBe(false);
+    expect(build(['risk:view', 'risk:search']).canSearchRisk).toBe(true);
+    expect(build(['risk:view', 'risk:review']).canReviewRisk).toBe(true);
+    expect(build([]).canViewRisk).toBe(false);
+    expect(build([], true).canSearchRisk).toBe(true);
+  });
+
   it('占位屏只认 is_super：拥有全部权限点的普通账号也看不到', () => {
     const all = ['analysis:view', 'analysis:export', 'upload:import', 'keyword:view', 'competitor:view'];
     expect(build(all).canViewUnreleased).toBe(false);
