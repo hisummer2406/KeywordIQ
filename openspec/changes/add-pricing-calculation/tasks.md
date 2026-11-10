@@ -1,5 +1,5 @@
 > 认领：2026-11-10，分支 `change/add-pricing-calculation`，worktree `~/.claude-worktrees/add-pricing-calculation`。
-> 进度：2026-11-10 任务 1～6 已实现并通过提交门禁（7224f7d、79b45dd、932d06f）；7.3 开 PR 与 7.4 人工验收未做。
+> 进度：2026-11-10 任务 1～6 已实现，PR #175；7.4 人工验收未做。
 
 ## 1. 站点与权限底座（D11、D12）
 
@@ -51,11 +51,11 @@
 - [x] 6.3 结果区（`ResultPanel.tsx`）：按市场分组、状态与原因、明细、调价重算、过期提示、保存、选定、导出
 - [x] 6.4 核价记录（`RecordsTab.tsx`）：分页、搜索筛选、版本抽屉、复制、删除、规则更新提示
 - [x] 6.5 费用配置（`RatesTab.tsx`、`RuleEditor.tsx`）：汇率、市场参数、渠道用结构化表单；佣金与 FBA 费率用 JSON 编辑（design 决策 15，与原计划的「FBA 用可编辑表格」不同）
-- [x] 6.6 `formInput.test.ts`、`ResultPanel.test.tsx`：百分数换算、未填项不发送、过期提示、状态展示、试算结果不可选定。费用配置按钮显隐只在 `access.test.ts` 覆盖权限派生，没有写 RatesTab 的渲染测试。前端检查由 932d06f 的提交门禁执行（eslint、tsc、vitest 通过），未手动运行
+- [x] 6.6 `formInput.test.ts`、`ResultPanel.test.tsx`：百分数换算、未填项不发送、过期提示、状态展示、试算结果不可选定。费用配置按钮显隐只在 `access.test.ts` 覆盖权限派生，没有写 RatesTab 的渲染测试。932d06f 的门禁结果不可靠（PR CI 首轮发现 eslint `no-use-before-define`，且两个测试文件未 mock `@umijs/max` 导致无法加载），5a925e4 修复后门禁的 eslint、tsc、vitest 真正执行并通过；未手动运行
 
 ## 7. 文档、规格与交付
 
 - [x] 7.1 `docs/pricing` 不在 git 中（#171 已说明本地文档不作为交付物），D3～D7 的默认口径及来由、实现中的修正统一记录在 design.md
 - [x] 7.2 `openspec validate --strict --all`；全量后端测试由提交门禁执行（已在 7224f7d、79b45dd 通过）
-- [ ] 7.3 PR（`--base v2`，Refs #171 #172），列出 spec delta
+- [x] 7.3 PR #175（`--base v2`，Refs #171 #172），列出 spec delta
 - [ ] 7.4 人工验收（用户在浏览器中进行）：运行两个脚本生成草稿，录入 USD/GBP/EUR 汇率，在费用配置中核对并启用 US 一套规则，完成一次 FBA 和一次自发货核价，FBA 配送费和卖家后台收入计算器对比，误差不超过 $0.05
