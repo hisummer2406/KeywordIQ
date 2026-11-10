@@ -1,7 +1,10 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CalcResult, OptionResult } from '@/services/pricing';
 import ResultPanel from './ResultPanel';
+
+// services/pricing 引入 @umijs/max 的 request；不 mock 会把 Umi 打包器（esbuild）拉进 jsdom
+vi.mock('@umijs/max', () => ({ request: vi.fn() }));
 
 function option(over: Partial<OptionResult> = {}): OptionResult {
   return {
@@ -94,10 +97,11 @@ describe('核价结果展示', () => {
 
   it('试算结果不提供选定按钮；已保存的最新版本才可选定', () => {
     const { rerender } = render(<ResultPanel result={result([market()])} stale={false} priceOverrides={{}} />);
-    expect(screen.queryByText('选定')).toBeNull();
+    // antd 会在两个汉字的按钮文字间插空格（「选 定」），按角色匹配
+    expect(screen.queryByRole('button', { name: /选\s*定/ })).toBeNull();
     rerender(
       <ResultPanel result={result([market()])} stale={false} priceOverrides={{}} canSelect onSelect={() => undefined} />,
     );
-    expect(screen.getByText('选定')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /选\s*定/ })).toBeTruthy();
   });
 });

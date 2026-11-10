@@ -274,12 +274,6 @@ export function rateToPct(rate: string | null | undefined): string | null {
   return shiftDecimal(rate, -2);
 }
 
-/** 比例展示为百分数，保留两位小数（四舍五入在字符串上做，不经过浮点）。 */
-export function formatPct(rate: string | null | undefined): string {
-  if (rate === null || rate === undefined) return '—';
-  return `${roundDecimal(shiftDecimal(rate, -2), 2)}%`;
-}
-
 /** 十进制字符串四舍五入到 `dp` 位小数（半数进位，远离零）。 */
 export function roundDecimal(value: string, dp: number): string {
   const neg = value.startsWith('-');
@@ -308,6 +302,12 @@ export function roundDecimal(value: string, dp: number): string {
   const out = dp > 0 ? `${s.slice(0, intLen) || '0'}.${s.slice(intLen)}` : s;
   const isZero = /^0*\.?0*$/.test(out);
   return neg && !isZero ? `-${out}` : out;
+}
+
+/** 比例展示为百分数，保留两位小数（四舍五入在字符串上做，不经过浮点）。 */
+export function formatPct(rate: string | null | undefined): string {
+  if (rate === null || rate === undefined) return '—';
+  return `${roundDecimal(shiftDecimal(rate, -2), 2)}%`;
 }
 
 /** 金额展示：两位小数。 */
