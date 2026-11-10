@@ -123,18 +123,41 @@ async def test_timeout_network_5xx_html_are_unknown():
     def timeout(req):
         raise httpx.ReadTimeout("t", request=req)
 
-    def boom(req):
-        raise httpx.ConnectError("c", request=req)
+    def reset(req):
+        raise httpx.ReadError("r", request=req)
 
     cases = [
         (timeout, pc.TIMEOUT),
-        (boom, pc.NETWORK),
+        (reset, pc.NETWORK),
         (lambda r: httpx.Response(502, text="<html>bad gateway</html>"), pc.UPSTREAM_5XX),
         (lambda r: httpx.Response(200, text="<html>login</html>"), pc.MALFORMED_RESPONSE),
     ]
     for handler, category in cases:
         res = await _client(handler).search_image(url="https://x", countries=[], limit=10, offset=0)
         assert (res.outcome, res.error_category) == ("unknown", category)
+
+
+async def test_unsent_requests_are_errors_not_unknown(monkeypatch):
+    def refused(req):
+        raise httpx.ConnectError("c", request=req)
+
+    res = await _client(refused).legal_status(["a"])
+    assert (res.outcome, res.error_category) == ("error", pc.CONNECT_FAILED)
+
+    def broken(self):
+        raise ImportError("socksio missing")
+
+    monkeypatch.setattr(ZhihuiyaClient, "_client", broken)
+    res = await _client(lambda r: _ok([])).legal_status(["a"])
+    assert (res.outcome, res.error_category) == ("error", pc.CLIENT_ERROR)
+
+
+async def test_ignores_environment_proxies(monkeypatch):
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    client = ZhihuiyaClient(KEY)._client()
+    assert client._trust_env is False
+    await client.aclose()
 
 
 @pytest.mark.parametrize(

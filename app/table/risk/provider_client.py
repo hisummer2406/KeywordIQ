@@ -46,6 +46,9 @@ RATE_LIMITED = "rate_limited"
 BAD_REQUEST = "bad_request"
 UPSTREAM_ERROR = "upstream_error"
 UNEXPECTED_CODE = "unexpected_code"
+# 请求确定没有到达供应商（不会计费）：本地建客户端失败、连接阶段失败
+CLIENT_ERROR = "client_error"
+CONNECT_FAILED = "connect_failed"
 # unknown 类
 TIMEOUT = "timeout"
 NETWORK = "network"
@@ -114,14 +117,26 @@ class ZhihuiyaClient:
             transport=self._transport,
             headers={"Authorization": f"Bearer {self._api_key}"},
             follow_redirects=False,
+            # 不读环境变量里的代理：源站固定，Key 不经环境配置的代理转发。本机 all_proxy=socks5
+            # 曾让客户端在构造时就抛 ImportError（2026-11-10 联调）。
+            trust_env=False,
         )
 
     async def _call(self, api: str, validate: Validator, **request: Any) -> CallResult:
         started = _now()
         method = "GET" if api in (P011, P013) else "POST"
         try:
-            async with self._client() as client:
+            client = self._client()
+        except Exception:
+            # 请求没有发出，确定不会计费：记 error 而不是 unknown，也不能让任务卡在 running
+            logger.exception("智慧芽 %s 客户端构造失败", api)
+            return self._log(CallResult(api, "error", started, _now(), error_category=CLIENT_ERROR))
+        try:
+            async with client:
                 resp = await client.request(method, _PATHS[api], **request)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.UnsupportedProtocol):
+            # 连接没建立起来，请求没有到达供应商
+            return self._log(CallResult(api, "error", started, _now(), error_category=CONNECT_FAILED))
         except httpx.TimeoutException:
             return self._log(CallResult(api, "unknown", started, _now(), error_category=TIMEOUT))
         except httpx.HTTPError:
