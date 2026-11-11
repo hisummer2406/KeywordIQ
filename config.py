@@ -134,6 +134,21 @@ class Settings(BaseSettings):
     # 单次智慧芽调用超时（秒）。官方给的最大响应时间是 10 秒。
     RISK_PROVIDER_TIMEOUT_SECONDS: float = 30
 
+    # 机会中心 IP 专家 Agent（change add-opportunity-ip-agent）。MCP 与 REST 共用 ZHIHUIYA_API_KEY。
+    # 预算按 MCP 调用次数计（计费口径未知，失败与未知的调用也计入）；超限拒绝入队。
+    OPPORTUNITY_IP_MCP_BUDGET_PER_RESEARCH: int = 20
+    OPPORTUNITY_IP_MCP_DAILY_LIMIT: int = 200
+    # 任务轮询间隔（秒），0 关闭；租约（秒）须大于一个任务的最长调用耗时（取证最多 20 件 × 3 工具）。
+    OPPORTUNITY_IP_TASK_POLL_SECONDS: float = 3
+    OPPORTUNITY_IP_TASK_LEASE_SECONDS: int = 900
+    OPPORTUNITY_IP_MCP_TIMEOUT_SECONDS: float = 30
+    # 大模型（OpenAI 兼容协议，如 DeepSeek、通义）。三项任一为空 = 未配置：Agent 生成与分析不可用，
+    # 人工检索与签署意见照常。基址只接受 https://。
+    OPPORTUNITY_LLM_BASE_URL: str = ""
+    OPPORTUNITY_LLM_API_KEY: str = ""
+    OPPORTUNITY_LLM_MODEL: str = ""
+    OPPORTUNITY_LLM_TIMEOUT_SECONDS: float = 120
+
     # 文件上传配置
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 3 * 1024 * 1024 * 1024  # 3GB for large files

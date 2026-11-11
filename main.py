@@ -19,6 +19,8 @@ from app.common.request_logging import RequestLoggingMiddleware
 from app.jobs.poller import run_poller
 from app.table.competitor.store_service import refresh_due_store_round
 from app.table.competitor.watch_service import purge_expired_previews_round
+from app.table.opportunity.schedule_service import run_ip_schedules_round
+from app.table.opportunity.task_service import reap_ip_tasks_round, run_one_ip_task_round
 from app.table.risk.task_service import reap_risk_tasks_round, run_one_risk_task_round
 from app.table.upload.import_queue import (
     drain_one_batch_round,
@@ -180,6 +182,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠️ RISK_TASK_POLL_SECONDS=0，外观专利核查任务不会执行")
 
+    # 机会中心 IP 专家任务（MCP 与大模型调用）：独立轮询，认领同样靠 SKIP LOCKED。
+    ip_runner: asyncio.Task | None = None
+    if settings.OPPORTUNITY_IP_TASK_POLL_SECONDS > 0:
+        ip_runner = asyncio.create_task(
+            run_poller(
+                [reap_ip_tasks_round, run_ip_schedules_round, run_one_ip_task_round],
+                settings.OPPORTUNITY_IP_TASK_POLL_SECONDS,
+                name="IP 专家任务",
+            )
+        )
+    else:
+        logger.warning("⚠️ OPPORTUNITY_IP_TASK_POLL_SECONDS=0，机会中心 IP 专家任务不会执行")
+
     logger.info("🎉 应用启动完成，准备接收请求（版本: %s）", settings.VERSION)
 
     yield
@@ -193,6 +208,13 @@ async def lifespan(app: FastAPI):
             await risk_runner
         except asyncio.CancelledError:
             logger.info("✅ 核查任务轮询已停止")
+
+    if ip_runner is not None:
+        ip_runner.cancel()
+        try:
+            await ip_runner
+        except asyncio.CancelledError:
+            logger.info("✅ IP 专家任务轮询已停止")
 
     if drainer is not None:
         drainer.cancel()

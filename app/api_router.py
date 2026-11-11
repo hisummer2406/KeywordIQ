@@ -8,6 +8,8 @@ from app.table.competitor.watch_api import competitor_router
 from app.table.keyword.growth_api import growth_router
 from app.table.keyword.library_api import library_router
 from app.table.keyword.trend_api import trend_router
+from app.table.opportunity.ip_api import opportunity_ip_router
+from app.table.opportunity.workspace_api import opportunity_workspace_router
 from app.table.pricing.pricing_api import pricing_router
 from app.table.risk.risk_api import risk_router
 from app.table.upload.upload_api import upload_router
@@ -89,6 +91,18 @@ api_router.include_router(
     risk_router,
     prefix="/risk",
     tags=["风险核查"]
+)
+
+# 机会中心 IP 专家（change add-opportunity-ip-agent）：端点逐个挂 opportunity:view。
+api_router.include_router(
+    opportunity_ip_router,
+    prefix="/opportunity/ip",
+    tags=["机会中心"]
+)
+api_router.include_router(
+    opportunity_workspace_router,
+    prefix="/opportunity/workspaces",
+    tags=["机会中心"]
 )
 
 api_router.include_router(
