@@ -29,12 +29,12 @@ from app.table.risk.jurisdictions import (
     MAX_OFFSET,
     PAGE_SIZE_OPTIONS,
 )
+from app.table.risk.review_rules import validate_review
 from app.table.risk.risk_errors import (
     CandidateNotFoundError,
     CheckNotFoundError,
     InvalidCheckInputError,
     InvalidImageError,
-    InvalidReviewError,
     NothingToFetchError,
     ProviderNotConfiguredError,
     TaskInProgressError,
@@ -57,8 +57,6 @@ from config import settings
 
 #: 附图地址官方说明 9 小时过期；超过后界面提示可能失效。
 IMAGE_URL_TTL = timedelta(hours=9)
-#: 检索未完成时不允许的人工建议（review 规格）。
-_DECISIONS_NEED_SEARCH = ("pass", "conditional_pass")
 
 
 def provider_configured() -> bool:
@@ -457,19 +455,12 @@ async def add_review(db: AsyncSession, owner_id: int, check_id: int, req: Review
             raise TokenConflictError(log_detail=f"review={existing.id}")
         return _review_out(existing, await _user_names(db, {existing.signer_id}))
 
-    if req.market not in check.markets:
-        raise InvalidReviewError("该市场不在本次核查范围内")
-    if req.evidence_candidate_ids:
+    owned = len(req.evidence_candidate_ids)
+    if req.evidence_candidate_ids and req.market in check.markets:
         owned = (await db.execute(select(func.count()).select_from(RiskCandidate).where(
             RiskCandidate.check_id == check.id, RiskCandidate.id.in_(req.evidence_candidate_ids)))).scalar_one()
-        if owned != len(req.evidence_candidate_ids):
-            raise InvalidReviewError("引用的候选不属于本次核查")
-    if req.decision in _DECISIONS_NEED_SEARCH and check.searched_at is None:
-        raise InvalidReviewError("检索尚未完成，只能选择继续验证、需补证或不建议上架")
-    if req.decision == "conditional_pass" and not (
-        req.conditions and req.evidence_candidate_ids and req.review_date
-    ):
-        raise InvalidReviewError("条件通过须填写整改条件、至少一条证据引用和复核日期")
+    validate_review(req, markets=check.markets, evidence_owned=owned == len(req.evidence_candidate_ids),
+                    search_done=check.searched_at is not None)
 
     review = RiskReview(
         check_id=check.id, market=req.market, risk_level=req.risk_level, decision=req.decision,
