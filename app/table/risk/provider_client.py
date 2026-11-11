@@ -185,7 +185,7 @@ class ZhihuiyaClient:
         )
 
     async def search_image(self, *, url: str, countries: list[str], limit: int, offset: int) -> CallResult:
-        """P060：单图外观检索。``country`` 按契约的数组类型发送（与说明冲突，待真实联调确认）。"""
+        """P060：单图外观检索。``country`` 必须是数组，逗号字符串会被拒绝（2026-11-11 真实联调）。"""
         payload: dict[str, Any] = {
             "url": url, "patent_type": "D", "model": 1, "is_https": 1,
             "limit": limit, "offset": offset, "field": "SCORE",

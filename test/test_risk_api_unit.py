@@ -89,7 +89,12 @@ def test_review_enums():
 def test_market_recommendations_reference_known_jurisdictions():
     for codes in MARKET_RECOMMENDATIONS.values():
         assert set(codes) <= set(JURISDICTIONS)
-    assert JURISDICTIONS["EU"].verified is False  # EM 取值待真实联调核实
+
+
+def test_eu_and_hague_use_verified_vendor_codes():
+    # EM 会被智慧芽静默忽略，欧盟专利会漏检而不报错（2026-11-11 真实联调）
+    assert JURISDICTIONS["EU"].vendor_code == "EU" and JURISDICTIONS["EU"].verified is True
+    assert JURISDICTIONS["WO"].vendor_code == "WO" and JURISDICTIONS["WO"].verified is True
 
 
 def test_vendor_values_sanitized():

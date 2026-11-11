@@ -62,13 +62,13 @@ async def test_search_sends_design_params():
         seen["json"] = json.loads(req.content)
         return _ok({"total_search_result_count": 1, "patent_messages": [_item()]})
 
-    res = await _client(handler).search_image(url="https://static/tmp.png", countries=["US", "EM"],
+    res = await _client(handler).search_image(url="https://static/tmp.png", countries=["US", "EU"],
                                               limit=20, offset=0)
     assert res.ok
     assert seen["path"] == "/search/patent/image-single"
     body = seen["json"]
     assert body["patent_type"] == "D" and body["model"] == 1 and body["is_https"] == 1
-    assert body["country"] == ["US", "EM"] and body["limit"] == 20 and body["offset"] == 0
+    assert body["country"] == ["US", "EU"] and body["limit"] == 20 and body["offset"] == 0
 
 
 async def test_detail_batch_comma_ids():
