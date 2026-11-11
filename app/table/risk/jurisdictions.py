@@ -24,9 +24,10 @@ JURISDICTIONS: dict[str, Jurisdiction] = {
         Jurisdiction("US", "美国", "US"),
         Jurisdiction("GB", "英国", "GB"),
         Jurisdiction("DE", "德国", "DE", note="德国本国注册；不含欧盟外观设计"),
-        Jurisdiction("EU", "欧盟外观设计（EUIPO）", "EM", verified=False,
+        # 2026-11-11 真实联调：EM 会被智慧芽静默忽略，EUIPO 的取值是 EU
+        Jurisdiction("EU", "欧盟外观设计（EUIPO）", "EU",
                      note="覆盖欧盟统一外观设计，不覆盖成员国本国注册"),
-        Jurisdiction("WO", "海牙国际注册（WIPO）", "WO", verified=False,
+        Jurisdiction("WO", "海牙国际注册（WIPO）", "WO",
                      note="海牙体系国际注册，指定国效力以各国为准"),
         Jurisdiction("FR", "法国", "FR"),
         Jurisdiction("IT", "意大利", "IT"),

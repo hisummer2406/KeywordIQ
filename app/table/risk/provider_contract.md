@@ -20,11 +20,15 @@ image-upload、image-single、simple-bibliography、legal-status）。只记本�
 | P011 | GET `/basic-patent-data/simple-bibliography` | `patent_id`，逗号分隔，最多 100 个，按成功条数计费 | `[{pn, patent_id, bibliographic_data{invention_title[], parties{assignees,applicants,inventors}, patent_type, application_reference, publication_reference, classification_data{classification_loc}, ...}}]` |
 | P013 | GET `/basic-patent-data/legal-status` | 同 P011 | `[{pn, patent_id, legal_date, patent_legal{simple_legal_status[], legal_status[], event_status[]}}]` |
 
+## 真实联调结论（2026-11-11）
+
+- P060 的 `country` 必须传数组。逗号分隔字符串返回 `error_code=20000`（`Json mapping failed`）。
+- EUIPO 的取值是 `EU`，海牙的取值是 `WO`。`EM` 不是有效取值：单独查询时 `status=true` 但 `data` 没有内容，与其他法域同查时被静默忽略。
+- `total_search_result_count` 不是可相加的真实总量，多法域的总数可能小于单查某一法域。
+
 ## 已知冲突（待真实联调核实）
 
-- P060 的 `country`：类型一栏标为数组，说明里却写逗号分隔。适配器目前按数组发送。
 - P060 返回的附图地址：正文说 9 小时过期，样例 URL 却带 `X-Amz-Expires=604800`（7 天）。系统按 9 小时提示。
-- EU（EUIPO）与 WO（海牙）在 `country` 中的取值：目前用 `EM`、`WO`，界面标「待核实」。
 
 ## 错误码分类（`provider_client.py`）
 
