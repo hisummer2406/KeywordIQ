@@ -1,14 +1,30 @@
 import { Alert, Button, Card, DatePicker, Empty, Form, Input, Radio, Select, Space, Tag, Timeline, Typography } from 'antd';
 import { useRef, useState } from 'react';
-import { addReview, type Candidate, type Decision, newToken, type Review, type RiskLevel } from '@/services/risk';
+import {
+  addReview,
+  type Candidate,
+  type Decision,
+  newToken,
+  type Review,
+  type ReviewInput,
+  type RiskLevel,
+} from '@/services/risk';
 import { DECISION, DECISIONS_NEED_SEARCH, dt, RISK_LEVEL } from '../riskLabels';
 
 /**
  * 某个销售市场的人工意见：当前意见 + 历史（只追加，不能改、不能删）。
  *
- * 规则与后端 add_review 一致：条件通过须填整改条件、证据和复核日期；检索未完成不能选
- * 可上架或条件通过；系统不预选任何判断——无命中不等于低风险。
+ * 规则与后端 review_rules.validate_review 一致：条件通过须填整改条件、证据和复核日期；检索
+ * 未完成不能选可上架或条件通过；系统不预选任何判断——无命中不等于低风险。
+ *
+ * 机会中心 IP 专家复用本组件（add-opportunity-ip-agent 决策 8）：传 ``submit`` 改提交端点，
+ * 传 ``evidenceOptions`` 改证据候选的显示名；不传时行为与 #24 完全一致。
  */
+
+export interface EvidenceOption {
+  value: number;
+  label: string;
+}
 
 interface Props {
   checkId: number;
@@ -19,6 +35,8 @@ interface Props {
   searchCompleted: boolean;
   canReview: boolean;
   onSaved: () => void;
+  submit?: (body: ReviewInput) => Promise<unknown>;
+  evidenceOptions?: EvidenceOption[];
 }
 
 interface Values {
@@ -32,10 +50,8 @@ interface Values {
   review_date?: { format: (fmt: string) => string };
 }
 
-function ReviewItem({ r, candidates }: { r: Review; candidates: Candidate[] }) {
-  const refs = r.evidence_candidate_ids
-    .map((id) => candidates.find((c) => c.id === id))
-    .map((c, i) => c?.patent_pn ?? c?.patent_id ?? `#${r.evidence_candidate_ids[i]}`);
+function ReviewItem({ r, options }: { r: Review; options: EvidenceOption[] }) {
+  const refs = r.evidence_candidate_ids.map((id) => options.find((o) => o.value === id)?.label ?? `#${id}`);
   return (
     <Space direction="vertical" size={2}>
       <Space wrap>
@@ -52,18 +68,35 @@ function ReviewItem({ r, candidates }: { r: Review; candidates: Candidate[] }) {
   );
 }
 
-export default function ReviewPanel({ checkId, market, marketName, reviews, candidates, searchCompleted, canReview, onSaved }: Props) {
+export default function ReviewPanel({
+  checkId,
+  market,
+  marketName,
+  reviews,
+  candidates,
+  searchCompleted,
+  canReview,
+  onSaved,
+  submit,
+  evidenceOptions,
+}: Props) {
   const [form] = Form.useForm<Values>();
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const token = useRef(newToken());
   const decision = Form.useWatch('decision', form);
   const [current, ...history] = reviews;
+  const options: EvidenceOption[] =
+    evidenceOptions ?? candidates.map((c) => ({ value: c.id, label: `#${c.rank} ${c.patent_pn ?? c.patent_id}` }));
+  // 已签意见里的证据只显示专利号（与 #24 原行为一致）；下拉里带名次便于挑选
+  const refLabels: EvidenceOption[] =
+    evidenceOptions ?? candidates.map((c) => ({ value: c.id, label: c.patent_pn ?? c.patent_id }));
+  const send = submit ?? ((body: ReviewInput) => addReview(checkId, body));
 
   const onFinish = async (v: Values) => {
     setSaving(true);
     try {
-      await addReview(checkId, {
+      await send({
         client_token: token.current,
         market,
         risk_level: v.risk_level,
@@ -97,7 +130,7 @@ export default function ReviewPanel({ checkId, market, marketName, reviews, cand
         )
       }
     >
-      {current ? <ReviewItem r={current} candidates={candidates} /> : (
+      {current ? <ReviewItem r={current} options={refLabels} /> : (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该市场还没有人工意见" />
       )}
       {history.length > 0 && (
@@ -105,7 +138,7 @@ export default function ReviewPanel({ checkId, market, marketName, reviews, cand
           <summary>{`历史意见（${history.length}）`}</summary>
           <Timeline
             style={{ marginTop: 12 }}
-            items={history.map((r) => ({ key: r.id, children: <ReviewItem r={r} candidates={candidates} /> }))}
+            items={history.map((r) => ({ key: r.id, children: <ReviewItem r={r} options={refLabels} /> }))}
           />
         </details>
       )}
@@ -175,7 +208,7 @@ export default function ReviewPanel({ checkId, market, marketName, reviews, cand
               allowClear
               placeholder="选择本次核查中的候选专利"
               optionFilterProp="label"
-              options={candidates.map((c) => ({ value: c.id, label: `#${c.rank} ${c.patent_pn ?? c.patent_id}` }))}
+              options={options}
             />
           </Form.Item>
           <Form.Item name="review_date" label="复核日期" rules={[{ required: conditional, message: '条件通过须填写复核日期' }]}>

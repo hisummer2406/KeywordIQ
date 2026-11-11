@@ -76,6 +76,19 @@ V2_TABLES = frozenset(
         "risk_candidate",
         "risk_patent_detail",
         "risk_review",
+        # 机会中心 IP 专家 Agent（change add-opportunity-ip-agent）。八张普通表，同上不分区：
+        # 调研证据与人工意见是选品决策的依据。
+        "opp_ip_research",
+        "opp_ip_task",
+        "opp_ip_call",
+        "opp_ip_query",
+        "opp_ip_candidate",
+        "opp_ip_detail",
+        "opp_ip_agent_output",
+        "opp_ip_review",
+        "opp_ip_message",
+        "opp_ip_schedule",
+        "opp_workspace",
     }
 )
 
