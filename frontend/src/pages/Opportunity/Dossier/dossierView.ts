@@ -73,10 +73,15 @@ export function isDue(recheckDate: string | null | undefined, today: string): bo
   return !!recheckDate && recheckDate <= today;
 }
 
-/** 把输入框里的多行/逗号分隔文本拆成关键词：去空白、转小写、去重，保持输入顺序。 */
+/**
+ * 把输入框里的多行文本拆成关键词：**只按换行拆分**，去空白、转小写、去重，保持输入顺序。
+ *
+ * 不按逗号、分号拆：ABA 关键词本身可能含逗号（如 `vitamins a, d and k`），按逗号拆会把一个词
+ * 拆成两个，丢掉它的 ABA 证据与档案归属（PR #188 评审）。两处输入框都写明「每行一个」。
+ */
 export function parseKeywordInput(text: string): string[] {
   const out: string[] = [];
-  for (const raw of text.split(/[\n,，;；]+/)) {
+  for (const raw of text.split(/\r?\n/)) {
     const kw = raw.trim().replace(/\s+/g, ' ').toLowerCase();
     if (kw && !out.includes(kw)) out.push(kw);
   }
