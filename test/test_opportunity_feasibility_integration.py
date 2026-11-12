@@ -206,6 +206,32 @@ async def test_unsolvable_option_does_not_show_diagnostic_profit(db):
     assert any("无法覆盖" in r for r in opt["reasons"])
 
 
+async def test_summary_carries_price_adjustment_separately(db):
+    """创建人手动调了售价：摘要带上调后结果并与原始求解分开（PR #189 复审 P2）。"""
+    owner = await _user(db, "a")
+    await _seed_us(db, owner)
+    did = await _dossier(db, owner)
+    sheet = await sheet_service.create_sheet(db, owner, SheetCreate(product_name="P"))
+    await dossier_service.link_pricing_sheet(db, owner, did, sheet.id)
+    v = await _save(db, owner, sheet.id, price_overrides={"US/FBM:C1": "92.99"})
+    raw = next(o for o in v.result["markets"][0]["options"] if o["option_key"] == "FBM:C1")
+    assert raw["adjusted"] and raw["adjusted_met"] is False  # 前提：引擎按调后价重算且未达标
+    detail = await dossier_service.get_dossier(db, owner, did)
+    opt = _us(detail["pricing"])["option"]
+    assert (opt["option_key"], opt["price"], opt["profit_cny"]) == ("FBM:C1", "93.75", "40.00")
+    assert opt["adjusted"] == {"price": "92.99", "profit_cny": raw["adjusted"]["profit_cny"],
+                               "margin": raw["adjusted"]["margin"], "roi": raw["adjusted"]["roi"],
+                               "met": False, "gap_cny": raw["adjusted_gap_cny"]}
+    from app.table.opportunity.dossier_model import OppDossier
+
+    ctx, _ = await dossier_ask.build_context(db, await db.get(OppDossier, did), 2_000_000_000)
+    assert ctx["pricing"]["sheets"][0]["markets"][0]["option"]["adjusted"]["met"] is False
+    await dossier_service.add_decision(db, owner, did, DecisionCreate(
+        verdict="reject", reason="调价后不达标", client_token=uuid.uuid4().hex))
+    frozen = (await dossier_service.get_dossier(db, owner, did))["decisions"][0]["pricing_status"]
+    assert frozen["sheets"][0]["markets"][0]["adjusted"]["price"] == "92.99"
+
+
 async def test_link_only_own_sheet_and_unlink(db):
     owner, other = await _user(db, "a"), await _user(db, "b")
     did = await _dossier(db, owner)

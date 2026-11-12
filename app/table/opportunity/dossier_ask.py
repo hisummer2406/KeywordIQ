@@ -187,6 +187,8 @@ async def build_context(db: AsyncSession, d: OppDossier, upto_message_id: int) -
                 "采购成本、包装、头程、佣金、配送费等已全部计入引擎结果；它们是核价单创建人的私有输入，这里不展示，不要说成缺失",
                 "max_purchase_cost（采购价上限）只在核价方式为 max_purchase 时计算；为空表示这次没有按该方式核价，不是缺数据",
                 "margin 是 0 到 1 的小数，回答时换成百分数并保留两位小数",
+                "option.reasons 是引擎的计算提醒（如某些费用未计入），回答涉及该方案的金额时要一并说明",
+                "option.adjusted 不为空时，表示创建人手动调了售价，adjusted 里是按调后售价重算的结果（met 表示是否达到目标）；以调后结果为准，同时说明原始求解的售价",
             ],
             "state": {"none": "没有关联核价单", "draft_only": "只有草稿，尚未保存测算",
                       "calculated": "已有测算"}[pricing["state"]],

@@ -157,7 +157,11 @@ export default function DecisionPanel({ detail, onSign }: Props) {
                             ? `：${d.pricing_status.sheets
                                 .flatMap((s) => s.markets)
                                 .filter((m) => m.price)
-                                .map((m) => `${m.market} ${formatMoney(m.price, m.currency)}，利润 ${formatMoney(m.profit_cny, 'CNY')}`)
+                                .map((m) =>
+                                  m.adjusted
+                                    ? `${m.market} 调价后 ${formatMoney(m.adjusted.price, m.currency)}，利润 ${formatMoney(m.adjusted.profit_cny, 'CNY')}`
+                                    : `${m.market} ${formatMoney(m.price, m.currency)}，利润 ${formatMoney(m.profit_cny, 'CNY')}`,
+                                )
                                 .join('；') || '各市场都没有可用结果'}`
                             : d.pricing_status.state === 'draft_only'
                               ? '只有草稿'

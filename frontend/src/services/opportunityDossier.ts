@@ -198,6 +198,8 @@ export interface PricingOptionBrief {
   max_purchase_cost: string | null;
   target_price: string | null;
   target_gap_cny: string | null;
+  /** 创建人手动调了售价时，按调后售价重算的结果；met 表示是否达到目标 */
+  adjusted: { price: string | null; profit_cny: string | null; margin: string | null; roi: string | null; met: boolean | null; gap_cny: string | null } | null;
 }
 
 export interface PricingMarketBrief {
@@ -242,7 +244,7 @@ export interface PricingStatusFrozen {
     state: string;
     version_no: number | null;
     calc_date: string | null;
-    markets: { market: string; currency: string | null; status: string; selected: boolean; label?: string; price?: string | null; profit_cny?: string | null }[];
+    markets: { market: string; currency: string | null; status: string; selected: boolean; label?: string; price?: string | null; profit_cny?: string | null; adjusted?: PricingOptionBrief['adjusted'] }[];
   }[];
 }
 

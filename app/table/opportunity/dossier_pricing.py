@@ -51,6 +51,13 @@ def _option_brief(o: dict[str, Any]) -> dict[str, Any]:
         **{k: ev.get(k) for k in _EVAL_FIELDS},
         **{k: o.get(k) for k in _OPTION_FIELDS},
     }
+    adj = o.get("adjusted")
+    # 核价单里手动调过这个方案的售价：引擎按调后价重算并判定是否达标（PR #189 复审）。
+    # 调价是创建人最终要卖的价格，摘要必须带上，并与原始求解结果分开。
+    brief["adjusted"] = None if not adj else {
+        "price": adj.get("price"), "profit_cny": adj.get("profit_cny"), "margin": adj.get("margin"),
+        "roi": adj.get("roi"), "met": o.get("adjusted_met"), "gap_cny": o.get("adjusted_gap_cny"),
+    }
     if o.get("solve_status") == "unsolvable":
         # 目标无解时引擎附带的正算是诊断用的（倒推采购价时按 0 采购成本算），不能当成预计利润展示
         # （PR #189 评审）。售价保留（它是用户给定的），其余金额置空。
@@ -154,7 +161,8 @@ def status_for_decision(summary: dict[str, Any]) -> dict[str, Any]:
             "markets": [{
                 "market": m["market"], "currency": m["currency"], "status": m["status"], "selected": m["selected"],
                 "solve_status": m["option"]["solve_status"] if m["option"] else None,
-                **({k: m["option"][k] for k in ("label", "price", "profit_cny", "margin", "max_purchase_cost")}
+                **({k: m["option"][k] for k in ("label", "price", "profit_cny", "margin", "max_purchase_cost",
+                                                 "adjusted")}
                    if m["option"] else {}),
             } for m in s.get("markets", [])],
         } for s in summary["sheets"]],
