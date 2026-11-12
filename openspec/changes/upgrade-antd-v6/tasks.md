@@ -12,7 +12,7 @@
 
 - [x] 2.1 Space/Space.Compact 的 `direction` 改成 `orientation`，共 40 处。用脚本只改开标签上的顶层属性；先 dry-run，数量与 grep 统计吻合，替换后 `direction=` 剩余 0、`orientation="vertical"` 为 40
 - [x] 2.2 Alert 的 `message` 改成 `title`（约 48 处，替换后脚本复查 Alert 开标签里 `message=` 剩余 0）；Drawer 的 `width`/`height` 改成 `size`；Table 分页 `position` 改成 `placement`（后两项是测试输出里的告警发现的，第一遍 grep 漏了）；Modal/Drawer/`modalProps` 的 `destroyOnClose` 改成 `destroyOnHidden`（13 处）
-- [x] 2.3 零散项：Tag `bordered={false}` 改成 `variant="filled"`（ExpertsView）；Spin `tip` 改成 `description`（SsoCallback）；Descriptions `labelStyle` 改成 `styles.label`（MessageItems）；InputNumber `addonAfter` 改成 `Space.Compact` + `Space.Addon`（ScheduleModal）。**范围说明**：按 antd 6.7.0 运行时 `warning.deprecated` 和类型定义核对后确定；`size="middle"`、Descriptions/List 的 `bordered` 不发警告，Tooltip `overlay*`/`Menu.Item` 只在 `.umi/` 生成目录，均不改（design D4）
+- [x] 2.3 零散项（另：`Conversation.tsx` 的 Select `suffixIcon` 改成 `suffix`，该页面没有测试渲染过，是 X 接入变更实现时发现的；之后用 antd 类型定义里全部 `@deprecated` 属性做了一次系统扫描，仅此一处遗漏）：Tag `bordered={false}` 改成 `variant="filled"`（ExpertsView）；Spin `tip` 改成 `description`（SsoCallback）；Descriptions `labelStyle` 改成 `styles.label`（MessageItems）；InputNumber `addonAfter` 改成 `Space.Compact` + `Space.Addon`（ScheduleModal）。**范围说明**：按 antd 6.7.0 运行时 `warning.deprecated` 和类型定义核对后确定；`size="middle"`、Descriptions/List 的 `bordered` 不发警告，Tooltip `overlay*`/`Menu.Item` 只在 `.umi/` 生成目录，均不改（design D4）
 - [x] 2.4 `pnpm build` 已通过（含 `No conflicts found`）。测试输出里的 antd 告警已逐类核对：Table `pagination.position`、Drawer `height` 已清掉；`List` 废弃（5 次）为登记例外（design D4）；`[antd: message] Static function can not consume context`（4 次）不是废弃告警，是项目里静态调用 `message.xxx` 的既有写法，未改动。**待用户在浏览器里确认**开发环境控制台没有项目代码触发的废弃告警（场景「开发环境无项目代码触发的废弃告警」） ——2026-11-13 用户在浏览器验收，未报告控制台告警问题（只有总体结论，没有逐页记录）
 
 ## 3. DOM 相关的样式与测试（design D5）
