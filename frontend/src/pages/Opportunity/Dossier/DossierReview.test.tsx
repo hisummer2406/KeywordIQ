@@ -75,6 +75,7 @@ function detail(over: Partial<Detail> = {}): Detail {
     other_evidence: [],
     decisions: [],
     ip: { state: 'unchecked', researches: [] },
+    pricing: { state: 'none', sheets: [] },
     messages: [],
     asking: false,
     llm_configured: true,
@@ -105,6 +106,7 @@ describe('详情加载失败（PR #187 复审）', () => {
     onChanged: () => undefined,
     onStartResearch: () => undefined,
     onOpenResearch: () => undefined,
+    onOpenPricingSheet: () => undefined,
   };
   beforeEach(() => getDossier.mockReset());
 

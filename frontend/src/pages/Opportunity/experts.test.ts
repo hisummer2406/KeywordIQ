@@ -8,13 +8,14 @@ describe('专家名片（spec opportunity-leads「专家名片反映真实接入
       ['signal', 'leads'],
       ['research', 'dossiers'],
       ['ip', 'task'],
+      ['feasibility', 'dossiers'],
     ]);
     expect(available.every((e) => !!e.entryLabel)).toBe(true);
   });
 
   it('未接入的专家没有入口，并写明还缺什么', () => {
     const blocked = EXPERTS.filter((e) => !e.available);
-    expect(blocked.map((e) => e.key)).toEqual(['feasibility', 'trademark']);
+    expect(blocked.map((e) => e.key)).toEqual(['trademark']);
     expect(blocked.every((e) => e.entry === undefined && !!e.blockedBy)).toBe(true);
   });
 
