@@ -98,7 +98,7 @@ export default function AddToLibraryModal({ open, site, keywordIds, onClose, onA
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`${site} 站点还没有分组，先建一个`}
+          title={`${site} 站点还没有分组，先建一个`}
         />
       ) : (
         <Select

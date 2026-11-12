@@ -59,7 +59,9 @@ describe('数据上传屏的归属判定', () => {
     await pickFile('DE_热门搜索词_简单_Day_2026_07_16.csv');
 
     // 三元组在上传前就摆出来了。限定在回显区域内断言——"日报"在周期单选按钮上也有一个
-    const banner = await screen.findByRole('alert');
+    // antd 6 的 message 提示条（上传成功的 toast）也带 role="alert"，所以按回显条独有的文案定位，
+    // 不能直接按 role 取唯一一个
+    const banner = (await screen.findByText('按文件名判定的归属')).closest('[role="alert"]') as HTMLElement;
     expect(within(banner).getByText('DE')).toBeInTheDocument();
     expect(within(banner).getByText('日报')).toBeInTheDocument();
     expect(within(banner).getByText('2026-07-16')).toBeInTheDocument();

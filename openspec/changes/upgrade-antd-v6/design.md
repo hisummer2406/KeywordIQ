@@ -83,25 +83,41 @@ antd 6 只废弃不删除，所以不清理也能跑。但要清理的理由有�
 2. 后续 X 接入会大面积改动机会中心，先把写法统一，可以避免新旧写法并存。
 3. 这些都是机械替换，有一一对应的新写法，风险低。
 
-替换按 antd 官方迁移表来做，例如：
+范围**以 antd 6.7.0 的类型定义和运行时 `warning.deprecated` 调用为准**，不照抄迁移表。实现时逐项核对后确定为：
 - Space 的 `direction` 改成 `orientation`；
 - Alert 的 `message` 改成 `title`；
-- `destroyOnClose` 改成 `destroyOnHidden`；
-- `size="middle"` 改成 `"medium"`；
-- Drawer 的 `width` 改成 `size`；
-- Tooltip 的 `overlay*` 改成 `classNames`/`styles`；
+- Modal/Drawer 的 `destroyOnClose` 改成 `destroyOnHidden`；
+- Drawer 的 `width`、`height` 改成 `size`（6.x 的 `size` 接受数字，`height` 用于上下弹出的抽屉）；
+- Table 分页的 `position: ['topRight']` 改成 `placement: ['topEnd']`（`Analysis/index.tsx`，通过 ProTable 透传）；
+- Tag 的 `bordered={false}` 改成 `variant="filled"`；
 - Spin 的 `tip` 改成 `description`；
 - Descriptions 的 `labelStyle` 改成 `styles.label`；
-- `Menu.Item` 等子组件写法改成 `items`。
+- InputNumber 的 `addonAfter` 改成 `Space.Compact` + `Space.Addon`。
 
+**核对依据**：除了对照类型定义，还以**前端测试输出里的 `[antd: …] … is deprecated` 告警**为准（测试渲染了大部分页面）。
+第一遍只靠 grep 迁移表漏掉了 Table `pagination.position`（292 次告警）和 Drawer `height`（73 次告警），是测试输出发现的。
+
+**登记的例外（不迁移）**：`List` 组件整体被废弃（antd 6.7 提示"下个主版本移除，请用 `Listy`"），项目里共 6 处 `<List>`（每处各带一个 `List.Item`）：
+`Opportunity/IpAgent/MessageItems.tsx` 2 处、`Opportunity/IpAgent/AnalysisCard.tsx` 1 处、`Competitor/BatchAddResult.tsx` 3 处。
+不迁移的理由：`Listy` 基于虚拟列表（`data` / `itemRender` / `ref`），接口与 `List` 不等价，不是改个属性名；antd 6 内仍可用，v7 才移除；
+机会中心的两个文件在下一个变更（接入 Ant Design X）里会被重写，`BatchAddResult` 随后单独评估。
+
+**不改的**：`size="middle"`（6.7.0 的 `SizeType` 仍然接受，运行时只对 `size="default"` 发警告，项目代码也没有）；
+Tooltip 的 `overlay*`、`Menu.Item`（只出现在 Umi 生成的 `.umi/` 目录里，不是项目代码）；Descriptions/List 的 `bordered`（没有被废弃）。
+
+机械替换用脚本只改指定组件开标签上的顶层属性，替换后用 grep 确认旧写法清零、新写法数量与替换前统计一致。
 只替换写法，不顺带改其他东西。
 
 **备选**：先升级，清理另开一个变更。这样 diff 更小，但验收期间告警噪音大，所以没选。
 
 ### D5：DOM 相关的样式和测试，只修"定位"，不改"语义"
 
-- **样式**：逐条核对 `.ant-*` 选择器在 antd 6 的 DOM 下是否还能命中。共 3 个样式文件：`global.less` 14 处、`AnalysisTable.less` 5 处、`ScopeBar.less` 2 处。命中不了的，改成新的类名，或者改用 antd 6 的 `classNames`/`styles` 语义化接口。
-- **测试**：11 个测试文件用 `.ant-*` 选择器定位元素。如果它们因为 DOM 变化失败，就改定位方式，优先改用 role 或文本查询；断言的业务含义不能变。不重写还能通过的测试。
+- **样式**：逐条核对 `.ant-*` 选择器在 antd 6 的 DOM 下是否还能命中，做法是在 antd 6.7.0 和 rc 组件源码里确认类名仍在生成。
+  核对结果：只有 Select 的 `.ant-select-selector` 失效（根节点 `.ant-select` 接管了边框、圆角、内边距和高度变量），
+  `ScopeBar.less` 改成选根节点；Menu、Pagination、Layout.Sider、Table、Input 前缀容器的类都还在，`.ant-pro-*` 来自 pro-components 未变。
+- **测试**：11 个测试文件用 `.ant-*` 选择器定位元素。静态核对后，Select 相关的 6 处要改：`.scope-bar__xxx .ant-select-selector` 改成 `.scope-bar__xxx`
+  （`className` 本来就加在 Select 根节点上），`.ant-select-selection-item` 改成 `.ant-select-content-value`，ImportModal 里改为直接在根节点上 `mouseDown`。
+  其余因 DOM 变化失败的，只改定位方式，优先改用 role 或文本查询；断言的业务含义不能变，不重写还能通过的测试。
 
 ## Risks / Trade-offs
 
@@ -109,7 +125,8 @@ antd 6 只废弃不删除，所以不清理也能跑。但要清理的理由有�
 - **[风险] 默认开启 CSS 变量、组件 DOM 调整，造成细微的视觉变化**（例如 Tag 间距、Modal 遮罩）→ 浏览器验收逐页对比；只在出现可见回归时，通过 ConfigProvider 或局部样式补回来。
 - **[风险] 测试依赖 antd 内部 DOM，升级后成批变红** → 按 D5 只改定位方式；改动后的测试在 antd 5 基线下应该也能写得出来，用这一点防止"改断言迁就实现"。
 - **[取舍] 产物体积**：探路时 dist 从 4.3MB 增加到 4.5MB（未压缩，含 IIFE 包装）。可以接受，不单独优化。
-- **[取舍] 废弃 API 一次清完**让 diff 变大。按"依赖与配置"、"废弃 API"、"样式与测试"分开提交，方便评审。
+- **[取舍] 废弃 API 一次清完**让 diff 变大。原计划按"依赖与配置 / 废弃 API / 样式与测试"分开提交，但提交门禁每次都跑前端 vitest，
+  依赖升级单独提交时测试必然是红的，所以代码合成一个提交（OpenSpec 文档单独一个提交），评审时按 tasks 的分组对照看 diff。
 
 ## Migration Plan
 

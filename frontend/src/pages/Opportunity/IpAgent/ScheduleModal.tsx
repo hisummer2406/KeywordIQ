@@ -37,7 +37,7 @@ export default function ScheduleModal({ open, data, onClose, onSaved }: Props) {
   const frequency = Form.useWatch('frequency', form) ?? 'weekly';
   const picked = Form.useWatch('queries', form) ?? [];
 
-  // 弹窗 destroyOnClose，每次打开表单重新挂载，初始值取当时的定时任务
+  // 弹窗 destroyOnHidden，每次打开表单重新挂载，初始值取当时的定时任务
   const initialValues: Values = {
     frequency: s?.frequency ?? 'weekly',
     weekday: s?.weekday ?? 0,
@@ -81,7 +81,7 @@ export default function ScheduleModal({ open, data, onClose, onSaved }: Props) {
       confirmLoading={saving}
       onCancel={onClose}
       okButtonProps={{ disabled: !options.length }}
-      destroyOnClose
+      destroyOnHidden
       footer={(orig) => (
         <Space>
           {s && (
@@ -104,7 +104,7 @@ export default function ScheduleModal({ open, data, onClose, onSaved }: Props) {
         </Typography.Paragraph>
       )}
       {!options.length ? (
-        <Alert type="info" showIcon message="还没有成功执行过的检索式。先在对话里执行一次检索，再设定时复检。" />
+        <Alert type="info" showIcon title="还没有成功执行过的检索式。先在对话里执行一次检索，再设定时复检。" />
       ) : (
         <Form<Values> form={form} layout="vertical" initialValues={initialValues} preserve={false}>
           <Form.Item name="frequency" label="频率">
@@ -117,7 +117,10 @@ export default function ScheduleModal({ open, data, onClose, onSaved }: Props) {
               </Form.Item>
             ) : (
               <Form.Item name="day_of_month" label="日期" extra="1–28 日，避免小月没有这一天">
-                <InputNumber min={1} max={28} precision={0} addonAfter="日" />
+                <Space.Compact>
+                  <InputNumber min={1} max={28} precision={0} />
+                  <Space.Addon>日</Space.Addon>
+                </Space.Compact>
               </Form.Item>
             )}
             <Form.Item name="hour" label="时刻（北京时间）">

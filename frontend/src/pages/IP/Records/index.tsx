@@ -47,7 +47,7 @@ export default function RecordsPage() {
       title: '产品 / 版本',
       key: 'product',
       render: (_, r) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Link onClick={() => history.push(`/ip/records/${r.id}`)}>{r.product_name}</Typography.Link>
           <Typography.Text type="secondary">{r.product_version}</Typography.Text>
         </Space>
@@ -59,7 +59,7 @@ export default function RecordsPage() {
       title: '检索状态',
       key: 'status',
       render: (_, r) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Tag color={TASK_STATUS[r.search_status].color}>{TASK_STATUS[r.search_status].text}</Tag>
           {r.searched_at && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>

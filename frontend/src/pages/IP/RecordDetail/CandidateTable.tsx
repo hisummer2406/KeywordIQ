@@ -123,7 +123,7 @@ function DrawingsView({ checkId, c }: { checkId: number; c: Candidate }) {
   if (!data) return null;
   const unarchived = data.files.filter((f) => !f.archived);
   return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
       <Typography.Text strong>{`全部附图（${data.files.length} 张，取证于 ${dt(c.details.drawings?.fetched_at)}）`}</Typography.Text>
       <Image.PreviewGroup>
         <Space size={8} wrap>
@@ -211,7 +211,7 @@ function DetailView({ checkId, c }: { checkId: number; c: Candidate }) {
     return <Typography.Text type="secondary">尚未获取详情。</Typography.Text>;
   }
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
       {(bib || legal) && (
         <Descriptions size="small" column={2} bordered>
           {bib && (
@@ -341,7 +341,7 @@ export default function CandidateTable({
       render: (_, c) => {
         const src = safeHttps(c.image_url);
         return src ? (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Image src={src} width={88} alt={c.patent_pn ?? c.patent_id} />
             {c.image_maybe_expired && <Typography.Text type="warning" style={{ fontSize: 12 }}>链接可能已过期</Typography.Text>}
           </Space>
@@ -354,7 +354,7 @@ export default function CandidateTable({
       title: '名称 / 公开号',
       key: 'title',
       render: (_, c) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text>{c.title ?? '—'}</Typography.Text>
           <Typography.Text type="secondary">{c.patent_pn ?? c.patent_id}</Typography.Text>
         </Space>
@@ -430,14 +430,14 @@ export default function CandidateTable({
         okText="确认获取"
         okButtonProps={{ disabled: ids.length === 0 || overLimit || kinds.length === 0, loading: requesting }}
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Checkbox.Group
             value={kinds}
             onChange={(v) => setKinds(DETAIL_KINDS.filter((k) => (v as DetailKind[]).includes(k)))}
             options={DETAIL_KINDS.map((k) => ({ label: DETAIL_KIND_TEXT[k], value: k }))}
           />
           {overLimit ? (
-            <Alert type="warning" showIcon message={`含全部附图或公报 PDF 时一次最多 ${limit} 件，请减少勾选。`} />
+            <Alert type="warning" showIcon title={`含全部附图或公报 PDF 时一次最多 ${limit} 件，请减少勾选。`} />
           ) : (
             <Typography.Paragraph style={{ marginBottom: 0 }}>{detailCallText(count)}</Typography.Paragraph>
           )}

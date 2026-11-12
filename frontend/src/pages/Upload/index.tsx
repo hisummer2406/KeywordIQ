@@ -126,7 +126,7 @@ export default function UploadPage() {
 
   return (
     <PageContainer title="数据管理">
-      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Card>
           {/* 归属回显：文件开始上传前就让用户看见它会落到哪一期 */}
           {inspected && (
@@ -134,7 +134,7 @@ export default function UploadPage() {
               type={inspected.needs.length ? 'error' : 'info'}
               showIcon
               style={{ marginBottom: 16 }}
-              message={
+              title={
                 inspected.needs.length ? (
                   '无法从文件名判定归属，已拒绝该文件'
                 ) : (

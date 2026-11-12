@@ -85,7 +85,7 @@ export default function DecisionPanel({ detail, onSign }: Props) {
                 type="warning"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="档案里还没有任何证据（关键词都没有在榜记录，也没有人工证据），暂时不能签「推进」。"
+                title="档案里还没有任何证据（关键词都没有在榜记录，也没有人工证据），暂时不能签「推进」。"
               />
             )}
             {verdict === 'advance' && detail.pricing.state !== 'calculated' && (
@@ -93,7 +93,7 @@ export default function DecisionPanel({ detail, onSign }: Props) {
                 type="warning"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="还没有保存过测算。可以照常签署，签署记录会写明当时「未测算」。"
+                title="还没有保存过测算。可以照常签署，签署记录会写明当时「未测算」。"
               />
             )}
             {verdict === 'advance' && detail.ip.state === 'unchecked' && (
@@ -101,7 +101,7 @@ export default function DecisionPanel({ detail, onSign }: Props) {
                 type="warning"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="外观专利还没核查。可以照常签署，签署记录会写明当时「专利未核查」。"
+                title="外观专利还没核查。可以照常签署，签署记录会写明当时「专利未核查」。"
               />
             )}
             <Form.Item name="reason" label="理由" rules={[{ required: true, whitespace: true, message: '写下理由' }, { max: 4000 }]}>

@@ -66,7 +66,7 @@ export default function RecordsList({ meta, reloadKey, onOpen }: Props) {
       title: '产品',
       key: 'product',
       render: (_, s) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text strong>{s.product_name}</Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             {[s.sku, s.asin].filter(Boolean).join(' · ') || '—'}
@@ -190,7 +190,7 @@ export default function RecordsList({ meta, reloadKey, onOpen }: Props) {
         }}
       />
       <Drawer
-        width={560}
+        size={560}
         open={!!detail}
         onClose={() => setDetail(null)}
         title={detail ? `${detail.product_name} · 版本` : ''}

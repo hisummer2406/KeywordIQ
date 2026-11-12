@@ -13,15 +13,20 @@
   - `antd` 从 5.29.3 升到 6.7.x。
   - `@ant-design/icons` 从 5 升到 6。antd 6 强制要求 icons 6，两者不能混用。
   - `@ant-design/pro-components` 保持 2.8.10。它官方只声明支持 antd 4 和 5，所以要在 pnpm 配置里**显式放行**这个 peer 依赖不匹配，并写明原因。不能靠忽略安装告警来过关。
-- **构建配置**：`.umirc.ts` 加上 `esbuildMinifyIIFE: true`。原因是 antd 6 升级后，Umi 的 esbuild helper 检查报告各 chunk 的压缩 helper 重名冲突。保留这个检查，不关掉它。
+- **构建配置**：`.umirc.ts` 加上 `esbuildMinifyIIFE: true`。原因是 antd 6 升级后，Umi 的 esbuild helper 检查报告各 chunk 的压缩 helper 重名冲突。开了这个开关后 Umi 内置的检查会被跳过，所以 `build` 脚本串上独立的 `max esbuildHelperChecker dist`，保证检查仍然强制执行。
 - **清理项目代码里的 antd 6 废弃 API**：
-  - Space 的 `direction` 改成 `orientation`。
-  - Alert 的 `message` 改成 `title`。
-  - `destroyOnClose` 改成 `destroyOnHidden`。
-  - `size="middle"` 改成 `"medium"`。
-  - 以及零散的 `bordered`、`Menu.Item`、Drawer 的 `width`、Tooltip 的 `overlay*`、Spin 的 `tip`、Descriptions 的 `labelStyle` 等。
+  - Space 的 `direction` 改成 `orientation`（40 处）。
+  - Alert 的 `message` 改成 `title`（约 48 处）。
+  - Modal/Drawer 的 `destroyOnClose` 改成 `destroyOnHidden`（13 处）。
+  - Drawer 的 `width`/`height` 改成 `size`；Table 分页的 `position` 改成 `placement`；Tag 的 `bordered={false}` 改成 `variant="filled"`；
+    Spin 的 `tip` 改成 `description`；Descriptions 的 `labelStyle` 改成 `styles.label`；InputNumber 的 `addonAfter` 改成 `Space.Compact` + `Space.Addon`。
+  - **例外**：`List` 组件整体被废弃，但替代品 `Listy` 不是等价接口，6 处 `<List>`（各带 `List.Item`）不在本次迁移，登记在 design D4。
+  - 范围按 antd 6.7.0 实际会在运行时发警告的写法确定，不照抄迁移表：例如 `size="middle"` 在 6.7.0 里不发警告，项目代码也没有
+    `size="default"`，所以不改；Tooltip 的 `overlay*`、`Menu.Item` 只出现在 Umi 生成的 `.umi/` 目录里，不是项目代码。
   - 目标是开发环境的控制台里，不再有项目代码触发的 antd 废弃告警。pro-components 内部触发的告警不在本次范围内。
-- **适配 antd 6 的 DOM 变化**：`global.less`、`AnalysisTable.less`、`ScopeBar.less` 里的 `.ant-*` 选择器，以及 11 个依赖 antd DOM 结构的测试文件。
+- **适配 antd 6 的 DOM 变化**：逐条核对样式和测试里的 `.ant-*` 选择器。已确认失效的是 Select：antd 6 去掉了内层 `.ant-select-selector`，
+  边框等样式挪到了根节点 `.ant-select`，已选值的类从 `.ant-select-selection-item` 变成 `.ant-select-content-value`，
+  影响 `ScopeBar.less` 一处样式和 4 个测试文件里的 6 处定位。
 - 不改任何业务行为、接口或数据。**不影响日报路径，也不影响周报路径**：本变更只涉及前端依赖和展示层，查询、导入和统计口径都不变。
 
 ## Capabilities

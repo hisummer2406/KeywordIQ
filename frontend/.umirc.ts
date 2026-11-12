@@ -9,6 +9,9 @@ import { routes } from './src/routes';
  */
 export default defineConfig({
   npmClient: 'pnpm',
+  // antd 6 升级后，Umi 的 esbuild helper 检查报告各 chunk 的压缩 helper 同名冲突（antd 5 无此问题）。
+  // 用 IIFE 包裹压缩产物消除冲突；不要关闭 esbuildHelperChecker（change upgrade-antd-v6 design D3）。
+  esbuildMinifyIIFE: true,
   title: '海眸系统',
 
   // Umi Max 内置插件

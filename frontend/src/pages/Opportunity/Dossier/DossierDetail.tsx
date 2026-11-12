@@ -179,7 +179,7 @@ export default function DossierDetail({ id, currentUserId, onBack, onChanged, on
             type="info"
             showIcon
             style={{ marginTop: 12 }}
-            message={
+            title={
               stale.new_data
                 ? `有新导入的报表（日榜最新期 ${detail.latest_anchor_day ?? '—'}），当前证据还停在 ${detail.snapshot?.anchor_day ?? '—'}。点「刷新证据」更新。`
                 : '关键词有变动，点「刷新证据」更新。'
@@ -191,7 +191,7 @@ export default function DossierDetail({ id, currentUserId, onBack, onChanged, on
             type="warning"
             showIcon
             style={{ marginTop: 12 }}
-            message="复查日期到了：刷新证据，看看和上次决定时相比有什么变化，然后签一条新的决定。"
+            title="复查日期到了：刷新证据，看看和上次决定时相比有什么变化，然后签一条新的决定。"
           />
         )}
 
@@ -272,7 +272,7 @@ export default function DossierDetail({ id, currentUserId, onBack, onChanged, on
         <AskPanel detail={detail} onAsk={(q) => act(() => askDossier(id, q))} />
       </div>
 
-      <Modal open={editing} title="改标题与想法" okText="保存" onOk={() => saveInfo().catch(() => undefined)} onCancel={() => setEditing(false)} destroyOnClose>
+      <Modal open={editing} title="改标题与想法" okText="保存" onOk={() => saveInfo().catch(() => undefined)} onCancel={() => setEditing(false)} destroyOnHidden>
         <Form form={form} layout="vertical" requiredMark={false}>
           <Form.Item name="title" label="标题" rules={[{ required: true, whitespace: true, message: '写一个标题' }, { max: 100 }]}>
             <Input maxLength={100} />
