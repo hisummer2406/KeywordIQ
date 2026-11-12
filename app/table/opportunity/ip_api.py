@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.permissions import OPPORTUNITY_VIEW
+from app.auth.permissions import OPPORTUNITY_VIEW, RISK_SEARCH
 from app.auth.simple_auth import simple_auth
 from app.table.opportunity import research_service, schedule_service
 from app.table.opportunity.ip_schemas import (
@@ -39,6 +39,10 @@ from database import get_async_db
 opportunity_ip_router = APIRouter()
 
 _require = simple_auth.require_permission(OPPORTUNITY_VIEW)
+# 会向智慧芽计费的动作（执行检索、取证、设定时复检）另外要求 risk:search：该权限点按既有约定
+# 只默认给 admin，「检索按次计费，不能随角色默认铺开」（permissions.py）。机会中心授予运营后
+# （change add-opportunity-dossier），不加这道门运营就能绕过它发起计费检索。
+_require_paid = simple_auth.require_permission(RISK_SEARCH)
 
 
 def _accepted(body: dict[str, Any]) -> JSONResponse:
@@ -79,13 +83,15 @@ async def plan(research_id: int, body: TokenRequest, db: AsyncSession = Depends(
 
 @opportunity_ip_router.post("/researches/{research_id}/searches", status_code=202)
 async def search(research_id: int, body: SearchRequest, db: AsyncSession = Depends(get_async_db),
-                 user=Depends(_require)) -> JSONResponse:
+                 user=Depends(_require),
+                 _paid=Depends(_require_paid)) -> JSONResponse:
     return _accepted(await research_service.request_search(db, user.id, research_id, body))
 
 
 @opportunity_ip_router.post("/researches/{research_id}/details", status_code=202)
 async def details(research_id: int, body: DetailRequest, db: AsyncSession = Depends(get_async_db),
-                  user=Depends(_require)) -> JSONResponse:
+                  user=Depends(_require),
+                  _paid=Depends(_require_paid)) -> JSONResponse:
     return _accepted(await research_service.request_details(db, user.id, research_id, body))
 
 
@@ -128,7 +134,8 @@ async def list_schedules(db: AsyncSession = Depends(get_async_db), user=Depends(
 
 @opportunity_ip_router.put("/researches/{research_id}/schedule")
 async def upsert_schedule(research_id: int, body: ScheduleUpsert, db: AsyncSession = Depends(get_async_db),
-                          user=Depends(_require)) -> dict[str, Any]:
+                          user=Depends(_require),
+                          _paid=Depends(_require_paid)) -> dict[str, Any]:
     return await schedule_service.upsert_schedule(db, user.id, research_id, body)
 
 

@@ -19,6 +19,7 @@ from app.common.request_logging import RequestLoggingMiddleware
 from app.jobs.poller import run_poller
 from app.table.competitor.store_service import refresh_due_store_round
 from app.table.competitor.watch_service import purge_expired_previews_round
+from app.table.opportunity.dossier_ask import reap_dossier_asks_round, run_one_dossier_ask_round
 from app.table.opportunity.schedule_service import run_ip_schedules_round
 from app.table.opportunity.task_service import reap_ip_tasks_round, run_one_ip_task_round
 from app.table.risk.task_service import reap_risk_tasks_round, run_one_risk_task_round
@@ -187,7 +188,9 @@ async def lifespan(app: FastAPI):
     if settings.OPPORTUNITY_IP_TASK_POLL_SECONDS > 0:
         ip_runner = asyncio.create_task(
             run_poller(
-                [reap_ip_tasks_round, run_ip_schedules_round, run_one_ip_task_round],
+                # 机会档案的追问（只调大模型）与 IP 任务共用这一条轮询：都是用户在等的短调用
+                [reap_ip_tasks_round, reap_dossier_asks_round, run_ip_schedules_round,
+                 run_one_ip_task_round, run_one_dossier_ask_round],
                 settings.OPPORTUNITY_IP_TASK_POLL_SECONDS,
                 name="IP 专家任务",
             )

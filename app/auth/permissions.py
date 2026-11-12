@@ -11,7 +11,7 @@
 
 **`admin` 角色默认拥有 `PERMISSIONS` 里的全部权限**（见下方 `ROLES["admin"]`），除了
 登记在 `SUPER_ONLY_PERMISSIONS` 里的例外。这个例外是为 `opportunity:view` 引入的
-（issue #76）：`role_code == 'admin'` 与 `is_super == True` 是两个独立字段（见
+（issue #76；该权限点已于 change add-opportunity-dossier 移出，集合目前为空，机制保留）：`role_code == 'admin'` 与 `is_super == True` 是两个独立字段（见
 `user_crud.create_user` 的「显式指定角色优先，否则才按 `is_super` 赋默认角色」），
 "仅超管可见"指的是后者。若不把新权限点放进 `SUPER_ONLY_PERMISSIONS`，它会被
 `ROLES["admin"]` 的"全部权限"定义自动吸收——一个 `admin` 角色但 `is_super=False`
@@ -43,8 +43,9 @@ KEYWORD_VIEW: Final = "keyword:view"
 # 竞对监控是独立数据域（自己的表、自己的用户隔离逻辑），不塞进 KEYWORD_VIEW——每个用户的
 # 关注池互相独立，不是「全体共用一个开关」的授权粒度，与 ANALYSIS_VIEW 等同一档次。
 COMPETITOR_VIEW: Final = "competitor:view"
-# 机会中心（issue #76）：承接确定性 Signal / 候选机会 / 验证推进 / 风险核查这条主动式
-# 工作流的入口。上线初期没有任何内置角色自动获得它，见下方 SUPER_ONLY_PERMISSIONS。
+# 机会中心（issue #76）。上线初期仅超管可见；change add-opportunity-dossier（2026-11-12 用户决定
+# 推进到运营可用）起授予三个内置角色。它把守机会档案与 IP 专家的全部端点；IP 专家里会向智慧芽
+# 计费的动作另外要求 RISK_SEARCH（见下），不随这个权限点铺开。
 OPPORTUNITY_VIEW: Final = "opportunity:view"
 # 定价核算（change add-pricing-calculation）。核价记录按创建人私有，费用规则是全员共享的。
 # 「能核价」与「能改共享费率」是两种授权：费率写错会让所有人的核价一起算错，所以单独
@@ -75,7 +76,9 @@ PERMISSIONS: Final[dict[str, str]] = {
 
 # 默认不授予任何内置角色（含 admin）的权限点——只有 is_super 能用。
 # 见文件头部 docstring："admin = 全部权限" 这条默认规则在这里被显式挖掉例外。
-SUPER_ONLY_PERMISSIONS: Final[frozenset[str]] = frozenset({OPPORTUNITY_VIEW})
+# 当前为空：`opportunity:view` 已于 change add-opportunity-dossier 授予内置角色。机制保留，
+# 以后「先仅超管试用」的权限点仍登记在这里。
+SUPER_ONLY_PERMISSIONS: Final[frozenset[str]] = frozenset()
 
 # ---- 内置角色 ----  code -> (中文名, 权限集合)
 ROLES: Final[dict[str, tuple[str, set[str]]]] = {
@@ -83,11 +86,11 @@ ROLES: Final[dict[str, tuple[str, set[str]]]] = {
     "operator": (
         "运营",
         {ANALYSIS_VIEW, ANALYSIS_EXPORT, UPLOAD_IMPORT, KEYWORD_VIEW, COMPETITOR_VIEW,
-         PRICING_VIEW},
+         PRICING_VIEW, OPPORTUNITY_VIEW},
     ),
     "analyst": (
         "分析师",
-        {ANALYSIS_VIEW, ANALYSIS_EXPORT, KEYWORD_VIEW, COMPETITOR_VIEW, PRICING_VIEW},
+        {ANALYSIS_VIEW, ANALYSIS_EXPORT, KEYWORD_VIEW, COMPETITOR_VIEW, PRICING_VIEW, OPPORTUNITY_VIEW},
     ),
 }
 

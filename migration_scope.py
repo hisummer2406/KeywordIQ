@@ -89,6 +89,13 @@ V2_TABLES = frozenset(
         "opp_ip_message",
         "opp_ip_schedule",
         "opp_workspace",
+        # 机会档案（change add-opportunity-dossier）：五张普通表，不分区、不参与保留清理——
+        # 证据快照与已签署的决定是选品依据。
+        "opp_dossier",
+        "opp_dossier_keyword",
+        "opp_dossier_evidence",
+        "opp_dossier_decision",
+        "opp_dossier_message",
     }
 )
 

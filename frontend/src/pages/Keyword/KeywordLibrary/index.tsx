@@ -1,5 +1,6 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType } from '@ant-design/pro-components';
+import { history, useAccess } from '@umijs/max';
 import { Button, Card, Popconfirm, Radio, Select, Space, Typography, message } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import KeywordTrendDrawer from '@/components/KeywordTrendDrawer';
@@ -40,6 +41,7 @@ import { toSortParams } from './sort';
  * 行为，而这些在一个盯盘清单里没有正确答案。所以这一屏只能移除、不能新增。
  */
 export default function KeywordLibraryPage() {
+  const access = useAccess();
   const actionRef = useRef<ActionType>();
   /**
    * 表格 `request` 的调用序号，与分析查询屏 `useAnalysisQuery.runRequest` 同一模式
@@ -180,6 +182,11 @@ export default function KeywordLibraryPage() {
         onCreate={createGroup}
         onRename={renameGroup}
         onDelete={(group) => deleteGroup(group.group_id)}
+        onCreateDossier={
+          access.canViewOpportunity
+            ? (group) => history.push(`/opportunity?view=new-dossier&group=${group.group_id}`)
+            : undefined
+        }
       />
 
       <Card size="small" style={{ marginTop: 12 }} styles={{ body: { padding: 12 } }}>
