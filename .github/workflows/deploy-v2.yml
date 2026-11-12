@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  checks: read
+  actions: read
   contents: read
 
 jobs:
@@ -20,22 +20,14 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: 核验目标 SHA 的必需 CI 检查
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          checks="$(gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100")"
-
-          for required in '后端（pytest + alembic）' '前端（lint + tsc + test + build）' '竞对采集插件（typecheck + test + build）'; do
-            matching="$(jq --arg name "$required" '[.check_runs[] | select(.name == $name)]' <<<"$checks")"
-            jq -e 'length > 0 and all(.[]; .status == "completed" and .conclusion == "success")' \
-              <<<"$matching" >/dev/null \
-              || { echo "必需 CI 未全部成功：$required"; exit 1; }
-          done
+      - uses: actions/checkout@v5
+      - name: 核验目标 SHA 的 v2 CI 发布门禁
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { verifyRelease } = require('./.github/ci-evidence.cjs');
+            const run = await verifyRelease({ github, context });
+            core.info(`已核验 CI run ${run}`);
 
       - name: 配置 SSH 连接
         env:
