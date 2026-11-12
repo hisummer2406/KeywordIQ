@@ -189,7 +189,7 @@ export default function TopslotHistoryPopover({
       <Alert
         type="error"
         showIcon
-        message="加载失败"
+        title="加载失败"
         action={
           <Button size="small" onClick={loadFirstPage}>
             重试

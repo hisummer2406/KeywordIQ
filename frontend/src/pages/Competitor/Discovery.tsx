@@ -76,7 +76,7 @@ function timeCell(row: NewArrivalRow) {
     </Tooltip>
   );
   return (
-    <Space direction="vertical" size={0}>
+    <Space orientation="vertical" size={0}>
       {row.source === 'DTC' && row.published_at ? (
         <Space size={4}>
           <Tooltip title="数据源直接给出的上架时间">
@@ -143,7 +143,7 @@ export default function CompetitorDiscoveryPage() {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="这里只列出「纳入监控之后」新出现的商品"
+        title="这里只列出「纳入监控之后」新出现的商品"
         description="刚加入一家店时，它已有的存量商品不会涌进来。Amazon 的时间是我们首次发现它的时刻，取决于你何时采集，不是上架时间；Shopify 店铺另有数据源给的上架时间。"
       />
 
@@ -232,7 +232,7 @@ export default function CompetitorDiscoveryPage() {
             dataIndex: 'title',
             ellipsis: true,
             render: (_, row) => (
-              <Space direction="vertical" size={0}>
+              <Space orientation="vertical" size={0}>
                 {/* 标题缺失时后端已用商品标识兜底；这里不再自造文案 */}
                 <Typography.Text ellipsis>{row.title || row.product_key}</Typography.Text>
                 <Space size={8}>

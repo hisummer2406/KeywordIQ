@@ -67,7 +67,7 @@ export default function QueryComposer({ data, initial, queryLimits, maxQueries, 
   };
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={10}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={10}>
       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
         {SYNTAX_HELP}
       </Typography.Text>
@@ -94,7 +94,7 @@ export default function QueryComposer({ data, initial, queryLimits, maxQueries, 
           )}
         </div>
       ))}
-      {!data.mcp_configured && <Alert type="warning" showIcon message="智慧芽接口未配置，无法执行检索。" />}
+      {!data.mcp_configured && <Alert type="warning" showIcon title="智慧芽接口未配置，无法执行检索。" />}
       <Space wrap>
         <Button disabled={drafts.length >= maxQueries} onClick={() => setDrafts((ds) => [...ds, draft()])}>
           添加一条

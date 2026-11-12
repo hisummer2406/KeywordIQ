@@ -154,18 +154,18 @@ export default function DesignPatentPage() {
 
   return (
     <PageContainer title="外观专利核查" content="上传产品原图，在所选法域检索相似外观专利，结果与人工意见在「核查记录」中留存。">
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         {!meta.provider_configured && (
-          <Alert type="warning" showIcon message="智慧芽接口未配置，暂时无法检索。请联系管理员在服务端配置 API Key。" />
+          <Alert type="warning" showIcon title="智慧芽接口未配置，暂时无法检索。请联系管理员在服务端配置 API Key。" />
         )}
         {meta.provider_configured && !access.canSearchRisk && (
-          <Alert type="info" showIcon message="你没有发起专利检索的权限（检索会计费），请联系管理员授予。" />
+          <Alert type="info" showIcon title="你没有发起专利检索的权限（检索会计费），请联系管理员授予。" />
         )}
         {previous && (
           <Alert
             type="info"
             showIcon
-            message={
+            title={
               <span>
                 基于上一轮核查「{previous.label}」发起新一轮：已带入原输入，请重新选择图片。上一轮的意见只适用于上一轮。
               </span>
@@ -255,7 +255,7 @@ export default function DesignPatentPage() {
               <Alert
                 type="info"
                 style={{ marginBottom: 16 }}
-                message="检索范围说明"
+                title="检索范围说明"
                 description={
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
                     {notes.map((j) => (
@@ -280,7 +280,7 @@ export default function DesignPatentPage() {
             <Alert
               type="warning"
               style={{ marginBottom: 16 }}
-              message="提交后，图片会发送给智慧芽进行检索"
+              title="提交后，图片会发送给智慧芽进行检索"
               description="本次将产生两次调用：P010 图片上传、P060 外观图片检索（金额以智慧芽账单为准）。检索结果只用于辅助人工判断，不代表侵权结论。"
             />
             <Button type="primary" htmlType="submit" loading={submitting} disabled={!canSubmit}>

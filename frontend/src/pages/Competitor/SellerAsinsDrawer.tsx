@@ -26,7 +26,7 @@ export default function SellerAsinsDrawer({
     <Drawer
       title={watch ? `${sellerDisplayName(watch)} · 已采集的商品` : ''}
       open={watch !== null}
-      width={760}
+      size={760}
       onClose={onClose}
       destroyOnHidden
     >
@@ -36,7 +36,7 @@ export default function SellerAsinsDrawer({
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="这里是已经采集到的商品，不是这家店的全部在售商品"
+            title="这里是已经采集到的商品，不是这家店的全部在售商品"
             description={<CollectGuide />}
           />
           <ProTable<SellerAsinRow>
@@ -69,7 +69,7 @@ export default function SellerAsinsDrawer({
                 dataIndex: 'title',
                 ellipsis: true,
                 render: (_, row) => (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Typography.Text>{row.title || row.asin}</Typography.Text>
                     {domain ? (
                       <a href={`https://www.${domain}/dp/${row.asin}`} target="_blank" rel="noreferrer">

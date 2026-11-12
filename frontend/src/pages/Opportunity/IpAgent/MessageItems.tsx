@@ -89,7 +89,7 @@ export default function MessageItem({ item, data, meta, busy, isLatestPlan, onUs
           {data.description && (
             <Typography.Paragraph style={{ margin: '4px 0 8px', whiteSpace: 'pre-wrap' }}>{data.description}</Typography.Paragraph>
           )}
-          <Descriptions size="small" column={1} colon={false} labelStyle={{ width: 72 }}>
+          <Descriptions size="small" column={1} colon={false} styles={{ label: { width: 72 } }}>
             <Descriptions.Item label="销售市场">{data.markets.map((m) => marketName.get(m) ?? m).join('、')}</Descriptions.Item>
             <Descriptions.Item label="检索法域">
               {data.jurisdiction_details.map((j) => `${j.name}（${j.code}）`).join('、')}
@@ -113,7 +113,7 @@ export default function MessageItem({ item, data, meta, busy, isLatestPlan, onUs
             dataSource={content.queries}
             renderItem={(q) => (
               <List.Item>
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Typography.Text code copyable>
                     {q.query_text}
                   </Typography.Text>
@@ -157,7 +157,7 @@ export default function MessageItem({ item, data, meta, busy, isLatestPlan, onUs
             dataSource={queries}
             renderItem={(q) => (
               <List.Item style={{ paddingInline: 0 }}>
-                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                <Space orientation="vertical" size={2} style={{ width: '100%' }}>
                   <Typography.Text code>{q.query_text}</Typography.Text>
                   <Space size={4} wrap>
                     <Tag color={QUERY_STATUS[q.status].color}>{QUERY_STATUS[q.status].text}</Tag>
@@ -246,7 +246,7 @@ export default function MessageItem({ item, data, meta, busy, isLatestPlan, onUs
           <Alert
             type="success"
             showIcon
-            message={
+            title={
               <Space size={4} wrap>
                 {`${r.signer_name ?? '人工'} 签署了 ${marketName.get(r.market) ?? r.market} 的人工意见：`}
                 <Tag color={RISK_LEVEL[r.risk_level].color}>{`风险 ${RISK_LEVEL[r.risk_level].text}`}</Tag>
@@ -266,7 +266,7 @@ export default function MessageItem({ item, data, meta, busy, isLatestPlan, onUs
           <Alert
             type={item.task.status === 'unknown' ? 'warning' : 'error'}
             showIcon
-            message={`${TASK_KIND[item.task.kind]}：${TASK_STATUS[item.task.status].text}${item.task.kind === 'ask' ? '，回答未生成' : ''}`}
+            title={`${TASK_KIND[item.task.kind]}：${TASK_STATUS[item.task.status].text}${item.task.kind === 'ask' ? '，回答未生成' : ''}`}
             description={taskErrorText(item.task.kind, item.task.error_category) || undefined}
           />
         </Bubble>
@@ -275,7 +275,7 @@ export default function MessageItem({ item, data, meta, busy, isLatestPlan, onUs
     case 'schedule-skipped':
       return (
         <Bubble side="system">
-          <Alert type="warning" showIcon message={`定时复检已跳过（${dt(item.at)}）`} description={item.reason} />
+          <Alert type="warning" showIcon title={`定时复检已跳过（${dt(item.at)}）`} description={item.reason} />
         </Bubble>
       );
 
