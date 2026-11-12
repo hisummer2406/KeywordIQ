@@ -173,6 +173,39 @@ async def test_missing_config_market_shows_status_without_amounts(db):
     assert de["reasons"]
 
 
+async def test_option_level_blockers_are_surfaced(db):
+    """所有渠道都缺资料时，引擎市场状态仍是 ok；摘要要汇总出「待补资料」与原因（PR #189 评审 P2）。"""
+    owner = await _user(db, "a")
+    await _seed_us(db, owner)
+    did = await _dossier(db, owner)
+    sheet = await sheet_service.create_sheet(db, owner, SheetCreate(product_name="P"))
+    await dossier_service.link_pricing_sheet(db, owner, did, sheet.id)
+    v = await _save(db, owner, sheet.id, weight_kg=None)
+    assert v.result["markets"][0]["status"] == "ok"  # 前提：引擎把阻塞留在方案上
+    us = _us((await dossier_service.get_dossier(db, owner, did))["pricing"])
+    assert (us["status"], us["status_text"], us["option"]) == ("needs_input", "待补资料", None)
+    assert us["reasons"] and all("：" in r for r in us["reasons"])
+
+
+async def test_unsolvable_option_does_not_show_diagnostic_profit(db):
+    """倒推采购价目标无解时，引擎附带的正算按 0 采购成本算，不能当成预计利润（PR #189 评审 P2）。"""
+    owner = await _user(db, "a")
+    await _seed_us(db, owner)
+    did = await _dossier(db, owner)
+    sheet = await sheet_service.create_sheet(db, owner, SheetCreate(product_name="P"))
+    await dossier_service.link_pricing_sheet(db, owner, did, sheet.id)
+    v = await _save(db, owner, sheet.id, mode="max_purchase", purchase_cost=None, target_profit="500",
+                    market_inputs={"US": {"price": "50"}})
+    raw = v.result["markets"][0]["options"]
+    assert all(o["solve_status"] == "unsolvable" and o["evaluation"] for o in raw)  # 前提
+    us = _us((await dossier_service.get_dossier(db, owner, did))["pricing"])
+    opt = us["option"]
+    assert (us["status"], opt["solve_status"], opt["recommended"]) == ("ok", "unsolvable", False)
+    assert opt["price"] == "50.00" or opt["price"] == "50"
+    assert (opt["profit_cny"], opt["margin"], opt["max_purchase_cost"]) == (None, None, None)
+    assert any("无法覆盖" in r for r in opt["reasons"])
+
+
 async def test_link_only_own_sheet_and_unlink(db):
     owner, other = await _user(db, "a"), await _user(db, "b")
     did = await _dossier(db, owner)

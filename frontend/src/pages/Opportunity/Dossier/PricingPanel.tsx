@@ -26,6 +26,28 @@ interface Props {
   onUnlink: (sheetId: number) => Promise<void>;
 }
 
+/** 方案来源：选定、选定过期、推荐，或只是能算出结果的一个方案（不冒充推荐） */
+function SelectionTag({ m }: { m: PricingMarketBrief }) {
+  if (m.selected) return <Tag color="success">已选定</Tag>;
+  if (m.selection_stale)
+    return (
+      <Tooltip title="选定方案来自旧版本，需要在定价核算里重新选定">
+        <Tag color="warning">需重新选定</Tag>
+      </Tooltip>
+    );
+  if (m.option?.recommended)
+    return (
+      <Tooltip title="创建人尚未选定方案，这里显示推荐方案">
+        <Tag>推荐，未选定</Tag>
+      </Tooltip>
+    );
+  return (
+    <Tooltip title="创建人尚未选定方案，也没有推荐方案，这里显示其中一个方案">
+      <Tag>未选定</Tag>
+    </Tooltip>
+  );
+}
+
 function MarketTable({ sheet }: { sheet: PricingSheetBrief }) {
   const { token } = theme.useToken();
   const priceLabel = sheet.mode === 'fixed_price' || sheet.mode === 'max_purchase' ? '给定售价' : '目标售价';
@@ -43,14 +65,13 @@ function MarketTable({ sheet }: { sheet: PricingSheetBrief }) {
           render: (_, m) =>
             m.option ? (
               <span>
-                {m.option.label}{' '}
-                {m.selected ? (
-                  <Tag color="success">已选定</Tag>
-                ) : (
-                  <Tooltip title={m.selection_stale ? '选定方案来自旧版本，需要在定价核算里重新选定' : '创建人尚未选定方案，这里显示推荐方案'}>
-                    <Tag color={m.selection_stale ? 'warning' : 'default'}>{m.selection_stale ? '需重新选定' : '推荐，未选定'}</Tag>
+                {m.option.label} <SelectionTag m={m} />
+                {m.option.solve_status === 'unsolvable' && (
+                  <Tooltip title={m.option.reasons.join('；')}>
+                    <Tag color="error">目标无解</Tag>
                   </Tooltip>
                 )}
+                {m.option.solve_status === 'not_met' && <Tag color="warning">未达目标</Tag>}
               </span>
             ) : (
               <Tooltip title={m.reasons.join('；')}>
