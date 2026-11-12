@@ -137,3 +137,82 @@ MUST NOT 用默认值继续、也 MUST NOT 提供在界面上绕过文件名的�
 - **WHEN** 调用方向接口显式传入站点 US，而文件名前缀是 DE
 - **THEN** 接口拒绝并指出冲突，不写入任何数据
 
+### Requirement: 前端组件库版本基线
+
+SPA SHALL 以 antd 6 作为组件库主版本，`@ant-design/icons` 的主版本 SHALL 与 antd 保持一致（同为 6）。
+项目代码 MUST NOT 混装 antd 5 和 antd 6，也 MUST NOT 混装 icons 5 和 icons 6。
+
+如果某个依赖的 peer 声明不覆盖当前的 antd 主版本（例如 `@ant-design/pro-components` 2.x
+只声明了 antd 4 和 5），这个越界 SHALL 在包管理器配置里显式放行，并写明原因和验证依据。
+MUST NOT 靠忽略安装告警或关闭严格 peer 检查来让它通过。
+
+前端生产构建 SHALL 通过 esbuild helper 冲突检查。出现冲突时，SHALL 通过调整构建产物的形态
+来消除冲突，MUST NOT 以关闭检查的方式放行。如果产物形态的调整会让构建流程内置的检查不再执行，
+`build` 脚本 SHALL 显式对产物运行独立的冲突检查，使 CI 和部署脚本调用 `pnpm build` 时仍然强制执行。
+
+#### Scenario: 依赖主版本一致
+
+- **WHEN** 检查前端的锁定依赖
+- **THEN** 只有一份 antd 6.x 被项目代码解析到，`@ant-design/icons` 的主版本为 6
+
+#### Scenario: peer 越界被显式记录
+
+- **WHEN** 某个依赖的 peer 声明不包含 antd 6，但项目经过验证后仍然使用它
+- **THEN** 包管理器配置里有一条针对这个依赖与 antd 的放行规则，旁边注明原因和验证依据；
+  不存在全局放宽 peer 检查的配置
+
+#### Scenario: 生产构建通过产物检查
+
+- **WHEN** 运行前端生产构建（`pnpm build`）
+- **THEN** 构建成功，并且对产物目录的 esbuild helper 冲突检查已经执行、输出无冲突；该检查不依赖构建流程内置的钩子，
+  检查发现冲突时 `pnpm build` 以非零状态退出
+
+### Requirement: 项目代码不使用组件库的废弃 API
+
+项目自身的前端代码（`frontend/src`）MUST NOT 使用当前 antd 主版本标记为废弃的组件、属性或取值，
+SHALL 改用对应的替代写法。依赖库内部触发的废弃告警不受本要求约束，但 SHALL 在升级依赖时复查。
+
+整个组件被废弃、而替代组件的接口并不等价的情形不在本要求范围内（当前只有 `List`，替代品 `Listy` 是虚拟列表接口，不是等价替换）。
+这类使用处 SHALL 登记在对应变更的 design 里，写明数量、位置和不迁移的理由，并在后续变更中迁移。
+
+#### Scenario: 开发环境无项目代码触发的废弃告警
+
+- **WHEN** 运行前端测试，或在开发环境打开各主要页面（市场分析、词库、竞对、导入、用户管理、定价、机会中心）并完成常规操作
+- **THEN** 测试输出和浏览器控制台里没有由项目代码触发的 `[antd: …] … is deprecated` 告警，已登记的例外除外
+
+#### Scenario: 新代码沿用替代写法
+
+- **WHEN** 新增或修改前端代码，需要用到已有替代写法的废弃能力（例如 Space 的方向、Alert 的标题、弹层关闭后销毁）
+- **THEN** 使用替代写法（`orientation`、`title`、`destroyOnHidden` 等），不使用废弃写法
+
+### Requirement: 对话类界面的组件与安全边界
+
+SPA 的对话类界面（机会中心的专家任务对话、机会档案的追问）SHALL 使用与 antd 主版本匹配的 Ant Design X 作为气泡、输入框与会话列表组件，
+`@ant-design/x` 的主版本 SHALL 满足 antd 6 的 peer 要求。
+
+对话输入框的提交动作 MUST 只触发「向大模型追问」。任何会调用付费外部服务（如专利检索、取证）的动作 MUST NOT 由对话输入框的提交或回车直接触发，
+SHALL 继续经过显示调用次数的确认后才入队。
+
+大模型与外部供应商返回的文本 MUST 作为纯文本渲染，MUST NOT 经由 Markdown 或 HTML 渲染器输出。
+如需渲染 Markdown，SHALL 另行变更并单独评估注入面，MUST NOT 随组件库接入顺带引入。
+
+#### Scenario: 回车只发送追问
+
+- **WHEN** 用户在专家任务对话的输入框里输入问题并按 Enter
+- **THEN** 只创建一次追问任务，不产生检索或取证任务，也不消耗检索预算
+
+#### Scenario: 输入法组合态下回车不提交
+
+- **WHEN** 用户用中文输入法在输入框里选词，按 Enter 确认候选
+- **THEN** 不提交，也不丢失已输入内容
+
+#### Scenario: 大模型返回含标记的文本
+
+- **WHEN** 大模型回答里包含 `<script>`、`<img onerror=…>` 或 Markdown 链接语法
+- **THEN** 页面按字面文本显示，不产生 DOM 元素，也不渲染成链接或图片
+
+#### Scenario: 对话输入忙时不可提交
+
+- **WHEN** 任务有在途的排队或执行中的工作
+- **THEN** 追问输入框不可提交，且界面说明原因（等当前任务完成），不发出请求
+
