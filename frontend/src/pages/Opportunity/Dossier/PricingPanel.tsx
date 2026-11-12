@@ -1,4 +1,4 @@
-import { CalculatorOutlined, LinkOutlined } from '@ant-design/icons';
+import { CalculatorOutlined, LinkOutlined, WarningOutlined } from '@ant-design/icons';
 import { useAccess } from '@umijs/max';
 import { Alert, Button, Modal, Popconfirm, Select, Table, Tag, Tooltip, Typography, theme } from 'antd';
 import { useState } from 'react';
@@ -72,6 +72,30 @@ function MarketTable({ sheet }: { sheet: PricingSheetBrief }) {
                   </Tooltip>
                 )}
                 {m.option.solve_status === 'not_met' && <Tag color="warning">未达目标</Tag>}
+                {m.option.solve_status !== 'unsolvable' && m.option.reasons.length > 0 && (
+                  // 能算出结果也可能带提醒（如超出尺寸段时仓储费等未计入）：团队看不到核价明细，必须在这里露出（PR #189 复审）
+                  <Tooltip title={m.option.reasons.join('；')}>
+                    <Tag color="warning" icon={<WarningOutlined />}>
+                      {m.option.reasons.length} 条计算提醒
+                    </Tag>
+                  </Tooltip>
+                )}
+                {m.option.adjusted && (
+                  <div style={{ fontSize: 12, marginTop: 2 }}>
+                    已手动调价：{formatMoney(m.option.adjusted.price, m.currency)}，利润 {formatMoney(m.option.adjusted.profit_cny, 'CNY')}，利润率{' '}
+                    {formatRate(m.option.adjusted.margin)}
+                    {m.option.adjusted.met === false && (
+                      <Tag color="error" style={{ marginLeft: 4 }}>
+                        调价后未达目标
+                      </Tag>
+                    )}
+                    {m.option.adjusted.met === true && (
+                      <Tag color="success" style={{ marginLeft: 4 }}>
+                        调价后达标
+                      </Tag>
+                    )}
+                  </div>
+                )}
               </span>
             ) : (
               <Tooltip title={m.reasons.join('；')}>
@@ -79,7 +103,11 @@ function MarketTable({ sheet }: { sheet: PricingSheetBrief }) {
               </Tooltip>
             ),
         },
-        { title: priceLabel, render: (_, m) => (m.option ? formatMoney(m.option.price, m.currency) : '—') },
+        {
+          title: priceLabel,
+          // 有手动调价时这里仍是引擎原始求解的售价，调后结果在「方案」列下方单独列出
+          render: (_, m) => (m.option ? formatMoney(m.option.price, m.currency) : '—'),
+        },
         {
           title: '预计单件利润',
           render: (_, m) =>
