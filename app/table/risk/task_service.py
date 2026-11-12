@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,9 +23,11 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.table.risk.jurisdictions import JURISDICTIONS
+from app.table.risk import evidence_store
+from app.table.risk.jurisdictions import DRAWINGS_PAGE_SIZE, JURISDICTIONS, MAX_DRAWINGS_PER_PATENT
 from app.table.risk.provider_client import CallResult, ZhihuiyaClient
 from app.table.risk.risk_model import (
+    FILE_DETAIL_KINDS,
     RiskCandidate,
     RiskCheck,
     RiskCheckImage,
@@ -71,8 +73,23 @@ class Snapshot:
 
 
 @dataclass
+class FileDetail:
+    """一件候选一种文件详情（附图或公报）的执行结果，由 ``_save_details`` 落库。"""
+
+    status: str  # success / missing / failed / unknown
+    fetched_at: datetime
+    category: str | None = None
+    data: dict[str, Any] | None = None
+
+
+@dataclass
 class Outcome:
     calls: list[CallResult] = field(default_factory=list)
+    #: (candidate_id, kind) → 附图 / 公报的结果
+    files: dict[tuple[int, str], FileDetail] = field(default_factory=dict)
+
+
+Renew = Callable[[], Awaitable[None]]
 
 
 # ---------------------------------------------------------------- 认领
@@ -131,7 +148,7 @@ async def _claim(session: AsyncSession) -> Snapshot | bool | None:
 # ---------------------------------------------------------------- 执行（不持有会话）
 
 
-async def _execute(snap: Snapshot, client: ZhihuiyaClient) -> Outcome:
+async def _execute(snap: Snapshot, client: ZhihuiyaClient, renew: Renew | None = None) -> Outcome:
     out = Outcome()
     if snap.kind == "search":
         url = snap.upload_url
@@ -153,7 +170,76 @@ async def _execute(snap: Snapshot, client: ZhihuiyaClient) -> Outcome:
             res = await fn(ids)
             res.extra["kind"] = kind
             out.calls.append(res)
+
+    file_targets = [(cid, pid, need) for cid, pid, need in snap.targets if set(need) & set(FILE_DETAIL_KINDS)]
+    if not file_targets:
+        return out
+    async with evidence_store.download_client() as http:
+        for cid, pid, need in file_targets:
+            if "drawings" in need:
+                out.files[(cid, "drawings")] = await _fetch_drawings(client, http, snap, out, cid, pid)
+            if "pdf" in need:
+                out.files[(cid, "pdf")] = await _fetch_pdf(client, http, snap, out, cid, pid)
+            if renew is not None:
+                await renew()
     return out
+
+
+def _failed(res: CallResult) -> FileDetail:
+    return FileDetail("unknown" if res.outcome == "unknown" else "failed", res.finished_at, res.error_category)
+
+
+async def _fetch_drawings(client: ZhihuiyaClient, http: Any, snap: Snapshot, out: Outcome,
+                          cid: int, pid: str) -> FileDetail:
+    """P042 按页读满该件全部附图，再逐张存档。翻页中途失败整件按失败定性，不落不完整的附图集。"""
+    images: list[dict[str, Any]] = []
+    pages: list[Any] = []
+    total, offset, last = 0, 0, None
+    while True:
+        res = await client.fulltext_image(pid, limit=DRAWINGS_PAGE_SIZE, offset=offset)
+        res.extra["kind"] = "drawings"
+        out.calls.append(res)
+        last = res
+        if not res.ok:
+            return _failed(res)
+        data = res.data or {}
+        pages.append(data)
+        batch = data.get("fulltext_image") or []
+        total = int(data.get("total_search_result_count") or 0)
+        images.extend(batch)
+        offset += len(batch)
+        if not batch or offset >= min(total, MAX_DRAWINGS_PER_PATENT):
+            break
+    if not images:
+        return FileDetail("missing", last.finished_at)
+    files = []
+    for seq, img in enumerate(images[:MAX_DRAWINGS_PER_PATENT], start=1):
+        entry = await evidence_store.archive_file(
+            http, url=img.get("path"), kind="drawings", check_id=snap.check_id, candidate_id=cid,
+            seq=seq, fetched_at=last.finished_at)
+        entry["image_type"] = _s(img.get("image_type"))
+        files.append(entry)
+    pn = next((_s(p.get("pn")) for p in pages if isinstance(p, dict) and p.get("pn")), None)
+    return FileDetail("success", last.finished_at, data={
+        "normalized": {"pn": pn, "total": total, "files": files}, "raw": pages})
+
+
+async def _fetch_pdf(client: ZhihuiyaClient, http: Any, snap: Snapshot, out: Outcome,
+                     cid: int, pid: str) -> FileDetail:
+    res = await client.pdf_data(pid)
+    res.extra["kind"] = "pdf"
+    out.calls.append(res)
+    if not res.ok:
+        return _failed(res)
+    item = next((it for it in res.data if it.get("patent_id") == pid), None)
+    pdf = item.get("pdf") if item is not None and isinstance(item.get("pdf"), dict) else None
+    if pdf is None or not pdf.get("path"):
+        return FileDetail("missing", res.finished_at)
+    entry = await evidence_store.archive_file(
+        http, url=pdf.get("path"), kind="pdf", check_id=snap.check_id, candidate_id=cid,
+        seq=1, fetched_at=res.finished_at)
+    return FileDetail("success", res.finished_at, data={
+        "normalized": {"pn": _s(item.get("pn")), "files": [entry]}, "raw": item})
 
 
 # ---------------------------------------------------------------- 收尾
@@ -238,6 +324,8 @@ async def _save_page(session: AsyncSession, snap: Snapshot, check: RiskCheck, re
 async def _save_details(session: AsyncSession, snap: Snapshot, out: Outcome) -> None:
     for res in out.calls:
         kind = res.extra["kind"]
+        if kind in FILE_DETAIL_KINDS:
+            continue  # 附图与公报按件落库，见下
         by_pid = {it["patent_id"]: it for it in (res.data or [])} if res.ok else {}
         normalize = _norm_biblio if kind == "bibliography" else _norm_legal
         for cid, pid, need in snap.targets:
@@ -251,18 +339,25 @@ async def _save_details(session: AsyncSession, snap: Snapshot, out: Outcome) -> 
             else:
                 status = "unknown" if res.outcome == "unknown" else "failed"
                 data, category = None, res.error_category
-            stmt = pg_insert(RiskPatentDetail).values(
-                candidate_id=cid, kind=kind, status=status, task_id=snap.task_id,
-                error_category=category, data=data, fetched_at=res.finished_at,
-            )
-            await session.execute(stmt.on_conflict_do_update(
-                index_elements=["candidate_id", "kind"],
-                set_={"status": stmt.excluded.status, "task_id": stmt.excluded.task_id,
-                      "error_category": stmt.excluded.error_category, "data": stmt.excluded.data,
-                      "fetched_at": stmt.excluded.fetched_at},
-                # 已成功的不覆盖（认领时已排除，这里再兜一次并发）
-                where=RiskPatentDetail.status != "success",
-            ))
+            await _upsert_detail(session, snap, cid, kind, status, category, data, res.finished_at)
+    for (cid, kind), fd in out.files.items():
+        await _upsert_detail(session, snap, cid, kind, fd.status, fd.category, fd.data, fd.fetched_at)
+
+
+async def _upsert_detail(session: AsyncSession, snap: Snapshot, cid: int, kind: str, status: str,
+                         category: str | None, data: dict[str, Any] | None, fetched_at: datetime) -> None:
+    stmt = pg_insert(RiskPatentDetail).values(
+        candidate_id=cid, kind=kind, status=status, task_id=snap.task_id,
+        error_category=category, data=data, fetched_at=fetched_at,
+    )
+    await session.execute(stmt.on_conflict_do_update(
+        index_elements=["candidate_id", "kind"],
+        set_={"status": stmt.excluded.status, "task_id": stmt.excluded.task_id,
+              "error_category": stmt.excluded.error_category, "data": stmt.excluded.data,
+              "fetched_at": stmt.excluded.fetched_at},
+        # 已成功的不覆盖（认领时已排除，这里再兜一次并发）
+        where=RiskPatentDetail.status != "success",
+    ))
 
 
 # ---------------------------------------------------------------- 规范化（供应商字段只做安全取值）
@@ -361,8 +456,12 @@ async def run_one(session_factory: SessionFactory = AsyncSessionFactory,
         return True
     assert isinstance(snap, Snapshot)
     client = (client_factory or make_client)()
+
+    async def renew() -> None:
+        await _renew_lease(session_factory, snap.task_id)
+
     try:
-        out = await _execute(snap, client)
+        out = await _execute(snap, client, renew)
     except Exception:
         # 客户端本身不抛供应商错误；走到这里是代码缺陷。任务留在 running，由租约回收为 unknown。
         logger.exception("核查任务 %s 执行异常", snap.task_id)
@@ -370,6 +469,18 @@ async def run_one(session_factory: SessionFactory = AsyncSessionFactory,
     async with session_factory() as session:
         await _finalize(session, snap, out)
     return True
+
+
+async def _renew_lease(session_factory: SessionFactory, task_id: int) -> None:
+    """详情任务每处理完一件续租一次（决策 5）。短会话，只更新仍在 running 的本任务；失败只记日志。"""
+    try:
+        async with session_factory() as session:
+            await session.execute(
+                update(RiskTask).where(RiskTask.id == task_id, RiskTask.status == "running")
+                .values(lease_until=_now() + timedelta(seconds=settings.RISK_TASK_LEASE_SECONDS)))
+            await session.commit()
+    except Exception:
+        logger.exception("核查任务 %s 续租失败", task_id)
 
 
 async def reap_expired(session_factory: SessionFactory = AsyncSessionFactory) -> int:

@@ -35,7 +35,7 @@ import ReviewPanel from './ReviewPanel';
 /**
  * 外观专利核查详情（独立路由，刷新/书签可恢复）。
  *
- * 只有「读取下一页」「重新检索」「读取著录与法律状态」三个按钮会产生智慧芽调用，且都先说明
+ * 只有「读取下一页」「重新检索」「补充详情」三个按钮会产生智慧芽调用，且都先说明
  * 调用组成。任务在途时只轮询内部状态（GET 详情），不会重新触发外部调用。
  */
 
@@ -243,13 +243,15 @@ export default function RecordDetailPage() {
             )}
             {data.candidates.length > 0 && (
               <CandidateTable
+                checkId={data.id}
                 candidates={data.candidates}
                 originalImage={image}
                 canSearch={!!access.canSearchRisk}
                 detailBusy={data.active_kinds.includes('detail')}
                 maxBatch={meta?.max_detail_batch ?? 20}
-                onRequestDetails={async (ids) => {
-                  const r = await requestDetails(data.id, { client_token: newToken(), candidate_ids: ids });
+                maxFileBatch={meta?.max_file_detail_batch ?? 10}
+                onRequestDetails={async (ids, kinds) => {
+                  const r = await requestDetails(data.id, { client_token: newToken(), candidate_ids: ids, kinds });
                   if (r.skipped) message.info('所选候选的详情都已获取，未产生新调用');
                   await load();
                 }}
