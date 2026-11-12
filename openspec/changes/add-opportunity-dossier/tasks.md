@@ -27,8 +27,9 @@
 
 - [x] 4.1 后端：`uv run ruff check .` 通过；定向 `pytest`（一次性库，首次运行）224 项通过：dossier 集成 20 项、IP 单元与集成、RBAC、risk api、conventions、data model、迁移核对、database；`openspec validate --strict --all` 46 项通过。未跑全量 `pytest test/`（提交门禁与 CI 会跑）
 - [x] 4.2 前端：`pnpm tsc`、`pnpm lint` 通过；`pnpm test` 60 个文件 640 项通过（含 `dossierView.test.ts`）
-- [ ] 4.3 浏览器验收（清单见 PR 说明；本会话没有做浏览器实测）
-- [ ] 4.4 PR 回 v2（合并、发布另行授权）
+- [x] 4.3 浏览器验收：2026-11-12 用户在本地演示环境（演示库 `keywordiq_demo_dossier`，三个真实案例）验收，原话「我验收了，挺好，先建表单，然后追问」——确认保留「表单建档 + 追问」的形态。实现方没有做浏览器实测；生产未验证
+- [x] 4.4 PR #187 已开（base v2，CI 三项通过）。尚无代码评审；合并与发布未执行
+- [x] 4.5 Codex 自动评审（针对 `541001f`）两条 P2，均核实后修复并补回归测试（修复前失败、修复后通过）：只上过周榜的词算 ABA 证据（`add_decision` 与 `DecisionPanel`）；带多余空白或大写的入库原文按规范化结果解析（`_resolve_keywords`，生产抽样 57 万词中 34 个带多余空白、0 个含大写）
 
 ## 未做（留给后续变更）
 

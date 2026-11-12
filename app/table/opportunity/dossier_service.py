@@ -92,13 +92,37 @@ async def _touch(db: AsyncSession, dossier_id: int) -> None:
     await db.execute(update(OppDossier).where(OppDossier.id == dossier_id).values(updated_at=func.now()))
 
 
+def _like_escape(text_: str) -> str:
+    return text_.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def _resolve_keywords(db: AsyncSession, site: str, keywords: list[str]) -> dict[str, int]:
-    """按站点把关键词文本解析到 ``dim_keyword``。解析不到的词不在返回值里。"""
+    """按站点把**已规范化**的关键词解析到 ``dim_keyword``。解析不到的词不在返回值里。
+
+    导入按报表原文入库（``importer._upsert_keywords`` 不改写），而档案里的词是规范化过的
+    （小写、单空格）。绝大多数词两者一致，先走 ``(site, keyword)`` 唯一索引精确匹配；剩下的再用
+    三元组索引找「规范化后相同」的原文（生产抽样约万分之 0.6 的词带多余空白）。不这样做，这些词
+    会被标成「未进入过榜单」，而同一个词从词库分组带入（按 keyword_id）却能解析（PR #187 评审）。
+    只读取、不改写 ``dim_keyword`` 的原文。
+    """
     if not keywords:
         return {}
     rows = (await db.execute(select(DimKeyword.keyword, DimKeyword.keyword_id).where(
         DimKeyword.site == site, DimKeyword.keyword.in_(keywords)))).all()
-    return {kw: kid for kw, kid in rows}
+    found = {kw: kid for kw, kid in rows}
+    for kw in keywords:
+        if kw in found:
+            continue
+        # 词与词之间允许任意空白、首尾允许空白；候选再按同一规范化函数精确比对
+        pattern = "%" + "%".join(_like_escape(part) for part in kw.split(" ")) + "%"
+        candidates = (await db.execute(
+            select(DimKeyword.keyword, DimKeyword.keyword_id)
+            .where(DimKeyword.site == site, DimKeyword.keyword.ilike(pattern, escape="\\"))
+            .order_by(DimKeyword.keyword_id).limit(200))).all()
+        match = next((kid for text_, kid in candidates if normalize_keyword(text_) == kw), None)
+        if match is not None:
+            found[kw] = match
+    return found
 
 
 async def _group_keywords(db: AsyncSession, user_id: int, group_id: int) -> tuple[str, list[tuple[str, int]]]:
@@ -179,8 +203,7 @@ async def list_dossiers(db: AsyncSession, user_id: int, *, page: int, page_size:
     if mine:
         conds.append(OppDossier.assignee_id == user_id)
     if q and q.strip():
-        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        like = f"%{escaped}%"
+        like = f"%{_like_escape(q.strip())}%"
         kw_match = (select(OppDossierKeyword.id).where(OppDossierKeyword.dossier_id == OppDossier.id,
                                                        OppDossierKeyword.keyword.ilike(like, escape="\\"))
                     .correlate(OppDossier).exists())
@@ -529,8 +552,10 @@ async def add_decision(db: AsyncSession, user_id: int, dossier_id: int, req: Dec
 
     latest = (await _snapshots(db, d.id, limit=1) or [None])[0]
     if req.verdict == "advance":
-        has_aba = latest is not None and any(k.get("resolved") and k["day"]["ranked_periods"] > 0
-                                             for k in latest.payload["keywords"])
+        # 日榜或周榜任一有在榜记录都算 ABA 证据：只上过周榜的词同样在快照里（PR #187 评审）
+        has_aba = latest is not None and any(
+            k.get("resolved") and (k["day"]["ranked_periods"] > 0 or k["week"]["ranked_periods"] > 0)
+            for k in latest.payload["keywords"])
         has_manual = (await db.execute(select(func.count()).select_from(OppDossierEvidence).where(
             OppDossierEvidence.dossier_id == d.id, OppDossierEvidence.kind == "manual",
             OppDossierEvidence.voided_at.is_(None)))).scalar_one() > 0
