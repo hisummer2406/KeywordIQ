@@ -1,5 +1,7 @@
 name: Deploy V2 to ECS
 
+# 仅手动触发（workflow_dispatch），不设自动部署触发器；SHA 与三项 CI 校验见下方 job。
+# 2026-11-13：仅注释改动，用于让独立私有仓库重新识别并登记本工作流，不改变任何行为。
 on:
   workflow_dispatch:
 
