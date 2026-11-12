@@ -31,5 +31,5 @@
 
 ## 6. 验证与交付
 
-- [ ] 6.1 后端定向测试与 ruff；`openspec validate --strict --all`；前端 lint、tsc、vitest 由提交门禁运行
+- [x] 6.1 后端定向测试与 ruff；`openspec validate --strict --all`；前端 lint、tsc、vitest 由提交门禁运行（b1a1ae2 门禁：后端全量 pytest 连一次性库、前端 lint/tsc/vitest 通过）
 - [ ] 6.2 上线前实测（需用户授权、产生计费）：生产 OSS 子账号对 `risk-evidence/` 的写读权限与生命周期规则；P042 `limit=20` 与附图多于 5 张的专利；浏览器验收
