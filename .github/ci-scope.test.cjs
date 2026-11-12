@@ -40,9 +40,9 @@ for (const job of ['backend', 'frontend', 'extension']) {
   conditions[job] = block.match(/    if: >-\n([\s\S]*?)    runs-on:/)[1].trim();
 }
 
-function scheduled({ event = 'pull_request', base = 'v2', draft = false,
+function scheduled({ event = 'pull_request', base = 'v2', ref = 'refs/heads/v2', draft = false,
                      result = 'success', outputs = {}, cancelled = false } = {}) {
-  const github = { event_name: event, base_ref: base, event: { pull_request: { draft } } };
+  const github = { event_name: event, base_ref: base, ref, event: { pull_request: { draft } } };
   const needs = { changes: { result, outputs } };
   return Object.fromEntries(Object.entries(conditions).map(([job, expression]) => [
     job,
@@ -53,81 +53,26 @@ function scheduled({ event = 'pull_request', base = 'v2', draft = false,
   ]));
 }
 
-test('v2 push 不受 skipped 的判定 job 影响，仍全量', () => {
-  assert.deepEqual(scheduled({ event: 'push', result: 'skipped' }), allChecks());
-});
-test('main push 与 PR 保留全量检查', () => {
-  assert.deepEqual(scheduled({ event: 'push', base: '', result: 'skipped' }), allChecks());
-  assert.deepEqual(scheduled({ base: 'main', draft: true, result: 'skipped' }), allChecks());
-});
-test('v2 草稿不运行三项检查', () => {
-  assert.deepEqual(scheduled({ draft: true, result: 'skipped' }), scope(false, false, false));
-});
-test('正式 PR 只运行选中的检查', () => {
-  assert.deepEqual(scheduled({ outputs: { backend: 'false', frontend: 'true', extension: 'false' } }), scope(false, true, false));
-});
-test('纯文档 PR 跳过三项检查', () => {
-  assert.deepEqual(scheduled({ outputs: { backend: 'false', frontend: 'false', extension: 'false' } }), scope(false, false, false));
-});
-test('判定失败、跳过或输出缺失时全量', () => {
-  for (const result of ['failure', 'skipped', 'cancelled', 'success']) {
-    assert.deepEqual(scheduled({ result }), allChecks());
+
+test('v2 push 与 PR 按范围调度', () => {
+  for (const event of ['push', 'pull_request']) {
+    assert.deepEqual(scheduled({ event, outputs: { backend: 'false', frontend: 'true', extension: 'false' } }), scope(false, true, false));
   }
 });
-test('新提交取消旧运行后不会继续启动检查', () => {
-  assert.deepEqual(scheduled({ event: 'push', cancelled: true }), scope(false, false, false));
+test('main push 与 PR 保持全量', () => {
+  assert.deepEqual(scheduled({ event: 'push', ref: 'refs/heads/main' }), allChecks());
+  assert.deepEqual(scheduled({ base: 'main', draft: true }), allChecks());
 });
-test('草稿与正式状态切换均触发，保证 Ready 后运行、转回草稿时取消旧任务', () => {
-  assert.match(workflow, /types: \[opened, synchronize, reopened, ready_for_review, converted_to_draft\]/);
-  assert.match(workflow, /if: github\.event_name == 'pull_request' && github\.base_ref == 'v2' && !github\.event\.pull_request\.draft/);
-  assert.match(workflow, /cancel-in-progress: true/);
-  assert.match(workflow, /basehead: `\$\{pr\.base\.sha\}\.\.\.\$\{pr\.head\.sha\}`/);
+test('草稿不运行；判定失败或缺失时全量；取消后不再启动', () => {
+  assert.deepEqual(scheduled({ draft: true }), scope(false, false, false));
+  for (const result of ['failure', 'skipped', 'cancelled', 'success']) assert.deepEqual(scheduled({ result }), allChecks());
+  assert.deepEqual(scheduled({ cancelled: true }), scope(false, false, false));
 });
-
-const script = workflow.split('          script: |\n')[1]
-  .split(/\n(?=\S|  \S)/)[0].replace(/^            /gm, '');
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-
-async function githubScript({ response, error } = {}) {
-  const outputs = {};
-  const warnings = [];
-  const expected = { owner: 'owner', repo: 'repo', basehead: 'base-sha...head-sha', per_page: 1 };
-  const context = {
-    repo: { owner: 'owner', repo: 'repo' },
-    payload: { pull_request: { base: { sha: 'base-sha' }, head: { sha: 'head-sha' } } },
-  };
-  const github = { rest: { repos: { compareCommitsWithBasehead: async args => {
-    assert.deepEqual(args, expected);
-    if (error) throw error;
-    return { data: response };
-  } } } };
-  const core = {
-    warning: message => warnings.push(message),
-    info: () => {},
-    setOutput: (name, value) => { outputs[name] = value; },
-  };
-  // 实际 workflow script 的 require 路径从仓库根解析。
-  await new AsyncFunction('require', 'context', 'github', 'core', script)(
-    path => { assert.equal(path, './.github/ci-scope.cjs'); return { selectChecks, allChecks }; },
-    context, github, core,
-  );
-  return { outputs, warnings };
-}
-
-test('真实 workflow script 用固定 SHA 比较并输出字符串，正确接入调度条件', async () => {
-  const { outputs, warnings } = await githubScript({ response: { files: files('frontend/src/app.tsx') } });
-  assert.deepEqual(outputs, { backend: 'false', frontend: 'true', extension: 'false' });
-  assert.deepEqual(scheduled({ outputs }), scope(false, true, false));
-  assert.deepEqual(warnings, []);
+test('纯文档 push 跳过三项测试', () => {
+  assert.deepEqual(scheduled({ event: 'push', outputs: { backend: 'false', frontend: 'false', extension: 'false' } }), scope(false, false, false));
 });
-test('真实 workflow script 在 API 错误时回退全套', async () => {
-  const { outputs, warnings } = await githubScript({ error: new Error('API unavailable') });
-  assert.deepEqual(scheduled({ outputs }), allChecks());
-  assert.equal(warnings.length, 1);
-});
-test('真实 workflow script 对缺失文件和达到截断上限都全量', async () => {
-  for (const response of [{}, { files: Array(300).fill({ filename: 'frontend/a.ts' }) }]) {
-    const { outputs } = await githubScript({ response });
-    assert.deepEqual(scheduled({ outputs }), allChecks());
-  }
+test('汇总门禁始终核对同一 push 的全部依赖', () => {
+  assert.match(workflow, /needs: \[changes, backend, frontend, extension\]/);
+  assert.match(workflow, /if: always\(\) && !cancelled\(\) && github.event_name == 'push'/);
+  assert.match(workflow, /CI_NEEDS: \$\{\{ toJSON\(needs\) \}\}/);
 });

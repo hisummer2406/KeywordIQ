@@ -13,7 +13,7 @@
 ## 已验证的能力
 
 - `https://key.liangtong.online/` 与 `/health` 已可用。
-- GitHub Actions 的 V2 CD 仅能手动触发：合并到 `v2` 后先等待该 merge commit 的三项 CI 全部通过，再在 Actions 运行 `Deploy V2 to ECS`。不要在 CI 尚未产生 check-runs 时提前运行，否则门禁会拒绝连接 ECS。
+- GitHub Actions 的 V2 CD 仅能手动触发：合并到 `v2` 后先等待该 merge commit 的 v2 push CI 发布门禁通过（受影响项成功，无关项经范围核验后跳过），再在 Actions 运行 `Deploy V2 to ECS`。不要在 CI 尚未产生 check-runs 时提前运行，否则门禁会拒绝连接 ECS。
 - OSS Bucket 为 `keywordiq-release`（杭州），服务端走内网 Endpoint；STS、前端临时上传权限、服务端读回、CORS 和 7 天未完成分片清理均已通过 `scripts/check_oss.py` 验证。密钥仅保存在 ECS `.env`。
 
 ## 当前飞书运维机器人状态
