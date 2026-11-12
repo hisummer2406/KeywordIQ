@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import httpx
 
-from ops_bot.release.ci import REQUIRED_CHECK_NAMES, check
+from ops_bot.release.ci import READY_CHECK_NAME, REQUIRED_CHECK_NAMES, check
 
 _RealAsyncClient = httpx.AsyncClient
 
@@ -157,6 +157,19 @@ class TestCheck(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.passing)
 
+    async def test_truncated_checks_fail_closed(self):
+        def handler(request):
+            return _run({"total_count": 101, "check_runs": [
+                _run_entry(_NAME_A), _run_entry(_NAME_B), _run_entry(_NAME_C)
+            ]})
+        with patch("ops_bot.release.ci.settings") as settings, patch(
+            "httpx.AsyncClient", lambda **kw: _client_with(handler)
+        ):
+            settings.GH_TOKEN = "tok"
+            settings.GH_REPO = "owner/repo"
+            result = await check("a" * 40)
+        self.assertFalse(result.passing)
+
     async def test_network_error_fails_closed(self):
         def handler(request):
             raise httpx.ConnectError("refused", request=request)
@@ -169,6 +182,64 @@ class TestCheck(unittest.IsolatedAsyncioTestCase):
             result = await check("a" * 40)
 
         self.assertFalse(result.passing)
+
+
+
+class TestScopedCheck(unittest.IsolatedAsyncioTestCase):
+    async def evaluate(self, entries):
+        def handler(request):
+            return _run({"check_runs": entries})
+        with patch("ops_bot.release.ci.settings") as settings, patch(
+            "httpx.AsyncClient", lambda **kw: _client_with(handler)
+        ):
+            settings.GH_TOKEN = "tok"
+            settings.GH_REPO = "owner/repo"
+            return await check("a" * 40)
+
+    def scoped_entries(self):
+        entries = [
+            _run_entry(READY_CHECK_NAME),
+            _run_entry(_NAME_A),
+            _run_entry(_NAME_B, conclusion="skipped"),
+            _run_entry(_NAME_C, conclusion="skipped"),
+        ]
+        for entry in entries:
+            entry.update(check_suite={"id": 123}, head_sha="a" * 40, app={"slug": "github-actions"})
+        return entries
+
+    async def test_gate_allows_only_verified_unaffected_skips(self):
+        result = await self.evaluate(self.scoped_entries())
+        self.assertTrue(result.passing)
+        self.assertIn("未受影响", result.details[_NAME_B])
+
+    async def test_no_gate_does_not_allow_skips(self):
+        self.assertFalse((await self.evaluate(self.scoped_entries()[1:])).passing)
+
+    async def test_gate_must_be_successful_and_have_trusted_metadata(self):
+        for update in [
+            {"conclusion": "failure"}, {"conclusion": "skipped"},
+            {"status": "in_progress"}, {"head_sha": "b" * 40},
+            {"app": {"slug": "other"}}, {"check_suite": {}},
+        ]:
+            entries = self.scoped_entries()
+            entries[0].update(update)
+            self.assertFalse((await self.evaluate(entries)).passing)
+
+    async def test_jobs_cannot_mix_suites_or_be_missing(self):
+        entries = self.scoped_entries()
+        entries[1]["check_suite"] = {"id": 456}
+        self.assertFalse((await self.evaluate(entries)).passing)
+        self.assertFalse((await self.evaluate(self.scoped_entries()[:-1])).passing)
+
+    async def test_gate_does_not_override_failed_check(self):
+        for conclusion in ["failure", "cancelled", None]:
+            entries = self.scoped_entries()
+            entries[1]["conclusion"] = conclusion
+            self.assertFalse((await self.evaluate(entries)).passing)
+
+    def test_gate_name_matches_workflow(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+        self.assertIn(f"name: {READY_CHECK_NAME}", workflow)
 
 
 if __name__ == "__main__":

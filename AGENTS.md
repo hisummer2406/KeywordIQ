@@ -115,8 +115,8 @@
 ### 部署与运维
 
 - **V2 只经 `Deploy V2 to ECS` 工作流发布**（`.github/workflows/deploy-v2.yml`，手动触发）。
-  三道门不得放宽或绕开：只允许 `refs/heads/v2`；该 SHA 的三项必需 CI（后端/前端/插件）必须
-  全部 `completed` 且 `success`；SHA 必须在 `origin/v2` 历史上。工作流、脚本、文档里
+  三道门不得放宽或绕开：只允许 `refs/heads/v2`；该 SHA 的 v2 push CI 必须通过：受影响项 `completed/success`；未受影响项仅经同一运行的
+  「发布就绪（按范围校验）」门禁核验后允许 skipped，未知范围全量，缺失/失败/取消拒绝；SHA 必须在 `origin/v2` 历史上。工作流、脚本、文档里
   不得出现 SSH 私钥、`.env`、AccessKey、飞书 App Secret 等任何密钥。
 - **V1 与 V2 同机隔离，V1 不得被碰。** V1 是裸部署（`amazon.liangtong.online`、8000）；V2 应用
   只绑 `127.0.0.1:8001`（域名 `key.liangtong.online`，Compose 项目 `keywordiq-v2`）。部署
@@ -125,7 +125,7 @@
 - **数据库没有自动备份**（2026-09-20 决定）。方案与文档不得默认"出事可从备份恢复"，也不得
   把 ops-bot 的定时备份/「备份逾期」告警加回去而不经用户决定。
 - **ops-bot（`ops_bot/`）与业务 `app` 相互独立。** `重启`/`发布` 必须走确认卡片、只做预定义
-  动作，生产库恢复不得作为飞书指令开放；发布只接受完整 40 位 SHA 且 CI 全过，导入进行中
+  动作，生产库恢复不得作为飞书指令开放；发布只接受完整 40 位 SHA 且 CI 发布门禁通过，导入进行中
   一律拒绝。`import_service._OPS_ACTION_LOCK_KEY` 与 `ops_bot/executor` 的锁 key 是两边各自
   定义的同一个值，只改一边会让重启/发布与导入的互斥静默失效。ops 表登记进
   `migration_scope.OPS_TABLES`，不是 `V2_TABLES`。
