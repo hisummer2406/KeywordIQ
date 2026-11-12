@@ -5,14 +5,14 @@ import {
   EditOutlined,
   FolderOpenOutlined,
   FolderOutlined,
-  RiseOutlined,
   InboxOutlined,
-  MoreOutlined,
   PlusOutlined,
+  RiseOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Badge, Button, Dropdown, Input, Modal, Spin, Tooltip, Typography, theme } from 'antd';
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from 'react';
+import { Conversations, type ConversationItemType } from '@ant-design/x';
+import { Badge, Button, Input, Modal, Spin, Typography, theme } from 'antd';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { TASK_STATUS } from '@/pages/IP/riskLabels';
 import {
   createWorkspace,
@@ -49,50 +49,6 @@ interface Props {
   onWorkspacesChanged: () => void;
 }
 
-function Row({
-  active,
-  icon,
-  label,
-  extra,
-  onClick,
-  style,
-}: {
-  active?: boolean;
-  icon?: ReactNode;
-  label: ReactNode;
-  extra?: ReactNode;
-  onClick: () => void;
-  style?: CSSProperties;
-}) {
-  const { token } = theme.useToken();
-  const [hover, setHover] = useState(false);
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '6px 10px',
-        borderRadius: 8,
-        cursor: 'pointer',
-        background: active ? token.colorPrimaryBg : hover ? token.colorFillTertiary : undefined,
-        color: active ? token.colorPrimary : undefined,
-        ...style,
-      }}
-    >
-      {icon}
-      <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
-      {extra}
-    </div>
-  );
-}
-
 function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactNode }) {
   const { token } = theme.useToken();
   return (
@@ -102,6 +58,19 @@ function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactN
     </div>
   );
 }
+
+/** 会话条目的标签：左文右数字 */
+function CountLabel({ text, count }: { text: ReactNode; count: number }) {
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
+      <Typography.Text type="secondary">{count}</Typography.Text>
+    </span>
+  );
+}
+
+const WS_PREFIX = 'ws-';
+const scopeKey = (scope: WsScope) => (typeof scope === 'number' ? `${WS_PREFIX}${scope}` : scope);
 
 const STATUS_DOT: Record<string, 'processing' | 'success' | 'error' | 'warning' | 'default'> = {
   queued: 'processing',
@@ -191,119 +160,103 @@ export default function Sidebar({ view, taskId, scope, workspaces, counts, versi
         </Button>
       </div>
       <div style={{ padding: '0 8px' }}>
-        <Row
-          active={view === 'dossiers' || view === 'dossier' || view === 'new-dossier'}
-          icon={<FolderOpenOutlined />}
-          label="机会档案"
-          onClick={() => onNavigate({ view: 'dossiers' })}
-        />
-        <Row active={view === 'leads'} icon={<RiseOutlined />} label="线索" onClick={() => onNavigate({ view: 'leads' })} />
-        <Row active={view === 'experts'} icon={<AppstoreOutlined />} label="专家" onClick={() => onNavigate({ view: 'experts', task: null })} />
-        <Row
-          active={view === 'schedules'}
-          icon={<ClockCircleOutlined />}
-          label="定时任务"
-          onClick={() => onNavigate({ view: 'schedules', task: null })}
+        <Conversations
+          activeKey={
+            view === 'dossiers' || view === 'dossier' || view === 'new-dossier'
+              ? 'dossiers'
+              : view === 'leads' || view === 'experts' || view === 'schedules'
+                ? view
+                : undefined
+          }
+          onActiveChange={(key) => {
+            if (key === 'dossiers' || key === 'leads') onNavigate({ view: key });
+            else if (key === 'experts' || key === 'schedules') onNavigate({ view: key, task: null });
+          }}
+          items={[
+            { key: 'dossiers', icon: <FolderOpenOutlined />, label: '机会档案' },
+            { key: 'leads', icon: <RiseOutlined />, label: '线索' },
+            { key: 'experts', icon: <AppstoreOutlined />, label: '专家' },
+            { key: 'schedules', icon: <ClockCircleOutlined />, label: '定时任务' },
+          ]}
         />
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 12px', minHeight: 0 }}>
-        <SectionTitle
-          extra={
-            <Tooltip title="向专家发起任务">
-              <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => onNavigate({ view: 'new', task: null })} />
-            </Tooltip>
-          }
-        >
-          专家任务（仅自己可见）
-        </SectionTitle>
-        <SectionTitle
-          extra={
-            <Tooltip title="新建工作空间">
-              <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => setEditing({ id: null, name: '' })} />
-            </Tooltip>
-          }
-        >
-          工作空间
-        </SectionTitle>
-        <Row
-          active={scope === 'all'}
-          icon={<UnorderedListOutlined />}
-          label="全部任务"
-          extra={<Typography.Text type="secondary">{counts.total}</Typography.Text>}
-          onClick={() => onNavigate({ scope: 'all' })}
+        <SectionTitle>专家任务（仅自己可见）</SectionTitle>
+        <Conversations
+          // 仅作入口：没有条目，只有「向专家发起任务」按钮
+          items={[]}
+          creation={{
+            label: '向专家发起任务',
+            icon: <PlusOutlined />,
+            onClick: () => onNavigate({ view: 'new', task: null }),
+          }}
         />
-        <Row
-          active={scope === 'none'}
-          icon={<InboxOutlined />}
-          label="未归类"
-          extra={<Typography.Text type="secondary">{counts.unassigned}</Typography.Text>}
-          onClick={() => onNavigate({ scope: 'none' })}
+        <SectionTitle>工作空间</SectionTitle>
+        <Conversations
+          activeKey={scopeKey(scope)}
+          onActiveChange={(key) => {
+            if (key === 'all' || key === 'none') onNavigate({ scope: key });
+            else onNavigate({ scope: Number(String(key).slice(WS_PREFIX.length)) });
+          }}
+          creation={{ label: '新建工作空间', icon: <PlusOutlined />, onClick: () => setEditing({ id: null, name: '' }) }}
+          items={[
+            { key: 'all', icon: <UnorderedListOutlined />, label: <CountLabel text="全部任务" count={counts.total} /> },
+            { key: 'none', icon: <InboxOutlined />, label: <CountLabel text="未归类" count={counts.unassigned} /> },
+            ...workspaces.map((ws) => ({
+              key: `${WS_PREFIX}${ws.id}`,
+              icon: <FolderOutlined />,
+              label: <CountLabel text={ws.name} count={ws.task_count} />,
+            })),
+          ]}
+          menu={(item: ConversationItemType) => {
+            const ws = workspaces.find((w) => `${WS_PREFIX}${w.id}` === item.key);
+            if (!ws) return undefined;
+            return {
+              items: [
+                { key: 'rename', icon: <EditOutlined />, label: '重命名', onClick: () => setEditing({ id: ws.id, name: ws.name }) },
+                { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true, onClick: () => removeWorkspace(ws) },
+              ],
+            };
+          }}
         />
-        {workspaces.map((ws) => (
-          <Row
-            key={ws.id}
-            active={scope === ws.id}
-            icon={<FolderOutlined />}
-            label={ws.name}
-            onClick={() => onNavigate({ scope: ws.id })}
-            extra={
-              <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="presentation">
-                <Typography.Text type="secondary" style={{ marginRight: 4 }}>
-                  {ws.task_count}
-                </Typography.Text>
-                <Dropdown
-                  trigger={['click']}
-                  menu={{
-                    items: [
-                      { key: 'rename', icon: <EditOutlined />, label: '重命名', onClick: () => setEditing({ id: ws.id, name: ws.name }) },
-                      { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true, onClick: () => removeWorkspace(ws) },
-                    ],
-                  }}
-                >
-                  <Button type="text" size="small" icon={<MoreOutlined />} />
-                </Dropdown>
-              </span>
-            }
-          />
-        ))}
 
         <SectionTitle>{`${scopeName} · ${total}`}</SectionTitle>
-        {tasks.map((t) => (
-          <Row
-            key={t.id}
-            active={view === 'task' && taskId === t.id}
-            style={{ alignItems: 'flex-start' }}
-            label={
-              <div>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.product_name}</div>
-                <div style={{ fontSize: 12, color: token.colorTextTertiary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {t.last_task ? (
-                    <Badge
-                      status={STATUS_DOT[t.last_task.status]}
-                      text={
-                        <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
-                          {`${TASK_KIND[t.last_task.kind]} ${TASK_STATUS[t.last_task.status].text}`}
-                        </span>
-                      }
-                    />
-                  ) : (
-                    '尚未开始'
-                  )}
-                  {` · 候选 ${t.candidate_count}`}
+        <Conversations
+          activeKey={view === 'task' && taskId !== null ? String(taskId) : undefined}
+          onActiveChange={(key) => onNavigate({ view: 'task', task: Number(key) })}
+          items={tasks.map((t) => ({
+            key: String(t.id),
+            label: (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.product_name}</div>
+                  <div style={{ fontSize: 12, color: token.colorTextTertiary, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {t.last_task ? (
+                      <Badge
+                        status={STATUS_DOT[t.last_task.status]}
+                        text={
+                          <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                            {`${TASK_KIND[t.last_task.kind]} ${TASK_STATUS[t.last_task.status].text}`}
+                          </span>
+                        }
+                      />
+                    ) : (
+                      '尚未开始'
+                    )}
+                    {` · 候选 ${t.candidate_count}`}
+                  </div>
                 </div>
+                {t.schedule_enabled !== null && (
+                  <ClockCircleOutlined
+                    title={t.schedule_enabled ? '定时复检已启用' : '定时复检已暂停'}
+                    style={{ color: t.schedule_enabled ? token.colorPrimary : token.colorTextQuaternary, marginTop: 4 }}
+                  />
+                )}
               </div>
-            }
-            extra={
-              t.schedule_enabled !== null && (
-                <Tooltip title={t.schedule_enabled ? '定时复检已启用' : '定时复检已暂停'}>
-                  <ClockCircleOutlined style={{ color: t.schedule_enabled ? token.colorPrimary : token.colorTextQuaternary, marginTop: 4 }} />
-                </Tooltip>
-              )
-            }
-            onClick={() => onNavigate({ view: 'task', task: t.id })}
-          />
-        ))}
+            ),
+          }))}
+        />
         {loading && <Spin size="small" style={{ display: 'block', margin: '8px auto' }} />}
         {!loading && tasks.length === 0 && (
           <Typography.Text type="secondary" style={{ display: 'block', padding: '4px 10px', fontSize: 12 }}>
