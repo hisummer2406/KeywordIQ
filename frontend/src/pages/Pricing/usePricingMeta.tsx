@@ -40,7 +40,7 @@ export function PricingPage({
       {meta ? (
         children(meta)
       ) : failed ? (
-        <Alert type="error" showIcon message="核价配置加载失败，请稍后刷新重试" />
+        <Alert type="error" showIcon title="核价配置加载失败，请稍后刷新重试" />
       ) : (
         <Spin />
       )}

@@ -208,7 +208,7 @@ export default function StoreTab({
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="只支持 Shopify 建站的店铺，其他建站平台暂不支持"
+          title="只支持 Shopify 建站的店铺，其他建站平台暂不支持"
           description="粘贴店铺地址即可，带不带 https:// 和 www. 都行。加入时会立即校验——不是 Shopify 会当场告诉你，不会等到明天才失败。"
         />
         <Tabs
@@ -245,7 +245,7 @@ export default function StoreTab({
               key: 'batch',
               label: '批量粘贴',
               children: (
-                <Space direction="vertical" style={{ width: '100%' }}>
+                <Space orientation="vertical" style={{ width: '100%' }}>
                   <Input.TextArea
                     rows={8}
                     value={batchText}
@@ -285,7 +285,7 @@ export default function StoreTab({
       <Drawer
         title={productsOf ? `${productsOf.name || productsOf.domain} · 在售商品` : ''}
         open={productsOf !== null}
-        width={900}
+        size={900}
         onClose={() => setProductsOf(null)}
         destroyOnHidden
       >

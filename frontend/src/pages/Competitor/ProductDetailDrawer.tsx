@@ -63,7 +63,7 @@ export default function ProductDetailDrawer({ open, domain, productId, title, on
   const currency = data?.currency ?? null;
 
   return (
-    <Drawer title={title} open={open} width={720} onClose={onClose} destroyOnHidden>
+    <Drawer title={title} open={open} size={720} onClose={onClose} destroyOnHidden>
       {error && <Typography.Text type="danger">{error}</Typography.Text>}
 
       <Typography.Title level={5}>价格历史</Typography.Title>

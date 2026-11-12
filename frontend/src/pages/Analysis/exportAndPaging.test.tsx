@@ -125,7 +125,8 @@ describe('分析查询屏 · 工具栏、总数与导出', () => {
 
     // 翻页：命中行数不会变，不该再付一次精确计数的代价
     await act(async () => {
-      await user.click(screen.getByTitle('2'));
+      // antd 6 的页码 `li` 只带 title，点击事件在它里面的 `<a role="button">` 上
+      await user.click(within(screen.getByTitle('2')).getByRole('button'));
     });
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
     expect(searchAnalysis.mock.calls[2][0].include_total).toBe(false);
@@ -145,7 +146,8 @@ describe('分析查询屏 · 工具栏、总数与导出', () => {
       success: true, data: [ROW], total: null, site: 'US', view: 'DAY', date: '2026-07-18',
     });
     await act(async () => {
-      await user.click(screen.getByTitle('2'));
+      // antd 6 的页码 `li` 只带 title，点击事件在它里面的 `<a role="button">` 上
+      await user.click(within(screen.getByTitle('2')).getByRole('button'));
     });
 
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));

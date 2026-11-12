@@ -53,7 +53,7 @@ interface Values {
 function ReviewItem({ r, options }: { r: Review; options: EvidenceOption[] }) {
   const refs = r.evidence_candidate_ids.map((id) => options.find((o) => o.value === id)?.label ?? `#${id}`);
   return (
-    <Space direction="vertical" size={2}>
+    <Space orientation="vertical" size={2}>
       <Space wrap>
         <Tag color={DECISION[r.decision].color}>{DECISION[r.decision].text}</Tag>
         <Tag color={RISK_LEVEL[r.risk_level].color}>{`风险：${RISK_LEVEL[r.risk_level].text}`}</Tag>
@@ -162,7 +162,7 @@ export default function ReviewPanel({
               type="warning"
               showIcon
               style={{ marginBottom: 12 }}
-              message="检索尚未完成（排队、失败或结果未知），只能选择继续验证、需补证或不建议上架。"
+              title="检索尚未完成（排队、失败或结果未知），只能选择继续验证、需补证或不建议上架。"
             />
           )}
           <Form.Item name="risk_level" label="风险判断" rules={[{ required: true, message: '请选择风险判断' }]}>

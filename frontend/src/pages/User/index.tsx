@@ -165,7 +165,7 @@ export default function UserPage() {
             ? { user_name: editing.user_name, role_id: editing.role_id, is_active: editing.is_active }
             : { is_active: true }
         }
-        modalProps={{ destroyOnClose: true }}
+        modalProps={{ destroyOnHidden: true }}
         onFinish={handleSubmit}
       >
         <ProFormText

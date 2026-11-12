@@ -174,7 +174,7 @@ export default function RatesManager({ meta, canManage, onChanged }: Props) {
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="以下市场缺少已启用的必需规则，暂时不能核价"
+          title="以下市场缺少已启用的必需规则，暂时不能核价"
           description={unconfigured
             .map((m) => `${m.name} ${m.code}：${m.missing.map((k) => kindName[k] ?? k).join('、')}`)
             .join('；')}

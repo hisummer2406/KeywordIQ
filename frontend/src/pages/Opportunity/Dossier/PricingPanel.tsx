@@ -238,7 +238,7 @@ export default function PricingPanel({ detail, currentUserId, onCreateSheet, onO
                         type="info"
                         showIcon
                         style={{ marginTop: 8 }}
-                        message="有市场的费用规则还没配齐（汇率、佣金、渠道等），这些市场不显示金额。规则由费用配置维护人员录入并启用。"
+                        title="有市场的费用规则还没配齐（汇率、佣金、渠道等），这些市场不显示金额。规则由费用配置维护人员录入并启用。"
                       />
                     )}
                   </>
@@ -261,7 +261,7 @@ export default function PricingPanel({ detail, currentUserId, onCreateSheet, onO
           }).catch(() => undefined)
         }
         onCancel={() => setPicking(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           只能关联你自己的核价单。关联后，团队成员能在这个档案里看到各市场的售价、预计利润和采购价上限；采购成本和费用明细仍只有你能看。

@@ -55,7 +55,7 @@ export default function NewTaskView({ meta, workspaces, defaultWorkspaceId, pres
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="你可以创建任务、让 IP 专家生成检索方案和回答追问；执行检索与取证会向智慧芽计费，需要「发起专利检索」权限，请联系管理员开通。"
+            title="你可以创建任务、让 IP 专家生成检索方案和回答追问；执行检索与取证会向智慧芽计费，需要「发起专利检索」权限，请联系管理员开通。"
           />
         )}
         {preset && (
