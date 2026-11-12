@@ -155,10 +155,10 @@ export default function KeywordTrendDrawer({
     <Drawer
       title={`关键词 ABA 排名趋势 · ${keyword}`}
       placement="bottom"
-      height={480}
+      size={480}
       open={open}
       onClose={onClose}
-      destroyOnClose
+      destroyOnHidden
     >
       {/* 抽屉铺满视口宽度（placement="bottom"），但内容没有必要跟着铺满——不加这层居中
           容器，内容会贴在视口左侧，右边留一大片空白，看起来像没对齐（用户反馈）。
@@ -183,7 +183,7 @@ export default function KeywordTrendDrawer({
           {/* `data !== null` 排除首次挂载、请求还没回来的那一瞬间——那时不该说"暂无数据"，
               两者含义不同；这一列在没有数据前干脆不渲染，不留一个空的占位列。 */}
           {!errored && data !== null && data.on !== null && (
-            <Space direction="vertical" size={12} style={{ fontSize: 13, flexShrink: 0 }}>
+            <Space orientation="vertical" size={12} style={{ fontSize: 13, flexShrink: 0 }}>
               <div>
                 <Text type="secondary">实际使用的锚定期：</Text>
                 <Text strong>{formatScopeDateLabel(data.on, data.view)}</Text>
@@ -226,11 +226,11 @@ export default function KeywordTrendDrawer({
             )}
 
             {errored && (
-              <Alert type="error" showIcon message="加载失败，请重试" />
+              <Alert type="error" showIcon title="加载失败，请重试" />
             )}
 
             {!errored && !loading && data !== null && data.on === null && (
-              <Alert type="info" showIcon message={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
+              <Alert type="info" showIcon title={`该站点 ${data.view === 'DAY' ? '天' : '周'}视图暂无任何数据`} />
             )}
 
             {/* 下面这段一律读 `data.view`（响应自带的视图），不读 `viewState`（用户当前选中

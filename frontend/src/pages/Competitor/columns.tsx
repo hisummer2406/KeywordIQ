@@ -95,7 +95,7 @@ export function buildWatchColumns(
       dataIndex: 'seller_id',
       width: 220,
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <a onClick={() => onOpenAsins(row)}>{sellerDisplayName(row)}</a>
           {row.seller_name ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -159,7 +159,7 @@ export function buildWatchColumns(
         }
         const time = new Date(row.last_reported_at).toLocaleString('zh-CN');
         return (
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             <Typography.Text type={row.status === 'STALE' ? 'warning' : undefined}>{time}</Typography.Text>
             {row.last_report_item_count !== null ? (
               <Tooltip title="这是那一次上报见到的条数，取决于翻了几页；没有完整性依据，不是这家店的在售总数">

@@ -192,9 +192,9 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
       {/* 消息流 */}
       <div ref={scroller} style={{ flex: 1, overflowY: 'auto', padding: '20px 20px 8px', background: token.colorBgLayout }}>
         <div style={{ maxWidth: 960, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {!data.mcp_configured && <Alert type="warning" showIcon message="智慧芽接口未配置，检索与取证不可用，请联系管理员。" />}
+          {!data.mcp_configured && <Alert type="warning" showIcon title="智慧芽接口未配置，检索与取证不可用，请联系管理员。" />}
           {!data.llm_configured && (
-            <Alert type="info" showIcon message="大模型未配置：不能自动写检索方案、分析或回答追问，但可以手写检索式完成检索与签署。" />
+            <Alert type="info" showIcon title="大模型未配置：不能自动写检索方案、分析或回答追问，但可以手写检索式完成检索与签署。" />
           )}
           {items.map((item) => (
             <MessageItem

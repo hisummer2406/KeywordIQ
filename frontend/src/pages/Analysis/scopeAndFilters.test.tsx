@@ -162,7 +162,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     const user = userEvent.setup();
     const box = screen.getByLabelText('搜索内容');
     const pickMode = async (label: string) => {
-      fireEvent.mouseDown(document.querySelector('.scope-bar__mode .ant-select-selector')!);
+      fireEvent.mouseDown(document.querySelector('.scope-bar__mode')!);
       fireEvent.click(await screen.findByText(label, { selector: '.ant-select-item-option-content' }));
     };
 
@@ -211,7 +211,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(2));
     expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ keyword_mode: 'ALL_TERMS' });
 
-    fireEvent.mouseDown(document.querySelector('.scope-bar__mode .ant-select-selector')!);
+    fireEvent.mouseDown(document.querySelector('.scope-bar__mode')!);
     fireEvent.click(await screen.findByText('关键词 · 词组', { selector: '.ant-select-item-option-content' }));
     await act(async () => {
       await user.click(submit());
@@ -468,9 +468,10 @@ describe('分析查询屏 · 作用域与筛选', () => {
       // 用例：第一次切换后 rc-select 的下拉选项列表仍挂在 DOM 里（关闭态但未卸载），
       // 裸 `getByText('德国站（DE）')` 会同时命中"当前选中值"与那份残留列表项，
       // 报"找到多个元素"。
-      const siteSelectValue = () =>
-        document.querySelector('.scope-bar__site .ant-select-selection-item') as HTMLElement;
-      await user.click(siteSelectValue());
+      // antd 6 的已选值节点（`.ant-select-content-value`）是 `pointer-events: none`，
+      // 开下拉的 mouseDown 挂在 Select 根节点上，所以点根节点。
+      const siteSelect = () => document.querySelector('.scope-bar__site') as HTMLElement;
+      await user.click(siteSelect());
       await act(async () => {
         await user.click(await screen.findByTitle('美国站（US）'));
       });

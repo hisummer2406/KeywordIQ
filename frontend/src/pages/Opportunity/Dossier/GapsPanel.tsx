@@ -136,7 +136,7 @@ export default function GapsPanel({ detail, onAdd, onVoid }: Props) {
         confirmLoading={saving}
         onOk={() => submit().catch(() => undefined)}
         onCancel={() => setOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form<Values> form={form} layout="vertical" requiredMark={false}>
           <Form.Item name="category" label="类别" rules={[{ required: true }]}>

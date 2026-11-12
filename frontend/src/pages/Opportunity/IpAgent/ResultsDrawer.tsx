@@ -30,8 +30,8 @@ export default function ResultsDrawer({ open, section, onSection, onClose, data,
   const reviewed = data.markets.filter((m) => (data.reviews[m] ?? []).length > 0).length;
 
   return (
-    <Drawer open={open} onClose={onClose} width={1000} title={`成果 · ${data.product_name}`} destroyOnClose={false}>
-      <Space direction="vertical" style={{ width: '100%' }} size={16}>
+    <Drawer open={open} onClose={onClose} size={1000} title={`成果 · ${data.product_name}`} destroyOnHidden={false}>
+      <Space orientation="vertical" style={{ width: '100%' }} size={16}>
         <Radio.Group
           optionType="button"
           buttonStyle="solid"
@@ -50,7 +50,7 @@ export default function ResultsDrawer({ open, section, onSection, onClose, data,
           </>
         )}
         {section === 'reviews' && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <Typography.Text type="secondary">
               人工意见按销售市场分别签署，只追加不修改。Agent 的分析与回答不会写进这里。
             </Typography.Text>
@@ -72,7 +72,7 @@ export default function ResultsDrawer({ open, section, onSection, onClose, data,
           </Space>
         )}
         {section === 'tasks' && (
-          <Space direction="vertical" style={{ width: '100%' }}>
+          <Space orientation="vertical" style={{ width: '100%' }}>
             <Typography.Text type="secondary">
               {data.calls.length
                 ? data.calls.map((c) => `${c.provider === 'mcp' ? 'MCP' : '大模型'} ${c.tool} ${c.outcome} ×${c.count}`).join('；')

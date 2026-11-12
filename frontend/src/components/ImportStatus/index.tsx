@@ -91,7 +91,7 @@ export function ImportStatusCell({
     // 里面那行 ellipsis 文本永远不会截断：flex 子项不会收缩到内容宽度以下，
     // CSS 的 text-overflow 于是无从生效——实测一条 SQL 报错把 200px 的单元格撑到
     // 2180px，横向压过后面两列。这两个样式是截断能成立的前提，不是装饰。
-    <Space direction="vertical" size={0} style={{ width: '100%', minWidth: 0 }}>
+    <Space orientation="vertical" size={0} style={{ width: '100%', minWidth: 0 }}>
       {/* 未知状态码没有图标，只出文字——凭空给个图标等于替一个我们不认识的状态下判断 */}
       <Tag color={meta?.color ?? 'default'} icon={meta?.icon} style={{ marginInlineEnd: 0 }}>
         {meta?.label ?? status}

@@ -5,7 +5,7 @@
   "description": "KeywordIQ 后台 SPA（Umi Max + Ant Design Pro）",
   "scripts": {
     "dev": "max dev",
-    "build": "max build",
+    "build": "max build && max esbuildHelperChecker dist",
     "format": "prettier --write \"src/**/*.{ts,tsx,less,md,json}\"",
     "lint": "eslint src --ext .ts,.tsx",
     "tsc": "tsc --noEmit",
@@ -15,11 +15,11 @@
     "postinstall": "max setup"
   },
   "dependencies": {
-    "@ant-design/icons": "^5.5.2",
+    "@ant-design/icons": "^6.3.4",
     "@ant-design/pro-components": "^2.8.2",
     "@umijs/max": "^4.4.11",
     "ali-oss": "^6.22.0",
-    "antd": "^5.22.7"
+    "antd": "^6.7.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.0",

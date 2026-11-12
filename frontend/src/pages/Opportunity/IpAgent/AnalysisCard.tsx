@@ -44,11 +44,11 @@ export default function AnalysisCard({ data, analysis }: { data: ResearchDetail;
   const pn = new Map(data.candidates.map((c) => [c.id, c.pn ?? c.patent_id]));
   const { content } = analysis;
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={12}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={12}>
       <Alert
         type="info"
         showIcon
-        message="Agent 分析，不构成法律意见"
+        title="Agent 分析，不构成法律意见"
         description="Agent 只看到文字著录信息，看不到产品图片；未命中只代表本次检索范围内没有找到。最终结论请在「成果 → 人工意见」按市场签署。"
       />
       {analysis.coverage && (
