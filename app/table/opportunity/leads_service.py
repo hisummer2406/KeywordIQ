@@ -37,9 +37,15 @@ async def _dossiers_by_keyword(db: AsyncSession, site: str, keyword_ids: list[in
     return out
 
 
-async def growth_leads(db: AsyncSession, *, site: str | None, on: date | None, page: int,
+async def growth_leads(db: AsyncSession, *, site: str, on: date | None, page: int,
                        page_size: int) -> dict[str, Any]:
-    """一页持续增长线索 + 判定口径 + 缺期 + 档案归属。非法站点或日期由 growth_service 报 422。"""
+    """一页持续增长线索 + 判定口径 + 缺期 + 档案归属。非法站点或日期由 growth_service 报 422。
+
+    站点必须显式给出：``growth_service`` 对缺省站点会取配置默认值（那是关键词工具页的既有行为），
+    线索不沿用——缺失站点一律报错，不让请求在不知情时落到另一个站点（PR #188 评审 P1）。
+    """
+    if not site or not site.strip():
+        raise growth_service.GrowthScopeError("缺少站点")
     scope = await growth_service.get_scope(db, site)
     result = await growth_service.search(
         db, GrowthSearchRequest(site=site, date=on, page=page, perPage=page_size))

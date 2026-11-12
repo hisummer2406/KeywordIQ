@@ -1,6 +1,6 @@
 import { Alert, Button, Modal, Select, Space, Table, Tag, Typography, message, theme } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import TrendSparkline from '@/components/TrendSparkline';
 import { addDossierKeywords, type DossierListItem, listDossiers } from '@/services/opportunityDossier';
 import { type GrowthLead, type GrowthLeadsResult, listGrowthLeads } from '@/services/opportunityLeads';
@@ -38,13 +38,21 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
     if (!site && sites[0]) setSite(sites[0].code);
   }, [site, sites]);
 
+  /**
+   * 请求代次：只接受最后一次发出的请求的响应。切换站点或锚定日时上一次请求可能还在路上，
+   * 晚到的旧响应若覆盖当前结果，表格会显示旧站点的词，而「建档」按的是 data.site——
+   * 会把档案建到错的站点（PR #188 评审 P2）。
+   */
+  const generation = useRef(0);
   const load = useCallback(async () => {
     if (!site) return;
+    const mine = ++generation.current;
     setLoading(true);
     try {
-      setData(await listGrowthLeads({ site, ...(date ? { date } : {}), page, page_size: PAGE_SIZE }));
+      const r = await listGrowthLeads({ site, ...(date ? { date } : {}), page, page_size: PAGE_SIZE });
+      if (mine === generation.current) setData(r);
     } finally {
-      setLoading(false);
+      if (mine === generation.current) setLoading(false);
     }
   }, [site, date, page]);
 
@@ -54,9 +62,11 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
 
   const searchTargets = useCallback(
     async (q: string) => {
-      const r = await listDossiers({ page: 1, page_size: 50, ...(q.trim() ? { q: q.trim() } : {}) });
-      // 关键词按站点解析，只能并入同站点的档案
-      setTargets(r.items.filter((d) => d.site === data?.site));
+      if (!data?.site) return;
+      // 关键词按站点解析，只能并入同站点的档案。站点在服务端分页之前筛选；
+      // 这里只取最近更新的 50 份，更早的靠输入标题或关键词搜索（搜索也在服务端）。
+      const r = await listDossiers({ page: 1, page_size: 50, site: data.site, ...(q.trim() ? { q: q.trim() } : {}) });
+      setTargets(r.items);
     },
     [data?.site],
   );
@@ -82,6 +92,8 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
   };
 
   const criteria = data?.criteria;
+  // 表格里的数据确实属于当前所选站点时，建档与并入才可用
+  const inScope = !!data && data.site === site;
   const columns: ColumnsType<GrowthLead> = [
     { title: '关键词', dataIndex: 'keyword', render: (k: string) => <Typography.Text copyable>{k}</Typography.Text> },
     {
@@ -162,12 +174,12 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
         <Typography.Text type="secondary">
           已选 {picked.length} / {MAX_PICK}
         </Typography.Text>
-        <Button disabled={picked.length === 0} onClick={openMerge}>
+        <Button disabled={picked.length === 0 || !inScope} onClick={openMerge}>
           并入已有档案
         </Button>
         <Button
           type="primary"
-          disabled={picked.length === 0 || !data}
+          disabled={picked.length === 0 || !data || !inScope}
           onClick={() => data && onNewDossier({ site: data.site, keywords: picked.map((p) => p.keyword) })}
         >
           用所选词建档
@@ -192,7 +204,7 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
         size="middle"
         loading={loading}
         columns={columns}
-        dataSource={data?.items ?? []}
+        dataSource={inScope ? (data?.items ?? []) : []}
         rowSelection={{
           selectedRowKeys: picked.map((p) => p.keyword_id),
           preserveSelectedRowKeys: true,
@@ -220,7 +232,7 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
         destroyOnClose
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-          只列出 {data?.site} 站点、未归档的档案。一个档案最多 20 个词，已在档案里的词不会重复添加。
+          只列出 {data?.site} 站点、未归档的档案，默认显示最近更新的 50 份，找不到时输入标题或关键词搜索。一个档案最多 20 个词，已在档案里的词不会重复添加。
         </Typography.Paragraph>
         <Select
           style={{ width: '100%' }}
