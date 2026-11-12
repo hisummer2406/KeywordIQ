@@ -181,6 +181,71 @@ export interface IpSummary {
   researches: IpResearchBrief[];
 }
 
+export interface PricingOptionBrief {
+  option_key: string;
+  label: string;
+  availability: string;
+  reasons: string[];
+  solve_status: string;
+  recommended: boolean;
+  /** 以下金额都是核价引擎快照里的原始十进制字符串，前端只展示、不计算 */
+  price: string | null;
+  profit_cny: string | null;
+  /** 0~1 的小数 */
+  margin: string | null;
+  roi: string | null;
+  breakeven_price: string | null;
+  max_purchase_cost: string | null;
+  target_price: string | null;
+  target_gap_cny: string | null;
+}
+
+export interface PricingMarketBrief {
+  market: string;
+  currency: string | null;
+  status: 'ok' | 'all_not_applicable' | 'missing_config' | 'needs_input' | string;
+  status_text: string;
+  reasons: string[];
+  option: PricingOptionBrief | null;
+  /** 是创建人选定的方案；否则是推荐方案 */
+  selected: boolean;
+  /** 选定方案来自旧版本，需要重新选定 */
+  selection_stale: boolean;
+}
+
+export interface PricingSheetBrief {
+  id: number;
+  product_name: string;
+  owner_id: number;
+  owner_name: string | null;
+  updated_at: string;
+  state: 'draft_only' | 'calculated';
+  version_id?: number;
+  version_no?: number;
+  calc_date?: string;
+  mode?: 'target_profit' | 'target_margin' | 'fixed_price' | 'max_purchase';
+  rules_updated?: boolean;
+  excluded_fees?: string[];
+  markets: PricingMarketBrief[];
+}
+
+export interface PricingSummary {
+  state: 'none' | 'draft_only' | 'calculated';
+  sheets: PricingSheetBrief[];
+}
+
+export interface PricingStatusFrozen {
+  state: PricingSummary['state'];
+  sheets: {
+    id: number;
+    product_name: string;
+    state: string;
+    version_no: number | null;
+    calc_date: string | null;
+    markets: { market: string; currency: string | null; status: string; selected: boolean; label?: string; price?: string | null; profit_cny?: string | null }[];
+  }[];
+}
+
 export interface Decision {
   id: number;
   verdict: Verdict;
@@ -189,6 +254,8 @@ export interface Decision {
   recheck_date: string | null;
   snapshot_id: number | null;
   ip_status: { state: 'unchecked' | 'reviewed'; research_count: number; reviews: { market: string; risk_level: string; decision: string }[] };
+  /** 签署时的测算状态；本功能上线前签的决定为空 */
+  pricing_status: PricingStatusFrozen | null;
   signer_id: number;
   signer_name: string | null;
   created_at: string;
@@ -222,6 +289,7 @@ export interface DossierDetail {
   other_evidence: ManualEvidence[];
   decisions: Decision[];
   ip: IpSummary;
+  pricing: PricingSummary;
   messages: DossierMessage[];
   asking: boolean;
   llm_configured: boolean;
@@ -319,4 +387,23 @@ export async function unlinkDossierResearch(id: number, researchId: number) {
 
 export async function askDossier(id: number, question: string) {
   return request<{ id: number; status: string }>(`${BASE}/${id}/messages`, { method: 'POST', data: { question } });
+}
+
+export async function listLinkablePricingSheets() {
+  return request<{ items: { id: number; product_name: string; status: string; dossier_id: number | null; updated_at: string }[] }>(
+    `${BASE}/linkable-pricing-sheets`,
+    { method: 'GET' },
+  );
+}
+
+export async function createDossierPricingSheet(id: number) {
+  return request<{ sheet_id: number }>(`${BASE}/${id}/pricing-sheets`, { method: 'POST' });
+}
+
+export async function linkDossierPricingSheet(id: number, sheetId: number) {
+  return request<{ sheet_id: number; dossier_id: number }>(`${BASE}/${id}/pricing-sheets/${sheetId}`, { method: 'PUT' });
+}
+
+export async function unlinkDossierPricingSheet(id: number, sheetId: number) {
+  return request<void>(`${BASE}/${id}/pricing-sheets/${sheetId}`, { method: 'DELETE' });
 }

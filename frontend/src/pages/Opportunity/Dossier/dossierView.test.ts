@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChangeRow } from '@/services/opportunityDossier';
-import { describeChange, isDue, parseKeywordInput, rankDelta } from './dossierView';
+import { describeChange, formatMoney, formatRate, isDue, parseKeywordInput, rankDelta } from './dossierView';
 
 describe('rankDelta', () => {
   it('排名数字变小是上升', () => {
@@ -53,5 +53,22 @@ describe('describeChange', () => {
     expect(describeChange({ keyword: 'k', state: 'removed', before: side(1, 'd', 1), after: null })).toBe('已从档案移除');
     const never = { resolved: false, latest: null, ranked_periods: null, top1_asin: null };
     expect(describeChange({ keyword: 'k', state: 'kept', before: never, after: never })).toBe('保留期内仍未进入过榜单');
+  });
+});
+
+describe('formatMoney / formatRate（只展示核价引擎的原值，不计算）', () => {
+  it('加千分位与币种符号，小数位原样保留', () => {
+    expect(formatMoney('93.75', 'USD')).toBe('$93.75');
+    expect(formatMoney('12345.6', 'CNY')).toBe('¥12,345.6');
+    expect(formatMoney('-1234.00', 'CNY')).toBe('-¥1,234.00');
+    expect(formatMoney('1000', 'JPY')).toBe('JPY 1,000');
+  });
+  it('空值不当成 0', () => {
+    expect(formatMoney(null, 'USD')).toBe('—');
+    expect(formatMoney('', 'USD')).toBe('—');
+    expect(formatRate(null)).toBe('—');
+  });
+  it('利润率是 0~1 的小数', () => {
+    expect(formatRate('0.4267')).toBe('42.67%');
   });
 });

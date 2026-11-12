@@ -1,0 +1,166 @@
+"""机会档案的商业可行性：关联核价单与测算摘要（change add-opportunity-feasibility）。
+
+档案不复制测算，只持有关联关系（``pricing_sheet.dossier_id``）。摘要只取核价单**已保存版本**里
+核价引擎算出的值，字段走白名单（design 决策 2）：采购成本、费用明细、输入参数是创建人的私有输入，
+不出现在摘要里；核价单明细仍按创建人私有。
+
+金额原样取自版本快照里的十进制字符串，这里不计算、不换算——金额只有核价引擎一个来源。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.table.opportunity.research_service import _user_names
+from app.table.pricing import rule_service, sheet_service
+from app.table.pricing.pricing_errors import SheetNotFoundError
+from app.table.pricing.pricing_model import PricingSelection, PricingSheet, PricingSheetVersion
+from app.table.pricing.pricing_schemas import SheetCreate
+
+#: 摘要里一个方案公开的字段（金额都是快照里的原始字符串）
+_EVAL_FIELDS = ("price", "profit_cny", "margin", "roi")
+_OPTION_FIELDS = ("breakeven_price", "max_purchase_cost", "target_price", "target_gap_cny")
+
+MARKET_STATUS_TEXT = {
+    "ok": "可计算",
+    "all_not_applicable": "所有方案都不适用",
+    "missing_config": "费用规则未配齐",
+    "needs_input": "待补资料",
+}
+
+
+def _option_brief(o: dict[str, Any]) -> dict[str, Any]:
+    ev = o.get("evaluation") or {}
+    return {
+        "option_key": o.get("option_key"), "label": o.get("label"),
+        "availability": o.get("availability"), "reasons": list(o.get("reasons") or []),
+        "solve_status": o.get("solve_status"), "recommended": bool(o.get("recommended")),
+        **{k: ev.get(k) for k in _EVAL_FIELDS},
+        **{k: o.get(k) for k in _OPTION_FIELDS},
+    }
+
+
+def _pick(market: dict[str, Any], selected_key: str | None) -> tuple[dict[str, Any] | None, bool]:
+    """返回 (方案, 是否为选定方案)：选定 → 推荐 → 第一个可算出结果的方案。"""
+    options = market.get("options") or []
+    if selected_key:
+        hit = next((o for o in options if o.get("option_key") == selected_key), None)
+        if hit is not None:
+            return hit, True
+    for cond in (lambda o: o.get("recommended"),
+                 lambda o: o.get("availability") == "available" and o.get("evaluation") is not None):
+        hit = next((o for o in options if cond(o)), None)
+        if hit is not None:
+            return hit, False
+    return None, False
+
+
+def _markets(version: PricingSheetVersion, selections: dict[str, PricingSelection]) -> list[dict[str, Any]]:
+    out = []
+    for m in (version.result or {}).get("markets", []):
+        code = m.get("market")
+        sel = selections.get(code)
+        # 选定后又保存了新版本：选定仍指向旧版本，摘要以当前版本为准并提示重新选定
+        stale = sel is not None and sel.version_id != version.id
+        option, selected = _pick(m, None if sel is None or stale else sel.option_key)
+        out.append({
+            "market": code, "currency": m.get("currency"), "status": m.get("status"),
+            "status_text": MARKET_STATUS_TEXT.get(m.get("status"), m.get("status")),
+            "reasons": list(m.get("reasons") or []),
+            # 市场整体不可算时不给方案，也就不会有任何金额
+            "option": _option_brief(option) if option is not None and m.get("status") == "ok" else None,
+            "selected": selected, "selection_stale": stale,
+        })
+    return out
+
+
+async def pricing_summary(db: AsyncSession, dossier_id: int) -> dict[str, Any]:
+    """档案关联核价单的测算摘要。``state``：none（没有关联）/ draft_only（都只有草稿）/ calculated。"""
+    sheets = list((await db.execute(select(PricingSheet).where(PricingSheet.dossier_id == dossier_id)
+                                    .order_by(PricingSheet.id))).scalars().all())
+    if not sheets:
+        return {"state": "none", "sheets": []}
+    names = await _user_names(db, {s.owner_id for s in sheets})
+    current_rules = await rule_service.active_rules_on(db, sheet_service.today())
+    out = []
+    for s in sheets:
+        item: dict[str, Any] = {
+            "id": s.id, "product_name": s.product_name, "owner_id": s.owner_id, "owner_name": names.get(s.owner_id),
+            "updated_at": s.updated_at,
+        }
+        ver = await db.get(PricingSheetVersion, s.current_version_id) if s.current_version_id else None
+        if ver is None:
+            out.append(item | {"state": "draft_only", "markets": []})
+            continue
+        sels = {x.market: x for x in (await db.execute(
+            select(PricingSelection).where(PricingSelection.sheet_id == s.id))).scalars().all()}
+        out.append(item | {
+            "state": "calculated", "version_id": ver.id, "version_no": ver.version_no,
+            "calc_date": ver.calc_date, "mode": (ver.input or {}).get("mode"),
+            "rules_updated": rule_service.rules_updated(ver.rule_refs, current_rules),
+            "excluded_fees": list((ver.result or {}).get("excluded_fees") or []),
+            "markets": _markets(ver, sels),
+        })
+    state = "calculated" if any(x["state"] == "calculated" for x in out) else "draft_only"
+    return {"state": state, "sheets": out}
+
+
+def status_for_decision(summary: dict[str, Any]) -> dict[str, Any]:
+    """签署决定时固化的测算状态：只留判断所需的字段。之后核价单再保存新版本，这里不变。"""
+    return {
+        "state": summary["state"],
+        "sheets": [{
+            "id": s["id"], "product_name": s["product_name"], "state": s["state"],
+            "version_no": s.get("version_no"), "calc_date": str(s["calc_date"]) if s.get("calc_date") else None,
+            "markets": [{
+                "market": m["market"], "currency": m["currency"], "status": m["status"], "selected": m["selected"],
+                **({k: m["option"][k] for k in ("label", "price", "profit_cny", "margin", "max_purchase_cost")}
+                   if m["option"] else {}),
+            } for m in s.get("markets", [])],
+        } for s in summary["sheets"]],
+    }
+
+
+async def _own_sheet(db: AsyncSession, user_id: int, sheet_id: int) -> PricingSheet:
+    s = (await db.execute(select(PricingSheet).where(
+        PricingSheet.id == sheet_id, PricingSheet.owner_id == user_id).with_for_update())).scalar_one_or_none()
+    if s is None:
+        # 不存在与不属于当前用户不区分（沿用核价单的私有性）
+        raise SheetNotFoundError(log_detail=f"sheet={sheet_id} owner={user_id}")
+    return s
+
+
+async def link(db: AsyncSession, user_id: int, dossier_id: int, sheet_id: int) -> None:
+    s = await _own_sheet(db, user_id, sheet_id)
+    s.dossier_id = dossier_id
+
+
+async def unlink(db: AsyncSession, user_id: int, dossier_id: int, sheet_id: int) -> bool:
+    s = await _own_sheet(db, user_id, sheet_id)
+    if s.dossier_id != dossier_id:
+        return False
+    s.dossier_id = None
+    return True
+
+
+async def create_draft(db: AsyncSession, user_id: int, dossier_id: int, title: str, site: str) -> PricingSheet:
+    """以档案标题为产品名、档案站点为市场建一张草稿并关联。草稿不算结果，用户在快速核价页继续填写。"""
+    req = SheetCreate(product_name=title[:200], draft_input={"mode": "target_profit", "markets": [site]})
+    s = PricingSheet(owner_id=user_id, product_name=req.product_name, status="draft",
+                     draft_input=req.draft_input, dossier_id=dossier_id)
+    db.add(s)
+    await db.flush()
+    return s
+
+
+async def my_linkable(db: AsyncSession, user_id: int) -> dict[str, Any]:
+    rows = (await db.execute(
+        select(PricingSheet.id, PricingSheet.product_name, PricingSheet.status, PricingSheet.dossier_id,
+               PricingSheet.updated_at)
+        .where(PricingSheet.owner_id == user_id)
+        .order_by(PricingSheet.updated_at.desc(), PricingSheet.id.desc()).limit(100))).all()
+    return {"items": [{"id": i, "product_name": n, "status": st, "dossier_id": did, "updated_at": u}
+                      for i, n, st, did, u in rows]}
