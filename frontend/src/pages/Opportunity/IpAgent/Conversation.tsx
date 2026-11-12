@@ -170,7 +170,7 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
         <Select
           size="small"
           style={{ width: 160 }}
-          suffixIcon={<FolderOpenOutlined />}
+          suffix={<FolderOpenOutlined />}
           value={data.workspace_id ?? 0}
           options={[{ value: 0, label: '未归类' }, ...workspaces.map((w) => ({ value: w.id, label: w.name }))]}
           onChange={(v) => act('move', () => moveResearch(data.id, v || null))}

@@ -97,6 +97,10 @@ antd 6 只废弃不删除，所以不清理也能跑。但要清理的理由有�
 **核对依据**：除了对照类型定义，还以**前端测试输出里的 `[antd: …] … is deprecated` 告警**为准（测试渲染了大部分页面）。
 第一遍只靠 grep 迁移表漏掉了 Table `pagination.position`（292 次告警）和 Drawer `height`（73 次告警），是测试输出发现的。
 
+**测试输出有盲区**：测试没有渲染到的页面不会产生告警。机会中心的 `Conversation.tsx` 里 Select 的 `suffixIcon`（antd 6 改为 `suffix`）就是这样漏掉的，后来由 X 接入变更的实现发现。
+补救是系统性扫描：从 antd 6.7.0 的类型定义里收集全部 132 个标了 `@deprecated` 的属性名，在 `frontend/src` 里逐个核对（大量通用名如 `label`、`type`、`width` 是误报，要人工看是不是真在用 antd 那个组件）。
+扫描后确认项目代码里真正遗漏的只有这一处，已补。以后再升级 antd 主版本，两种核对都要做。
+
 **登记的例外（不迁移）**：`List` 组件整体被废弃（antd 6.7 提示"下个主版本移除，请用 `Listy`"），项目里共 6 处 `<List>`（每处各带一个 `List.Item`）：
 `Opportunity/IpAgent/MessageItems.tsx` 2 处、`Opportunity/IpAgent/AnalysisCard.tsx` 1 处、`Competitor/BatchAddResult.tsx` 3 处。
 不迁移的理由：`Listy` 基于虚拟列表（`data` / `itemRender` / `ref`），接口与 `List` 不等价，不是改个属性名；antd 6 内仍可用，v7 才移除；
