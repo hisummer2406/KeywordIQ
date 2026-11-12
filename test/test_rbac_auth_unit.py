@@ -47,7 +47,7 @@ def test_permission_codes_from_role():
     op = _operator()
     assert op.permission_codes == {
         "analysis:view", "analysis:export", "upload:import", "keyword:view",
-        "competitor:view", "pricing:view",
+        "competitor:view", "pricing:view", "opportunity:view",
     }
     assert op.role_code == "operator"
 
@@ -173,7 +173,7 @@ def test_serialize_user_shape():
         "role_name": "operator",
         "permissions": [
             "analysis:export", "analysis:view", "competitor:view", "keyword:view",
-            "pricing:view", "upload:import",
+            "opportunity:view", "pricing:view", "upload:import",
         ],
         "is_active": True,
         "is_super": False,
@@ -331,10 +331,11 @@ def test_role_permission_matrix_matches_spec():
     assert P.ROLES["admin"][1] == set(P.PERMISSIONS.keys()) - P.SUPER_ONLY_PERMISSIONS
     assert P.ROLES["operator"][1] == {
         "analysis:view", "analysis:export", "upload:import", "keyword:view",
-        "competitor:view", "pricing:view",
+        "competitor:view", "pricing:view", "opportunity:view",
     }
     assert P.ROLES["analyst"][1] == {
         "analysis:view", "analysis:export", "keyword:view", "competitor:view", "pricing:view",
+        "opportunity:view",
     }
 
 
@@ -350,28 +351,26 @@ def test_pricing_permissions_matrix():
         assert P.PRICING_MANAGE_RATES not in P.ROLES[role][1]
 
 
-def test_opportunity_view_is_super_only():
-    """机会中心权限点默认不授予任何内置角色，只有 is_super 能看到（issue #76）。
+def test_opportunity_view_granted_to_builtin_roles():
+    """机会中心权限点授予三个内置角色（change add-opportunity-dossier，2026-11-12 用户决定运营可用）。
 
-    `role_code == 'admin'` 与 `is_super == True` 是两个独立字段——一个 admin 角色但
-    `is_super=False` 的用户不该看到机会中心。若把 `opportunity:view` 漏掉不放进
-    `SUPER_ONLY_PERMISSIONS`，`ROLES["admin"]` 的"全部权限"定义会自动把它吸收进去，
-    这条测试就是拦住那种回退的回归。
+    此前它登记在 `SUPER_ONLY_PERMISSIONS`（issue #76，仅超管可见）；机制保留，集合目前为空。
     """
     assert P.OPPORTUNITY_VIEW in P.PERMISSIONS
-    assert P.OPPORTUNITY_VIEW in P.SUPER_ONLY_PERMISSIONS
+    assert P.OPPORTUNITY_VIEW not in P.SUPER_ONLY_PERMISSIONS
     for role in ("admin", "operator", "analyst"):
-        assert P.OPPORTUNITY_VIEW not in P.ROLES[role][1]
+        assert P.OPPORTUNITY_VIEW in P.ROLES[role][1]
 
-    # is_super 兜底仍然放行——它绕过 permission_codes 直接判定
     dep = simple_auth.require_permission(P.OPPORTUNITY_VIEW)
     su = _super()
     assert dep(current_user=su) is su
+    operator = _make_user("operator", P.ROLES["operator"][1], is_super=False, uid=4)
+    assert dep(current_user=operator) is operator
 
-    # admin 角色、is_super=False 的用户被拒
-    admin_not_super = _make_user("admin", P.ROLES["admin"][1], is_super=False, uid=4)
+    # 不持有该权限点的自定义角色仍被拒：菜单隐藏不是访问控制
+    custom = _make_user("custom", {P.ANALYSIS_VIEW}, is_super=False, uid=5)
     with pytest.raises(HTTPException) as exc:
-        dep(current_user=admin_not_super)
+        dep(current_user=custom)
     assert exc.value.status_code == 403
 
 

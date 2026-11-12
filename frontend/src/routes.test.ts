@@ -82,7 +82,7 @@ describe('竞对监控任务菜单（#166）', () => {
 });
 
 describe('权限', () => {
-  it('机会中心挂 canViewOpportunity——当前唯一默认不授予任何内置角色的权限点', () => {
+  it('机会中心挂 canViewOpportunity（自 add-opportunity-dossier 起授予内置角色，仍由该权限点把守）', () => {
     const node = topLevel.find((r) => r.name === '机会中心')!;
     expect(node.access).toBe('canViewOpportunity');
   });

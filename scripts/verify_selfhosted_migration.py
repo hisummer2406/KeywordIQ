@@ -112,6 +112,11 @@ _TABLES_WITH_LATEST_COL = (
     ("opp_ip_message", None),
     ("opp_ip_schedule", None),
     ("opp_workspace", None),
+    ("opp_dossier", None),
+    ("opp_dossier_keyword", None),
+    ("opp_dossier_evidence", None),
+    ("opp_dossier_decision", None),
+    ("opp_dossier_message", None),
     *((table, None) for table, _, _ in _FILTER_STATS),
 )
 # 上面这一截（`category_stats`/`brand_stats`）不在 `migration_scope.V2_TABLES` 里

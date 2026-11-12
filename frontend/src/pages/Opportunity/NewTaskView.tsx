@@ -1,6 +1,7 @@
-import { Tooltip, Typography, theme } from 'antd';
+import { useAccess } from '@umijs/max';
+import { Alert, Tooltip, Typography, theme } from 'antd';
 import type { IpMeta, Workspace } from '@/services/opportunityIp';
-import NewTaskComposer from './IpAgent/NewTaskComposer';
+import NewTaskComposer, { type DossierPreset } from './IpAgent/NewTaskComposer';
 import { ExpertBadge } from './ExpertsView';
 import { EXPERTS } from './experts';
 
@@ -13,11 +14,14 @@ interface Props {
   meta: IpMeta | null;
   workspaces: Workspace[];
   defaultWorkspaceId: number | null;
+  /** 从机会档案发起 IP 调研时带入的内容 */
+  preset?: DossierPreset | null;
   onCreated: (id: number) => void;
 }
 
-export default function NewTaskView({ meta, workspaces, defaultWorkspaceId, onCreated }: Props) {
+export default function NewTaskView({ meta, workspaces, defaultWorkspaceId, preset, onCreated }: Props) {
   const { token } = theme.useToken();
+  const access = useAccess();
   return (
     <div style={{ padding: '48px 24px', overflowY: 'auto', height: '100%' }}>
       <div style={{ maxWidth: 860, margin: '0 auto' }}>
@@ -57,8 +61,28 @@ export default function NewTaskView({ meta, workspaces, defaultWorkspaceId, onCr
             );
           })}
         </div>
+        {!access.canSearchRisk && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="你可以创建任务、让 IP 专家生成检索方案和回答追问；执行检索与取证会向智慧芽计费，需要「发起专利检索」权限，请联系管理员开通。"
+          />
+        )}
+        {preset && (
+          <Typography.Paragraph type="secondary" style={{ textAlign: 'center' }}>
+            来自机会档案「{preset.dossierTitle}」：创建后这条调研会挂回该档案，团队能在档案里看到它的结论摘要。请补充产品的外观特征。
+          </Typography.Paragraph>
+        )}
         {meta ? (
-          <NewTaskComposer key={defaultWorkspaceId ?? 'none'} meta={meta} workspaces={workspaces} defaultWorkspaceId={defaultWorkspaceId} onCreated={onCreated} />
+          <NewTaskComposer
+            key={`${defaultWorkspaceId ?? 'none'}-${preset?.dossierId ?? 'free'}`}
+            meta={meta}
+            workspaces={workspaces}
+            defaultWorkspaceId={defaultWorkspaceId}
+            preset={preset}
+            onCreated={onCreated}
+          />
         ) : (
           <Typography.Text type="secondary">正在加载 IP 专家配置…</Typography.Text>
         )}
