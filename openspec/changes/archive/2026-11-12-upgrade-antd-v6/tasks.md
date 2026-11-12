@@ -31,4 +31,4 @@
 - [x] 4.2 用户浏览器验收：布局与菜单、市场分析（筛选、分页、导出）、词库、竞对（ProTable、导入弹窗）、导入历史、用户管理（ModalForm）、定价、机会中心、登录页（账号密码和钉钉入口都要显示），并确认控制台没有报错 ——2026-11-13 用户验收通过，未发现问题
 - [x] 4.3 `git diff --check`、`openspec validate --strict --all` 通过；OpenSpec 文档单独一个提交（`05f3cf0`）；代码合成一个提交，因为提交门禁每次跑前端 vitest，依赖升级单独提交时测试必然是红的（design 风险与取舍）。只暂存本变更的路径
 - [x] 4.4 开 PR（`--base v2`），写上变更 id、Issue、spec delta 文件列表、实际跑过的验证和剩余风险 ——PR #192，Issue #191（后续事项：pro-components 3 与 List 迁移）；CI 因 GitHub 账号付款/额度问题未能运行（0 个步骤），不是代码失败，待恢复后重跑，合并前必须以 PR head 的 CI 结果为准
-- [ ] 4.5 合并后清理一次性探路：worktree `~/.claude-worktrees/probe-antd6`、本地分支 `probe/antd6-upgrade`、8012 端口的 dev server、`keywordiq_demo_dossier` 库里的验收账号 `antd6probe`（删账号前先问用户）
+- [x] 4.5 合并后清理一次性探路：worktree `~/.claude-worktrees/probe-antd6`、本地分支 `probe/antd6-upgrade`、8012 端口的 dev server、`keywordiq_demo_dossier` 库里的验收账号 `antd6probe`（删账号前先问用户） ——2026-11-13 核实：worktree、探路分支、8012 服务均已不存在；用户授权后已删除 antd6probe 账号
