@@ -24,6 +24,7 @@ from app.site_registry import SITE_CATALOG, UnknownSiteError, normalize_site_cod
 from app.table.analysis.dimension_model import DimKeyword
 from app.table.keyword.library_model import KeywordGroup, KeywordGroupItem
 from app.table.opportunity import dossier_evidence as evidence
+from app.table.opportunity import dossier_pricing
 from app.table.opportunity.dossier_errors import (
     DecisionRuleError,
     DossierInputError,
@@ -265,6 +266,7 @@ def _decision_out(x: OppDossierDecision, names: dict[int, str]) -> dict[str, Any
     return {
         "id": x.id, "verdict": x.verdict, "reason": x.reason, "next_step": x.next_step,
         "recheck_date": x.recheck_date, "snapshot_id": x.snapshot_id, "ip_status": x.ip_status,
+        "pricing_status": x.pricing_status,
         "signer_id": x.signer_id, "signer_name": names.get(x.signer_id), "created_at": x.created_at,
     }
 
@@ -356,6 +358,7 @@ async def get_dossier(db: AsyncSession, user_id: int, dossier_id: int) -> dict[s
                                       .order_by(OppDossierMessage.id.desc()).limit(MESSAGE_WINDOW))).scalars().all())
     messages.reverse()
     ip = await ip_summary(db, d.id)
+    pricing = await dossier_pricing.pricing_summary(db, d.id)
 
     latest = snaps[0] if snaps else None
     base, basis = await _baseline(db, d.id, latest, snaps, decisions)
@@ -395,6 +398,7 @@ async def get_dossier(db: AsyncSession, user_id: int, dossier_id: int) -> dict[s
         "other_evidence": by_cat.get("other", []),
         "decisions": [_decision_out(x, names) for x in decisions],
         "ip": ip,
+        "pricing": pricing,
         "messages": [message_out(m, names) for m in messages],
         "asking": any(m.status in ACTIVE_MESSAGE_STATUSES for m in messages),
         "llm_configured": llm_configured(),
@@ -566,10 +570,12 @@ async def add_decision(db: AsyncSession, user_id: int, dossier_id: int, req: Dec
             raise DecisionRuleError("档案里还没有任何证据（关键词都没有在榜记录，也没有人工证据），不能签「推进」；请先补充证据")
 
     summary = await ip_summary(db, d.id)
+    # 测算状态只记录、不阻塞（design 决策 4）；之后核价单再保存新版本，这条决定里的值不变
+    pricing = dossier_pricing.status_for_decision(await dossier_pricing.pricing_summary(db, d.id))
     x = OppDossierDecision(dossier_id=d.id, verdict=req.verdict, reason=req.reason, next_step=req.next_step,
                            recheck_date=req.recheck_date, snapshot_id=latest.id if latest else None,
-                           ip_status=_ip_status_for_decision(summary), signer_id=user_id,
-                           client_token=req.client_token)
+                           ip_status=_ip_status_for_decision(summary), pricing_status=pricing,
+                           signer_id=user_id, client_token=req.client_token)
     db.add(x)
     # 状态与复查日期是最新决定的冗余，同一事务写入
     d.status, d.recheck_date, d.updated_at = req.verdict, req.recheck_date, func.now()
@@ -614,3 +620,34 @@ async def my_linkable_researches(db: AsyncSession, user_id: int) -> dict[str, An
         .where(OppIpResearch.owner_id == user_id)
         .order_by(OppIpResearch.created_at.desc(), OppIpResearch.id.desc()).limit(100))).all()
     return {"items": [{"id": i, "product_name": n, "dossier_id": did, "created_at": c} for i, n, did, c in rows]}
+
+
+# ---------------------------------------------------------------- 关联核价单（change add-opportunity-feasibility）
+
+
+async def link_pricing_sheet(db: AsyncSession, user_id: int, dossier_id: int, sheet_id: int) -> dict[str, Any]:
+    d = await _dossier(db, dossier_id)
+    await dossier_pricing.link(db, user_id, d.id, sheet_id)
+    await _touch(db, d.id)
+    await db.commit()
+    return {"sheet_id": sheet_id, "dossier_id": d.id}
+
+
+async def unlink_pricing_sheet(db: AsyncSession, user_id: int, dossier_id: int, sheet_id: int) -> None:
+    await _dossier(db, dossier_id)
+    if await dossier_pricing.unlink(db, user_id, dossier_id, sheet_id):
+        await _touch(db, dossier_id)
+    await db.commit()
+
+
+async def create_pricing_sheet(db: AsyncSession, user_id: int, dossier_id: int) -> dict[str, Any]:
+    """从档案发起核价：草稿核价单（产品名 = 档案标题，市场 = 档案站点）并关联。"""
+    d = await _dossier(db, dossier_id)
+    sheet = await dossier_pricing.create_draft(db, user_id, d.id, d.title, d.site)
+    await _touch(db, d.id)
+    await db.commit()
+    return {"sheet_id": sheet.id}
+
+
+async def my_linkable_pricing_sheets(db: AsyncSession, user_id: int) -> dict[str, Any]:
+    return await dossier_pricing.my_linkable(db, user_id)

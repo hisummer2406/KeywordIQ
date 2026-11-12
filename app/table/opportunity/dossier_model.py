@@ -171,6 +171,8 @@ class OppDossierDecision(Base):
         BigInteger, _fk("opp_dossier_evidence", "RESTRICT"), comment="签署时最新的 ABA 快照",
     )
     ip_status: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, comment="签署时的专利核查状态摘要")
+    pricing_status: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="签署时关联核价单的测算摘要（change add-opportunity-feasibility；此前的决定为空）")
     signer_id: Mapped[int] = _user("签署人")
     client_token: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

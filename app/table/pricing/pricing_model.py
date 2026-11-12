@@ -27,10 +27,12 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.table.opportunity import dossier_model  # noqa: F401 - 外键目标 opp_dossier 须先注册进同一 metadata
 from app.user import user_model  # noqa: F401 - 外键目标 user_center 须先注册进同一 metadata
 from config import settings
 from database import Base
@@ -108,6 +110,9 @@ class PricingSheet(Base):
                                                                comment="当前草稿输入，可反复修改")
     current_version_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True,
                                                            comment="最新已保存版本 id")
+    dossier_id: Mapped[int | None] = mapped_column(
+        ForeignKey(f"{_SCHEMA}.opp_dossier.id", ondelete="SET NULL"), nullable=True,
+        comment="关联的机会档案（change add-opportunity-feasibility）；关联后档案向团队展示测算摘要，明细仍私有")
     lock_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1",
                                               comment="乐观锁版本号，并发修改草稿返回 409")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,
@@ -118,6 +123,7 @@ class PricingSheet(Base):
     __table_args__ = (
         CheckConstraint("status IN ('draft', 'saved')", name="ck_pricing_sheet_status"),
         Index("idx_pricing_sheet_owner", "owner_id", "updated_at"),
+        Index("idx_pricing_sheet_dossier", "dossier_id", postgresql_where=text("dossier_id IS NOT NULL")),
         {"comment": "核价单：创建人私有，草稿可改，保存产生不可变版本。"},
     )
 

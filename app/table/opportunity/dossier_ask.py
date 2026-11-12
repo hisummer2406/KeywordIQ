@@ -24,6 +24,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.table.opportunity import dossier_pricing
 from app.table.opportunity.dossier_errors import AskInProgressError, AskNotConfiguredError
 from app.table.opportunity.dossier_model import (
     GAP_CATEGORIES,
@@ -63,8 +64,9 @@ SYSTEM_PROMPT = """你是跨境电商选品团队的研究助理，正在帮运�
 3. ABA 排名是搜索频率排名，数字越小越靠前；不在榜不等于没有需求，只表示该期没有进入榜单。点击份额与转化份额是该词点击前三商品各自的占比（0 到 100 的百分数）。
 4. 标为「未接入」的数据类别表示系统没有这类数据；有人工证据时可以引用，并说明它的来源与日期。
 5. 专利状态为「未核查」时不得说成没有风险。你不给出法律结论，也不给出可以上架的结论。
-6. 不替用户做决定。被问到「能不能做 / 要不要推进」时，说明证据支持什么、不支持什么、还缺什么、下一步可以核实什么，把决定留给用户。
-7. 用简体中文，先给结论再给依据，不超过 400 字。
+6. 金额（售价、利润、保本价、采购价上限）只能原样引用 pricing 段里核价引擎给出的值，不得自行计算、换算或估算；pricing 段没有测算或市场状态为未配齐、待补资料时，说明缺什么。利润率是 0 到 1 的小数。
+7. 不替用户做决定。被问到「能不能做 / 要不要推进」时，说明证据支持什么、不支持什么、还缺什么、下一步可以核实什么，把决定留给用户。
+8. 用简体中文，先给结论再给依据，不超过 400 字。
 
 只输出一个 JSON 对象：{"answer": "回答正文", "cited_evidence_ids": [引用到的证据 id，整数]}。
 证据 id 只能取自 <dossier_evidence> 里出现的 evidence_id。"""
@@ -150,6 +152,7 @@ async def build_context(db: AsyncSession, d: OppDossier, upto_message_id: int) -
         .order_by(OppDossierMessage.id.desc()).limit(HISTORY_TURNS))).scalars().all())
     history.reverse()
     ip = await ip_summary(db, d.id)
+    pricing = await dossier_pricing.pricing_summary(db, d.id)
 
     valid = {e.id for e in manual} | ({snap.id} if snap else set())
     with_manual = {e.category for e in manual}
@@ -176,6 +179,28 @@ async def build_context(db: AsyncSession, d: OppDossier, upto_message_id: int) -
                             "reviews": [{"market": m["market"], "risk_level": m["risk_level"],
                                          "decision": m["decision"]} for m in r["reviews"]]}
                            for r in ip["researches"]],
+        },
+        "pricing": {
+            "source": "定价核算引擎按已启用的费用规则计算；金额原样引用，不得自行计算或换算",
+            # 联调发现：不说明这两点，模型会把「没展示」说成「缺数据」（2026-11-12）
+            "notes": [
+                "采购成本、包装、头程、佣金、配送费等已全部计入引擎结果；它们是核价单创建人的私有输入，这里不展示，不要说成缺失",
+                "max_purchase_cost（采购价上限）只在核价方式为 max_purchase 时计算；为空表示这次没有按该方式核价，不是缺数据",
+                "margin 是 0 到 1 的小数，回答时换成百分数并保留两位小数",
+                "option.reasons 是引擎的计算提醒（如某些费用未计入），回答涉及该方案的金额时要一并说明",
+                "option.adjusted 不为空时，表示创建人手动调了售价，adjusted 里是按调后售价重算的结果（met 表示是否达到目标）；以调后结果为准，同时说明原始求解的售价",
+            ],
+            "state": {"none": "没有关联核价单", "draft_only": "只有草稿，尚未保存测算",
+                      "calculated": "已有测算"}[pricing["state"]],
+            "sheets": [{
+                "product_name": sh["product_name"], "state": sh["state"], "version_no": sh.get("version_no"),
+                "calc_date": str(sh["calc_date"]) if sh.get("calc_date") else None, "mode": sh.get("mode"),
+                "rules_updated_since": sh.get("rules_updated"),
+                "markets": [{
+                    "market": m["market"], "currency": m["currency"], "result_status": m["status_text"],
+                    "reasons": m["reasons"], "selected_by_user": m["selected"], "option": m["option"],
+                } for m in sh.get("markets", [])],
+            } for sh in pricing["sheets"]],
         },
         "decisions": [{"verdict": x.verdict, "reason": x.reason, "next_step": x.next_step,
                        "recheck_date": x.recheck_date.isoformat() if x.recheck_date else None,
