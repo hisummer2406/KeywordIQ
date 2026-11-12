@@ -6,14 +6,19 @@
 
 前端菜单显隐 SHALL 由该权限点驱动；菜单隐藏 MUST NOT 被当作访问控制，后端每个机会中心端点 SHALL 各自挂 `opportunity:view` 权限依赖。
 
+#### Scenario: 超管可见
+
+- **WHEN** `is_super=true` 的用户登录，且该用户所在角色不持有 `opportunity:view`
+- **THEN** 顶栏出现「机会中心」，`/opportunity` 可正常打开
+
 #### Scenario: 运营可见
 
 - **WHEN** `is_super=false`、角色为 operator 的用户登录
 - **THEN** 顶栏出现「机会中心」，`/opportunity` 可正常打开
 
-#### Scenario: 无权限的自定义角色不可见
+#### Scenario: 普通角色不可见
 
-- **WHEN** 一个角色不持有 `opportunity:view` 的非超管用户登录
+- **WHEN** 一个角色不持有 `opportunity:view` 的非超管用户登录（例如自定义角色；自 add-opportunity-dossier 起三个内置角色都持有该权限点）
 - **THEN** 顶栏不出现「机会中心」；直接访问 `/opportunity` 被路由守卫挡回，请求机会中心端点得到 403
 
 #### Scenario: 内置角色授权矩阵
