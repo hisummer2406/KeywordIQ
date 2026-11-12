@@ -5,3 +5,21 @@ allowBuilds:
   core-js-pure: false
   es5-ext: false
   esbuild: true
+
+# pro-components 2.x 只声明支持 antd 4/5，但项目已升到 antd 6（change upgrade-antd-v6）。
+# 2026-11-13 探路验证：它依赖的 124 个 antd 内部路径在 antd 6.7.0 全部存在，
+# 布局 / ProTable / ModalForm / 机会中心浏览器验收通过。
+# 只放行它和它的子包对 antd 的 peer，不放宽其他依赖；pro-components 3 出正式版并升级后删除本段。
+peerDependencyRules:
+  allowedVersions:
+    "@ant-design/pro-components>antd": "6"
+    "@ant-design/pro-card>antd": "6"
+    "@ant-design/pro-descriptions>antd": "6"
+    "@ant-design/pro-field>antd": "6"
+    "@ant-design/pro-form>antd": "6"
+    "@ant-design/pro-layout>antd": "6"
+    "@ant-design/pro-list>antd": "6"
+    "@ant-design/pro-provider>antd": "6"
+    "@ant-design/pro-skeleton>antd": "6"
+    "@ant-design/pro-table>antd": "6"
+    "@ant-design/pro-utils>antd": "6"

@@ -132,7 +132,7 @@ export default function GrowthMarketPage() {
           style={{ marginTop: 12 }}
           type="warning"
           showIcon
-          message="窗口内有期次缺少数据"
+          title="窗口内有期次缺少数据"
           description={missingText}
         />
       )}

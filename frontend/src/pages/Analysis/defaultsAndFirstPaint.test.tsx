@@ -229,7 +229,7 @@ describe('分析查询屏 · 首屏与默认条件', () => {
 
       // 视图是 antd Select，得先开下拉再点选项
       await act(async () => {
-        fireEvent.mouseDown(document.querySelector('.scope-bar__view .ant-select-selector')!);
+        fireEvent.mouseDown(document.querySelector('.scope-bar__view')!);
       });
       await act(async () => {
         fireEvent.click(await screen.findByTitle('按周'));

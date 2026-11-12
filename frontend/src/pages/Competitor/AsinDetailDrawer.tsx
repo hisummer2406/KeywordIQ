@@ -65,11 +65,11 @@ export default function AsinDetailDrawer({
   }, [open, sellerId, site, asin]);
 
   return (
-    <Drawer title={title} open={open} width={480} onClose={onClose} destroyOnHidden>
+    <Drawer title={title} open={open} size={480} onClose={onClose} destroyOnHidden>
       {(imageUrl || asin) && (
         <Space align="start" style={{ marginBottom: 12 }}>
           {imageUrl ? <Image src={imageUrl} width={96} height={96} style={{ objectFit: 'contain' }} /> : null}
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             {asin ? <Typography.Text type="secondary">ASIN {asin}</Typography.Text> : null}
             {productUrl ? (
               <a href={productUrl} target="_blank" rel="noreferrer">

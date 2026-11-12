@@ -218,7 +218,7 @@ function MarketCard({
         const s = SOLVE_TEXT[o.solve_status];
         if (!s) return '—';
         return (
-          <Space size={4} direction="vertical">
+          <Space size={4} orientation="vertical">
             <Tag color={s.color}>{s.text}</Tag>
             {o.target_gap_cny ? <span>差距 ¥{formatMoney(o.target_gap_cny)}</span> : null}
           </Space>
@@ -267,7 +267,7 @@ function MarketCard({
           type={status.type}
           showIcon
           style={{ marginBottom: market.options.length ? 12 : 0 }}
-          message={status.title}
+          title={status.title}
           description={market.reasons.length ? market.reasons.join('；') : undefined}
         />
       ) : null}
@@ -296,7 +296,7 @@ function MarketCard({
                       style={{ marginBottom: 8 }}
                       type={o.adjusted_met === false ? 'warning' : 'success'}
                       showIcon
-                      message={`按调整价 ${formatMoney(o.adjusted.price)} ${market.currency}：预计单件利润 ¥${formatMoney(
+                      title={`按调整价 ${formatMoney(o.adjusted.price)} ${market.currency}：预计单件利润 ¥${formatMoney(
                         o.adjusted.profit_cny,
                       )}，利润率 ${formatPct(o.adjusted.margin)}${
                         o.adjusted_met === null
@@ -344,7 +344,7 @@ export default function ResultPanel(props: ResultPanelProps) {
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="条件已修改，请重新核价"
+          title="条件已修改，请重新核价"
           description="下方结果对应修改前的条件，不能按新条件保存或导出。"
         />
       ) : null}

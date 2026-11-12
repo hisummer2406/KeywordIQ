@@ -618,7 +618,7 @@ export default function CalculatorView({ meta, openTarget, onSheetChanged, onLoc
         okText="选定"
       >
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message="每个市场只选定一个方案；换选会留下记录。选定只代表核价结论，不代表已通过风险审核。" />
+          title="每个市场只选定一个方案；换选会留下记录。选定只代表核价结论，不代表已通过风险审核。" />
         <Input.TextArea rows={3} maxLength={500} placeholder="选定说明（可选）" value={selectNote}
           onChange={(e) => setSelectNote(e.target.value)} />
       </Modal>

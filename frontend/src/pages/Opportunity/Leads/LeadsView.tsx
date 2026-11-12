@@ -196,7 +196,7 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message={`窗口内有期次未导入（${data.missing_dates.join('、')}）：所有词都凑不满窗口，榜单可能为空。这不代表今天没有走强的词。`}
+          title={`窗口内有期次未导入（${data.missing_dates.join('、')}）：所有词都凑不满窗口，榜单可能为空。这不代表今天没有走强的词。`}
         />
       )}
       <Table<GrowthLead>
@@ -229,7 +229,7 @@ export default function LeadsView({ sites, onOpenDossier, onNewDossier }: Props)
         okButtonProps={{ disabled: !target, loading: saving }}
         onOk={() => merge().catch(() => undefined)}
         onCancel={() => setMerging(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           只列出 {data?.site} 站点、未归档的档案，默认显示最近更新的 50 份，找不到时输入标题或关键词搜索。一个档案最多 20 个词，已在档案里的词不会重复添加。

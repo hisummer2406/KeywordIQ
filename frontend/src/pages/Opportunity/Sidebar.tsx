@@ -324,7 +324,7 @@ export default function Sidebar({ view, taskId, scope, workspaces, counts, versi
         onOk={() => saveWorkspace().catch(() => undefined)}
         onCancel={() => setEditing(null)}
         okButtonProps={{ disabled: !editing?.name.trim() }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Input
           autoFocus

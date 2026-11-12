@@ -130,7 +130,7 @@ describe('目标分组下拉可搜索', () => {
   /** 打开下拉并输入关键词，返回下拉里当前可见的选项文本。 */
   async function searchIn(placeholder: string, keyword: string) {
     const holder = screen.getByText(placeholder).closest('.ant-select') as HTMLElement;
-    fireEvent.mouseDown(holder.querySelector('.ant-select-selector')!);
+    fireEvent.mouseDown(holder);
     fireEvent.change(holder.querySelector('input')!, { target: { value: keyword } });
     await waitFor(() =>
       expect(document.querySelectorAll('.ant-select-item-option-content').length).toBeGreaterThan(0),

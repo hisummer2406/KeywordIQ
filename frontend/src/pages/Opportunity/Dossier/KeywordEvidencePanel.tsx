@@ -276,7 +276,7 @@ export default function KeywordEvidencePanel({ detail, onAdd, onRemove }: Props)
         okButtonProps={{ disabled: !pending.length || pending.length > room, loading: saving }}
         onOk={() => save().catch(() => undefined)}
         onCancel={() => setAdding(null)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Input.TextArea
           autoFocus
