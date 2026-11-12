@@ -3,6 +3,7 @@
 - ``GET  /risk/meta``：Key 是否已配置（不含 Key 本身）、市场、法域、限制
 - ``POST /risk/checks``（multipart，202）、``GET /risk/checks``、``GET /risk/checks/{id}``、
   ``GET /risk/checks/{id}/image``
+- ``GET /risk/checks/{id}/files/{candidate_id}/{kind}/{seq}``：已存档的全部附图 / 公报 PDF（经 OSS 代读）
 - 显式付费动作（202）：``POST /risk/checks/{id}/pages``、``/evidence``、``/retry``
 - ``POST /risk/checks/{id}/reviews``：追加人工意见
 
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,6 +99,18 @@ async def get_image(check_id: int, db: AsyncSession = Depends(get_async_db),
     data, content_type = await check_service.get_image(db, user.id, check_id)
     return Response(content=data, media_type=content_type,
                     headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+@risk_router.get("/checks/{check_id}/files/{candidate_id}/{kind}/{seq}")
+async def get_evidence_file(check_id: int, candidate_id: int, kind: Literal["drawings", "pdf"],
+                            seq: int = Path(ge=1, le=1000), db: AsyncSession = Depends(get_async_db),
+                            user=Depends(_require_view)) -> Response:
+    data, content_type, filename = await check_service.get_evidence_file(
+        db, user.id, check_id, candidate_id, kind, seq)
+    return Response(content=data, media_type=content_type, headers={
+        "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f'inline; filename="{filename}"',
+    })
 
 
 @risk_router.post("/checks/{check_id}/pages", status_code=202)

@@ -3,12 +3,13 @@ import { request } from '@umijs/max';
 /**
  * 外观专利核查（change add-patent-risk-check，#24）。
  *
- * 会计费的动作只有四个：创建核查、读取下一页、补充详情、重新检索——都只写任务、返回 202，
+ * 会计费的动作只有四个：创建核查、读取下一页、补充详情（著录/法律状态/全部附图/公报）、重新检索——都只写任务、返回 202，
  * 由后台调用智慧芽。其余接口只读库，刷新、轮询不会产生任何外部调用。
  */
 
 export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'unknown';
-export type DetailKind = 'bibliography' | 'legal';
+export type DetailKind = 'bibliography' | 'legal' | 'drawings' | 'pdf';
+export type FileDetailKind = 'drawings' | 'pdf';
 export type DetailStatus = 'success' | 'failed' | 'unknown' | 'missing';
 export type RiskLevel = 'high' | 'medium' | 'low' | 'undetermined';
 export type Decision = 'pass' | 'conditional_pass' | 'continue_verify' | 'need_evidence' | 'not_recommended';
@@ -23,6 +24,10 @@ export interface RiskMeta {
   default_page_size: number;
   max_offset: number;
   max_detail_batch: number;
+  /** 含全部附图或公报 PDF 时一次最多几件 */
+  max_file_detail_batch: number;
+  /** OSS 存档是否启用；未启用时附图与公报只保留供应商签名链接 */
+  evidence_archive_enabled: boolean;
   max_image_bytes: number;
 }
 
@@ -45,6 +50,26 @@ export interface DetailEntry {
   error_category: string | null;
   fetched_at: string;
   data: Record<string, any> | null;
+}
+
+/** 全部附图 / 公报 PDF 中的一个文件。已存档的经鉴权端点读取；未存档的只有限期签名链接。 */
+export interface EvidenceFile {
+  seq: number;
+  image_type: string | null;
+  archived: boolean;
+  content_type: string | null;
+  size_bytes: number | null;
+  archived_at: string | null;
+  archive_error: string | null;
+  link_expires_at: string | null;
+  /** 仅未存档、可信且未过期时给出 */
+  link_url: string | null;
+}
+
+export interface FileDetailData {
+  pn: string | null;
+  total: number | null;
+  files: EvidenceFile[];
 }
 
 export interface Candidate {
@@ -198,6 +223,14 @@ export async function getCheck(id: number) {
 /** 原图要带登录凭证读取，不能直接作为 <img src>；取回 Blob 再转对象 URL。 */
 export async function getCheckImage(id: number) {
   return request<Blob>(`/api/risk/checks/${id}/image`, { method: 'GET', responseType: 'blob' });
+}
+
+/** 已存档的附图或公报：带登录凭证取 Blob，再转对象 URL 展示。 */
+export async function getEvidenceFile(checkId: number, candidateId: number, kind: FileDetailKind, seq: number) {
+  return request<Blob>(`/api/risk/checks/${checkId}/files/${candidateId}/${kind}/${seq}`, {
+    method: 'GET',
+    responseType: 'blob',
+  });
 }
 
 export async function requestNextPage(id: number, client_token: string) {

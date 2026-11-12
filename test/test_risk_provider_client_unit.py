@@ -187,3 +187,56 @@ async def test_logs_never_contain_key_or_vendor_message(caplog):
     await _client(lambda r: _ok([{"patent_id": "a"}])).legal_status(["a"])
     text = caplog.text
     assert KEY not in text and "vendor-secret-msg" not in text and "Bearer" not in text
+
+
+# ---------------------------------------------------------------- P042 / P020 与签名文件下载
+# change add-patent-fulltext-evidence
+
+
+async def test_fulltext_image_posts_json_and_validates():
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen["method"], seen["path"] = req.method, req.url.path
+        seen["body"] = json.loads(req.content)
+        return _ok({"patent_id": "p1", "pn": "USD1", "total_search_result_count": 8, "result_count": 1,
+                    "fulltext_image": [{"image_type": "drawing", "path": "https://data-fulltext-image.zhihuiya.com/a.png"}]})
+
+    res = await _client(handler).fulltext_image("p1", limit=20, offset=0)
+    assert res.ok and res.api == pc.P042
+    assert seen == {"method": "POST", "path": "/basic-patent-data/fulltext-image",
+                    "body": {"patent_id": "p1", "limit": 20, "offset": 0}}
+
+
+@pytest.mark.parametrize("data", [
+    {"patent_id": "other", "total_search_result_count": 1, "fulltext_image": [{"path": "https://x"}]},
+    {"patent_id": "p1", "total_search_result_count": 5, "fulltext_image": []},
+    {"patent_id": "p1", "total_search_result_count": 1, "fulltext_image": [{"image_type": "drawing"}]},
+    ["not", "a", "dict"],
+])
+async def test_fulltext_image_malformed_is_unknown(data):
+    res = await _client(lambda req: _ok(data)).fulltext_image("p1", limit=20, offset=0)
+    assert res.outcome == "unknown" and res.error_category == pc.MALFORMED_RESPONSE
+
+
+async def test_fulltext_image_null_data_is_success_without_items():
+    res = await _client(lambda req: _ok(None)).fulltext_image("p1", limit=20, offset=0)
+    assert res.ok and res.data is None
+
+
+async def test_pdf_data_gets_single_patent():
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen["method"], seen["path"], seen["pid"] = req.method, req.url.path, req.url.params["patent_id"]
+        return _ok([{"patent_id": "p1", "pn": "USD1", "pdf": {"path": "https://data-pdf.zhihuiya.com/a.pdf"}}])
+
+    res = await _client(handler).pdf_data("p1")
+    assert res.ok and res.api == pc.P020
+    assert seen == {"method": "GET", "path": "/basic-patent-data/pdf-data", "pid": "p1"}
+
+
+async def test_file_error_code_is_classified():
+    res = await _client(lambda req: httpx.Response(200, json={
+        "status": False, "error_code": 67200004, "error_msg": "x"})).pdf_data("p1")
+    assert res.outcome == "error" and res.error_category == pc.NO_PERMISSION

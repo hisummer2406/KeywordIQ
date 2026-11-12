@@ -17,6 +17,13 @@ class CandidateNotFoundError(NotFoundError):
     message = "候选专利不属于该核查记录"
 
 
+class EvidenceFileNotFoundError(NotFoundError):
+    """存档文件不存在、未存档或不属于当前用户——不区分，避免泄露。"""
+
+    code = "risk.evidence_file_not_found"
+    message = "存档文件不存在"
+
+
 class ProviderNotConfiguredError(UnprocessableError):
     code = "risk.provider_not_configured"
     message = "智慧芽接口未配置，请联系管理员"

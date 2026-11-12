@@ -79,7 +79,9 @@ class EvidenceRequest(BaseModel):
 
     client_token: str = Token
     candidate_ids: list[int] = Field(min_length=1, max_length=MAX_DETAIL_BATCH)
-    kinds: list[Literal["bibliography", "legal"]] = Field(default=list(DETAIL_KINDS), min_length=1)
+    kinds: list[Literal["bibliography", "legal", "drawings", "pdf"]] = Field(
+        default=["bibliography", "legal"], min_length=1,
+    )
 
     @field_validator("candidate_ids")
     @classmethod
