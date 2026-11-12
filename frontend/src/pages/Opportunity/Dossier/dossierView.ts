@@ -1,4 +1,4 @@
-import type { ChangeRow, DossierStatus, ManualCategory, PointStatus, Verdict } from '@/services/opportunityDossier';
+import type { ChangeRow, DossierStatus, ManualCategory, PointStatus, PricingSummary, Verdict } from '@/services/opportunityDossier';
 
 /**
  * 机会档案的标签与纯函数（change add-opportunity-dossier）。组件只负责摆放，口径相关的判断放这里便于测试。
@@ -103,4 +103,39 @@ export function describeChange(row: ChangeRow): string {
   }
   if (row.top1_changed) parts.push('点击第一的商品换了');
   return parts.length ? parts.join('；') : '没有变化';
+}
+
+export const PRICING_STATE: Record<PricingSummary['state'], { text: string; color: string }> = {
+  none: { text: '未测算', color: 'warning' },
+  draft_only: { text: '只有草稿', color: 'default' },
+  calculated: { text: '已有测算', color: 'blue' },
+};
+
+export const MODE_LABEL: Record<string, string> = {
+  target_profit: '按目标利润求售价',
+  target_margin: '按目标利润率求售价',
+  fixed_price: '按给定售价算利润',
+  max_purchase: '按售价倒推采购价上限',
+};
+
+const CURRENCY_SIGN: Record<string, string> = { CNY: '¥', USD: '$', GBP: '£', EUR: '€' };
+
+/**
+ * 展示核价引擎给出的十进制字符串金额：只加千分位与币种符号，**不做任何计算或舍入**——
+ * 金额只有核价引擎一个来源（change add-opportunity-feasibility 决策 2）。空值显示「—」。
+ */
+export function formatMoney(value: string | null | undefined, currency: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const negative = value.startsWith('-');
+  const [intPart, frac] = (negative ? value.slice(1) : value).split('.');
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const sign = (currency && CURRENCY_SIGN[currency]) ?? (currency ? `${currency} ` : '');
+  return `${negative ? '-' : ''}${sign}${grouped}${frac !== undefined ? `.${frac}` : ''}`;
+}
+
+/** 0~1 的小数字符串 → 百分数（两位小数）。只用于展示。 */
+export function formatRate(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const n = Number(value);
+  return Number.isFinite(n) ? `${(n * 100).toFixed(2)}%` : '—';
 }

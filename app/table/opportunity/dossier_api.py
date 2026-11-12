@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.permissions import OPPORTUNITY_VIEW
+from app.auth.permissions import OPPORTUNITY_VIEW, PRICING_VIEW
 from app.auth.simple_auth import simple_auth
 from app.table.opportunity import dossier_ask, dossier_service
 from app.table.opportunity.dossier_model import DOSSIER_STATUSES
@@ -31,6 +31,8 @@ from database import get_async_db
 opportunity_dossier_router = APIRouter()
 
 _require = simple_auth.require_permission(OPPORTUNITY_VIEW)
+# 从档案建核价单另要求核价的既有权限点；档案里的测算摘要只要求 opportunity:view（摘要是档案的一部分）
+_require_pricing = simple_auth.require_permission(PRICING_VIEW)
 
 DossierStatus = Literal[DOSSIER_STATUSES]  # type: ignore[valid-type]
 
@@ -58,6 +60,12 @@ async def create_dossier(body: DossierCreate, db: AsyncSession = Depends(get_asy
 @opportunity_dossier_router.get("/linkable-researches")
 async def linkable_researches(db: AsyncSession = Depends(get_async_db), user=Depends(_require)) -> dict[str, Any]:
     return await dossier_service.my_linkable_researches(db, user.id)
+
+
+@opportunity_dossier_router.get("/linkable-pricing-sheets")
+async def linkable_pricing_sheets(db: AsyncSession = Depends(get_async_db),
+                                  user=Depends(_require)) -> dict[str, Any]:
+    return await dossier_service.my_linkable_pricing_sheets(db, user.id)
 
 
 @opportunity_dossier_router.get("/{dossier_id}")
@@ -127,3 +135,22 @@ async def unlink_research(dossier_id: int, research_id: int, db: AsyncSession = 
 async def ask(dossier_id: int, body: AskCreate, db: AsyncSession = Depends(get_async_db),
               user=Depends(_require)) -> JSONResponse:
     return JSONResponse(status_code=202, content=await dossier_ask.request_ask(db, user.id, dossier_id, body))
+
+
+@opportunity_dossier_router.post("/{dossier_id}/pricing-sheets", status_code=status.HTTP_201_CREATED)
+async def create_pricing_sheet(dossier_id: int, db: AsyncSession = Depends(get_async_db),
+                               user=Depends(_require), _pricing=Depends(_require_pricing)) -> dict[str, Any]:
+    return await dossier_service.create_pricing_sheet(db, user.id, dossier_id)
+
+
+@opportunity_dossier_router.put("/{dossier_id}/pricing-sheets/{sheet_id}")
+async def link_pricing_sheet(dossier_id: int, sheet_id: int, db: AsyncSession = Depends(get_async_db),
+                             user=Depends(_require)) -> dict[str, Any]:
+    return await dossier_service.link_pricing_sheet(db, user.id, dossier_id, sheet_id)
+
+
+@opportunity_dossier_router.delete("/{dossier_id}/pricing-sheets/{sheet_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def unlink_pricing_sheet(dossier_id: int, sheet_id: int, db: AsyncSession = Depends(get_async_db),
+                               user=Depends(_require)) -> Response:
+    await dossier_service.unlink_pricing_sheet(db, user.id, dossier_id, sheet_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
