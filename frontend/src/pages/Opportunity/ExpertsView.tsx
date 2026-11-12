@@ -1,9 +1,9 @@
 import { Avatar, Button, Card, Space, Tag, Typography, theme } from 'antd';
-import { type Expert, EXPERTS } from './experts';
+import { type Expert, type ExpertEntry, EXPERTS } from './experts';
 
 /**
  * 专家名片（change add-opportunity-ip-agent 决策 14）。名片内容是前端常量，打开这一屏不发请求；
- * 未接入的专家只说明依赖与接入后的能力，不能发起任务。
+ * 未接入的专家只说明还缺什么，不能发起任务。
  */
 
 export function ExpertBadge({ expert, size = 44 }: { expert: Expert; size?: number }) {
@@ -14,7 +14,7 @@ export function ExpertBadge({ expert, size = 44 }: { expert: Expert; size?: numb
   );
 }
 
-export default function ExpertsView({ onStart }: { onStart: () => void }) {
+export default function ExpertsView({ onOpen }: { onOpen: (entry: ExpertEntry) => void }) {
   const { token } = theme.useToken();
   return (
     <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
@@ -23,7 +23,7 @@ export default function ExpertsView({ onStart }: { onStart: () => void }) {
           专家
         </Typography.Title>
         <Typography.Paragraph type="secondary">
-          每位专家负责选品工作流里的一个阶段。专家给出的是建议和证据，结论由你确认；未接入的专家会在依赖的能力上线后开放。
+          每位专家负责选品工作流里的一个阶段。专家给出的是线索、证据和建议，结论由你确认；未接入的专家写明了还缺什么。
         </Typography.Paragraph>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
           {EXPERTS.map((e) => (
@@ -50,14 +50,17 @@ export default function ExpertsView({ onStart }: { onStart: () => void }) {
                 ))}
               </Space>
               <div style={{ fontSize: 12, color: token.colorTextTertiary, marginBottom: 12 }}>{`数据与工具：${e.sources.join('、')}`}</div>
-              {e.available ? (
-                <Button type="primary" block onClick={onStart}>
-                  发起任务
+              {e.available && e.entry ? (
+                <Button type="primary" block onClick={() => onOpen(e.entry as ExpertEntry)}>
+                  {e.entryLabel}
                 </Button>
               ) : (
-                <Button block disabled>
-                  {`尚未接入 · 依赖 ${e.dependsOn?.join('、')}`}
-                </Button>
+                <>
+                  <Button block disabled>
+                    尚未接入
+                  </Button>
+                  <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 8 }}>{e.blockedBy}</div>
+                </>
               )}
             </Card>
           ))}

@@ -5,6 +5,7 @@ import {
   EditOutlined,
   FolderOpenOutlined,
   FolderOutlined,
+  RiseOutlined,
   InboxOutlined,
   MoreOutlined,
   PlusOutlined,
@@ -32,7 +33,7 @@ import { TASK_KIND } from './IpAgent/ipLabels';
 export type WsScope = 'all' | 'none' | number;
 
 /** 主区视图。`dossiers` 是默认视图（机会档案列表）。 */
-export type View = 'dossiers' | 'dossier' | 'new-dossier' | 'new' | 'experts' | 'schedules' | 'task';
+export type View = 'dossiers' | 'dossier' | 'new-dossier' | 'leads' | 'new' | 'experts' | 'schedules' | 'task';
 
 const PAGE_SIZE = 30;
 
@@ -196,6 +197,7 @@ export default function Sidebar({ view, taskId, scope, workspaces, counts, versi
           label="机会档案"
           onClick={() => onNavigate({ view: 'dossiers' })}
         />
+        <Row active={view === 'leads'} icon={<RiseOutlined />} label="线索" onClick={() => onNavigate({ view: 'leads' })} />
         <Row active={view === 'experts'} icon={<AppstoreOutlined />} label="专家" onClick={() => onNavigate({ view: 'experts', task: null })} />
         <Row
           active={view === 'schedules'}

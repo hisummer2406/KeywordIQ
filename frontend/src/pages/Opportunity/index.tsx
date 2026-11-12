@@ -9,6 +9,7 @@ import NewDossier from './Dossier/NewDossier';
 import ExpertsView from './ExpertsView';
 import Conversation from './IpAgent/Conversation';
 import type { DossierPreset } from './IpAgent/NewTaskComposer';
+import LeadsView from './Leads/LeadsView';
 import NewTaskView from './NewTaskView';
 import SchedulesView from './SchedulesView';
 import Sidebar, { type View, type WsScope } from './Sidebar';
@@ -18,13 +19,13 @@ import Sidebar, { type View, type WsScope } from './Sidebar';
  *
  * - 仍是 `/opportunity` 单页、无二级路由；左栏是页面组件自带的（top-nav-structure 规格）。
  * - 视图状态全部在 URL 查询参数里，刷新可恢复：`dossier=<id>`、`task=<id>`、
- *   `view=new-dossier|new|experts|schedules`、`ws=<id>|none`、`group=<词库分组 id>`。
+ *   `view=new-dossier|leads|new|experts|schedules`、`ws=<id>|none`、`group=<词库分组 id>`。
  * - 默认视图是机会档案列表（change add-opportunity-dossier，opportunity-center「机会档案是默认入口」）。
  *   档案团队可见；专家任务（目前只有 IP 专家）仍按创建人私有，用工作空间组织。
  * - 未接入的专家不发请求（opportunity-center 规格）。
  */
 
-const PLAIN_VIEWS: View[] = ['new-dossier', 'new', 'experts', 'schedules'];
+const PLAIN_VIEWS: View[] = ['new-dossier', 'leads', 'new', 'experts', 'schedules'];
 
 function parseScope(v: string | null): WsScope {
   if (v === 'none') return 'none';
@@ -55,6 +56,8 @@ export default function OpportunityPage() {
   const [version, setVersion] = useState(0);
   /** 从档案发起 IP 调研时带入的内容；只在本次会话里有效，刷新后按普通新建任务处理 */
   const [preset, setPreset] = useState<DossierPreset | null>(null);
+  /** 从线索带入新建档案页的站点与关键词；同样只在本次会话里有效 */
+  const [leadPreset, setLeadPreset] = useState<{ site: string; keywords: string[] } | null>(null);
 
   const loadWorkspaces = useCallback(async () => {
     const r = await listWorkspaces();
@@ -87,6 +90,7 @@ export default function OpportunityPage() {
       if (v === 'new-dossier' && next.group) p.set('group', String(next.group));
     }
     if (v !== 'new') setPreset(null);
+    if (v !== 'new-dossier') setLeadPreset(null);
     setParams(p);
   };
 
@@ -117,11 +121,25 @@ export default function OpportunityPage() {
           {view === 'dossiers' && <DossierList onOpen={(id) => navigate({ dossier: id })} onNew={() => navigate({ view: 'new-dossier' })} />}
           {view === 'new-dossier' && (
             <NewDossier
-              key={groupId ?? 'manual'}
+              key={`${groupId ?? 'manual'}-${leadPreset ? leadPreset.keywords.join('|') : ''}`}
               sites={meta?.markets ?? []}
               groupId={groupId}
+              preset={leadPreset}
               onCreated={(id) => navigate({ dossier: id })}
               onCancel={() => navigate({ view: 'dossiers' })}
+            />
+          )}
+          {view === 'leads' && (
+            <LeadsView
+              sites={meta?.markets ?? []}
+              onOpenDossier={(id) => navigate({ dossier: id })}
+              onNewDossier={(p) => {
+                setLeadPreset(p);
+                // 先设带入内容再切视图：navigate 只在离开「新建档案」时清掉它
+                const next = new URLSearchParams();
+                next.set('view', 'new-dossier');
+                setParams(next);
+              }}
             />
           )}
           {view === 'dossier' && dossierId && (
@@ -170,7 +188,9 @@ export default function OpportunityPage() {
               }}
             />
           )}
-          {view === 'experts' && <ExpertsView onStart={() => navigate({ view: 'new' })} />}
+          {view === 'experts' && (
+            <ExpertsView onOpen={(entry) => navigate({ view: entry === 'task' ? 'new' : entry === 'leads' ? 'leads' : 'dossiers' })} />
+          )}
           {view === 'schedules' && <SchedulesView onOpenTask={(id) => navigate({ task: id })} onChanged={bump} />}
         </div>
       </div>
