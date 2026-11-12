@@ -22,11 +22,12 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.table.risk import check_service, task_service
+from app.table.risk import check_service, evidence_store, task_service
 from app.table.risk.provider_client import ZhihuiyaClient
 from app.table.risk.risk_errors import (
     CandidateNotFoundError,
     CheckNotFoundError,
+    EvidenceFileNotFoundError,
     InvalidCheckInputError,
     InvalidImageError,
     InvalidReviewError,
@@ -96,6 +97,7 @@ class Vendor:
         self.requests: list[httpx.Request] = []
         self.routes: dict[str, object] = {}
         self.total = 45
+        self.drawings_total = 3
 
     def paths(self) -> list[str]:
         return [r.url.path for r in self.requests]
@@ -120,6 +122,18 @@ class Vendor:
                       "authority": "US", "apdt": 20200101, "pbdt": 20210101, "loc": ["07-01"]}
                      for i in range(off - shift, min(off + lim, self.total) - shift)]
             return _ok({"total_search_result_count": self.total, "patent_messages": items})
+        if req.url.path == "/basic-patent-data/fulltext-image":
+            import json
+            body = json.loads(req.content)
+            total = self.drawings_total
+            items = [{"image_type": "drawing", "path": f"{FILE_HOST}/{body['patent_id']}-{i}.png?"
+                      "sign=x&response-expires=Wed%2C%2018%20Nov%202099%2006%3A39%3A17%20GMT"}
+                     for i in range(body["offset"], min(body["offset"] + body["limit"], total))]
+            return _ok({"patent_id": body["patent_id"], "pn": "USD1", "total_search_result_count": total,
+                        "result_count": len(items), "fulltext_image": items})
+        if req.url.path == "/basic-patent-data/pdf-data":
+            pid = req.url.params["patent_id"]
+            return _ok([{"patent_id": pid, "pn": "USD1", "pdf": {"path": f"{FILE_HOST}/{pid}.pdf?sign=x"}}])
         ids = req.url.params["patent_id"].split(",")
         if req.url.path.endswith("simple-bibliography"):
             return _ok([{"patent_id": i, "pn": i, "bibliographic_data": {
@@ -131,6 +145,9 @@ class Vendor:
 
     def client(self) -> ZhihuiyaClient:
         return ZhihuiyaClient("sk-test-integration", timeout=5, transport=httpx.MockTransport(self.handler))
+
+
+FILE_HOST = "https://data-fulltext-image.zhihuiya.com"
 
 
 def _ok(data):
@@ -460,3 +477,185 @@ async def test_calls_recorded_with_unknown_billing(db, factory):
         select(RiskProviderCall.billing).join(RiskTask, RiskTask.id == RiskProviderCall.task_id)
         .where(RiskTask.check_id == cid))).scalars().all()
     assert billing == ["unknown", "unknown"]
+
+
+# ---------------------------------------------------------------- 全部附图与公报（change add-patent-fulltext-evidence）
+
+
+class FakeBucket:
+    def __init__(self, fail: bool = False):
+        self.objects: dict[str, bytes] = {}
+        self.fail = fail
+
+    def put_object(self, key, data, headers=None):
+        if self.fail:
+            raise RuntimeError("oss down")
+        self.objects[key] = data
+
+    def get_object(self, key):
+        import io
+        return io.BytesIO(self.objects[key])
+
+
+@pytest.fixture()
+def files(monkeypatch):
+    """签名文件下载走 MockTransport，OSS 走内存桶；默认启用存档。"""
+    state = {"bucket": FakeBucket(), "downloads": []}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        state["downloads"].append(str(req.url))
+        if req.url.path.endswith(".pdf"):
+            return httpx.Response(200, content=b"%PDF-1.4 x")
+        return httpx.Response(200, content=PNG)
+
+    monkeypatch.setattr(evidence_store, "download_client", lambda: httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=False, trust_env=False))
+    monkeypatch.setattr(evidence_store, "bucket", lambda: state["bucket"])
+    for k, v in (("OSS_ENABLED", True), ("OSS_ENDPOINT", "https://oss"), ("OSS_BUCKET", "b"),
+                 ("OSS_ACCESS_KEY_ID", "id"), ("OSS_ACCESS_KEY_SECRET", "secret")):
+        monkeypatch.setattr(settings, k, v)
+    return state
+
+
+async def _file_detail(db, factory, vendor, owner, kinds, n=1):
+    cid = await _searched_check(db, factory, vendor, owner)
+    ids = [c["id"] for c in (await check_service.get_check(db, owner, cid))["candidates"][:n]]
+    await check_service.request_details(db, owner, cid, EvidenceRequest(
+        client_token=uuid.uuid4().hex, candidate_ids=ids, kinds=kinds))
+    before = len(vendor.requests)
+    assert await _run(factory, vendor)
+    cands = {c["id"]: c for c in (await check_service.get_check(db, owner, cid))["candidates"]}
+    return cid, ids, cands, vendor.paths()[before:]
+
+
+async def test_drawings_paginate_and_archive(db, factory, files):
+    owner = await _user(db)
+    vendor = Vendor()
+    vendor.drawings_total = 26
+    cid, ids, cands, paths = await _file_detail(db, factory, vendor, owner, ["drawings", "pdf"])
+    assert paths == ["/basic-patent-data/fulltext-image"] * 2 + ["/basic-patent-data/pdf-data"]
+    d = cands[ids[0]]["details"]["drawings"]
+    assert d["status"] == "success" and d["data"]["total"] == 26 and len(d["data"]["files"]) == 26
+    first = d["data"]["files"][0]
+    assert first["archived"] is True and first["link_url"] is None and "object_key" not in first
+    assert first["content_type"] == "image/png"
+    pdf = cands[ids[0]]["details"]["pdf"]["data"]["files"][0]
+    assert pdf["archived"] is True and pdf["content_type"] == "application/pdf"
+    assert len(files["bucket"].objects) == 27
+    assert all(k.startswith(f"risk-evidence/{cid}/{ids[0]}/") for k in files["bucket"].objects)
+
+    content, ctype, name = await check_service.get_evidence_file(db, owner, cid, ids[0], "pdf", 1)
+    assert content.startswith(b"%PDF-") and ctype == "application/pdf" and name == "USD1.pdf"
+    _, _, img_name = await check_service.get_evidence_file(db, owner, cid, ids[0], "drawings", 2)
+    assert img_name == "USD1-002.png"
+
+    other = await _user(db, "other")
+    with pytest.raises(CheckNotFoundError):
+        await check_service.get_evidence_file(db, other, cid, ids[0], "pdf", 1)
+    with pytest.raises(EvidenceFileNotFoundError):
+        await check_service.get_evidence_file(db, owner, cid, ids[0], "drawings", 99)
+
+    # 已成功：再次请求不产生调用
+    again = await check_service.request_details(db, owner, cid, EvidenceRequest(
+        client_token=uuid.uuid4().hex, candidate_ids=ids, kinds=["drawings", "pdf"]))
+    assert again["skipped"] is True
+
+
+async def test_archive_disabled_keeps_link_only(db, factory, files, monkeypatch):
+    monkeypatch.setattr(settings, "OSS_ENABLED", False)
+    owner = await _user(db)
+    vendor = Vendor()
+    cid, ids, cands, _ = await _file_detail(db, factory, vendor, owner, ["pdf"])
+    d = cands[ids[0]]["details"]["pdf"]
+    assert d["status"] == "success"
+    f = d["data"]["files"][0]
+    assert f["archived"] is False and f["archive_error"] == "archive_disabled"
+    assert f["link_url"].startswith("https://data-fulltext-image.zhihuiya.com/") and f["link_expires_at"]
+    assert files["downloads"] == [] and files["bucket"].objects == {}
+    with pytest.raises(EvidenceFileNotFoundError):
+        await check_service.get_evidence_file(db, owner, cid, ids[0], "pdf", 1)
+
+
+async def test_oss_failure_degrades_without_failing_detail(db, factory, files):
+    files["bucket"].fail = True
+    owner = await _user(db)
+    vendor = Vendor()
+    _, ids, cands, _ = await _file_detail(db, factory, vendor, owner, ["drawings"])
+    d = cands[ids[0]]["details"]["drawings"]
+    assert d["status"] == "success"
+    assert {f["archive_error"] for f in d["data"]["files"]} == {"archive_failed"}
+
+
+async def test_untrusted_file_host_is_not_downloaded(db, factory, files):
+    owner = await _user(db)
+    vendor = Vendor()
+    vendor.routes["/basic-patent-data/pdf-data"] = lambda req: _ok([{
+        "patent_id": req.url.params["patent_id"], "pn": "X", "pdf": {"path": "https://evil.example.com/a.pdf"}}])
+    _, ids, cands, _ = await _file_detail(db, factory, vendor, owner, ["pdf"])
+    f = cands[ids[0]]["details"]["pdf"]["data"]["files"][0]
+    assert f["archive_error"] == "untrusted_url" and f["link_url"] is None
+    assert files["downloads"] == []
+
+
+async def test_drawings_page_failure_is_not_success(db, factory, files):
+    owner = await _user(db)
+    vendor = Vendor()
+    vendor.drawings_total = 26
+    import json
+
+    def second_page_times_out(req):
+        if json.loads(req.content)["offset"] > 0:
+            raise httpx.ReadTimeout("t", request=req)
+        vendor.routes.pop("/basic-patent-data/fulltext-image")
+        r = vendor.handler(req)
+        vendor.requests.pop()
+        vendor.routes["/basic-patent-data/fulltext-image"] = second_page_times_out
+        return r
+
+    vendor.routes["/basic-patent-data/fulltext-image"] = second_page_times_out
+    _, ids, cands, paths = await _file_detail(db, factory, vendor, owner, ["drawings"])
+    assert paths == ["/basic-patent-data/fulltext-image"] * 2
+    d = cands[ids[0]]["details"]["drawings"]
+    assert d["status"] == "unknown" and d["data"] is None
+    assert files["bucket"].objects == {}
+
+
+async def test_no_drawings_is_missing(db, factory, files):
+    owner = await _user(db)
+    vendor = Vendor()
+    vendor.drawings_total = 0
+    _, ids, cands, _ = await _file_detail(db, factory, vendor, owner, ["drawings"])
+    assert cands[ids[0]]["details"]["drawings"]["status"] == "missing"
+
+
+async def test_file_kinds_limit_batch(db, factory):
+    owner = await _user(db)
+    vendor = Vendor()
+    cid = await _searched_check(db, factory, vendor, owner)
+    ids = [c["id"] for c in (await check_service.get_check(db, owner, cid))["candidates"][:12]]
+    with pytest.raises(InvalidCheckInputError):
+        await check_service.request_details(db, owner, cid, EvidenceRequest(
+            client_token=uuid.uuid4().hex, candidate_ids=ids, kinds=["drawings"]))
+    # 只要著录与法律状态时仍是 20 件
+    await check_service.request_details(db, owner, cid, EvidenceRequest(
+        client_token=uuid.uuid4().hex, candidate_ids=ids))
+
+
+async def test_detail_task_renews_lease(db, factory, files, monkeypatch):
+    owner = await _user(db)
+    vendor = Vendor()
+    cid = await _searched_check(db, factory, vendor, owner)
+    ids = [c["id"] for c in (await check_service.get_check(db, owner, cid))["candidates"][:2]]
+    await check_service.request_details(db, owner, cid, EvidenceRequest(
+        client_token=uuid.uuid4().hex, candidate_ids=ids, kinds=["pdf"]))
+    seen: list[datetime | None] = []
+    real = task_service._renew_lease
+
+    async def spy(session_factory, task_id):
+        await real(session_factory, task_id)
+        async with session_factory() as s:
+            seen.append(await s.scalar(select(RiskTask.lease_until).where(RiskTask.id == task_id)))
+
+    monkeypatch.setattr(task_service, "_renew_lease", spy)
+    assert await _run(factory, vendor)
+    assert len(seen) == 2 and all(x is not None and x > datetime.now(UTC) for x in seen)

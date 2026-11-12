@@ -25,13 +25,16 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://connect.zhihuiya.com"
 
-P010, P060, P011, P013 = "P010", "P060", "P011", "P013"
+P010, P060, P011, P013, P042, P020 = "P010", "P060", "P011", "P013", "P042", "P020"
 _PATHS = {
     P010: "/image-search/image-upload",
     P060: "/search/patent/image-single",
     P011: "/basic-patent-data/simple-bibliography",
     P013: "/basic-patent-data/legal-status",
+    P042: "/basic-patent-data/fulltext-image",
+    P020: "/basic-patent-data/pdf-data",
 }
+_GET_APIS = (P011, P013, P020)
 
 #: P011/P013 单次批量上限（官方：逗号分隔，最多 100 个）。
 MAX_BATCH_IDS = 100
@@ -124,7 +127,7 @@ class ZhihuiyaClient:
 
     async def _call(self, api: str, validate: Validator, **request: Any) -> CallResult:
         started = _now()
-        method = "GET" if api in (P011, P013) else "POST"
+        method = "GET" if api in _GET_APIS else "POST"
         try:
             client = self._client()
         except Exception:
@@ -175,7 +178,7 @@ class ZhihuiyaClient:
                            result.error_category, result.http_status, result.error_code)
         return result
 
-    # ---------------------------------------------------------------- 四个接口
+    # ---------------------------------------------------------------- 接口
 
     async def upload_image(self, content: bytes, content_type: str) -> CallResult:
         """P010：multipart 字段 ``image``。成功时 ``data`` = ``{"url", "expire"}``。"""
@@ -199,6 +202,15 @@ class ZhihuiyaClient:
 
     async def legal_status(self, patent_ids: list[str]) -> CallResult:
         return await self._batch(P013, patent_ids)
+
+    async def fulltext_image(self, patent_id: str, *, limit: int, offset: int) -> CallResult:
+        """P042：一件专利的全文附图，JSON 请求体。``data`` = ``{total_search_result_count, fulltext_image[]}``。"""
+        return await self._call(P042, lambda d: _valid_fulltext(d, patent_id, offset),
+                                json={"patent_id": patent_id, "limit": limit, "offset": offset})
+
+    async def pdf_data(self, patent_id: str) -> CallResult:
+        """P020：一件专利的公报 PDF。``data`` = ``[{patent_id, pn, pdf: {path}}]``，可能为空列表。"""
+        return await self._call(P020, _valid_detail, params={"patent_id": patent_id})
 
     async def _batch(self, api: str, patent_ids: list[str]) -> CallResult:
         if not patent_ids or len(patent_ids) > MAX_BATCH_IDS:
@@ -225,6 +237,23 @@ def _valid_search(data: Any, offset: int) -> bool:
     if not items and total > offset:
         return False
     return all(isinstance(i, dict) and isinstance(i.get("patent_id"), str) and i["patent_id"] for i in items)
+
+
+def _valid_fulltext(data: Any, patent_id: str, offset: int) -> bool:
+    # 无附图时供应商可能返回 null 或空对象：按「无数据」处理，由调用方记为 missing
+    if data is None or data == {}:
+        return True
+    if not isinstance(data, dict):
+        return False
+    total = data.get("total_search_result_count")
+    items = data.get("fulltext_image")
+    if not isinstance(total, int) or total < 0 or not isinstance(items, list):
+        return False
+    if data.get("patent_id") not in (None, patent_id):
+        return False
+    if not items and total > offset:
+        return False
+    return all(isinstance(i, dict) and isinstance(i.get("path"), str) for i in items)
 
 
 def _valid_detail(data: Any) -> bool:

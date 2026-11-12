@@ -51,5 +51,10 @@ DEFAULT_PAGE_SIZE = 20
 MAX_OFFSET = 1000
 #: 一次补充详情最多选几件（P011/P013 支持 100，界面按 20 控制单次消耗）。
 MAX_DETAIL_BATCH = 20
+#: 含全部附图或公报 PDF 时一次最多选几件：要逐件调用、下载并存档，耗时随件数线性增长。
+MAX_FILE_DETAIL_BATCH = 10
+#: P042 每页取几张附图（2026-11-11 实测 limit=5 可用，20 未验证）；单件最多读多少张。
+DRAWINGS_PAGE_SIZE = 20
+MAX_DRAWINGS_PER_PATENT = 100
 #: P010 图片上限 4096 KB。
 MAX_IMAGE_BYTES = 4096 * 1024
