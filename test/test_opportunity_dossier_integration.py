@@ -81,6 +81,7 @@ def _ensure_partitions_sync() -> bool:
             for d in D:
                 ensure_fact_partitions(conn, "fact_daily", SITE, d)
                 ensure_fact_partitions(conn, "fact_dropped", SITE, d)
+                ensure_fact_partitions(conn, "fact_weekly", SITE, d)
         return True
     finally:
         engine.dispose()
@@ -423,6 +424,52 @@ async def test_advance_requires_some_evidence(db):
     await svc.void_manual_evidence(db, owner, did, eid)
     with pytest.raises(DecisionRuleError):
         await svc.add_decision(db, owner, did, _decision("advance"))
+
+
+async def test_weekly_only_keyword_counts_as_aba_evidence(db):
+    """只上过周榜、没上过日榜的词也是 ABA 证据，可以签推进（PR #187 评审 P2）。"""
+    await _seed(db)
+    owner = await _user(db)
+    kw = f"dossier weekly only {uuid.uuid4().hex[:6]}"
+    kid = (await db.execute(text(
+        "INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
+        {"s": SITE, "k": kw})).scalar()
+    await db.execute(text(
+        "INSERT INTO analysis.fact_weekly(site,report_date_week,keyword_id,current_ranking) VALUES (:s,:d,:k,900000)"),
+        {"s": SITE, "d": D[3], "k": kid})
+    await db.execute(text(
+        "INSERT INTO analysis.site_data_stats(site,period_type,report_date,row_count) VALUES (:s,'WEEK',:d,1)"),
+        {"s": SITE, "d": D[3]})
+    await db.commit()
+    did = (await svc.create_dossier(db, owner, _create(keywords=[kw])))["id"]
+    ev = _kw(await svc.get_dossier(db, owner, did), kw)
+    assert ev["day"]["ranked_periods"] == 0 and ev["week"]["ranked_periods"] == 1
+    await svc.add_decision(db, owner, did, _decision("advance"))
+
+
+async def test_resolves_keywords_stored_with_extra_whitespace_or_uppercase(db):
+    """导入按报表原文入库：带多余空白或大写的原文，手动填词时也要解析到同一个 keyword_id（PR #187 评审 P2）。"""
+    await _seed(db)
+    owner = await _user(db)
+    tag = uuid.uuid4().hex[:6]
+    stored = {f"Dossier  USB   Cable {tag}": f"dossier usb cable {tag}",
+              f" dossier 100% cotton_tee {tag} ": f"dossier 100% cotton_tee {tag}"}
+    ids = {}
+    for raw, norm in stored.items():
+        ids[norm] = (await db.execute(text(
+            "INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k) RETURNING keyword_id"),
+            {"s": SITE, "k": raw})).scalar()
+    # 通配符按字面匹配：`100% cotton_tee` 不能撞上别的词
+    await db.execute(text("INSERT INTO analysis.dim_keyword(site,keyword) VALUES (:s,:k)"),
+                     {"s": SITE, "k": f"dossier 100x cottonXtee {tag}"})
+    await db.commit()
+    did = (await svc.create_dossier(db, owner, _create(keywords=[*stored.values(), Seed.unknown])))["id"]
+    by_kw = {k["keyword"]: k["keyword_id"] for k in (await svc.get_dossier(db, owner, did))["keywords"]}
+    assert by_kw == {**ids, Seed.unknown: None}
+    # 原文没有被改写
+    kept = (await db.execute(text("SELECT keyword FROM analysis.dim_keyword WHERE keyword_id = ANY(:i)"),
+                             {"i": list(ids.values())})).scalars().all()
+    assert set(kept) == set(stored)
 
 
 async def test_changes_are_relative_to_last_decision_snapshot(db):

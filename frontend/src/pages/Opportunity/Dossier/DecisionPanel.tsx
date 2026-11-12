@@ -30,7 +30,8 @@ export default function DecisionPanel({ detail, onSign }: Props) {
   const verdict = Form.useWatch('verdict', form);
   const needRecheck = !!verdict && RECHECK_REQUIRED.includes(verdict);
   const payload = detail.snapshot?.payload;
-  const hasAba = !!payload?.keywords.some((k) => k.resolved && (k.day?.ranked_periods ?? 0) > 0);
+  // 日榜或周榜任一有在榜记录都算 ABA 证据（与后端 add_decision 一致）
+  const hasAba = !!payload?.keywords.some((k) => k.resolved && ((k.day?.ranked_periods ?? 0) > 0 || (k.week?.ranked_periods ?? 0) > 0));
   const hasManual = [...detail.gaps.flatMap((g) => g.evidence), ...detail.other_evidence].some((e) => !e.voided_at);
   const noEvidence = !hasAba && !hasManual;
 
