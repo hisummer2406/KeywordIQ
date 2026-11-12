@@ -24,12 +24,15 @@ describe('isDue', () => {
 });
 
 describe('parseKeywordInput', () => {
-  it('按换行与中英文逗号拆分，规范化并去重', () => {
-    expect(parseKeywordInput('Melty  Mug\nmeltzy mug， melty mug ,\n\n chocolate melting cup;')).toEqual([
+  it('只按换行拆分，规范化并去重', () => {
+    expect(parseKeywordInput('Melty  Mug\r\nmeltzy mug\n melty mug \n\n chocolate melting cup')).toEqual([
       'melty mug',
       'meltzy mug',
       'chocolate melting cup',
     ]);
+  });
+  it('关键词里的逗号、分号原样保留（PR #188 评审）', () => {
+    expect(parseKeywordInput('vitamins a, d and k\nbrine bag; large')).toEqual(['vitamins a, d and k', 'brine bag; large']);
   });
 });
 
