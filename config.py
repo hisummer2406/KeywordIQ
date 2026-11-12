@@ -129,10 +129,13 @@ class Settings(BaseSettings):
     # 核查任务轮询间隔（秒）。独立于导入队列：导入一跑几分钟，挂在一起检索会被卡住。0 关闭。
     RISK_TASK_POLL_SECONDS: float = 3
     # 任务租约（秒）。running 超过它即视为执行中断，转 unknown 且不自动重发（可能已计费）。
-    # 一个任务最多三次外部调用，须大于 3 × RISK_PROVIDER_TIMEOUT_SECONDS。
+    # 检索任务最多两次外部调用，须大于 2 × RISK_PROVIDER_TIMEOUT_SECONDS；详情任务每处理完一件续租一次。
     RISK_TASK_LEASE_SECONDS: int = 180
     # 单次智慧芽调用超时（秒）。官方给的最大响应时间是 10 秒。
     RISK_PROVIDER_TIMEOUT_SECONDS: float = 30
+    # 全部附图（P042）与公报 PDF（P020）存档到 OSS 的 key 前缀（change add-patent-fulltext-evidence）。
+    # 复用 OSS_* 配置；OSS 未启用时只保留供应商签名链接（约 7–10 天过期）。
+    RISK_EVIDENCE_OSS_PREFIX: str = "risk-evidence"
 
     # 机会中心 IP 专家 Agent（change add-opportunity-ip-agent）。MCP 与 REST 共用 ZHIHUIYA_API_KEY。
     # 预算按 MCP 调用次数计（计费口径未知，失败与未知的调用也计入）；超限拒绝入队。

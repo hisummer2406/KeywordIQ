@@ -20,11 +20,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.site_registry import SITE_CATALOG
+from app.table.risk import evidence_store
 from app.table.risk.jurisdictions import (
     DEFAULT_PAGE_SIZE,
     JURISDICTIONS,
     MARKET_RECOMMENDATIONS,
     MAX_DETAIL_BATCH,
+    MAX_FILE_DETAIL_BATCH,
     MAX_IMAGE_BYTES,
     MAX_OFFSET,
     PAGE_SIZE_OPTIONS,
@@ -33,6 +35,7 @@ from app.table.risk.review_rules import validate_review
 from app.table.risk.risk_errors import (
     CandidateNotFoundError,
     CheckNotFoundError,
+    EvidenceFileNotFoundError,
     InvalidCheckInputError,
     InvalidImageError,
     NothingToFetchError,
@@ -42,6 +45,7 @@ from app.table.risk.risk_errors import (
 )
 from app.table.risk.risk_model import (
     ACTIVE_TASK_STATUSES,
+    FILE_DETAIL_KINDS,
     RiskCandidate,
     RiskCheck,
     RiskCheckImage,
@@ -90,6 +94,8 @@ def meta() -> dict[str, Any]:
         "default_page_size": DEFAULT_PAGE_SIZE,
         "max_offset": MAX_OFFSET,
         "max_detail_batch": MAX_DETAIL_BATCH,
+        "max_file_detail_batch": MAX_FILE_DETAIL_BATCH,
+        "evidence_archive_enabled": evidence_store.archive_enabled(),
         "max_image_bytes": MAX_IMAGE_BYTES,
     }
 
@@ -264,13 +270,16 @@ async def get_check(db: AsyncSession, owner_id: int, check_id: int) -> dict[str,
             RiskCheck.id == previous_id, RiskCheck.owner_id == owner_id)))).scalar()
         previous_id = previous_id if owned else None
 
+    now = _now()
     by_candidate: dict[int, dict[str, Any]] = {}
     for d in details:
+        data = (d.data or {}).get("normalized") if d.status == "success" else None
+        if data is not None and d.kind in FILE_DETAIL_KINDS:
+            data = _files_out(data, now)
         by_candidate.setdefault(d.candidate_id, {})[d.kind] = {
             "status": d.status, "error_category": d.error_category, "fetched_at": d.fetched_at,
-            "data": (d.data or {}).get("normalized") if d.status == "success" else None,
+            "data": data,
         }
-    now = _now()
     active = {t.kind for t in tasks if t.status in ACTIVE_TASK_STATUSES}
     reviews_by_market: dict[str, list[dict[str, Any]]] = {m: [] for m in c.markets}
     for r in reviews:
@@ -317,6 +326,29 @@ async def get_check(db: AsyncSession, owner_id: int, check_id: int) -> dict[str,
     }
 
 
+def _files_out(norm: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """附图 / 公报清单对外形状：剥掉 OSS key；仅链接的条目只在可信、未过期时给出链接（决策 3）。"""
+    files = []
+    for f in norm.get("files") or []:
+        expires = f.get("link_expires_at")
+        link = f.get("link_url")
+        expired = True
+        if expires:
+            try:
+                expired = datetime.fromisoformat(expires) <= now
+            except ValueError:
+                expired = True
+        files.append({
+            "seq": f.get("seq"), "image_type": f.get("image_type"), "archived": bool(f.get("archived")),
+            "content_type": f.get("content_type"), "size_bytes": f.get("size_bytes"),
+            "archived_at": f.get("archived_at"), "archive_error": f.get("archive_error"),
+            "link_expires_at": expires,
+            "link_url": link if (not f.get("archived") and not expired
+                                 and evidence_store.is_trusted_url(link)) else None,
+        })
+    return {"pn": norm.get("pn"), "total": norm.get("total"), "files": files}
+
+
 def _can_fetch_more(c: RiskCheck) -> bool:
     return (c.searched_at is not None and c.total_count is not None
             and c.fetched_count < c.total_count and c.fetched_count <= MAX_OFFSET)
@@ -345,6 +377,26 @@ async def get_image(db: AsyncSession, owner_id: int, check_id: int) -> tuple[byt
     if img is None:
         raise CheckNotFoundError(log_detail=f"image missing check={check_id}")
     return img.data, img.content_type
+
+
+async def get_evidence_file(db: AsyncSession, owner_id: int, check_id: int, candidate_id: int,
+                            kind: str, seq: int) -> tuple[bytes, str, str]:
+    """读一个已存档的附图或公报：先做核查单归属校验，再从 OSS 读。返回 (内容, 类型, 下载文件名)。"""
+    await _check(db, owner_id, check_id)
+    detail = (await db.execute(
+        select(RiskPatentDetail).join(RiskCandidate, RiskCandidate.id == RiskPatentDetail.candidate_id)
+        .where(RiskCandidate.check_id == check_id, RiskCandidate.id == candidate_id,
+               RiskPatentDetail.kind == kind, RiskPatentDetail.status == "success")
+    )).scalar_one_or_none()
+    norm = (detail.data or {}).get("normalized") if detail is not None else None
+    entry = next((f for f in (norm or {}).get("files") or [] if f.get("seq") == seq), None)
+    if entry is None or not entry.get("archived") or not entry.get("object_key"):
+        raise EvidenceFileNotFoundError(log_detail=f"check={check_id} cand={candidate_id} {kind}#{seq}")
+    content = await evidence_store.read_file(entry["object_key"])
+    base = "".join(ch for ch in str(norm.get("pn") or f"patent-{candidate_id}") if ch.isascii() and (ch.isalnum() or ch in "-_"))
+    ext = entry["object_key"].rsplit(".", 1)[-1]
+    name = f"{base}.{ext}" if kind == "pdf" else f"{base}-{seq:03d}.{ext}"
+    return content, entry.get("content_type") or "application/octet-stream", name
 
 
 # ---------------------------------------------------------------- 显式付费动作
@@ -426,6 +478,8 @@ async def request_details(db: AsyncSession, owner_id: int, check_id: int, req: E
     existing = await _existing_task(db, check.id, req.client_token)
     if existing is not None:
         return _task_same_or_conflict(existing, fp)
+    if set(req.kinds) & set(FILE_DETAIL_KINDS) and len(req.candidate_ids) > MAX_FILE_DETAIL_BATCH:
+        raise InvalidCheckInputError(f"含全部附图或公报 PDF 时一次最多选 {MAX_FILE_DETAIL_BATCH} 件")
     owned = (await db.execute(select(func.count()).select_from(RiskCandidate).where(
         RiskCandidate.check_id == check.id, RiskCandidate.id.in_(req.candidate_ids)))).scalar_one()
     if owned != len(req.candidate_ids):

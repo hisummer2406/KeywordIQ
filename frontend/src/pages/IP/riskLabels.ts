@@ -1,4 +1,4 @@
-import type { Decision, DetailStatus, RiskLevel, TaskStatus } from '@/services/risk';
+import type { Decision, DetailKind, DetailStatus, RiskLevel, TaskStatus } from '@/services/risk';
 
 /**
  * 外观专利核查的展示文案。原则：失败、未知、未检索与「无命中」分开说，任何一种都不能读成
@@ -58,6 +58,54 @@ const ERROR_CATEGORY: Record<string, string> = {
   malformed_response: '返回内容不完整：结果未知，可能已计费',
   interrupted: '执行中断：结果未知，可能已计费',
 };
+
+/** 附图 / 公报未存档的原因。存档失败不影响详情结论，也不会自动重新调用。 */
+const ARCHIVE_ERROR: Record<string, string> = {
+  archive_disabled: '对象存储未启用',
+  untrusted_url: '链接不在智慧芽文件域名，已拒绝',
+  download_failed: '下载失败',
+  too_large: '文件过大',
+  bad_content: '文件格式不符',
+  archive_failed: '写入对象存储失败',
+};
+
+export function archiveErrorText(category: string | null | undefined): string {
+  if (!category) return '';
+  return ARCHIVE_ERROR[category] ?? '未存档';
+}
+
+export const DETAIL_KIND_TEXT: Record<DetailKind, string> = {
+  bibliography: '著录',
+  legal: '法律状态',
+  drawings: '全部附图',
+  pdf: '公报 PDF',
+};
+
+export const DETAIL_KINDS: DetailKind[] = ['bibliography', 'legal', 'drawings', 'pdf'];
+const FILE_KINDS: DetailKind[] = ['drawings', 'pdf'];
+
+export function hasFileKind(kinds: DetailKind[]): boolean {
+  return kinds.some((k) => FILE_KINDS.includes(k));
+}
+
+/** 本次可选的件数上限：含附图或公报时更小（要逐件调用并存档）。 */
+export function detailBatchLimit(kinds: DetailKind[], maxBatch: number, maxFileBatch: number): number {
+  return hasFileKind(kinds) ? Math.min(maxBatch, maxFileBatch) : maxBatch;
+}
+
+/**
+ * 补充详情的调用说明。count 为各种类实际需要获取的件数（已成功的不再调用）。
+ * 金额未知，不编造金额。
+ */
+export function detailCallText(count: Partial<Record<DetailKind, number>>): string {
+  const parts: string[] = [];
+  if (count.bibliography) parts.push(`P011 著录 1 次（${count.bibliography} 件，按成功条数计费）`);
+  if (count.legal) parts.push(`P013 法律状态 1 次（${count.legal} 件，按成功条数计费）`);
+  if (count.drawings) parts.push(`P042 全部附图至少 ${count.drawings} 次（按件调用，附图多于 20 张会翻页）`);
+  if (count.pdf) parts.push(`P020 公报 PDF ${count.pdf} 次（按件调用）`);
+  if (!parts.length) return '所选候选的这些详情都已获取，不会产生调用。';
+  return `将调用：${parts.join('；')}。已获取的不会重复调用，金额以智慧芽账单为准。`;
+}
 
 export function errorText(category: string | null | undefined): string {
   if (!category) return '';

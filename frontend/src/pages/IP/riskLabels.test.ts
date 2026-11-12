@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { coverageText, DECISIONS_NEED_SEARCH, errorText, safeHttps, ymd } from './riskLabels';
+import {
+  archiveErrorText,
+  coverageText,
+  DECISIONS_NEED_SEARCH,
+  detailBatchLimit,
+  detailCallText,
+  errorText,
+  safeHttps,
+  ymd,
+} from './riskLabels';
 
 /**
  * 外观专利核查的展示口径（specs/patent-risk-check、patent-risk-review）：无命中、未读取、
@@ -37,5 +46,27 @@ describe('riskLabels', () => {
   it('供应商 yyyyMMdd 日期格式化', () => {
     expect(ymd(20240131)).toBe('2024-01-31');
     expect(ymd(null)).toBe('—');
+  });
+
+  it('含附图或公报时批量上限收紧到文件上限', () => {
+    expect(detailBatchLimit(['bibliography', 'legal'], 20, 10)).toBe(20);
+    expect(detailBatchLimit(['bibliography', 'drawings'], 20, 10)).toBe(10);
+    expect(detailBatchLimit(['pdf'], 20, 10)).toBe(10);
+  });
+
+  it('调用说明列出每个接口的次数，不编造金额', () => {
+    const text = detailCallText({ bibliography: 3, drawings: 2, pdf: 2 });
+    expect(text).toContain('P011 著录 1 次（3 件');
+    expect(text).toContain('P042 全部附图至少 2 次');
+    expect(text).toContain('P020 公报 PDF 2 次');
+    expect(text).not.toContain('P013');
+    expect(text).not.toMatch(/元|¥/);
+    expect(detailCallText({})).toContain('不会产生调用');
+  });
+
+  it('未存档原因有中文说明', () => {
+    expect(archiveErrorText('archive_disabled')).toBe('对象存储未启用');
+    expect(archiveErrorText('x')).toBe('未存档');
+    expect(archiveErrorText(null)).toBe('');
   });
 });

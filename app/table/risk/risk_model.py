@@ -8,7 +8,8 @@
 - ``risk_task``：持久化任务，``SKIP LOCKED`` 认领 + 租约（决策 3）。
 - ``risk_provider_call``：每一次供应商 HTTP 调用（决策 4），计费状态恒为未知。
 - ``risk_search_page`` / ``risk_candidate``：每页检索证据与去重后的候选（决策 6）。
-- ``risk_patent_detail``：按需获取的著录 / 法律状态（决策 7）。
+- ``risk_patent_detail``：按需获取的著录 / 法律状态（决策 7），以及全部附图 / 公报 PDF 的存档清单
+  （change add-patent-fulltext-evidence，文件本体在 OSS）。
 - ``risk_review``：按市场追加的人工意见（决策 10）。
 
 私有性靠每条查询带 ``risk_check.owner_id``，取不到一律 404——超管也不例外。
@@ -48,7 +49,9 @@ TASK_KINDS = ("search", "detail")
 TASK_STATUSES = ("queued", "running", "completed", "failed", "unknown")
 ACTIVE_TASK_STATUSES = ("queued", "running")
 CALL_OUTCOMES = ("success", "error", "unknown")
-DETAIL_KINDS = ("bibliography", "legal")
+DETAIL_KINDS = ("bibliography", "legal", "drawings", "pdf")
+#: 需要下载并存档文件的详情种类（change add-patent-fulltext-evidence）
+FILE_DETAIL_KINDS = ("drawings", "pdf")
 DETAIL_STATUSES = ("success", "failed", "unknown", "missing")
 RISK_LEVELS = ("high", "medium", "low", "undetermined")
 DECISIONS = ("pass", "conditional_pass", "continue_verify", "need_evidence", "not_recommended")
@@ -131,7 +134,7 @@ class RiskTask(Base):
     check_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey(f"{_SCHEMA}.risk_check.id", ondelete="CASCADE"), nullable=False,
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False, comment="search（检索一页）/detail（著录与法律状态）")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, comment="search（检索一页）/detail（专利详情）")
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued",
                                         comment="queued/running/completed/failed/unknown")
     params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, comment="固定的任务参数")
@@ -165,7 +168,7 @@ class RiskProviderCall(Base):
     task_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey(f"{_SCHEMA}.risk_task.id", ondelete="CASCADE"), nullable=False,
     )
-    api: Mapped[str] = mapped_column(String(8), nullable=False, comment="P010/P060/P011/P013")
+    api: Mapped[str] = mapped_column(String(8), nullable=False, comment="P010/P060/P011/P013/P042/P020")
     outcome: Mapped[str] = mapped_column(String(16), nullable=False, comment="success/error/unknown")
     http_status: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[int | None] = mapped_column(BigInteger, comment="供应商 error_code")
@@ -243,7 +246,7 @@ class RiskCandidate(Base):
 
 
 class RiskPatentDetail(Base):
-    """候选的著录或法律状态。只对尚无成功结果的项发起调用，成功结果不重复取。"""
+    """候选的一种详情（著录、法律状态、全部附图、公报 PDF）。只对尚无成功结果的项发起调用，成功结果不重复取。"""
 
     __tablename__ = "risk_patent_detail"
 
@@ -251,20 +254,20 @@ class RiskPatentDetail(Base):
     candidate_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey(f"{_SCHEMA}.risk_candidate.id", ondelete="CASCADE"), nullable=False,
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False, comment="bibliography/legal")
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, comment="bibliography/legal/drawings/pdf")
     status: Mapped[str] = mapped_column(String(16), nullable=False, comment="success/failed/unknown/missing")
     task_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey(f"{_SCHEMA}.risk_task.id", ondelete="CASCADE"), nullable=False,
     )
     error_category: Mapped[str | None] = mapped_column(String(32))
-    data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, comment="规范化字段 + 原始条目")
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, comment="规范化字段 + 原始条目；附图与公报含存档清单")
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         UniqueConstraint("candidate_id", "kind", name="uq_risk_patent_detail_candidate_kind"),
         CheckConstraint(_in("kind", DETAIL_KINDS), name="ck_risk_patent_detail_kind"),
         CheckConstraint(_in("status", DETAIL_STATUSES), name="ck_risk_patent_detail_status"),
-        {"schema": _SCHEMA, "comment": "候选专利的著录与法律状态"},
+        {"schema": _SCHEMA, "comment": "候选专利的著录、法律状态、全部附图与公报"},
     )
 
 
