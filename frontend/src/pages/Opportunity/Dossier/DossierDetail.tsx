@@ -50,12 +50,20 @@ export default function DossierDetail({ id, currentUserId, onBack, onChanged, on
   const [form] = Form.useForm<{ title: string; idea?: string }>();
   const alive = useRef(true);
 
+  /**
+   * 只有 404 才算「档案不存在」。网络抖动或服务端错误时保留已加载的内容（轮询期间常见），
+   * 下一次成功即恢复；否则一次失败就把仍存在的档案永久显示成不存在（PR #187 复审）。
+   * 错误提示仍由全局错误处理负责。
+   */
   const load = useCallback(async () => {
     try {
       const d = await getDossier(id);
-      if (alive.current) setDetail(d);
-    } catch {
-      if (alive.current) setMissing(true);
+      if (alive.current) {
+        setDetail(d);
+        setMissing(false);
+      }
+    } catch (e: any) {
+      if (alive.current && e?.response?.status === 404) setMissing(true);
     }
   }, [id]);
 
