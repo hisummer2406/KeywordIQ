@@ -30,7 +30,7 @@ export const PLACEHOLDER_PIXEL_SIZE = 1;
 
 /**
  * 返回这个 ASIN 的缩略图地址；ASIN 为空时返回 null
- * （调用方据此直接渲染占位，不要拼出畸形地址再等它返回透明像素）。
+ * （调用方据此直接不渲染图片，不要拼出畸形地址再等它返回透明像素）。
  */
 export function productImageUrl(asin: string | null | undefined): string | null {
   const id = (asin || '').trim();

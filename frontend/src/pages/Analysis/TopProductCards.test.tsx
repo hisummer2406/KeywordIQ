@@ -70,16 +70,17 @@ describe('TopProductCards', () => {
     expect(screen.getByText('转化 20%')).toBeTruthy();
   });
 
-  it('图片加载失败降级为占位方块，ASIN 与份额照常展示', () => {
+  it('图片加载失败时不显示图片也不显示占位，ASIN 与份额照常展示', () => {
     render(<TopProductCards row={row(1)} />);
     fireEvent.error(screen.getByAltText('B0SLOT00001'));
 
-    expect(screen.getByTestId('thumb-placeholder')).toBeTruthy();
+    expect(screen.queryByAltText('B0SLOT00001')).toBeNull();
+    expect(screen.queryByTestId('thumb-placeholder')).toBeNull();
     expect(screen.getByText('B0SLOT00001')).toBeTruthy();
     expect(screen.getByText('点击 50%')).toBeTruthy();
   });
 
-  it('图床返回 1×1 透明像素时也降级——它是 200，onError 不会触发', () => {
+  it('图床返回 1×1 透明像素时同样移除图片——它是 200，onError 不会触发', () => {
     // 实测：不存在的 ASIN 返回 HTTP 200 + 43 字节的 1×1 透明 GIF。只挂 onError 的话，
     // 用户看到的是一个被拉伸的空白方块，比占位符更糟——它看起来像"图还在加载"
     render(<TopProductCards row={row(1)} />);
@@ -88,7 +89,7 @@ describe('TopProductCards', () => {
     Object.defineProperty(img, 'naturalHeight', { value: 1, configurable: true });
     fireEvent.load(img);
 
-    expect(screen.getByTestId('thumb-placeholder')).toBeTruthy();
+    expect(screen.queryByAltText('B0SLOT00001')).toBeNull();
     expect(screen.getByText('点击 50%')).toBeTruthy();
   });
 
@@ -99,7 +100,7 @@ describe('TopProductCards', () => {
     Object.defineProperty(img, 'naturalHeight', { value: 112, configurable: true });
     fireEvent.load(img);
 
-    expect(screen.queryByTestId('thumb-placeholder')).toBeNull();
+    expect(screen.getByAltText('B0SLOT00001')).toBeTruthy();
   });
 });
 
@@ -115,7 +116,7 @@ describe('卡牌可点击至商品页', () => {
   });
 
   it('取不到图的卡牌同样可点击——那恰恰是最需要这个入口的时候', () => {
-    // 图床对本项目 ASIN 覆盖率很低（实测 12 个中仅 2 个有图），占位方块是常态而非例外。
+    // 图床对本项目 ASIN 覆盖率很低（实测 12 个中仅 2 个有图），无图卡牌是常态而非例外。
     // 链接挂在卡牌而非图片上，故有无图都可点。
     render(<TopProductCards row={row(3)} siteDomain="amazon.com" />);
     const card = screen.getByTestId('slot-card-2');
