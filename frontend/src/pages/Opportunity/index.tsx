@@ -1,5 +1,5 @@
 import { PageContainer } from '@ant-design/pro-components';
-import { useModel, useSearchParams } from '@umijs/max';
+import { history, useModel, useSearchParams } from '@umijs/max';
 import { theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { getIpMeta, type IpMeta, listWorkspaces, type Workspace } from '@/services/opportunityIp';
@@ -150,6 +150,7 @@ export default function OpportunityPage() {
               onBack={() => navigate({ view: 'dossiers' })}
               onChanged={bump}
               onOpenResearch={(id) => navigate({ task: id })}
+              onOpenPricingSheet={(sid) => history.push(`/pricing/calculate?sheet=${sid}`)}
               onStartResearch={(detail) => {
                 setPreset({
                   dossierId: detail.dossier.id,

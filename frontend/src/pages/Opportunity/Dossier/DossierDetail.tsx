@@ -6,11 +6,14 @@ import {
   addDossierKeywords,
   addManualEvidence,
   askDossier,
+  createDossierPricingSheet,
   type DossierDetail as Detail,
   getDossier,
+  linkDossierPricingSheet,
   linkDossierResearch,
   refreshDossierSnapshot,
   removeDossierKeyword,
+  unlinkDossierPricingSheet,
   unlinkDossierResearch,
   updateDossier,
   voidManualEvidence,
@@ -21,10 +24,11 @@ import { describeChange, isDue, STATUS } from './dossierView';
 import GapsPanel from './GapsPanel';
 import IpPanel from './IpPanel';
 import KeywordEvidencePanel from './KeywordEvidencePanel';
+import PricingPanel from './PricingPanel';
 
 /**
  * 机会档案详情（change add-opportunity-dossier 决策 9）。自上而下：标题区 → 自上次决定以来的变化 →
- * 关键词与 ABA 证据 → 系统没有的数据 → 专利风险 → 决定 → 追问。
+ * 关键词与 ABA 证据 → 系统没有的数据 → 专利风险 → 商业可行性 → 决定 → 追问。
  *
  * 每个写操作成功后重新取一次详情；有在途的追问时每 3 秒轮询，答完就停。
  */
@@ -37,11 +41,13 @@ interface Props {
   onChanged: () => void;
   onStartResearch: (detail: Detail) => void;
   onOpenResearch: (researchId: number) => void;
+  /** 打开核价单（定价核算 › 快速核价，`?sheet=<id>`） */
+  onOpenPricingSheet: (sheetId: number) => void;
 }
 
 const POLL_MS = 3000;
 
-export default function DossierDetail({ id, currentUserId, onBack, onChanged, onStartResearch, onOpenResearch }: Props) {
+export default function DossierDetail({ id, currentUserId, onBack, onChanged, onStartResearch, onOpenResearch, onOpenPricingSheet }: Props) {
   const { token } = theme.useToken();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [missing, setMissing] = useState(false);
@@ -244,6 +250,19 @@ export default function DossierDetail({ id, currentUserId, onBack, onChanged, on
           onOpenResearch={onOpenResearch}
           onLink={(rid) => act(() => linkDossierResearch(id, rid))}
           onUnlink={(rid) => act(() => unlinkDossierResearch(id, rid))}
+        />
+
+        <Divider />
+        <PricingPanel
+          detail={detail}
+          currentUserId={currentUserId}
+          onCreateSheet={async () => {
+            const r = await createDossierPricingSheet(id);
+            onOpenPricingSheet(r.sheet_id);
+          }}
+          onOpenSheet={onOpenPricingSheet}
+          onLink={(sid) => act(() => linkDossierPricingSheet(id, sid))}
+          onUnlink={(sid) => act(() => unlinkDossierPricingSheet(id, sid))}
         />
 
         <Divider />

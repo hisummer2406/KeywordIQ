@@ -2,7 +2,7 @@ import { Alert, Button, DatePicker, Form, Input, Radio, Tag, Timeline, Typograph
 import { useRef, useState } from 'react';
 import type { DossierDetail, Verdict } from '@/services/opportunityDossier';
 import { newToken } from '@/services/risk';
-import { RECHECK_REQUIRED, STATUS, VERDICTS } from './dossierView';
+import { formatMoney, RECHECK_REQUIRED, STATUS, VERDICTS } from './dossierView';
 
 /**
  * 决定：推进 / 补证 / 观察 / 否决。只追加，每一条都留着签署人、理由、当时依据的证据快照和专利状态。
@@ -88,6 +88,14 @@ export default function DecisionPanel({ detail, onSign }: Props) {
                 message="档案里还没有任何证据（关键词都没有在榜记录，也没有人工证据），暂时不能签「推进」。"
               />
             )}
+            {verdict === 'advance' && detail.pricing.state !== 'calculated' && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="还没有保存过测算。可以照常签署，签署记录会写明当时「未测算」。"
+              />
+            )}
             {verdict === 'advance' && detail.ip.state === 'unchecked' && (
               <Alert
                 type="warning"
@@ -143,6 +151,22 @@ export default function DecisionPanel({ detail, onSign }: Props) {
                     <div style={{ fontSize: 12, color: t.colorTextTertiary, marginTop: 2 }}>
                       签署时：{d.snapshot_id ? `依据 ABA 证据快照 #${d.snapshot_id}` : '没有 ABA 证据快照'}；专利
                       {d.ip_status.state === 'unchecked' ? '未核查' : `已有 ${d.ip_status.reviews.length} 条市场意见`}
+                      {d.pricing_status &&
+                        `；测算${
+                          d.pricing_status.state === 'calculated'
+                            ? `：${d.pricing_status.sheets
+                                .flatMap((s) => s.markets)
+                                .filter((m) => m.price)
+                                .map((m) =>
+                                  m.adjusted
+                                    ? `${m.market} 调价后 ${formatMoney(m.adjusted.price, m.currency)}，利润 ${formatMoney(m.adjusted.profit_cny, 'CNY')}`
+                                    : `${m.market} ${formatMoney(m.price, m.currency)}，利润 ${formatMoney(m.profit_cny, 'CNY')}`,
+                                )
+                                .join('；') || '各市场都没有可用结果'}`
+                            : d.pricing_status.state === 'draft_only'
+                              ? '只有草稿'
+                              : '未测算'
+                        }`}
                     </div>
                   </div>
                 ),
