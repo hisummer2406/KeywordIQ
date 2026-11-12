@@ -1,6 +1,7 @@
-import { Alert, Descriptions, List, Space, Tag, Typography } from 'antd';
+import { Alert, Descriptions, Space, Tag, Typography } from 'antd';
 import type { AgentOutput, AnalysisContent, Coverage, ResearchDetail } from '@/services/opportunityIp';
 import { RELEVANCE, TOOL_TEXT } from './ipLabels';
+import Rows from './Rows';
 
 /**
  * Agent 风险分析卡（决策 7）。旁边显示服务端算出的覆盖事实——这些不由模型生成。
@@ -59,20 +60,15 @@ export default function AnalysisCard({ data, analysis }: { data: ResearchDetail;
       )}
       <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>{content.summary}</Typography.Paragraph>
       {content.signals.length > 0 && (
-        <List
-          size="small"
-          bordered
-          dataSource={content.signals}
-          renderItem={(s) => (
-            <List.Item>
-              <Space align="start">
-                <Tag color={RELEVANCE[s.relevance].color}>{RELEVANCE[s.relevance].text}</Tag>
-                <Typography.Text strong>{pn.get(s.candidate_id) ?? `#${s.candidate_id}`}</Typography.Text>
-                <Typography.Text>{s.reason}</Typography.Text>
-              </Space>
-            </List.Item>
-          )}
-        />
+        <Rows bordered>
+          {content.signals.map((s) => (
+            <Space key={s.candidate_id} align="start">
+              <Tag color={RELEVANCE[s.relevance].color}>{RELEVANCE[s.relevance].text}</Tag>
+              <Typography.Text strong>{pn.get(s.candidate_id) ?? `#${s.candidate_id}`}</Typography.Text>
+              <Typography.Text>{s.reason}</Typography.Text>
+            </Space>
+          ))}
+        </Rows>
       )}
       <Bullets title="覆盖缺口" items={content.coverage_gaps} />
       <Bullets title="无法判断" items={content.unknowns} />
