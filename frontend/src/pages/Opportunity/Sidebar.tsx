@@ -3,6 +3,7 @@ import {
   ClockCircleOutlined,
   DeleteOutlined,
   EditOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
   InboxOutlined,
   MoreOutlined,
@@ -23,24 +24,27 @@ import {
 import { TASK_KIND } from './IpAgent/ipLabels';
 
 /**
- * 机会中心页内左栏（change add-opportunity-ip-agent 决策 10、11）：新建任务、专家、定时任务、
- * 工作空间与当前工作空间下的任务。它是页面组件的一部分，不是布局层的二级菜单（top-nav-structure）。
+ * 机会中心页内左栏（change add-opportunity-ip-agent 决策 10、11）：机会档案、专家、定时任务、
+ * 个人的工作空间与其下的专家任务。它是页面组件的一部分，不是布局层的二级菜单（top-nav-structure）。
  */
 
 /** 工作空间范围：全部、未归类，或某个工作空间 id */
 export type WsScope = 'all' | 'none' | number;
 
+/** 主区视图。`dossiers` 是默认视图（机会档案列表）。 */
+export type View = 'dossiers' | 'dossier' | 'new-dossier' | 'new' | 'experts' | 'schedules' | 'task';
+
 const PAGE_SIZE = 30;
 
 interface Props {
-  view: 'new' | 'experts' | 'schedules' | 'task';
+  view: View;
   taskId: number | null;
   scope: WsScope;
   workspaces: Workspace[];
   counts: { total: number; unassigned: number };
   /** 任务或工作空间变了就加一，左栏重新取列表 */
   version: number;
-  onNavigate: (next: { view?: Props['view']; task?: number | null; scope?: WsScope }) => void;
+  onNavigate: (next: { view?: View; task?: number | null; dossier?: number | null; scope?: WsScope }) => void;
   onWorkspacesChanged: () => void;
 }
 
@@ -181,11 +185,17 @@ export default function Sidebar({ view, taskId, scope, workspaces, counts, versi
       }}
     >
       <div style={{ padding: 12 }}>
-        <Button type="primary" block icon={<PlusOutlined />} onClick={() => onNavigate({ view: 'new', task: null })}>
-          新建任务
+        <Button type="primary" block icon={<PlusOutlined />} onClick={() => onNavigate({ view: 'new-dossier' })}>
+          新建档案
         </Button>
       </div>
       <div style={{ padding: '0 8px' }}>
+        <Row
+          active={view === 'dossiers' || view === 'dossier' || view === 'new-dossier'}
+          icon={<FolderOpenOutlined />}
+          label="机会档案"
+          onClick={() => onNavigate({ view: 'dossiers' })}
+        />
         <Row active={view === 'experts'} icon={<AppstoreOutlined />} label="专家" onClick={() => onNavigate({ view: 'experts', task: null })} />
         <Row
           active={view === 'schedules'}
@@ -196,6 +206,15 @@ export default function Sidebar({ view, taskId, scope, workspaces, counts, versi
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 12px', minHeight: 0 }}>
+        <SectionTitle
+          extra={
+            <Tooltip title="向专家发起任务">
+              <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => onNavigate({ view: 'new', task: null })} />
+            </Tooltip>
+          }
+        >
+          专家任务（仅自己可见）
+        </SectionTitle>
         <SectionTitle
           extra={
             <Tooltip title="新建工作空间">

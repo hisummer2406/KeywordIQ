@@ -25,9 +25,8 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     // 独立权限点,不复用 keyword:view——每个用户的关注池互相独立,不是"全体共用一个开关"
     // 的授权粒度(design.md 决策 6)。
     canViewCompetitor: has('competitor:view'),
-    // 机会中心（issue #76）：当前唯一一个默认不授予任何内置角色的权限点，只有 is_super
-    // 能看到——即便某个用户的角色码是 admin，只要 is_super 为假就看不到，与其余按角色
-    // 矩阵授予的权限点不同档次（add-opportunity-center-nav/design.md 决策 1）。
+    // 机会中心（issue #76）：自 change add-opportunity-dossier 起授予三个内置角色（此前仅
+    // is_super 可见）。IP 专家的计费动作另由 risk:search 把守（见 canSearchRisk）。
     canViewOpportunity: has('opportunity:view'),
     // 定价核算（change add-pricing-calculation）：真实端点，按权限点派生。核价本身与「维护
     // 共享费率」分开授权——费率写错会让所有人的核价一起算错。后端逐端点校验，这里只管显隐。
