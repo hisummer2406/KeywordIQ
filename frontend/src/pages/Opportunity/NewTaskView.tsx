@@ -1,4 +1,5 @@
 import { useAccess } from '@umijs/max';
+import { Welcome } from '@ant-design/x';
 import { Alert, Typography, theme } from 'antd';
 import type { IpMeta, Workspace } from '@/services/opportunityIp';
 import NewTaskComposer, { type DossierPreset } from './IpAgent/NewTaskComposer';
@@ -25,12 +26,12 @@ export default function NewTaskView({ meta, workspaces, defaultWorkspaceId, pres
   return (
     <div style={{ padding: '48px 24px', overflowY: 'auto', height: '100%' }}>
       <div style={{ maxWidth: 860, margin: '0 auto' }}>
-        <Typography.Title level={3} style={{ textAlign: 'center', marginBottom: 8 }}>
-          今天想让哪位专家帮你？
-        </Typography.Title>
-        <Typography.Paragraph type="secondary" style={{ textAlign: 'center', marginBottom: 28 }}>
-          专家给建议和证据，会花钱的调用都先问你；结论由你签署。
-        </Typography.Paragraph>
+        <Welcome
+          variant="borderless"
+          style={{ textAlign: 'center', marginBottom: 28 }}
+          title="今天想让哪位专家帮你？"
+          description="专家给建议和证据，会花钱的调用都先问你；结论由你签署。"
+        />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center', marginBottom: 20 }}>
           {TASK_EXPERTS.map((e) => (
             <div

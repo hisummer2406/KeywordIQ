@@ -41,6 +41,18 @@ class ResizeObserverStub {
 }
 window.ResizeObserver = window.ResizeObserver ?? (ResizeObserverStub as never);
 
+// Ant Design X 的 Bubble.List（滚动兼容）用 IntersectionObserver，jsdom 没有实现；
+// 补一个什么都不触发的桩即可（change adopt-antdx-opportunity-ui）。
+class IntersectionObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+}
+window.IntersectionObserver = window.IntersectionObserver ?? (IntersectionObserverStub as never);
+
 /**
  * 只过滤 act(...) 这一类警告。
  *
