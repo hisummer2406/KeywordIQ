@@ -168,6 +168,10 @@ async def test_leads_reject_unknown_site_and_date(db):
     await _seed(db)
     with pytest.raises(GrowthScopeError):
         await svc.growth_leads(db, site="UK", on=None, page=1, page_size=50)
+    # 缺失站点不回退默认站点（PR #188 评审 P1）
+    for missing in ("", "  ", None):
+        with pytest.raises(GrowthScopeError):
+            await svc.growth_leads(db, site=missing, on=None, page=1, page_size=50)  # type: ignore[arg-type]
     with pytest.raises(GrowthScopeError):
         await svc.growth_leads(db, site=SITE, on=MISSING, page=1, page_size=50)
 
@@ -177,6 +181,36 @@ async def test_leads_empty_site_is_empty_not_error(db):
     await db.commit()
     out = await svc.growth_leads(db, site=SITE, on=None, page=1, page_size=50)
     assert (out["date"], out["total"], out["items"], out["missing_dates"]) == (None, 0, [], [])
+
+
+async def test_dossier_list_filters_by_site_before_pagination(db):
+    """并入目标按站点在服务端筛选：别的站点的档案再多，也不会把同站点的挤出第一页（PR #188 评审 P2）。"""
+    ids = await _seed(db)
+    owner = await _user(db)
+    mine = (await dossier_service.create_dossier(db, owner, DossierCreate(
+        title="GB 档案", site=SITE, keywords=[ids["rising_text"]], client_token=uuid.uuid4().hex)))["id"]
+    # 之后再建三份别的站点的档案，它们的 updated_at 更晚，会排在前面
+    for i in range(3):
+        db.add(OppDossier(title=f"US 档案 {i}", site="US", creator_id=owner, assignee_id=owner,
+                          client_token=uuid.uuid4().hex))
+    await db.commit()
+    first_page = await dossier_service.list_dossiers(db, owner, page=1, page_size=2, site=SITE)
+    assert [d["id"] for d in first_page["items"]] == [mine] and first_page["total"] >= 1
+    assert all(d["site"] == SITE for d in first_page["items"])
+    from app.table.opportunity.dossier_errors import DossierInputError
+    with pytest.raises(DossierInputError):
+        await dossier_service.list_dossiers(db, owner, page=1, page_size=2, site="UK")
+
+
+def test_leads_route_requires_site_param():
+    from fastapi.routing import APIRoute
+
+    from app.api_router import api_router
+
+    route = next(r for r in api_router.routes
+                 if isinstance(r, APIRoute) and r.path == "/api/opportunity/leads/growth")
+    site = next(p for p in route.dependant.query_params if p.name == "site")
+    assert site.required is True
 
 
 def test_leads_route_requires_opportunity_view_only():

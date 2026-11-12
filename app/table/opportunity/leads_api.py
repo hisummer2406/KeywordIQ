@@ -24,7 +24,8 @@ _require = simple_auth.require_permission(OPPORTUNITY_VIEW)
 
 @opportunity_leads_router.get("/growth")
 async def growth_leads(
-    site: str | None = Query(None, max_length=8),
+    # 站点必填：缺失即 422，不回退默认站点（multi-site-data-model；AGENTS「非法/缺失站点码必须报错」）
+    site: str = Query(..., min_length=1, max_length=8),
     on: date | None = Query(None, alias="date", description="锚定日，缺省取该站点最新可用日期"),
     page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_async_db), user=Depends(_require),
