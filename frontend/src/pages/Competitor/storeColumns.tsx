@@ -65,7 +65,7 @@ export function buildStoreColumns(
       dataIndex: 'domain',
       width: 220,
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Link href={`https://${row.domain}`} target="_blank" rel="noreferrer">
             {row.name || row.domain}
           </Typography.Link>

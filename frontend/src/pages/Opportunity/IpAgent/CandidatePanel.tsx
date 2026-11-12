@@ -138,7 +138,7 @@ export default function CandidatePanel({ data, tools, maxBatch, busy, onQueued }
             {
               title: '专利',
               render: (_: unknown, c) => (
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Typography.Text strong>{c.pn ?? c.patent_id}</Typography.Text>
                   <Typography.Text>{c.title ?? '—'}</Typography.Text>
                   <Typography.Text type="secondary">{`${c.authority ?? '—'} · 申请 ${ymd(c.apdt)} · 公开 ${ymd(c.pbdt)}`}</Typography.Text>

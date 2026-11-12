@@ -44,7 +44,7 @@ export default function ExpertsView({ onOpen }: { onOpen: (entry: ExpertEntry) =
               <div style={{ fontSize: 12, color: token.colorTextTertiary, marginBottom: 4 }}>{`负责阶段：${e.stage}`}</div>
               <Space size={[4, 4]} wrap style={{ marginBottom: 8 }}>
                 {e.skills.map((s) => (
-                  <Tag key={s} bordered={false}>
+                  <Tag key={s} variant="filled">
                     {s}
                   </Tag>
                 ))}

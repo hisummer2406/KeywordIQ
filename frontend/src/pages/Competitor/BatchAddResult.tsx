@@ -15,7 +15,7 @@ export default function BatchAddResult({ result }: { result: StoreBatchAddRespon
   const { added, already_watched: existing, rejected } = result;
 
   return (
-    <Space direction="vertical" style={{ width: '100%' }} size={12}>
+    <Space orientation="vertical" style={{ width: '100%' }} size={12}>
       <Space size={8} wrap>
         <Tag color="green">已加入 {added.length}</Tag>
         {existing.length > 0 && <Tag>已关注过 {existing.length}</Tag>}
@@ -26,7 +26,7 @@ export default function BatchAddResult({ result }: { result: StoreBatchAddRespon
         <Alert
           type="warning"
           showIcon
-          message="这一批都没能加入"
+          title="这一批都没能加入"
           description="下面逐条列出了原因。「不是 Shopify」是根本不受支持，换个站点；「无法访问」可能是临时的，稍后再试。"
         />
       )}
@@ -44,7 +44,7 @@ export default function BatchAddResult({ result }: { result: StoreBatchAddRespon
                   dataSource={rejected}
                   renderItem={(item) => (
                     <List.Item>
-                      <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                      <Space orientation="vertical" size={0} style={{ width: '100%' }}>
                         <Typography.Text ellipsis={{ tooltip: item.input }}>
                           {item.input}
                         </Typography.Text>

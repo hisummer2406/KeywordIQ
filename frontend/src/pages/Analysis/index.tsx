@@ -468,7 +468,7 @@ export default function AnalysisPage() {
           style={{ marginTop: 12 }}
           type="warning"
           showIcon
-          message="该日期的品牌与类目尚未重建"
+          title="该日期的品牌与类目尚未重建"
           description="这份数据导入时品牌与类目还存放在商品维度上，需要从原始文件重导才能按名次筛选。在此之前，按品牌或类目筛选这个日期会得到空结果——那是数据待重建，不是你的筛选条件写错了。"
         />
       )}
@@ -516,7 +516,7 @@ export default function AnalysisPage() {
           defaultPageSize: initialSnapshot?.lastRequest?.perPage ?? 50,
           showSizeChanger: true,
           // 只保留这一套分页入口，放在表头上方右侧并随表头一起固定（见 AnalysisTable.less）
-          position: ['topRight'],
+          placement: ['topEnd'],
           className: 'analysis-pager',
           onChange: () => {
             scrollAfterLoadRef.current = true;

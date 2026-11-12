@@ -130,7 +130,7 @@ export default function IpPanel({ detail, currentUserId, onStartResearch, onOpen
         okButtonProps={{ disabled: !chosen, loading: saving }}
         onOk={() => link().catch(() => undefined)}
         onCancel={() => setPicking(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
           只能关联你自己创建的调研。关联后，团队成员能在这个档案里看到它的产品名和各市场的人工意见；检索式、候选和附图仍只有你能看。

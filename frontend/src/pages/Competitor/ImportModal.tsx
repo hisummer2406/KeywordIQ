@@ -202,7 +202,7 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
               },
             ]}
           />
-          <Space direction="vertical" style={{ width: '100%', marginTop: 12 }}>
+          <Space orientation="vertical" style={{ width: '100%', marginTop: 12 }}>
             <Typography.Text type="secondary">
               默认站点(可选):部分链接不带站点信息(裸卖家 ID、缺少站点参数的链接),这些条目会
               用这里选的站点兜底;不选则这些条目判为解析失败。
@@ -220,7 +220,7 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
       )}
 
       {step === 'preview' && preview && (
-        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <Space orientation="vertical" style={{ width: '100%' }} size="middle">
           <Descriptions size="small" column={3} bordered>
             <Descriptions.Item label="解析出">{preview.parsed} 个卖家</Descriptions.Item>
             <Descriptions.Item label="新增">{preview.new} 个</Descriptions.Item>
@@ -231,7 +231,7 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
             <Alert
               type="warning"
               showIcon
-              message={`${preview.unparsable.length} 条无法解析`}
+              title={`${preview.unparsable.length} 条无法解析`}
               description={
                 <Table
                   size="small"
@@ -299,7 +299,7 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
               </Radio.Group>
             </div>
             {mode === 'append' ? (
-              <Space direction="vertical" style={{ marginTop: 8 }}>
+              <Space orientation="vertical" style={{ marginTop: 8 }}>
                 <Typography.Text type="secondary">
                   未识别出候选分组的卖家归入(可选,已有分组/备注的已关注卖家不受影响):
                 </Typography.Text>
@@ -315,7 +315,7 @@ export default function ImportModal({ open, groups, sites, onClose, onImported }
                 />
               </Space>
             ) : (
-              <Space direction="vertical" style={{ marginTop: 8, width: '100%' }}>
+              <Space orientation="vertical" style={{ marginTop: 8, width: '100%' }}>
                 <Typography.Text type="secondary">
                   选择要对齐的分组:该分组下现有的全部关注会被清空,替换为本次预览结果。
                 </Typography.Text>

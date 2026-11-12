@@ -131,7 +131,7 @@ export default function RecordDetailPage() {
         </Space>
       }
     >
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Card title="核查输入">
           <Row gutter={24}>
             <Col xs={24} md={16}>
@@ -139,7 +139,7 @@ export default function RecordDetailPage() {
                 <Descriptions.Item label="核查编号">{data.id}</Descriptions.Item>
                 <Descriptions.Item label="销售市场">{data.markets.map(marketName).join('、')}</Descriptions.Item>
                 <Descriptions.Item label="检索法域">
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     {data.jurisdiction_details.map((j) => (
                       <span key={j.code}>
                         {j.name}
@@ -190,13 +190,13 @@ export default function RecordDetailPage() {
             </Typography.Text>
           }
         >
-          <Space direction="vertical" style={{ width: '100%' }}>
-            {busy && <Alert type="info" showIcon message="任务执行中，页面会自动刷新状态（不会重复调用智慧芽）。" />}
+          <Space orientation="vertical" style={{ width: '100%' }}>
+            {busy && <Alert type="info" showIcon title="任务执行中，页面会自动刷新状态（不会重复调用智慧芽）。" />}
             {(data.search_status === 'failed' || data.search_status === 'unknown') && (
               <Alert
                 type={data.search_status === 'unknown' ? 'warning' : 'error'}
                 showIcon
-                message={errorText(lastSearch?.error_category) || status.text}
+                title={errorText(lastSearch?.error_category) || status.text}
                 description={
                   data.search_status === 'unknown'
                     ? '系统不会自动重发。如需重新检索，请点击「重新检索」——这会产生新的调用。'
@@ -205,13 +205,13 @@ export default function RecordDetailPage() {
               />
             )}
             {lastDetail && (lastDetail.status === 'failed' || lastDetail.status === 'unknown') && (
-              <Alert type="warning" showIcon message={`最近一次读取详情：${errorText(lastDetail.error_category)}`} />
+              <Alert type="warning" showIcon title={`最近一次读取详情：${errorText(lastDetail.error_category)}`} />
             )}
             {noHit && (
               <Alert
                 type="info"
                 showIcon
-                message="本次检索范围（所选法域）内未找到相似外观专利"
+                title="本次检索范围（所选法域）内未找到相似外观专利"
                 description="这只说明本次范围内没有命中，不代表低风险或可以上架；请在下方按市场填写人工意见。"
               />
             )}

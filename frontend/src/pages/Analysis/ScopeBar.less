@@ -26,7 +26,8 @@
   border-left: 1px solid #f0f0f0 !important;
 }
 
-.scope-bar__query .ant-select-selector,
+// antd 6 的 Select 去掉了内层 `.ant-select-selector`，边框/圆角/内边距都在根节点 `.ant-select` 上。
+.scope-bar__query .ant-select,
 .scope-bar__query .ant-input-affix-wrapper {
   border: 0 !important;
   border-radius: 0 !important;

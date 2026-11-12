@@ -146,7 +146,7 @@ export default function FilterPanel({ value, onChange, view = 'DAY' }: FilterPan
   const onlyDropped = value.include === 'DROPPED';
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
       <Row label="行集合">
         <Space size={12} wrap>
           <Radio.Group

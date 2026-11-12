@@ -49,7 +49,7 @@ export default function AskPanel({ detail, onAsk }: Props) {
         回答只基于这份档案里的证据，不查外部数据，也不替你做决定。它是大模型生成的，引用的证据请回到上面核对。
       </Typography.Paragraph>
       {!detail.llm_configured && (
-        <Alert type="info" showIcon style={{ marginBottom: 10 }} message="大模型未配置，暂时不能追问。证据、补证与决定都不受影响。" />
+        <Alert type="info" showIcon style={{ marginBottom: 10 }} title="大模型未配置，暂时不能追问。证据、补证与决定都不受影响。" />
       )}
       <div style={{ display: 'grid', gap: 10 }}>
         {detail.messages.map((m) => (

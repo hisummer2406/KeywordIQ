@@ -216,11 +216,11 @@ export default function RuleEditor({ open, meta, rule, kind, readOnly, onClose, 
       onOk={() => onOk().catch(() => undefined)}
       okText={readOnly ? '关闭' : '保存草稿'}
       confirmLoading={saving}
-      destroyOnClose
+      destroyOnHidden
     >
       {rule && rule.status !== 'draft' ? (
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message="已启用或停用的规则不能修改；需要改动请在列表中「复制为新草稿」。" />
+          title="已启用或停用的规则不能修改；需要改动请在列表中「复制为新草稿」。" />
       ) : null}
       <Form form={form} layout="vertical" disabled={readOnly}>
         <Row gutter={16}>
@@ -495,7 +495,7 @@ export default function RuleEditor({ open, meta, rule, kind, readOnly, onClose, 
             >
               <Input.TextArea rows={18} style={{ fontFamily: 'monospace', fontSize: 12 }} />
             </Form.Item>
-            {jsonError ? <Alert type="error" message={jsonError} /> : null}
+            {jsonError ? <Alert type="error" title={jsonError} /> : null}
           </>
         ) : null}
       </Form>

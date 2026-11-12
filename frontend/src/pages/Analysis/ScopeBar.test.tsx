@@ -45,7 +45,7 @@ describe('ScopeBar', () => {
     // 形如 ASIN 的输入不会改变方式——方式只由用户选择决定
     expect(container.querySelector('.scope-bar__mode')).toHaveTextContent('关键词 · 全部词');
 
-    fireEvent.mouseDown(container.querySelector('.scope-bar__mode .ant-select-selector')!);
+    fireEvent.mouseDown(container.querySelector('.scope-bar__mode')!);
     for (const label of ['关键词 · 全部词', '关键词 · 词组', 'ASIN · 批量']) {
       expect(
         await screen.findByText(label, { selector: '.ant-select-item-option-content' }),

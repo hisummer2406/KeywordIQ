@@ -75,7 +75,7 @@ export default function SsoCallbackPage() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center' }}>
-      <Spin size="large" tip="正在完成钉钉登录…">
+      <Spin size="large" description="正在完成钉钉登录…">
         <div style={{ padding: 48 }} />
       </Spin>
     </div>
