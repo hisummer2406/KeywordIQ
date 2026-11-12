@@ -13,7 +13,7 @@
 - [x] 2.1 Space/Space.Compact 的 `direction` 改成 `orientation`，共 40 处。用脚本只改开标签上的顶层属性；先 dry-run，数量与 grep 统计吻合，替换后 `direction=` 剩余 0、`orientation="vertical"` 为 40
 - [x] 2.2 Alert 的 `message` 改成 `title`（约 48 处，替换后脚本复查 Alert 开标签里 `message=` 剩余 0）；Drawer 的 `width`/`height` 改成 `size`；Table 分页 `position` 改成 `placement`（后两项是测试输出里的告警发现的，第一遍 grep 漏了）；Modal/Drawer/`modalProps` 的 `destroyOnClose` 改成 `destroyOnHidden`（13 处）
 - [x] 2.3 零散项：Tag `bordered={false}` 改成 `variant="filled"`（ExpertsView）；Spin `tip` 改成 `description`（SsoCallback）；Descriptions `labelStyle` 改成 `styles.label`（MessageItems）；InputNumber `addonAfter` 改成 `Space.Compact` + `Space.Addon`（ScheduleModal）。**范围说明**：按 antd 6.7.0 运行时 `warning.deprecated` 和类型定义核对后确定；`size="middle"`、Descriptions/List 的 `bordered` 不发警告，Tooltip `overlay*`/`Menu.Item` 只在 `.umi/` 生成目录，均不改（design D4）
-- [ ] 2.4 `pnpm build` 已通过（含 `No conflicts found`）。测试输出里的 antd 告警已逐类核对：Table `pagination.position`、Drawer `height` 已清掉；`List` 废弃（5 次）为登记例外（design D4）；`[antd: message] Static function can not consume context`（4 次）不是废弃告警，是项目里静态调用 `message.xxx` 的既有写法，未改动。**待用户在浏览器里确认**开发环境控制台没有项目代码触发的废弃告警（场景「开发环境无项目代码触发的废弃告警」）
+- [x] 2.4 `pnpm build` 已通过（含 `No conflicts found`）。测试输出里的 antd 告警已逐类核对：Table `pagination.position`、Drawer `height` 已清掉；`List` 废弃（5 次）为登记例外（design D4）；`[antd: message] Static function can not consume context`（4 次）不是废弃告警，是项目里静态调用 `message.xxx` 的既有写法，未改动。**待用户在浏览器里确认**开发环境控制台没有项目代码触发的废弃告警（场景「开发环境无项目代码触发的废弃告警」） ——2026-11-13 用户在浏览器验收，未报告控制台告警问题（只有总体结论，没有逐页记录）
 
 ## 3. DOM 相关的样式与测试（design D5）
 
@@ -23,12 +23,12 @@
   Select 已选值节点 `pointer-events: none`，开下拉的 mouseDown 在根节点上（`scopeAndFilters.test` 改点 `.scope-bar__site`）；
   message 提示条也带 `role="alert"`，`Upload` 回显条不能再按 role 取唯一一个（`Upload/index.test` 改按回显条独有文案定位）。
   另有 1 个用例（`scopeAndFilters` 的"点开始筛选发一次"）在第一次全量运行时 20 秒超时、单独跑 2.7 秒通过、第二次全量运行通过，未发现逻辑原因，按并行负载下的抖动记录，之后再复现要重新查
-- [ ] 3.3 Tag 默认右边距等默认值变化：只在浏览器验收发现可见回归时才补，补的位置和原因写在本条
+- [x] 3.3 Tag 默认右边距等默认值变化：只在浏览器验收发现可见回归时才补，补的位置和原因写在本条 ——验收中未报告可见回归，无需补，故未改动任何默认值
 
 ## 4. 验证与交付
 
 - [x] 4.1 在 worktree 的 `frontend` 下跑全量（`.umirc.ts` 是全局配置，不能用 related）：`pnpm lint` 通过；`pnpm tsc` 通过；`pnpm test` 62 个文件 650 个用例全部通过（Duration 87s）。以上针对本地工作区，PR 的审核 head 提交后以 CI 与门禁结果为准
-- [ ] 4.2 用户浏览器验收：布局与菜单、市场分析（筛选、分页、导出）、词库、竞对（ProTable、导入弹窗）、导入历史、用户管理（ModalForm）、定价、机会中心、登录页（账号密码和钉钉入口都要显示），并确认控制台没有报错
-- [ ] 4.3 `git diff --check`、`openspec validate --strict --all` 通过；OpenSpec 文档单独一个提交（`05f3cf0`）；代码合成一个提交，因为提交门禁每次跑前端 vitest，依赖升级单独提交时测试必然是红的（design 风险与取舍）。只暂存本变更的路径
-- [ ] 4.4 开 PR（`--base v2`），写上变更 id、Issue、spec delta 文件列表、实际跑过的验证和剩余风险
+- [x] 4.2 用户浏览器验收：布局与菜单、市场分析（筛选、分页、导出）、词库、竞对（ProTable、导入弹窗）、导入历史、用户管理（ModalForm）、定价、机会中心、登录页（账号密码和钉钉入口都要显示），并确认控制台没有报错 ——2026-11-13 用户验收通过，未发现问题
+- [x] 4.3 `git diff --check`、`openspec validate --strict --all` 通过；OpenSpec 文档单独一个提交（`05f3cf0`）；代码合成一个提交，因为提交门禁每次跑前端 vitest，依赖升级单独提交时测试必然是红的（design 风险与取舍）。只暂存本变更的路径
+- [x] 4.4 开 PR（`--base v2`），写上变更 id、Issue、spec delta 文件列表、实际跑过的验证和剩余风险 ——PR #192，Issue #191（后续事项：pro-components 3 与 List 迁移）；CI 因 GitHub 账号付款/额度问题未能运行（0 个步骤），不是代码失败，待恢复后重跑，合并前必须以 PR head 的 CI 结果为准
 - [ ] 4.5 合并后清理一次性探路：worktree `~/.claude-worktrees/probe-antd6`、本地分支 `probe/antd6-upgrade`、8012 端口的 dev server、`keywordiq_demo_dossier` 库里的验收账号 `antd6probe`（删账号前先问用户）
