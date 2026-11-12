@@ -1,13 +1,13 @@
 import { useAccess } from '@umijs/max';
-import { Alert, Tooltip, Typography, theme } from 'antd';
+import { Alert, Typography, theme } from 'antd';
 import type { IpMeta, Workspace } from '@/services/opportunityIp';
 import NewTaskComposer, { type DossierPreset } from './IpAgent/NewTaskComposer';
 import { ExpertBadge } from './ExpertsView';
-import { EXPERTS } from './experts';
+import { TASK_EXPERTS } from './experts';
 
 /**
- * 新建任务（机会中心首页）：选专家，再把需求发给他。目前只有 IP 专家可选；未接入的专家只展示、
- * 不可选、不发请求（opportunity-center 规格）。
+ * 向专家发起任务：只列以「任务对话」方式工作的专家（目前是 IP 专家）。信号洞察与选品研究
+ * 有各自的视图（线索、机会档案），未接入的专家在专家页说明，不在这里出现。
  */
 
 interface Props {
@@ -32,34 +32,23 @@ export default function NewTaskView({ meta, workspaces, defaultWorkspaceId, pres
           专家给建议和证据，会花钱的调用都先问你；结论由你签署。
         </Typography.Paragraph>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center', marginBottom: 20 }}>
-          {EXPERTS.map((e) => {
-            const chip = (
-              <div
-                key={e.key}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '6px 14px 6px 6px',
-                  borderRadius: 999,
-                  border: `1px solid ${e.available ? e.color : token.colorBorderSecondary}`,
-                  background: e.available ? token.colorPrimaryBg : token.colorFillQuaternary,
-                  color: e.available ? token.colorText : token.colorTextQuaternary,
-                  cursor: e.available ? 'default' : 'not-allowed',
-                }}
-              >
-                <ExpertBadge expert={e} size={28} />
-                <span>{e.name}</span>
-              </div>
-            );
-            return e.available ? (
-              chip
-            ) : (
-              <Tooltip key={e.key} title={`尚未接入，依赖 ${e.dependsOn?.join('、')}`}>
-                {chip}
-              </Tooltip>
-            );
-          })}
+          {TASK_EXPERTS.map((e) => (
+            <div
+              key={e.key}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 14px 6px 6px',
+                borderRadius: 999,
+                border: `1px solid ${e.color}`,
+                background: token.colorPrimaryBg,
+              }}
+            >
+              <ExpertBadge expert={e} size={28} />
+              <span>{e.name}</span>
+            </div>
+          ))}
         </div>
         {!access.canSearchRisk && (
           <Alert
