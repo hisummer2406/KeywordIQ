@@ -47,11 +47,11 @@ const CARD_WIDTH = 112;
 const THUMB_SIZE = 72;
 
 /**
- * 缩略图：取不到图时降级为 ASIN 首字母占位方块，不影响卡牌其余信息。
+ * 缩略图：取不到图时**不渲染任何东西**（用户 2026-11-12 明确不要占位方块），卡牌其余信息照常展示。
  *
  * **不能只靠 `onError`**：图床对不存在的 ASIN 返回的是 HTTP 200 + 1×1 透明 GIF，
- * 而不是 404，`onError` 因此永远不会触发，结果是一个被拉伸的空白方块——比占位符更糟，
- * 因为它看起来像"图还在加载"。所以加载完成后要检查真实尺寸，1×1 即判定为无图。
+ * 而不是 404，`onError` 因此永远不会触发，结果是一个被拉伸的空白方块——它看起来像
+ * "图还在加载"。所以加载完成后要检查真实尺寸，1×1 即判定为无图并移除。
  * `onError` 仍保留，它负责真正的网络失败。
  *
  * `failed` 是组件内部状态，**调用方必须按 asin 给 key**（见 SlotCard）：表格的 rowKey
@@ -62,29 +62,7 @@ function Thumbnail({ asin }: { asin: string }) {
   const [failed, setFailed] = useState(false);
   const url = productImageUrl(asin);
 
-  if (!url || failed) {
-    return (
-      <div
-        data-testid="thumb-placeholder"
-        style={{
-          width: THUMB_SIZE,
-          height: THUMB_SIZE,
-          borderRadius: 4,
-          background: '#f5f5f5',
-          border: '1px solid #f0f0f0',
-          // inline-flex 而非 flex：块级元素不会被卡牌的 text-align: center 居中，
-          // 而 <img> 是 inline-block 会居中——两者不一致会让"有图"和"没图"的卡牌歪成两样
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#bfbfbf',
-          fontSize: 18,
-        }}
-      >
-        {asin.slice(0, 1)}
-      </div>
-    );
-  }
+  if (!url || failed) return null;
 
   return (
     <img
@@ -124,7 +102,7 @@ function SlotCard({
     return (
       <div
         data-testid={`slot-empty-${slot.rank}`}
-        style={{ width: CARD_WIDTH, textAlign: 'center', color: '#d9d9d9', fontSize: 12 }}
+        style={{ width: CARD_WIDTH, textAlign: 'center', color: '#d9d9d9', fontSize: 12, alignSelf: 'center' }}
       >
         —
       </div>
@@ -153,7 +131,7 @@ function SlotCard({
   );
 
   // 链接包在**整张卡牌**外而不是图片上：图床覆盖率很低（实测 12 个 ASIN 仅 2 个有图），
-  // 占位方块是常态，而那恰恰是用户最需要"去看看这到底是什么商品"的时候。
+  // 无图卡牌是常态，而那恰恰是用户最需要"去看看这到底是什么商品"的时候。
   // 拿不到域名就不给链接——宁可不可点，也不要拼出一个会跳错的地址。
   const linked = href ? (
     <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>
@@ -189,7 +167,14 @@ function SlotCard({
   );
 }
 
-/** 三张卡牌横排，从左到右是点击量第一、第二、第三名。 */
+/**
+ * 三张卡牌横排，从左到右是点击量第一、第二、第三名。
+ *
+ * **底部对齐**：无图卡牌不留图片位（用户 2026-11-12 不要占位方块），同一行里有图与无图
+ * 混排时卡牌高度不同。底部对齐让三张卡的 ASIN / 点击 / 转化三行文字落在同一水平线上，
+ * 跨名次比较份额时视线不用上下跳；图片只在有图的卡牌上方出现。空槽位的"—"单独居中。
+ * 整格相对行高的垂直居中由表格单元格默认的 vertical-align: middle 负责，这里不再处理。
+ */
 export default function TopProductCards({
   row,
   siteDomain,
@@ -200,7 +185,7 @@ export default function TopProductCards({
   historyScope?: HistoryScope;
 }) {
   return (
-    <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'flex-end' }}>
       {topSlots(row).map((slot) => (
         <SlotCard
           key={slot.rank}
