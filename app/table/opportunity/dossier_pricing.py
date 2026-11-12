@@ -31,31 +31,65 @@ MARKET_STATUS_TEXT = {
     "needs_input": "待补资料",
 }
 
+#: 市场整体可算、但没有任何方案算出结果时，按方案层的阻塞原因汇总出的状态（优先级从高到低）
+_OPTION_BLOCKERS = (("needs_input", "needs_input"), ("missing_config", "missing_config"),
+                    ("not_applicable", "all_not_applicable"))
+
+
+def _calculable(o: dict[str, Any]) -> bool:
+    """算出了可用结果：可用、有正算、且目标不是无解。"""
+    return (o.get("availability") == "available" and o.get("evaluation") is not None
+            and o.get("solve_status") != "unsolvable")
+
 
 def _option_brief(o: dict[str, Any]) -> dict[str, Any]:
     ev = o.get("evaluation") or {}
-    return {
+    brief = {
         "option_key": o.get("option_key"), "label": o.get("label"),
         "availability": o.get("availability"), "reasons": list(o.get("reasons") or []),
         "solve_status": o.get("solve_status"), "recommended": bool(o.get("recommended")),
         **{k: ev.get(k) for k in _EVAL_FIELDS},
         **{k: o.get(k) for k in _OPTION_FIELDS},
     }
+    if o.get("solve_status") == "unsolvable":
+        # 目标无解时引擎附带的正算是诊断用的（倒推采购价时按 0 采购成本算），不能当成预计利润展示
+        # （PR #189 评审）。售价保留（它是用户给定的），其余金额置空。
+        for k in ("profit_cny", "margin", "roi", "max_purchase_cost", "target_gap_cny"):
+            brief[k] = None
+    return brief
 
 
 def _pick(market: dict[str, Any], selected_key: str | None) -> tuple[dict[str, Any] | None, bool]:
-    """返回 (方案, 是否为选定方案)：选定 → 推荐 → 第一个可算出结果的方案。"""
+    """返回 (方案, 是否为选定方案)：选定 → 推荐 → 第一个算出可用结果的方案 → 第一个目标无解的方案。
+
+    无解方案排在最后：它说明「这个渠道达不到目标」，比什么都不显示有用，但不能顶替一个算得出的方案。
+    """
     options = market.get("options") or []
     if selected_key:
         hit = next((o for o in options if o.get("option_key") == selected_key), None)
         if hit is not None:
             return hit, True
-    for cond in (lambda o: o.get("recommended"),
-                 lambda o: o.get("availability") == "available" and o.get("evaluation") is not None):
+    for cond in (lambda o: o.get("recommended"), _calculable,
+                 lambda o: o.get("availability") == "available" and o.get("solve_status") == "unsolvable"):
         hit = next((o for o in options if cond(o)), None)
         if hit is not None:
             return hit, False
     return None, False
+
+
+def _blocked_status(market: dict[str, Any]) -> tuple[str, list[str]]:
+    """没有方案能给出结果时，从方案层汇总状态与原因。
+
+    引擎在市场配置齐全时把市场状态记为 ok，阻塞原因留在每个方案上（例如所有渠道都缺重量）；
+    直接透传 ok 会让摘要显示「可计算」却没有结果、也没有原因（PR #189 评审）。
+    """
+    options = market.get("options") or []
+    for availability, status in _OPTION_BLOCKERS:
+        hits = [o for o in options if o.get("availability") == availability]
+        if hits:
+            reasons = [f"{o.get('label')}：{r}" for o in hits for r in (o.get("reasons") or [])]
+            return status, list(dict.fromkeys(reasons))
+    return "all_not_applicable", list(market.get("reasons") or [])
 
 
 def _markets(version: PricingSheetVersion, selections: dict[str, PricingSelection]) -> list[dict[str, Any]]:
@@ -65,13 +99,15 @@ def _markets(version: PricingSheetVersion, selections: dict[str, PricingSelectio
         sel = selections.get(code)
         # 选定后又保存了新版本：选定仍指向旧版本，摘要以当前版本为准并提示重新选定
         stale = sel is not None and sel.version_id != version.id
-        option, selected = _pick(m, None if sel is None or stale else sel.option_key)
+        status, reasons = m.get("status"), list(m.get("reasons") or [])
+        # 市场整体不可算时不给方案，也就不会有任何金额
+        option, selected = _pick(m, None if sel is None or stale else sel.option_key) if status == "ok" else (None, False)
+        if status == "ok" and option is None:
+            status, reasons = _blocked_status(m)
         out.append({
-            "market": code, "currency": m.get("currency"), "status": m.get("status"),
-            "status_text": MARKET_STATUS_TEXT.get(m.get("status"), m.get("status")),
-            "reasons": list(m.get("reasons") or []),
-            # 市场整体不可算时不给方案，也就不会有任何金额
-            "option": _option_brief(option) if option is not None and m.get("status") == "ok" else None,
+            "market": code, "currency": m.get("currency"), "status": status,
+            "status_text": MARKET_STATUS_TEXT.get(status, status), "reasons": reasons,
+            "option": _option_brief(option) if option is not None else None,
             "selected": selected, "selection_stale": stale,
         })
     return out
@@ -117,6 +153,7 @@ def status_for_decision(summary: dict[str, Any]) -> dict[str, Any]:
             "version_no": s.get("version_no"), "calc_date": str(s["calc_date"]) if s.get("calc_date") else None,
             "markets": [{
                 "market": m["market"], "currency": m["currency"], "status": m["status"], "selected": m["selected"],
+                "solve_status": m["option"]["solve_status"] if m["option"] else None,
                 **({k: m["option"][k] for k in ("label", "price", "profit_cny", "margin", "max_purchase_cost")}
                    if m["option"] else {}),
             } for m in s.get("markets", [])],
