@@ -34,7 +34,11 @@ export default function AskPanel({ detail, onAsk }: Props) {
     }
   };
 
-  const citeLabel = (id: number) => (id === snapshotId ? 'ABA 证据快照' : `人工证据 #${id}`);
+  // 证据只有两类：人工证据（列在缺口与「其他」里，含已作废的）与 ABA 快照。按人工证据 id 判断类型，
+  // 不能用「是不是最新快照」来猜——刷新证据后，旧回答引用的旧快照会被错标成人工证据（PR #187 复审）。
+  const manualIds = new Set([...detail.gaps.flatMap((g) => g.evidence), ...detail.other_evidence].map((e) => e.id));
+  const citeLabel = (id: number) =>
+    manualIds.has(id) ? `人工证据 #${id}` : id === snapshotId ? 'ABA 证据快照（当前）' : `ABA 证据快照 #${id}（较早）`;
 
   return (
     <div>

@@ -195,8 +195,11 @@ async def create_dossier(db: AsyncSession, user_id: int, req: DossierCreate) -> 
 
 async def list_dossiers(db: AsyncSession, user_id: int, *, page: int, page_size: int, status: str | None = None,
                         due: bool = False, mine: bool = False, archived: bool = False,
-                        q: str | None = None) -> dict[str, Any]:
+                        q: str | None = None, site: str | None = None) -> dict[str, Any]:
     conds = [OppDossier.archived_at.is_not(None) if archived else OppDossier.archived_at.is_(None)]
+    if site is not None:
+        # 在分页之前按站点筛：线索「并入已有档案」只能选同站点的档案（PR #188 评审 P2）
+        conds.append(OppDossier.site == _resolve_site(site))
     if status:
         conds.append(OppDossier.status == status)
     if due:

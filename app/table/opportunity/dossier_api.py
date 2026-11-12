@@ -45,10 +45,11 @@ async def list_dossiers(
     mine: bool = Query(False, description="只看我负责的"),
     archived: bool = Query(False, description="看已归档的"),
     q: str | None = Query(None, max_length=100, description="按标题或关键词搜索"),
+    site: str | None = Query(None, min_length=1, max_length=8, description="只看某个站点的档案；非法站点 422"),
     db: AsyncSession = Depends(get_async_db), user=Depends(_require),
 ) -> dict[str, Any]:
     return await dossier_service.list_dossiers(db, user.id, page=page, page_size=page_size, status=status_,
-                                               due=due, mine=mine, archived=archived, q=q)
+                                               due=due, mine=mine, archived=archived, q=q, site=site)
 
 
 @opportunity_dossier_router.post("", status_code=status.HTTP_201_CREATED)

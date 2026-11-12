@@ -16,6 +16,8 @@ interface Props {
   sites: { code: string; name: string }[];
   /** 从词库分组入口进来时预选的分组 */
   groupId: number | null;
+  /** 从线索带入的站点与关键词（change add-opportunity-signal-leads） */
+  preset?: { site: string; keywords: string[] } | null;
   onCreated: (id: number) => void;
   onCancel: () => void;
 }
@@ -29,7 +31,7 @@ interface Values {
   group_id?: number;
 }
 
-export default function NewDossier({ sites, groupId, onCreated, onCancel }: Props) {
+export default function NewDossier({ sites, groupId, preset, onCreated, onCancel }: Props) {
   const { token: t } = theme.useToken();
   const [form] = Form.useForm<Values>();
   const [groups, setGroups] = useState<KeywordGroup[]>([]);
@@ -77,12 +79,20 @@ export default function NewDossier({ sites, groupId, onCreated, onCancel }: Prop
         <Typography.Paragraph type="secondary">
           一个档案对应一个产品想法和它的一组关键词。建好后会立刻生成 ABA 证据；搜索量、销量、售价这些系统没有的数据，可以在档案里补上带来源的资料。
         </Typography.Paragraph>
+        {preset && (
+          <Typography.Paragraph type="secondary">已从线索带入 {preset.site} 站点的 {preset.keywords.length} 个词，起个标题、写下想法即可。</Typography.Paragraph>
+        )}
         <div style={{ border: `1px solid ${t.colorBorder}`, borderRadius: 12, padding: 20, background: t.colorBgContainer }}>
           <Form<Values>
             form={form}
             layout="vertical"
             requiredMark={false}
-            initialValues={{ source: groupId ? 'group' : 'manual', group_id: groupId ?? undefined, site: sites[0]?.code }}
+            initialValues={{
+              source: groupId ? 'group' : 'manual',
+              group_id: groupId ?? undefined,
+              site: preset?.site ?? sites[0]?.code,
+              keywords_text: preset?.keywords.join('\n'),
+            }}
             onValuesChange={() => {
               token.current = newToken();
             }}
