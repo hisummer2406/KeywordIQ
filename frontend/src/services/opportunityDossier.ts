@@ -246,6 +246,8 @@ export async function listDossiers(params: {
   mine?: boolean;
   archived?: boolean;
   q?: string;
+  /** 只看某个站点的档案（服务端在分页前筛选） */
+  site?: string;
 }) {
   return request<DossierListResult>(BASE, { method: 'GET', params });
 }

@@ -10,6 +10,7 @@ from app.table.keyword.library_api import library_router
 from app.table.keyword.trend_api import trend_router
 from app.table.opportunity.dossier_api import opportunity_dossier_router
 from app.table.opportunity.ip_api import opportunity_ip_router
+from app.table.opportunity.leads_api import opportunity_leads_router
 from app.table.opportunity.workspace_api import opportunity_workspace_router
 from app.table.pricing.pricing_api import pricing_router
 from app.table.risk.risk_api import risk_router
@@ -116,5 +117,12 @@ api_router.include_router(
 api_router.include_router(
     opportunity_dossier_router,
     prefix="/opportunity/dossiers",
+    tags=["机会中心"]
+)
+
+# 机会中心线索——信号洞察专家（change add-opportunity-signal-leads）：持续增长榜的只读视图 + 档案归属。
+api_router.include_router(
+    opportunity_leads_router,
+    prefix="/opportunity/leads",
     tags=["机会中心"]
 )
