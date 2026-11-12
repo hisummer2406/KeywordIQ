@@ -27,6 +27,8 @@ interface Props {
   onCreate: (site: string, name: string) => Promise<KeywordGroup>;
   onRename: (groupId: number, name: string) => Promise<unknown>;
   onDelete: (group: KeywordGroup) => Promise<unknown>;
+  /** 用这个分组的词建一份机会档案（change add-opportunity-dossier）。没有机会中心权限时不传，菜单项不出现。 */
+  onCreateDossier?: (group: KeywordGroup) => void;
 }
 
 type NameDraft =
@@ -42,6 +44,7 @@ export default function GroupBar({
   onCreate,
   onRename,
   onDelete,
+  onCreateDossier,
 }: Props) {
   const [draft, setDraft] = useState<NameDraft | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<KeywordGroup | null>(null);
@@ -86,6 +89,7 @@ export default function GroupBar({
 
   const groupMenu = (group: KeywordGroup) => ({
     items: [
+      ...(onCreateDossier ? [{ key: 'dossier', label: '用这个分组建机会档案' }] : []),
       { key: 'rename', label: '重命名' },
       { type: 'divider' as const },
       { key: 'delete', label: <Typography.Text type="danger">删除分组</Typography.Text> },
@@ -95,6 +99,8 @@ export default function GroupBar({
         setDraft({ mode: 'rename', groupId: group.group_id, name: group.name });
       } else if (key === 'delete') {
         setDeleteTarget(group);
+      } else if (key === 'dossier') {
+        onCreateDossier?.(group);
       }
     },
   });

@@ -41,6 +41,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.table.opportunity import dossier_model  # noqa: F401 - 外键目标 opp_dossier 须先注册进同一 metadata
 from app.table.risk.risk_model import DECISIONS, RISK_LEVELS
 from app.user import user_model  # noqa: F401 - 外键目标 user_center 须先注册进同一 metadata
 from config import settings
@@ -105,6 +106,10 @@ class OppIpResearch(Base):
     workspace_id: Mapped[int | None] = mapped_column(
         BigInteger, _fk("opp_workspace", "SET NULL"), comment="所属工作空间；空即未归类（可移动，不属于调研输入）",
     )
+    dossier_id: Mapped[int | None] = mapped_column(
+        BigInteger, _fk("opp_dossier", "SET NULL"),
+        comment="关联的机会档案（change add-opportunity-dossier）；关联后档案向团队展示本调研的摘要，明细仍私有",
+    )
     client_token: Mapped[str] = mapped_column(String(64), nullable=False, comment="防重复提交的客户端令牌")
     input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, comment="规范化输入指纹")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -113,6 +118,7 @@ class OppIpResearch(Base):
         UniqueConstraint("owner_id", "client_token", name="uq_opp_ip_research_owner_token"),
         Index("idx_opp_ip_research_owner_created", "owner_id", text("created_at DESC"), text("id DESC")),
         Index("idx_opp_ip_research_workspace", "workspace_id"),
+        Index("idx_opp_ip_research_dossier", "dossier_id", postgresql_where=text("dossier_id IS NOT NULL")),
         {"schema": _SCHEMA, "comment": "机会中心专利调研：产品信息、检索法域、销售市场"},
     )
 

@@ -282,3 +282,42 @@ def test_prompts_refer_to_patents_by_pn_not_internal_id():
     from app.table.opportunity.agent_prompts import ANALYSIS_SYSTEM, ASK_SYSTEM
     for p in (ASK_SYSTEM, ANALYSIS_SYSTEM):
         assert "公开号（pn）" in p and "不要写 candidate_id" in p
+
+
+def test_paid_ip_routes_also_require_risk_search():
+    """opportunity-center「计费的专利检索不随机会中心权限铺开」（change add-opportunity-dossier）。
+
+    机会中心授予运营后，会向智慧芽计费的三个动作必须另挂 risk:search；只调大模型或不产生外部
+    调用的动作不能被误加这道门（否则运营连方案都生成不了）。
+    """
+    from fastapi.routing import APIRoute
+
+    from app.api_router import api_router
+    from app.auth.permissions import RISK_SEARCH
+
+    def perms(dependant) -> set[str]:
+        out: set[str] = set()
+        for dep in dependant.dependencies:
+            call = dep.call
+            if getattr(call, "__qualname__", "").endswith("require_permission.<locals>._require"):
+                out.update(c.cell_contents for c in call.__closure__ or () if isinstance(c.cell_contents, str))
+            out |= perms(dep)
+        return out
+
+    paid = {
+        ("POST", "/api/opportunity/ip/researches/{research_id}/searches"),
+        ("POST", "/api/opportunity/ip/researches/{research_id}/details"),
+        ("PUT", "/api/opportunity/ip/researches/{research_id}/schedule"),
+    }
+    seen = set()
+    for r in api_router.routes:
+        if not isinstance(r, APIRoute) or not r.path.startswith("/api/opportunity"):
+            continue
+        for method in r.methods:
+            key = (method, r.path)
+            if key in paid:
+                seen.add(key)
+                assert RISK_SEARCH in perms(r.dependant), key
+            else:
+                assert RISK_SEARCH not in perms(r.dependant), key
+    assert seen == paid

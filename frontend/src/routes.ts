@@ -39,10 +39,12 @@ export const routes = [
     // 任务对话布局（参考 WorkBuddy）：左栏是页面组件自带的，视图状态走 URL 查询参数，
     // 不是布局层二级菜单（change add-opportunity-ip-agent，top-nav-structure 规格）。
     //
-    // `opportunity:view` **不授予任何内置角色，默认只有 is_super 能看到**（design.md
-    // 决策 1）——这是当前唯一一个"admin 角色也看不到"的权限点，与其余按角色矩阵授予
-    // 的权限点不同档次。只有已接入的 IP 专家请求 /api/opportunity/*：机会中心的业务
-    // 能力由其他 issue（#7 #13 #25 #38 #54 #55）陆续接入，未接入的以「未接入」专家名片展示、不发请求。
+    // 默认视图是机会档案（change add-opportunity-dossier）：团队可见的研究对象，承接 ABA 证据、
+    // 人工证据、专利调研与决定。专家任务（目前只有 IP 专家）在同一页的左栏里。
+    //
+    // `opportunity:view` 自 change add-opportunity-dossier 起授予 admin / operator / analyst
+    // （此前仅 is_super 可见）。IP 专家里会向智慧芽计费的动作另外要求 `risk:search`，后端把守。
+    // 未接入的专家以「未接入」名片展示、不发请求。
     name: '机会中心',
     path: '/opportunity',
     component: './Opportunity',

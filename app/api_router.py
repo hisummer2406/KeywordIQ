@@ -8,6 +8,7 @@ from app.table.competitor.watch_api import competitor_router
 from app.table.keyword.growth_api import growth_router
 from app.table.keyword.library_api import library_router
 from app.table.keyword.trend_api import trend_router
+from app.table.opportunity.dossier_api import opportunity_dossier_router
 from app.table.opportunity.ip_api import opportunity_ip_router
 from app.table.opportunity.workspace_api import opportunity_workspace_router
 from app.table.pricing.pricing_api import pricing_router
@@ -109,4 +110,11 @@ api_router.include_router(
     user_router,
     prefix="/user",
     tags=["用户中心"]
+)
+
+# 机会档案（change add-opportunity-dossier）：团队可见的研究对象，端点逐个挂 opportunity:view。
+api_router.include_router(
+    opportunity_dossier_router,
+    prefix="/opportunity/dossiers",
+    tags=["机会中心"]
 )

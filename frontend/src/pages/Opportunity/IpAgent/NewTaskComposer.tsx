@@ -1,6 +1,7 @@
 import { SendOutlined } from '@ant-design/icons';
 import { Button, Collapse, Form, Input, Select, Space, Tag, Typography, theme } from 'antd';
 import { useRef, useState } from 'react';
+import { linkDossierResearch } from '@/services/opportunityDossier';
 import { createResearch, type IpMeta, requestPlan, type Workspace } from '@/services/opportunityIp';
 import { newToken } from '@/services/risk';
 
@@ -10,10 +11,21 @@ import { newToken } from '@/services/risk';
  * 法域推荐只作提示，点一下才加入，不自动勾选（与 #24 一致）。
  */
 
+/** 从机会档案发起时带入的内容；创建成功后把调研挂回该档案（change add-opportunity-dossier）。 */
+export interface DossierPreset {
+  dossierId: number;
+  dossierTitle: string;
+  product_name: string;
+  description?: string;
+  keywords: string[];
+  markets: string[];
+}
+
 interface Props {
   meta: IpMeta;
   workspaces: Workspace[];
   defaultWorkspaceId: number | null;
+  preset?: DossierPreset | null;
   onCreated: (id: number) => void;
 }
 
@@ -27,7 +39,7 @@ interface Values {
   workspace_id: number;
 }
 
-export default function NewTaskComposer({ meta, workspaces, defaultWorkspaceId, onCreated }: Props) {
+export default function NewTaskComposer({ meta, workspaces, defaultWorkspaceId, preset, onCreated }: Props) {
   const { token: t } = theme.useToken();
   const [form] = Form.useForm<Values>();
   const [sending, setSending] = useState(false);
@@ -54,6 +66,10 @@ export default function NewTaskComposer({ meta, workspaces, defaultWorkspaceId, 
         workspace_id: v.workspace_id || null,
       });
       token.current = newToken();
+      if (preset) {
+        // 关联失败不影响调研已创建：错误由全局处理提示，之后可在档案里「关联我的调研」
+        await linkDossierResearch(preset.dossierId, r.id).catch(() => undefined);
+      }
       if (meta.llm_configured) {
         // 方案生成失败不影响任务已创建：错误由全局处理提示，进入对话后可以重试或手写
         await requestPlan(r.id, newToken()).catch(() => undefined);
@@ -71,7 +87,12 @@ export default function NewTaskComposer({ meta, workspaces, defaultWorkspaceId, 
         form={form}
         layout="vertical"
         requiredMark={false}
-        initialValues={{ workspace_id: defaultWorkspaceId ?? 0 }}
+        initialValues={{
+          workspace_id: defaultWorkspaceId ?? 0,
+          ...(preset
+            ? { product_name: preset.product_name, description: preset.description, keywords: preset.keywords, markets: preset.markets }
+            : {}),
+        }}
         onValuesChange={() => {
           token.current = newToken();
         }}
