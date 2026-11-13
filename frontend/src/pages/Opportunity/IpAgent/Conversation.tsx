@@ -1,14 +1,30 @@
 import {
+  CheckOutlined,
   ClockCircleOutlined,
+  DownOutlined,
   EditOutlined,
+  EllipsisOutlined,
   FileSearchOutlined,
   FolderOpenOutlined,
   ProfileOutlined,
+  SafetyCertificateOutlined,
   ThunderboltOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Bubble, type BubbleItemType, Sender } from '@ant-design/x';
-import { Alert, Button, Result, Select, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Dropdown,
+  type MenuProps,
+  Result,
+  Space,
+  Spin,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   askResearch,
   getResearch,
@@ -21,33 +37,29 @@ import {
 } from '@/services/opportunityIp';
 import { dt } from '@/pages/IP/riskLabels';
 import { newToken } from '@/services/risk';
+import { BubbleTitle, MetaLine, useChatRoles } from '../chat/roles';
 import { EXPERT_BY_KEY } from '../experts';
 import { scheduleText, TASK_KIND } from './ipLabels';
-import MessageBody, {
-  BubbleHeader,
-  type BubbleMeta,
-  bubbleMeta,
-  ExpertAvatar,
-  UserAvatar,
-} from './MessageItems';
+import MessageBody, { bubbleMeta } from './MessageItems';
+import { type ActionKey, nextAction } from './nextAction';
 import QueryComposer from './QueryComposer';
 import ResultsDrawer, { type ResultsSection } from './ResultsDrawer';
 import ScheduleModal from './ScheduleModal';
 import { buildTimeline } from './timeline';
 
 /**
- * IP 专家任务对话（change add-opportunity-ip-agent 决策 10、12）。
+ * IP 专家任务对话（change add-opportunity-ip-agent 决策 10、12；change refine-opportunity-chat-ui 决策 D3、D4）。
  *
  * - 消息流由已存事实拼出（timeline.ts）；有在途任务时每 3 秒轮询详情（只读库，不产生外部调用），没有就停。
  * - 底部输入框发送的是**追问**（只调用大模型）；检索与取证必须在卡片里确认调用次数后才入队。
+ * - 输入区按任务进度只突出一个主要动作（nextAction），其余动作在「更多」里，不可用时写明原因。
  */
 
 const POLL_MS = 3000;
 /** 追问最长字数（与原输入框 maxLength 一致） */
 const ASK_MAX = 2000;
-/** 宽卡占满可用宽度 */
-const WIDE = { styles: { body: { flex: 1, minWidth: 0 }, content: { width: '100%' } } };
 const IP = EXPERT_BY_KEY.ip;
+const BUSY = '等当前任务完成';
 
 interface Props {
   id: number;
@@ -58,8 +70,23 @@ interface Props {
   onBack: () => void;
 }
 
+interface ActionDef {
+  label: string;
+  icon: ReactNode;
+  /** 可用时的说明（调用什么、会不会计费） */
+  tip?: string;
+  /** 非空即不可用，并说明原因 */
+  disabledReason?: string;
+  loading?: boolean;
+  onClick: () => void;
+}
+
+/** 「更多」里的顺序；确认检索式只作为主要动作出现（方案卡里也有入口） */
+const MORE_ORDER: ActionKey[] = ['plan', 'manual', 'analysis', 'review'];
+
 export default function Conversation({ id, meta, workspaces, onChanged, onBack }: Props) {
   const { token } = theme.useToken();
+  const roles = useChatRoles('ip');
   const [data, setData] = useState<ResearchDetail | null>(null);
   const [missing, setMissing] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null);
@@ -156,6 +183,98 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
       setText('');
     });
   };
+  const openResults = (section: ResultsSection) => setResults({ open: true, section });
+
+  const llmTip = data.llm_configured ? '' : '大模型未配置';
+  const draftOpen = draft !== null;
+  const draftReason = busy ? BUSY : draftOpen ? '待确认的检索式已打开' : '';
+  const actions: Record<ActionKey, ActionDef> = {
+    plan: {
+      label: data.plans.length ? '重新生成检索方案' : '生成检索方案',
+      icon: <ThunderboltOutlined />,
+      tip: '调用一次大模型，根据产品信息写检索式建议（不调用智慧芽）',
+      disabledReason: llmTip || (busy ? BUSY : ''),
+      loading: acting === 'plan',
+      onClick: plan,
+    },
+    confirmPlan: {
+      label: '确认检索式',
+      icon: <CheckOutlined />,
+      tip: '用最新方案打开待确认的检索式；确认调用次数后才会执行',
+      disabledReason: draftReason,
+      onClick: () => latestPlan && setDraft(latestPlan.content.queries.map((q) => q.query_text)),
+    },
+    manual: {
+      label: '手写检索式',
+      icon: <EditOutlined />,
+      tip: '自己写检索式；确认调用次数后才会执行',
+      disabledReason: draftReason,
+      onClick: () => setDraft([]),
+    },
+    analysis: {
+      label: data.analyses.length ? '重新生成风险分析' : '生成风险分析',
+      icon: <FileSearchOutlined />,
+      tip: '调用一次大模型，基于已取得的证据写风险分析',
+      disabledReason: llmTip || (!data.search_done ? '先成功执行至少一条检索' : busy ? BUSY : ''),
+      loading: acting === 'analysis',
+      onClick: analyze,
+    },
+    review: {
+      label: '签署人工意见',
+      icon: <SafetyCertificateOutlined />,
+      tip: '按销售市场签署，只追加不修改',
+      onClick: () => openResults('reviews'),
+    },
+  };
+  const primaryKey = nextAction(data);
+  // 待确认卡已打开时它就是焦点，不再重复一个主按钮
+  const primary =
+    primaryKey && !(draftOpen && (primaryKey === 'confirmPlan' || primaryKey === 'manual'))
+      ? actions[primaryKey]
+      : null;
+  const moreItems: MenuProps['items'] = MORE_ORDER.filter((k) => k !== primaryKey).map((k) => {
+    const a = actions[k];
+    return {
+      key: k,
+      icon: a.icon,
+      disabled: !!a.disabledReason,
+      label: a.disabledReason ? `${a.label}（${a.disabledReason}）` : a.label,
+    };
+  });
+
+  const workspaceName = workspaces.find((w) => w.id === data.workspace_id)?.name ?? '未归类';
+  const scheduleLabel = data.schedule
+    ? `${scheduleText(data.schedule)}${data.schedule.enabled ? '' : '（已暂停）'}`
+    : null;
+  const taskMenu: MenuProps['items'] = [
+    {
+      key: 'schedule',
+      icon: <ClockCircleOutlined />,
+      label: data.schedule
+        ? `定时复检：${scheduleLabel} · 下次 ${dt(data.schedule.next_run_at)}`
+        : '设置定时复检',
+    },
+    {
+      key: 'move',
+      icon: <FolderOpenOutlined />,
+      label: '移动到工作空间',
+      children: [{ id: 0, name: '未归类' }, ...workspaces].map((w) => ({
+        key: `ws-${w.id}`,
+        label: w.name,
+        icon: (data.workspace_id ?? 0) === w.id ? <CheckOutlined /> : undefined,
+        disabled: (data.workspace_id ?? 0) === w.id,
+      })),
+    },
+    { key: 'tasks', icon: <UnorderedListOutlined />, label: `任务与调用记录（${data.tasks.length}）` },
+  ];
+  const onTaskMenu: MenuProps['onClick'] = ({ key }) => {
+    if (key === 'schedule') setScheduleOpen(true);
+    else if (key === 'tasks') openResults('tasks');
+    else if (key.startsWith('ws-')) {
+      const ws = Number(key.slice(3));
+      act('move', () => moveResearch(data.id, ws || null));
+    }
+  };
 
   const latestPlanId = latestPlan?.id;
   const bubbleItems: BubbleItemType[] = timeline.map((item) => {
@@ -163,7 +282,8 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
     return {
       key: item.key,
       role: m.role,
-      header: <BubbleHeader meta={m} />,
+      header: m.title ? <BubbleTitle>{m.title}</BubbleTitle> : undefined,
+      footer: m.meta ? <MetaLine parts={m.meta} /> : undefined,
       content: (
         <MessageBody
           item={item}
@@ -172,19 +292,17 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
           busy={busy}
           isLatestPlan={item.kind === 'plan' && item.plan.id === latestPlanId}
           onUsePlan={setDraft}
-          openResults={(section) => setResults({ open: true, section })}
+          openResults={openResults}
           openSchedule={() => setScheduleOpen(true)}
         />
       ),
-      ...(m.wide ? WIDE : {}),
     };
   });
-  if (draft !== null && !busy) {
-    const m: BubbleMeta = { role: 'ai', title: '待你确认的检索式', wide: true };
+  if (draftOpen && !busy) {
     bubbleItems.push({
       key: 'draft',
       role: 'ai',
-      header: <BubbleHeader meta={m} />,
+      header: <BubbleTitle>待你确认的检索式</BubbleTitle>,
       content: (
         <QueryComposer
           data={data}
@@ -199,15 +317,13 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
           onCancel={() => setDraft(null)}
         />
       ),
-      ...WIDE,
     });
   }
   if (active) {
-    const m: BubbleMeta = { role: 'ai', title: TASK_KIND[active.kind] };
     bubbleItems.push({
       key: 'active',
       role: 'ai',
-      header: <BubbleHeader meta={m} />,
+      header: <BubbleTitle>{TASK_KIND[active.kind]}</BubbleTitle>,
       content: '',
       loading: true,
       loadingRender: () => (
@@ -220,74 +336,58 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
                 : `正在${TASK_KIND[active.kind]}…`}
             </Typography.Text>
           </Space>
-          <Typography.Text
-            type="secondary"
-            style={{ display: 'block', fontSize: 12, marginTop: 4 }}
-          >
+          <div className="chat-meta" style={{ marginTop: 4 }}>
             任务在后台执行，刷新或离开页面不会重复调用。
-          </Typography.Text>
+          </div>
         </div>
       ),
     });
   }
 
-  const llmTip = data.llm_configured ? '' : '大模型未配置';
-  const analysisTip = llmTip || (!data.search_done ? '先成功执行至少一条检索' : '');
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
-      {/* 顶部：任务、专家、工作空间、预算 */}
+      {/* 顶部：任务名 + 弱化元信息；成果与任务设置在右侧 */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '12px 20px',
+          padding: '10px 20px',
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          flexWrap: 'wrap',
         }}
       >
-        <Typography.Title level={5} style={{ margin: 0 }} ellipsis={{ tooltip: data.product_name }}>
-          {data.product_name}
-        </Typography.Title>
-        <Tag color={IP.color}>{IP.name}</Tag>
-        <Select
-          size="small"
-          style={{ width: 160 }}
-          suffix={<FolderOpenOutlined />}
-          value={data.workspace_id ?? 0}
-          options={[
-            { value: 0, label: '未归类' },
-            ...workspaces.map((w) => ({ value: w.id, label: w.name })),
-          ]}
-          onChange={(v) => act('move', () => moveResearch(data.id, v || null))}
-        />
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {`MCP 预算 ${data.budget.used}/${data.budget.per_research} · 全站今天 ${data.budget.daily_used}/${data.budget.daily_limit}`}
-        </Typography.Text>
-        <div style={{ flex: 1 }} />
-        <Tooltip
-          title={
-            data.schedule
-              ? `下次执行 ${dt(data.schedule.next_run_at)}`
-              : '把已执行的检索式设为每周或每月复检'
-          }
-        >
-          <Button size="small" icon={<ClockCircleOutlined />} onClick={() => setScheduleOpen(true)}>
-            {data.schedule
-              ? `${scheduleText(data.schedule)}${data.schedule.enabled ? '' : '（已暂停）'}`
-              : '定时复检'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <Typography.Title
+            level={5}
+            style={{ margin: 0, flex: 1, minWidth: 0 }}
+            ellipsis={{ tooltip: data.product_name }}
+          >
+            {data.product_name}
+          </Typography.Title>
+          <Button
+            size="small"
+            icon={<ProfileOutlined />}
+            onClick={() => openResults('candidates')}
+          >
+            {`成果 · 候选 ${data.candidates.length}`}
           </Button>
-        </Tooltip>
-        <Button
-          size="small"
-          type="primary"
-          ghost
-          icon={<ProfileOutlined />}
-          onClick={() => setResults({ open: true, section: 'candidates' })}
-        >
-          {`成果 · 候选 ${data.candidates.length}`}
-        </Button>
+          <Dropdown menu={{ items: taskMenu, onClick: onTaskMenu }} trigger={['click']}>
+            <Button
+              size="small"
+              icon={<EllipsisOutlined />}
+              aria-label="任务设置"
+              loading={acting === 'move'}
+            />
+          </Dropdown>
+        </div>
+        <div style={{ marginTop: 2 }}>
+          <MetaLine
+            parts={[
+              IP.name,
+              workspaceName,
+              `MCP 预算 ${data.budget.used}/${data.budget.per_research}`,
+              `全站今天 ${data.budget.daily_used}/${data.budget.daily_limit}`,
+              scheduleLabel && `定时复检 ${scheduleLabel}`,
+            ]}
+          />
+        </div>
       </div>
 
       {/* 消息流：气泡、滚动到底部由 X 的 Bubble.List 负责 */}
@@ -297,13 +397,13 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          background: token.colorBgLayout,
+          background: token.colorBgContainer,
         }}
       >
         {(!data.mcp_configured || !data.llm_configured) && (
           <div
             style={{
-              maxWidth: 960,
+              maxWidth: 880,
               width: '100%',
               margin: '0 auto',
               padding: '12px 20px 0',
@@ -331,26 +431,17 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
           style={{
             flex: 1,
             minHeight: 0,
-            maxWidth: 960,
+            maxWidth: 880,
             width: '100%',
             margin: '0 auto',
-            padding: '12px 20px 0',
+            padding: '16px 20px 0',
           }}
         >
-          <Bubble.List
-            autoScroll
-            style={{ height: '100%' }}
-            items={bubbleItems}
-            role={{
-              ai: { placement: 'start', variant: 'outlined', avatar: <ExpertAvatar /> },
-              user: { placement: 'end', variant: 'outlined', avatar: <UserAvatar /> },
-              system: { variant: 'borderless' },
-            }}
-          />
+          <Bubble.List autoScroll style={{ height: '100%' }} items={bubbleItems} role={roles} />
         </div>
       </div>
 
-      {/* 输入区：快捷动作 + 追问 */}
+      {/* 输入区：当前主要动作 + 更多 + 追问 */}
       <div
         style={{
           padding: '10px 20px 16px',
@@ -358,41 +449,36 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
           background: token.colorBgContainer,
         }}
       >
-        <div style={{ maxWidth: 960, margin: '0 auto' }}>
+        <div style={{ maxWidth: 880, margin: '0 auto' }}>
           <Space wrap size={8} style={{ marginBottom: 8 }}>
-            <Tooltip title={llmTip || '调用一次大模型，根据产品信息写检索式建议（不调用智慧芽）'}>
-              <Button
-                size="small"
-                icon={<ThunderboltOutlined />}
-                disabled={!!llmTip || busy}
-                loading={acting === 'plan'}
-                onClick={plan}
-              >
-                {data.plans.length ? '重新生成检索方案' : '生成检索方案'}
-              </Button>
-            </Tooltip>
-            <Button
-              size="small"
-              icon={<EditOutlined />}
-              disabled={busy || draft !== null}
-              onClick={() => setDraft([])}
+            {primary && (
+              <Tooltip title={primary.disabledReason || primary.tip}>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={primary.icon}
+                  disabled={!!primary.disabledReason}
+                  loading={primary.loading}
+                  onClick={primary.onClick}
+                >
+                  {primary.label}
+                </Button>
+              </Tooltip>
+            )}
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: moreItems,
+                onClick: ({ key }) => actions[key as ActionKey].onClick(),
+              }}
             >
-              手写检索式
-            </Button>
-            <Tooltip title={analysisTip || '调用一次大模型，基于已取得的证据写风险分析'}>
-              <Button
-                size="small"
-                icon={<FileSearchOutlined />}
-                disabled={!!analysisTip || busy}
-                loading={acting === 'analysis'}
-                onClick={analyze}
-              >
-                {data.analyses.length ? '重新生成风险分析' : '生成风险分析'}
+              <Button size="small">
+                <Space size={4}>
+                  {primary ? '更多操作' : '操作'}
+                  <DownOutlined />
+                </Space>
               </Button>
-            </Tooltip>
-            <Button size="small" onClick={() => setResults({ open: true, section: 'reviews' })}>
-              签署人工意见
-            </Button>
+            </Dropdown>
           </Space>
           <Sender
             value={text}
@@ -406,12 +492,7 @@ export default function Conversation({ id, meta, workspaces, onChanged, onBack }
                 ? '大模型未配置，暂不能追问'
                 : busy
                   ? '等当前任务完成后再发送'
-                  : '向 IP 专家追问，例如：哪几件和我的产品最像？还缺哪些检索？（Enter 发送，Shift+Enter 换行）'
-            }
-            footer={
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                只调用大模型，不调用智慧芽、不计 MCP 预算
-              </Typography.Text>
+                  : '向 IP 专家追问，例如：哪几件和我的产品最像？（只调用大模型，不计 MCP 预算；Shift+Enter 换行）'
             }
           />
         </div>
