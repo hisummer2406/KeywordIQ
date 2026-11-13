@@ -1,10 +1,4 @@
-"""发布必需 CI 校验：目标 SHA 上 `.github/workflows/ci.yml` 的三个 job 是否全部成功。
-
-**规定目标 SHA 上这三个 job 的结论必须全部为 `success`，不按"这次改动是否波及某个
-目录"做部分豁免**——SHA 是不可变的，CI 结果是这个提交整体的性质；引入"哪个 job 与
-本次相关"的判断本身就是一层容易出错的启发式，漏判的后果是放行一个实际上未通过 CI
-的发布（design.md D5）。
-"""
+"""发布 CI 校验：全量成功，或同一运行的按范围汇总门禁成功。"""
 
 from __future__ import annotations
 
@@ -25,6 +19,7 @@ REQUIRED_CHECK_NAMES = (
     "前端（lint + tsc + test + build）",
     "竞对采集插件（typecheck + test + build）",
 )
+READY_CHECK_NAME = "发布就绪（按范围校验）"
 _TIMEOUT = 10.0
 
 
@@ -48,11 +43,15 @@ async def check(sha: str) -> CICheckResult:
                     "Authorization": f"Bearer {settings.GH_TOKEN}",
                     "Accept": "application/vnd.github+json",
                 },
+                params={"per_page": 100},
             )
         response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as exc:
         return CICheckResult(passing=False, details={"_error": f"查询 CI 状态失败：{exc}"})
+
+    if data.get("total_count", len(data.get("check_runs", []))) > len(data.get("check_runs", [])):
+        return CICheckResult(passing=False, details={"_error": "CI 结果不完整，无法核实"})
 
     # 同一 SHA 可能因重跑产生多条同名记录，取 started_at 最新的一条——不是"要不要
     # 认过去的失败"这类判断，纯粹是"这个 job 现在到底是什么状态"只有一个答案。
@@ -64,6 +63,24 @@ async def check(sha: str) -> CICheckResult:
         existing = latest_by_name.get(name)
         if existing is None or (run.get("started_at") or "") > (existing.get("started_at") or ""):
             latest_by_name[name] = run
+
+    ready = latest_by_name.get(READY_CHECK_NAME)
+    scoped = False
+    if ready is not None:
+        suite_id = (ready.get("check_suite") or {}).get("id")
+        if (
+            ready.get("status") != "completed"
+            or ready.get("conclusion") != "success"
+            or ready.get("head_sha") != sha
+            or (ready.get("app") or {}).get("slug") != "github-actions"
+            or suite_id is None
+        ):
+            return CICheckResult(passing=False, details={"_error": "按范围发布门禁未通过"})
+        latest_by_name = {
+            name: run for name, run in latest_by_name.items()
+            if (run.get("check_suite") or {}).get("id") == suite_id
+        }
+        scoped = True
 
     details: dict[str, str] = {}
     passing = True
@@ -78,6 +95,8 @@ async def check(sha: str) -> CICheckResult:
         if status != "completed":
             details[name] = f"进行中（{status}）"
             passing = False
+        elif scoped and conclusion == "skipped":
+            details[name] = "未受影响（已由发布门禁核验）"
         elif conclusion != "success":
             details[name] = f"失败（{conclusion}）"
             passing = False

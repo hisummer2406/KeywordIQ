@@ -13,12 +13,13 @@ concurrency:
 
 jobs:
   changes:
-    name: 判定 PR 检查范围
+    name: 判定检查范围
     # V1 的 main 保持原行为；v2 草稿不分配 runner。
-    if: github.event_name == 'pull_request' && github.base_ref == 'v2' && !github.event.pull_request.draft
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/v2') || (github.event_name == 'pull_request' && github.base_ref == 'v2' && !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       backend: ${{ steps.scope.outputs.backend }}
       frontend: ${{ steps.scope.outputs.frontend }}
@@ -29,26 +30,14 @@ jobs:
         with:
           node-version: 22
       - name: 验证 CI 范围策略
-        run: node --test .github/ci-scope.test.cjs
-      - name: 按本次 PR 的固定 SHA 比较文件
+        run: node --test .github/ci-scope.test.cjs .github/ci-evidence.test.cjs
+      - name: 按固定 SHA 与已验证基线比较文件
         id: scope
         uses: actions/github-script@v7
         with:
           script: |
-            const { selectChecks, allChecks } = require('./.github/ci-scope.cjs');
-            const pr = context.payload.pull_request;
-            let checks;
-            try {
-              const { data } = await github.rest.repos.compareCommitsWithBasehead({
-                ...context.repo,
-                basehead: `${pr.base.sha}...${pr.head.sha}`,
-                per_page: 1,
-              });
-              checks = selectChecks(data.files);
-            } catch (error) {
-              core.warning(`无法确认改动范围，运行全部检查：${error.message}`);
-              checks = allChecks();
-            }
+            const { resolveScope } = require('./.github/ci-evidence.cjs');
+            const checks = await resolveScope({ github, context, core });
             for (const [name, enabled] of Object.entries(checks)) {
               core.setOutput(name, String(enabled));
             }
@@ -57,11 +46,11 @@ jobs:
   backend:
     name: 后端（pytest + alembic）
     needs: changes
-    # push 全量；判定失败/输出缺失时也全量，绝不把未知当成无改动。
+    # main 全量；v2 按范围，判定失败/输出缺失时全量。
     if: >-
       always() && !cancelled() &&
-      (github.event_name == 'push' || github.base_ref == 'main' ||
-       (!github.event.pull_request.draft &&
+      (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
+       ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.backend != 'false')))
     runs-on: ubuntu-latest
 
@@ -135,8 +124,8 @@ jobs:
     needs: changes
     if: >-
       always() && !cancelled() &&
-      (github.event_name == 'push' || github.base_ref == 'main' ||
-       (!github.event.pull_request.draft &&
+      (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
+       ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.frontend != 'false')))
     runs-on: ubuntu-latest
     defaults:
@@ -181,8 +170,8 @@ jobs:
     needs: changes
     if: >-
       always() && !cancelled() &&
-      (github.event_name == 'push' || github.base_ref == 'main' ||
-       (!github.event.pull_request.draft &&
+      (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
+       ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.extension != 'false')))
     runs-on: ubuntu-latest
     defaults:
@@ -214,3 +203,20 @@ jobs:
 
       - name: 构建
         run: pnpm run build
+
+  release-ready:
+    name: 发布就绪（按范围校验）
+    needs: [changes, backend, frontend, extension]
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/v2'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: 核对受影响项成功、未受影响项按规则跳过
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: node -e "require('./.github/ci-evidence.cjs').validateNeeds(JSON.parse(process.env.CI_NEEDS))"

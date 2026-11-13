@@ -1,7 +1,7 @@
 # V2 ECS 持续部署
 
 `Deploy V2 to ECS` 是 V2 的唯一 GitHub Actions 发布入口。仓库管理员在 `v2` 分支的
-Actions 页面手动运行它；工作流会核验当前 SHA 的后端、前端和扩展 CI 均已成功，再连接
+Actions 页面手动运行它；工作流会核验当前 SHA 的 v2 push CI 已通过发布门禁：受影响项成功，无关项经范围核验后跳过，再连接
 ECS 执行 `./deploy.sh --yes`。
 
 部署脚本的 V2 默认值如下：
