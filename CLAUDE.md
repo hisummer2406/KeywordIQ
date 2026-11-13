@@ -69,6 +69,7 @@ Claude Code 按 `.claude/rules/` 的 `paths` 加载规则；不支持该机制�
 - PR 包含 Issue、OpenSpec/delta、实际验证和剩余风险；审核者独立只读，不直接改实现者工作区。
 - 用户要求本次 `@codex review` 时可代发；先核 base/head SHA、已推送及 CI 状态。未明确要求不发，不代发 `@claude`。
 - 合并、关闭 Issue、发布与后续审核分别依授权执行；合到 v2 不自动关闭 Issue，合并不等于上线。
+- **PR 一经合并（无论是否走 close-change，含只改文档的小 PR），必须当场在干净主工作区 `git pull --ff-only` 同步本地 `v2` 并核对 SHA**；依赖清单变了就重装依赖。主工作区有改动、已有 dev server 在跑或两仓 v2 已分叉时只报告，不强拉、不强推。同步哪个远端取决于 PR 合在哪个仓库（主仓 origin / 备用库 backup）。来源：2026-11-13 手动合并后漏同步，被用户指出。
 
 ## 生产操作边界
 

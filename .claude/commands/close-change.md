@@ -60,6 +60,10 @@ git merge-base --is-ancestor <合并提交> HEAD
 
 检查最后一条的**退出码为 0**，不能用“没有输出”判断成功。失败则停止，不强制重置本地分支。
 
+同步前先看主工作区是否有本项目 dev server 在跑（`lsof` 查 cwd）；`package.json`/`pyproject.toml`
+或锁文件在此次拉取中有变化时，同步后在 `frontend` 重新 `pnpm install`（后端用 `uv sync`），
+否则本地页面会因依赖不匹配而坏。PR 合在备用库时，从备用库对应远端同步，两仓 v2 分叉就报告。
+
 ## 3. 处理验收并归档
 
 - 有 OpenSpec 变更时归档必做；无变更目录的小改动明确记为不适用，不虚构 spec。

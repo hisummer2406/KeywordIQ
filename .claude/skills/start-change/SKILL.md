@@ -194,7 +194,7 @@ checkout 占着（在 worktree 里 `git checkout v2` 会直接报
 
 ```bash
 cd /Users/stone/Developer/KeywordIQ
-git checkout v2 && git pull            # 让本地 v2 含上合并结果，跳过这步 -d 一定拒绝
+git checkout v2 && git pull --ff-only   # 让本地 v2 含上合并结果，跳过这步 -d 一定拒绝；PR 合在备用库时改拉对应远端
 ```
 
 然后清理**三样一起做完，并当场核对**——漏掉任何一样都不算收工：
