@@ -1,106 +1,57 @@
-import { Alert, Avatar, Button, Descriptions, Space, Tag, theme, Typography } from 'antd';
-import type { ReactNode } from 'react';
+import {
+  CheckCircleOutlined,
+  DownOutlined,
+  FileProtectOutlined,
+  RightOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
+import { Alert, Button, Descriptions, Space, Tag, Typography, theme } from 'antd';
+import { type ReactNode, useState } from 'react';
 import { DECISION, dt, RISK_LEVEL, TASK_STATUS } from '@/pages/IP/riskLabels';
-import type { IpMeta, ResearchDetail } from '@/services/opportunityIp';
-import { EXPERT_BY_KEY } from '../experts';
+import type { IpMeta, IpQuery, IpTask, ResearchDetail } from '@/services/opportunityIp';
+import AnswerMarkdown from '../chat/AnswerMarkdown';
+import { CitationTags } from '../chat/roles';
 import AnalysisCard from './AnalysisCard';
 import Rows from './Rows';
-import { QUERY_STATUS, queryResultText, TASK_KIND, taskErrorText } from './ipLabels';
+import { QUERY_STATUS, queryResultText, taskErrorText, TASK_KIND } from './ipLabels';
 import type { ResultsSection } from './ResultsDrawer';
 import type { TimelineItem } from './timeline';
 
 /**
- * 对话消息流里的每种消息（决策 10）。供应商与模型的文本一律作为纯文本渲染。
+ * 对话消息流里的每种消息（change add-opportunity-ip-agent 决策 10；change refine-opportunity-chat-ui 决策 D4）。
+ *
+ * 角色：用户输入（简报、追问）→ user；AI 产出（方案、分析、回答）→ ai；任务事件（检索、取证、签署、
+ * 失败、跳过）→ event。Agent 回答走受限 Markdown（chat/AnswerMarkdown）；方案、分析与供应商文本仍按纯文本。
  */
 
-const IP = EXPERT_BY_KEY.ip;
-
-export function ExpertAvatar({ size = 32 }: { size?: number }) {
-  return (
-    <Avatar size={size} style={{ background: IP.color, flex: 'none', fontSize: size * 0.4 }}>
-      {IP.initial}
-    </Avatar>
-  );
-}
-
-export function UserAvatar({ size = 32 }: { size?: number }) {
-  const { token } = theme.useToken();
-  return (
-    <Avatar size={size} style={{ flex: 'none', background: token.colorTextQuaternary }}>
-      我
-    </Avatar>
-  );
-}
-
-/** 一条消息放进 Bubble.List 时的角色与头部信息；气泡本身由 X 的 Bubble 提供。 */
+/** 一条消息放进 Bubble.List 时的角色、标题与底部元信息 */
 export interface BubbleMeta {
-  role: 'ai' | 'user' | 'system';
+  role: 'ai' | 'user' | 'event';
+  /** 这是什么；不含模型名与时间 */
   title?: ReactNode;
-  at?: string | null;
-  /** 宽卡（检索结果、分析）占满可用宽度 */
-  wide?: boolean;
+  /** 底部弱化元信息：提示、模型名、时间 */
+  meta?: (string | null | undefined)[];
 }
 
 export function bubbleMeta(item: TimelineItem): BubbleMeta {
   switch (item.kind) {
     case 'brief':
-      return { role: 'user', at: item.at, title: '任务简报' };
+      return { role: 'user', title: '任务简报', meta: [dt(item.at)] };
     case 'plan':
-      return { role: 'ai', at: item.at, title: `检索方案 · ${item.plan.model}` };
-    case 'search':
-      return {
-        role: 'ai',
-        at: item.at,
-        wide: true,
-        title: (
-          <Space size={4}>
-            执行检索
-            {item.task.scheduled && <Tag color="purple">定时复检</Tag>}
-            <Tag color={TASK_STATUS[item.task.status].color}>
-              {TASK_STATUS[item.task.status].text}
-            </Tag>
-          </Space>
-        ),
-      };
-    case 'detail':
-      return {
-        role: 'ai',
-        at: item.at,
-        title: (
-          <Space size={4}>
-            取证
-            <Tag color={TASK_STATUS[item.task.status].color}>
-              {TASK_STATUS[item.task.status].text}
-            </Tag>
-          </Space>
-        ),
-      };
+      return { role: 'ai', title: '检索方案', meta: [item.plan.model, dt(item.at)] };
     case 'analysis':
-      return { role: 'ai', at: item.at, wide: true, title: `风险分析 · ${item.analysis.model}` };
+      return { role: 'ai', title: '风险分析', meta: [item.analysis.model, dt(item.at)] };
     case 'message':
       return item.message.role === 'user'
-        ? { role: 'user', at: item.message.created_at }
+        ? { role: 'user', meta: [dt(item.message.created_at)] }
         : {
             role: 'ai',
-            at: item.message.created_at,
-            title: item.message.model ? `回答 · ${item.message.model}` : '回答',
+            title: '回答',
+            meta: ['Agent 回复，仅供参考，不构成法律意见', item.message.model, dt(item.message.created_at)],
           };
     default:
-      return { role: 'system' };
+      return { role: 'event' };
   }
-}
-
-/** 气泡头部：说话人、标题、时间（沿用原先自写气泡的文字层级） */
-export function BubbleHeader({ meta }: { meta: BubbleMeta }) {
-  const { token } = theme.useToken();
-  if (meta.role === 'system') return null;
-  return (
-    <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
-      {meta.role === 'user' ? '我' : IP.name}
-      {meta.title && <span style={{ marginLeft: 8 }}>{meta.title}</span>}
-      {meta.at && <span style={{ marginLeft: 8 }}>{dt(meta.at)}</span>}
-    </div>
-  );
 }
 
 interface ItemProps {
@@ -112,6 +63,132 @@ interface ItemProps {
   onUsePlan: (queries: string[]) => void;
   openResults: (s: ResultsSection) => void;
   openSchedule: () => void;
+}
+
+/** 事件行：图标 + 一行摘要 + 链接式动作，可选展开内容 */
+function EventLine({
+  icon,
+  children,
+  actions,
+  detail,
+}: {
+  icon: ReactNode;
+  children: ReactNode;
+  actions?: ReactNode;
+  detail?: ReactNode;
+}) {
+  return (
+    <div className="chat-event">
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        <span style={{ flex: 'none', lineHeight: '22px' }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 8, rowGap: 2 }}>
+            {children}
+            {actions}
+          </div>
+          {detail}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const linkBtn = { type: 'link', size: 'small', style: { padding: 0, height: 'auto' } } as const;
+
+function StatusTag({ task }: { task: IpTask }) {
+  const s = TASK_STATUS[task.status];
+  return (
+    <Tag color={s.color} style={{ marginInlineEnd: 0 }}>
+      {s.text}
+    </Tag>
+  );
+}
+
+/** 一次执行检索：默认折叠成一行摘要，失败与未知的条数始终可见 */
+function SearchEvent({
+  task,
+  queries,
+  newCandidates,
+  at,
+  hasSchedule,
+  openResults,
+  openSchedule,
+}: {
+  task: IpTask;
+  queries: IpQuery[];
+  newCandidates: number;
+  at: string;
+  hasSchedule: boolean;
+  openResults: (s: ResultsSection) => void;
+  openSchedule: () => void;
+}) {
+  const { token } = theme.useToken();
+  const [open, setOpen] = useState(false);
+  const count = (s: IpQuery['status']) => queries.filter((q) => q.status === s).length;
+  const ok = count('success');
+  const failed = count('failed');
+  const unknown = count('unknown');
+  return (
+    <EventLine
+      icon={<SearchOutlined />}
+      actions={
+        <Space size={12} wrap>
+          <Button {...linkBtn} icon={open ? <DownOutlined /> : <RightOutlined />} onClick={() => setOpen((v) => !v)}>
+            {open ? '收起检索式' : '查看检索式'}
+          </Button>
+          <Button {...linkBtn} onClick={() => openResults('candidates')}>
+            查看候选并取证
+          </Button>
+          {ok > 0 && (
+            <Button {...linkBtn} onClick={openSchedule}>
+              {hasSchedule ? '修改定时复检' : '设为定时复检'}
+            </Button>
+          )}
+        </Space>
+      }
+      detail={
+        open && (
+          <div style={{ marginTop: 6 }}>
+            <Rows bordered>
+              {queries.map((q) => (
+                <Space key={q.id} orientation="vertical" size={2} style={{ width: '100%' }}>
+                  <Typography.Text code style={{ wordBreak: 'break-all' }}>
+                    {q.query_text}
+                  </Typography.Text>
+                  <Space size={4} wrap>
+                    <Tag color={QUERY_STATUS[q.status].color}>{QUERY_STATUS[q.status].text}</Tag>
+                    <Typography.Text type={q.status === 'success' ? undefined : 'danger'}>
+                      {queryResultText(q)}
+                    </Typography.Text>
+                  </Space>
+                </Space>
+              ))}
+            </Rows>
+          </div>
+        )
+      }
+    >
+      <Typography.Text strong style={{ fontSize: 13 }}>{`执行检索 ${queries.length} 条`}</Typography.Text>
+      {task.scheduled && (
+        <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+          定时复检
+        </Tag>
+      )}
+      <StatusTag task={task} />
+      <span>
+        {`成功 ${ok}`}
+        {failed > 0 && <span style={{ color: token.colorError }}>{` · 失败 ${failed}`}</span>}
+        {unknown > 0 && <span style={{ color: token.colorWarning }}>{` · 结果未知 ${unknown}`}</span>}
+        {' · '}
+        {ok > 0
+          ? newCandidates
+            ? `新增 ${newCandidates} 件候选（已按专利去重）`
+            : '没有新增候选'
+          : '候选没有变化'}
+      </span>
+      <span className="chat-meta">{dt(at)}</span>
+    </EventLine>
+  );
 }
 
 export default function MessageBody({
@@ -163,8 +240,8 @@ export default function MessageBody({
           </Typography.Paragraph>
           <Rows bordered>
             {content.queries.map((q) => (
-              <Space key={q.query_text} orientation="vertical" size={0}>
-                <Typography.Text code copyable>
+              <Space key={q.query_text} orientation="vertical" size={0} style={{ width: '100%' }}>
+                <Typography.Text code copyable style={{ wordBreak: 'break-all' }}>
                   {q.query_text}
                 </Typography.Text>
                 {q.rationale && <Typography.Text type="secondary">{q.rationale}</Typography.Text>}
@@ -189,53 +266,40 @@ export default function MessageBody({
       );
     }
 
-    case 'search': {
-      const { queries, newCandidates } = item;
-      const ok = queries.some((q) => q.status === 'success');
+    case 'search':
       return (
-        <>
-          <Rows>
-            {queries.map((q) => (
-              <Space key={q.id} orientation="vertical" size={2} style={{ width: '100%' }}>
-                <Typography.Text code>{q.query_text}</Typography.Text>
-                <Space size={4} wrap>
-                  <Tag color={QUERY_STATUS[q.status].color}>{QUERY_STATUS[q.status].text}</Tag>
-                  <Typography.Text type={q.status === 'success' ? undefined : 'danger'}>
-                    {queryResultText(q)}
-                  </Typography.Text>
-                </Space>
-              </Space>
-            ))}
-          </Rows>
-          <Typography.Paragraph style={{ margin: '8px 0' }}>
-            {ok
-              ? newCandidates
-                ? `本次新增 ${newCandidates} 件候选（已按专利去重）。`
-                : '本次没有新增候选：命中的专利此前已在候选里，或检索范围内未找到。'
-              : '这次检索没有成功的结果，候选没有变化。'}
-          </Typography.Paragraph>
-          <Space wrap>
-            <Button onClick={() => openResults('candidates')}>查看候选并取证</Button>
-            {ok && (
-              <Button onClick={openSchedule}>
-                {data.schedule ? '修改定时复检' : '设为定时复检'}
-              </Button>
-            )}
-          </Space>
-        </>
+        <SearchEvent
+          task={item.task}
+          queries={item.queries}
+          newCandidates={item.newCandidates}
+          at={item.at}
+          hasSchedule={!!data.schedule}
+          openResults={openResults}
+          openSchedule={openSchedule}
+        />
+      );
+
+    case 'detail': {
+      const err = item.task.error_category && taskErrorText('detail', item.task.error_category);
+      return (
+        <EventLine
+          icon={<FileProtectOutlined />}
+          actions={
+            <Button {...linkBtn} onClick={() => openResults('candidates')}>
+              查看证据
+            </Button>
+          }
+        >
+          <Typography.Text strong style={{ fontSize: 13 }}>
+            取证
+          </Typography.Text>
+          <StatusTag task={item.task} />
+          <span>{`本次计划调用智慧芽 ${item.task.planned_mcp_calls} 次。`}</span>
+          {err && <Typography.Text type="danger">{err}</Typography.Text>}
+          <span className="chat-meta">{dt(item.at)}</span>
+        </EventLine>
       );
     }
-
-    case 'detail':
-      return (
-        <>
-          <Typography.Paragraph style={{ marginBottom: 8 }}>
-            {`本次计划调用智慧芽 ${item.task.planned_mcp_calls} 次。`}
-            {item.task.error_category && taskErrorText('detail', item.task.error_category)}
-          </Typography.Paragraph>
-          <Button onClick={() => openResults('candidates')}>查看证据</Button>
-        </>
-      );
 
     case 'analysis':
       return (
@@ -249,25 +313,15 @@ export default function MessageBody({
 
     case 'message': {
       const m = item.message;
-      if (m.role === 'user') {
-        return <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography.Text>;
-      }
+      if (m.role === 'user') return <>{m.content}</>;
       return (
         <>
-          <Typography.Paragraph style={{ marginBottom: 6, whiteSpace: 'pre-wrap' }}>
-            {m.content}
-          </Typography.Paragraph>
+          <AnswerMarkdown>{m.content}</AnswerMarkdown>
           {m.cited_candidate_ids.length > 0 && (
-            <Space size={4} wrap style={{ marginBottom: 6 }}>
-              <Typography.Text type="secondary">引用：</Typography.Text>
-              {m.cited_candidate_ids.map((id) => (
-                <Tag key={id}>{pn.get(id) ?? `#${id}`}</Tag>
-              ))}
-            </Space>
+            <div style={{ marginTop: 8 }}>
+              <CitationTags labels={m.cited_candidate_ids.map((id) => pn.get(id) ?? `#${id}`)} />
+            </div>
           )}
-          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-            Agent 回复，仅供参考，不构成法律意见。
-          </Typography.Text>
         </>
       );
     }
@@ -275,21 +329,19 @@ export default function MessageBody({
     case 'review': {
       const r = item.review;
       return (
-        <Alert
-          type="success"
-          showIcon
-          title={
-            <Space size={4} wrap>
-              {`${r.signer_name ?? '人工'} 签署了 ${marketName.get(r.market) ?? r.market} 的人工意见：`}
-              <Tag
-                color={RISK_LEVEL[r.risk_level].color}
-              >{`风险 ${RISK_LEVEL[r.risk_level].text}`}</Tag>
-              <Tag color={DECISION[r.decision].color}>{DECISION[r.decision].text}</Tag>
-              <Typography.Text type="secondary">{dt(r.created_at)}</Typography.Text>
-            </Space>
-          }
-          description={<span style={{ whiteSpace: 'pre-wrap' }}>{r.basis}</span>}
-        />
+        <EventLine icon={<CheckCircleOutlined style={{ color: 'var(--ant-color-success, #52c41a)' }} />}>
+          <span>{`${r.signer_name ?? '人工'} 签署了 ${marketName.get(r.market) ?? r.market} 的人工意见：`}</span>
+          <Tag color={RISK_LEVEL[r.risk_level].color} style={{ marginInlineEnd: 0 }}>
+            {`风险 ${RISK_LEVEL[r.risk_level].text}`}
+          </Tag>
+          <Tag color={DECISION[r.decision].color} style={{ marginInlineEnd: 0 }}>
+            {DECISION[r.decision].text}
+          </Tag>
+          <span className="chat-meta">{dt(r.created_at)}</span>
+          <div style={{ flexBasis: '100%', whiteSpace: 'pre-wrap', color: 'var(--ant-color-text, inherit)' }}>
+            {r.basis}
+          </div>
+        </EventLine>
       );
     }
 

@@ -73,7 +73,7 @@ const query = (over: Partial<IpQuery> = {}): IpQuery =>
   }) as IpQuery;
 
 describe('时间线卡片', () => {
-  it('检索：每条检索式带状态与结果文案，按钮可用', () => {
+  it('检索：默认折叠为摘要，失败条数可见；展开后每条检索式带状态与结果文案，按钮可用', () => {
     const { openResults, openSchedule } = show({
       kind: 'search',
       key: 's',
@@ -82,10 +82,15 @@ describe('时间线卡片', () => {
       queries: [query(), query({ id: 2, query_text: 'TA:(cup)', status: 'failed', error_category: 'not_configured' })],
       newCandidates: 3,
     });
+    // 折叠时：摘要里有条数、失败数与新增候选，逐条检索式不展示
+    expect(screen.getByText('执行检索 2 条')).toBeTruthy();
+    expect(screen.getByText(/失败 1/)).toBeTruthy();
+    expect(screen.getByText(/新增 3 件候选（已按专利去重）/)).toBeTruthy();
+    expect(screen.queryByText('TTL:(mug)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /查看检索式/ }));
     expect(screen.getByText('TTL:(mug)')).toBeTruthy();
     expect(screen.getByText('来源共 12 条，已读取 10 条')).toBeTruthy();
     expect(screen.getByText('智慧芽接口未配置，请联系管理员')).toBeTruthy();
-    expect(screen.getByText('本次新增 3 件候选（已按专利去重）。')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: '查看候选并取证' }));
     expect(openResults).toHaveBeenCalledWith('candidates');
     fireEvent.click(screen.getByRole('button', { name: '设为定时复检' }));
@@ -170,6 +175,78 @@ describe('时间线卡片', () => {
     show({ kind: 'task-failed', key: 'u', at: AT, task: task('search', 'unknown', { error_category: 'timeout' }) });
     expect(screen.getByText('执行检索：结果未知')).toBeTruthy();
     expect(screen.queryByText(/执行检索：失败/)).toBeNull();
+  });
+
+  it('Agent 回答：渲染受限 Markdown，引用标签在底部，链接与图片不产生元素', () => {
+    const msg = (content: string, role: 'user' | 'agent' = 'agent'): TimelineItem => ({
+      kind: 'message',
+      key: `m-${role}`,
+      at: AT,
+      message: { id: 1, task_id: 2, role, content, model: 'm', cited_candidate_ids: [5], created_at: AT },
+    });
+    const { container } = render(
+      <MessageBody
+        item={msg('## 结论\n\n- 和 US D123456 外形接近\n\n[来源](javascript:alert(1)) ![图](https://e.com/a.png)')}
+        data={data}
+        meta={meta}
+        busy={false}
+        isLatestPlan={false}
+        onUsePlan={vi.fn()}
+        openResults={vi.fn()}
+        openSchedule={vi.fn()}
+      />,
+    );
+    expect(container.querySelector('h2')?.textContent).toBe('结论');
+    expect(container.querySelectorAll('li')).toHaveLength(1);
+    expect(container.querySelector('a, img')).toBeNull();
+    expect(screen.getByText('US D123456')).toBeTruthy();
+  });
+
+  it('用户追问与检索方案仍按纯文本，不渲染 Markdown', () => {
+    const { container } = render(
+      <>
+        <MessageBody
+          item={{
+            kind: 'message',
+            key: 'u',
+            at: AT,
+            message: { id: 1, task_id: 2, role: 'user', content: '# 不是标题', model: null, cited_candidate_ids: [], created_at: AT },
+          }}
+          data={data}
+          meta={meta}
+          busy={false}
+          isLatestPlan={false}
+          onUsePlan={vi.fn()}
+          openResults={vi.fn()}
+          openSchedule={vi.fn()}
+        />
+        <MessageBody
+          item={{
+            kind: 'plan',
+            key: 'p',
+            at: AT,
+            plan: {
+              id: 1,
+              task_id: 3,
+              model: 'm',
+              coverage: null,
+              created_at: AT,
+              content: { queries: [{ query_text: 'TTL:(mug)', rationale: '**最窄** [x](https://e.com)' }], assumptions: [] },
+            },
+          }}
+          data={data}
+          meta={meta}
+          busy={false}
+          isLatestPlan
+          onUsePlan={vi.fn()}
+          openResults={vi.fn()}
+          openSchedule={vi.fn()}
+        />
+      </>,
+    );
+    expect(container.querySelector('h1, strong, a')).toBeNull();
+    expect(screen.getByText('# 不是标题')).toBeTruthy();
+    expect(screen.getByText('**最窄** [x](https://e.com)')).toBeTruthy();
   });
 
   it('定时复检跳过：显示原因', () => {
