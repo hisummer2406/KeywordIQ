@@ -27,7 +27,7 @@ MUST NOT 产生可点击的链接或发起图片请求。渲染器 MUST NOT 使�
 - **WHEN** 用户用中文输入法在输入框里选词，按 Enter 确认候选
 - **THEN** 不提交，也不丢失已输入内容
 
-#### Scenario: 回答含 HTML 或脚本
+#### Scenario: 大模型返回含标记的文本
 
 - **WHEN** 大模型回答里包含 `<script>`、`<img onerror=…>` 等 HTML
 - **THEN** 页面按字面文本显示这些标记，不产生对应的 DOM 元素

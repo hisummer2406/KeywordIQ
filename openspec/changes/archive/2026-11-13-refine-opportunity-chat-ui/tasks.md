@@ -4,9 +4,9 @@
 
 ## 1. 改前核实
 
-- [ ] 1.1 用户截取改前截图（场景清单见 PR 说明）：IP 专家任务对话各阶段、档案追问、窄窗口
+- [x] 1.1 用户截取改前截图（场景清单见 PR 说明）：IP 专家任务对话各阶段、档案追问、窄窗口
 
-## 2. 共用表现层与受限 Markdown（design D1、D2；admin-spa 场景「回答含 HTML 或脚本」「回答含链接或图片语法」「回答含标题、列表与表格」）
+## 2. 共用表现层与受限 Markdown（design D1、D2；admin-spa 场景「大模型返回含标记的文本」（原拟名「回答含 HTML 或脚本」，归档时为保留旧场景改回）「回答含链接或图片语法」「回答含标题、列表与表格」）
 
 - [x] 2.1 新增依赖 `react-markdown@10.1.0`、`remark-gfm@4.0.1`
 - [x] 2.2 `chat/AnswerMarkdown.tsx`：HTML 转字面文本插件、元素白名单、链接/图片降为文字、`urlTransform` 置空、表格与代码块横向滚动、段内换行保留
@@ -34,6 +34,8 @@
 ## 5. 验证与交付
 
 - [x] 5.1 `openspec validate --strict --all`（50 passed）、`git diff --check` 通过
-- [ ] 5.2 前端 `pnpm lint && pnpm tsc && pnpm test`（由用户执行，按记忆约定）
-- [ ] 5.3 浏览器实屏验收（用户）：改后截图、长回复/长标题/检索式/窄窗口无横向溢出、自动滚动与输入区可达、键盘焦点与对比度
-- [ ] 5.4 开 PR（`--base v2`，备用仓库），附 Refs #7、spec delta、截图与实际验证
+- [x] 5.2 前端 `pnpm lint && pnpm tsc && pnpm test`：PR #8 CI（580579c）与 v2 推送 CI（d5d3f6b）均通过
+- [x] 5.3 浏览器实屏验收（用户 2026-11-13 告知截图与实测完成）：改后截图、长回复/长标题/检索式/窄窗口无横向溢出、自动滚动与输入区可达、键盘焦点与对比度
+- [x] 5.4 开 PR（`--base v2`，备用仓库），附 Refs #7、spec delta、截图与实际验证
+
+2026-11-13 Claude：PR #8（备用仓库）合并为 d5d3f6b，Codex 评审零发现；同日由 Deploy V2 to ECS 发布 d5d3f6b 成功。
