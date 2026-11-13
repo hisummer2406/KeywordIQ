@@ -176,9 +176,68 @@ describe('消息流', () => {
     expect(screen.getByText('待你确认的检索式')).toBeTruthy();
   });
 
+  it('回答里的 Markdown 标题与列表按排版显示', async () => {
+    await mount(
+      detail({
+        messages: [
+          { id: 2, task_id: 2, role: 'agent', content: '## 结论\n\n- 甲\n- 乙', model: 'm', cited_candidate_ids: [], created_at: '2026-11-11T02:01:00+00:00' },
+        ],
+      }),
+    );
+    expect(document.querySelector('.chat-answer h2')?.textContent).toBe('结论');
+    expect(document.querySelectorAll('.chat-answer li')).toHaveLength(2);
+    // 回答仍标为仅供参考
+    expect(screen.getByText(/Agent 回复，仅供参考/)).toBeTruthy();
+  });
+
   it('有在途任务时显示进度文案，且不再显示待确认卡', async () => {
     await mount(detail({ active_task: task(6, 'search', 'queued') }));
     expect(screen.getByText(/已排队，马上开始/)).toBeTruthy();
     expect(screen.queryByText('待你确认的检索式')).toBeNull();
+  });
+});
+
+describe('主要动作（change refine-opportunity-chat-ui 决策 D3）', () => {
+  const primaryButton = () =>
+    Array.from(document.querySelectorAll('button.ant-btn-primary')).map((b) => b.textContent);
+
+  it('还没有方案：主要动作是生成检索方案，其余在「更多操作」里', async () => {
+    await mount(detail());
+    expect(primaryButton()).toContain('生成检索方案');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /更多操作/ }));
+    });
+    expect(await screen.findByText('手写检索式')).toBeTruthy();
+    expect(screen.getByText('签署人工意见')).toBeTruthy();
+    // 还没检索：分析不可用，并写明原因
+    expect(screen.getByText('生成风险分析（先成功执行至少一条检索）')).toBeTruthy();
+  });
+
+  it('已有成功检索、没有分析：主要动作是生成风险分析，点击只请求分析', async () => {
+    api.requestAnalysis.mockResolvedValue({ task_id: 7, status: 'queued' });
+    await mount(detail({ search_done: true }));
+    expect(primaryButton()).toContain('生成风险分析');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /生成风险分析/ }));
+    });
+    expect(api.requestAnalysis).toHaveBeenCalledTimes(1);
+    expect(api.requestSearch).not.toHaveBeenCalled();
+    expect(api.requestDetail).not.toHaveBeenCalled();
+  });
+
+  it('大模型未配置：主要动作是手写检索式，打开待确认卡但不入队', async () => {
+    await mount(detail({ llm_configured: false }));
+    expect(primaryButton()).toContain('手写检索式');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /手写检索式/ }));
+    });
+    expect(screen.getByText('待你确认的检索式')).toBeTruthy();
+    expect(api.requestSearch).not.toHaveBeenCalled();
+  });
+
+  it('有在途任务：主要动作不可用', async () => {
+    await mount(detail({ search_done: true, active_task: task(5, 'search', 'running') }));
+    const btn = screen.getByRole('button', { name: /生成风险分析/ }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
   });
 });
