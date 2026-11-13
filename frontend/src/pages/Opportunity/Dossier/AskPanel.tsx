@@ -1,12 +1,17 @@
-import { Prompts, Sender } from '@ant-design/x';
-import { Alert, Spin, Tag, Typography, theme } from 'antd';
+import { Bubble, type BubbleItemType, Prompts, Sender } from '@ant-design/x';
+import { Alert, Space, Spin, Typography } from 'antd';
 import { useState } from 'react';
 import type { DossierDetail } from '@/services/opportunityDossier';
+import AnswerMarkdown from '../chat/AnswerMarkdown';
+import { CitationTags, MetaLine, useChatRoles } from '../chat/roles';
 import { ASK_ERROR } from './dossierView';
 
 /**
  * 追问。大模型只拿到这份档案里的证据（ABA 快照、有效的人工证据、决定、专利摘要），
  * 档案里没有的数据它应当直说没有。回答下方标出引用了哪些证据，便于回到上面核对。
+ *
+ * 与 IP 专家任务对话共用消息规范（change refine-opportunity-chat-ui 决策 D1、D5）：问在右、答在左，
+ * 回答走受限 Markdown。嵌在档案详情的长页面里，所以消息列表不另设滚动区。
  */
 
 interface Props {
@@ -23,7 +28,7 @@ const SUGGESTIONS = [
 ];
 
 export default function AskPanel({ detail, onAsk }: Props) {
-  const { token } = theme.useToken();
+  const roles = useChatRoles('research');
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const snapshotId = detail.snapshot?.id;
@@ -52,12 +57,79 @@ export default function AskPanel({ detail, onAsk }: Props) {
         ? 'ABA 证据快照（当前）'
         : `ABA 证据快照 #${id}（较早）`;
 
+  const items: BubbleItemType[] = detail.messages.flatMap((m): BubbleItemType[] => {
+    const at = m.created_at.slice(0, 16).replace('T', ' ');
+    const question: BubbleItemType = {
+      key: `q-${m.id}`,
+      role: 'user',
+      content: m.question,
+      footer: <MetaLine parts={[m.asker_name ?? '—', at]} />,
+    };
+    if (m.status === 'queued' || m.status === 'running') {
+      return [
+        question,
+        {
+          key: `a-${m.id}`,
+          role: 'ai',
+          content: '',
+          loading: true,
+          loadingRender: () => (
+            <Space>
+              <Spin size="small" />
+              <Typography.Text type="secondary">正在根据档案证据回答…</Typography.Text>
+            </Space>
+          ),
+        },
+      ];
+    }
+    if (m.status === 'completed') {
+      return [
+        question,
+        {
+          key: `a-${m.id}`,
+          role: 'ai',
+          content: (
+            <>
+              <AnswerMarkdown>{m.answer ?? ''}</AnswerMarkdown>
+              <div style={{ marginTop: 8 }}>
+                {m.cited_evidence_ids.length > 0 ? (
+                  <CitationTags labels={m.cited_evidence_ids.map(citeLabel)} />
+                ) : (
+                  <span className="chat-meta">没有标出引用的证据。</span>
+                )}
+              </div>
+            </>
+          ),
+          footer: <MetaLine parts={['大模型回答，仅供参考', m.model && `模型 ${m.model}`]} />,
+        },
+      ];
+    }
+    const reason = ASK_ERROR[m.error_category ?? ''] ?? m.error_category;
+    return [
+      question,
+      {
+        key: `a-${m.id}`,
+        role: 'ai',
+        content:
+          m.status === 'failed' ? (
+            <Typography.Text type="danger">
+              没有回答：{reason ?? '调用失败'}。可以再问一次。
+            </Typography.Text>
+          ) : (
+            <Typography.Text type="warning">
+              结果未知：{reason ?? '调用中断'}。系统不会自动重发，可以再问一次。
+            </Typography.Text>
+          ),
+      },
+    ];
+  });
+
   return (
     <div>
       <Typography.Title level={5} style={{ marginBottom: 4 }}>
         追问
       </Typography.Title>
-      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
         回答只基于这份档案里的证据，不查外部数据，也不替你做决定。它是大模型生成的，引用的证据请回到上面核对。
       </Typography.Paragraph>
       {!detail.llm_configured && (
@@ -68,69 +140,13 @@ export default function AskPanel({ detail, onAsk }: Props) {
           title="大模型未配置，暂时不能追问。证据、补证与决定都不受影响。"
         />
       )}
-      <div style={{ display: 'grid', gap: 10 }}>
-        {detail.messages.map((m) => (
-          <div
-            key={m.id}
-            style={{
-              border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 10,
-              padding: 12,
-              background: token.colorBgContainer,
-            }}
-          >
-            <div style={{ fontWeight: 500 }}>
-              {m.question}
-              <Typography.Text
-                type="secondary"
-                style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}
-              >
-                {m.asker_name ?? '—'} · {m.created_at.slice(0, 16).replace('T', ' ')}
-              </Typography.Text>
-            </div>
-            <div style={{ marginTop: 6 }}>
-              {(m.status === 'queued' || m.status === 'running') && (
-                <span style={{ color: token.colorTextSecondary }}>
-                  <Spin size="small" style={{ marginRight: 8 }} />
-                  正在根据档案证据回答…
-                </span>
-              )}
-              {m.status === 'completed' && (
-                <>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.answer}</div>
-                  <div style={{ marginTop: 6, fontSize: 12, color: token.colorTextTertiary }}>
-                    {m.cited_evidence_ids.length > 0 ? (
-                      <>
-                        引用：
-                        {m.cited_evidence_ids.map((id) => (
-                          <Tag key={id}>{citeLabel(id)}</Tag>
-                        ))}
-                      </>
-                    ) : (
-                      '没有标出引用的证据。'
-                    )}
-                    {m.model && <span>模型 {m.model}</span>}
-                  </div>
-                </>
-              )}
-              {m.status === 'failed' && (
-                <Typography.Text type="danger">
-                  没有回答：{ASK_ERROR[m.error_category ?? ''] ?? m.error_category ?? '调用失败'}
-                  。可以再问一次。
-                </Typography.Text>
-              )}
-              {m.status === 'unknown' && (
-                <Typography.Text type="warning">
-                  结果未知：{ASK_ERROR[m.error_category ?? ''] ?? m.error_category ?? '调用中断'}
-                  。系统不会自动重发，可以再问一次。
-                </Typography.Text>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+      {items.length > 0 && (
+        <div style={{ maxWidth: 880, marginBottom: 12 }}>
+          <Bubble.List autoScroll={false} items={items} role={roles} />
+        </div>
+      )}
       {detail.llm_configured && (
-        <div style={{ marginTop: 10 }}>
+        <div style={{ maxWidth: 880 }}>
           {detail.messages.length === 0 && (
             <Prompts
               style={{ marginBottom: 8 }}
