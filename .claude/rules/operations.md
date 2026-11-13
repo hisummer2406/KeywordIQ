@@ -21,8 +21,8 @@ paths:
 
 - 动生产前读 [交接](../../docs/ops/v2-ecs-handoff.md) 和 [运维导航](../../openspec/guides/operations.md)；交接状态仍需按所声称层面验证。
 - V2 只绑 127.0.0.1:8001，Compose 项目 keywordiq-v2，所有 ports 只回环。
-- 发布只走 Deploy V2 to ECS：refs/heads/v2、完整 SHA 在 origin/v2 历史、该 SHA 后端/前端/插件 CI 全部 completed/success。
-  不放宽检查。授权与失败处理见根 CLAUDE.md「生产操作边界」，这里不重复。
+- 发布只走 Deploy V2 to ECS：refs/heads/v2、完整 SHA 在 origin/v2 历史、该 SHA 的 v2 push CI 必须通过；受影响项成功，未受影响项仅经同一运行的「发布就绪（按范围校验）」门禁核验后允许跳过。范围不明全量，缺失/失败/取消拒绝。
+  不得无条件放行 skipped。授权与失败处理见根 CLAUDE.md「生产操作边界」，这里不重复。
 - 触发前核对：最新目标、无未推送提交、三项 CI、是否含新迁移、无进行中导入；有迁移先说明无自动备份并等确认。
 - 生产 .env 的 db 主机属于容器网络；不要裸用宿主机连接执行迁移，按发布工作流封装执行。
 - 池预算不变式：（同步池+异步池，各自 pool_size+max_overflow）×worker 数，加 ops-bot 池，必须小于 PG_MAX_CONNECTIONS 并留余量；当前来源看 config.py/database.py/ops_bot/database.py/Compose。
