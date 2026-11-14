@@ -16,7 +16,7 @@ jobs:
     name: 判定检查范围
     # V1 的 main 保持原行为；v2 草稿不分配 runner。
     if: (github.event_name == 'push' && github.ref == 'refs/heads/v2') || (github.event_name == 'pull_request' && github.base_ref == 'v2' && !github.event.pull_request.draft)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, mbp-ci]
     permissions:
       contents: read
       actions: read
@@ -52,7 +52,7 @@ jobs:
       (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
        ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.backend != 'false')))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, mbp-ci]
 
     # 生产是 RDS PostgreSQL 15，这里对齐大版本。
     # 起真库的目的有二：让 test_database.py 的连通性用例有意义，
@@ -127,7 +127,7 @@ jobs:
       (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
        ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.frontend != 'false')))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, mbp-ci]
     defaults:
       run:
         working-directory: frontend
@@ -173,7 +173,7 @@ jobs:
       (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
        ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.extension != 'false')))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, mbp-ci]
     defaults:
       run:
         working-directory: extension
@@ -208,7 +208,7 @@ jobs:
     name: 发布就绪（按范围校验）
     needs: [changes, backend, frontend, extension]
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/v2'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, mbp-ci]
     permissions:
       contents: read
     steps:
