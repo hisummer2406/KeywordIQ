@@ -52,14 +52,16 @@ async function renderWith(rows: ReturnType<typeof row>[]) {
 /**
  * 表格里某一行的重导按钮。
  *
- * 名字用正则而非全等：按钮带 ReloadOutlined，antd 会把图标的 aria-label 拼进无障碍名
- * （「reload 重导」），全等匹配会在加图标后静默找不到元素——表现是 `toBeEnabled` 报
- * 「received value must be an HTMLElement」，而不是「按钮是禁用的」，很难一眼看懂。
+ * 按文字找再取所在 button，不用 `queryByRole('button', { name })`：role 查询为算无障碍名
+ * 和可见性会反复调 getComputedStyle，jsdom 每次都要扫一遍 antd CSS-in-JS 注入的上千条规则，
+ * 慢机器上单次查询 10s+，`waitFor` 里重复调用直接撞 20s 超时（自托管 runner 实测）。
+ * 文字用 `\s*`：去掉图标后 antd 会给两个汉字的按钮自动插空格（「重 导」）。
+ * 找不到时返回 null，`toBeEnabled` 报「received value must be an HTMLElement」即是没找到。
  */
 function retryButtonIn(fileName: string) {
   const cell = screen.getByText(fileName);
   const tr = cell.closest('tr') as HTMLElement;
-  return within(tr).queryByRole('button', { name: /重导/ });
+  return within(tr).queryByText(/^重\s*导$/)?.closest('button') ?? null;
 }
 
 describe('导入历史屏', () => {
