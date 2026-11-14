@@ -17,7 +17,8 @@ jobs:
   deploy:
     # 工作流页面可选择任意分支；只允许 V2 分支触发，避免误把 main/V1 发到此 ECS 目录。
     if: github.ref == 'refs/heads/v2'
-    runs-on: ubuntu-24.04
+    # 自托管 runner 跨 job 持久，私钥只落 $RUNNER_TEMP 并在 always() 清理，见下方两步。
+    runs-on: [self-hosted, linux, x64, mbp-ci]
 
     steps:
       - uses: actions/checkout@v5
@@ -37,10 +38,11 @@ jobs:
           set -euo pipefail
           test -n "$SSH_PRIVATE_KEY"
           test -n "$SSH_KNOWN_HOSTS"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          # 不写 ~/.ssh：自托管 runner 的家目录会留给后续任意 CI job 读取。
+          umask 077
+          install -d -m 700 "$RUNNER_TEMP/ecs-ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ecs-ssh/id_ed25519"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ecs-ssh/known_hosts"
 
       - name: 部署已验证的 V2 SHA
         env:
@@ -54,6 +56,9 @@ jobs:
           test -n "$ECS_SSH_USER"
 
           ssh -p "$ECS_SSH_PORT" \
+            -i "$RUNNER_TEMP/ecs-ssh/id_ed25519" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/ecs-ssh/known_hosts" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
             "${ECS_SSH_USER}@${ECS_SSH_HOST}" \
@@ -93,3 +98,7 @@ jobs:
             --resolve key.liangtong.online:443:127.0.0.1 \
             https://key.liangtong.online/health >/dev/null
           REMOTE
+
+      - name: 清理 SSH 私钥
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ecs-ssh"
