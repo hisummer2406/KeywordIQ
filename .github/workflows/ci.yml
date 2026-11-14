@@ -152,6 +152,9 @@ jobs:
 
       # 不用 setup-node 的 pnpm 缓存：自托管 runner 的 pnpm store 由 runner .env 的 npm_config_store_dir 固定在本机持久目录，
       # 上传 GitHub 缓存要经代理传几百 MB 到 Azure，曾卡死收尾步骤。
+      - name: 记录 pnpm store 路径（应为 runner 持久目录）
+        run: pnpm store path
+
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
@@ -192,6 +195,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: 记录 pnpm store 路径（应为 runner 持久目录）
+        run: pnpm store path
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
