@@ -18,7 +18,7 @@
 不只比较最后一次提交。API 返回达到 300 文件上限、空结果、无效结果或失败时，运行全套。
 判定 job 失败或输出缺失时，下游同样全量执行，避免漏检。
 
-依赖缓存和自动取消旧任务沿用现有配置。工作流不使用顶层 `paths` 过滤，避免必需检查一直 Pending。
+所有 job 跑在自托管 runner（标签 `mbp-ci`），不用 GitHub Actions 缓存：pnpm store（runner `.env` 的 `npm_config_store_dir`；不设会落到 `pnpm/action-setup` 每次重装的 `PNPM_HOME` 下）和 uv 缓存（`UV_CACHE_DIR`）在本机持久，每个 job 设 `timeout-minutes` 防挂死。自动取消旧任务沿用现有配置。工作流不使用顶层 `paths` 过滤，避免必需检查一直 Pending。
 三个检查名称不变；v2 push 增加「发布就绪（按范围校验）」汇总门禁，核验受影响项成功、无关项按规则跳过。
 
 本地验证策略与调度条件：`node --test .github/ci-scope.test.cjs .github/ci-evidence.test.cjs`。
