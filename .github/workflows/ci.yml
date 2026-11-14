@@ -17,6 +17,7 @@ jobs:
     # V1 的 main 保持原行为；v2 草稿不分配 runner。
     if: (github.event_name == 'push' && github.ref == 'refs/heads/v2') || (github.event_name == 'pull_request' && github.base_ref == 'v2' && !github.event.pull_request.draft)
     runs-on: [self-hosted, linux, x64, mbp-ci]
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
@@ -53,6 +54,7 @@ jobs:
        ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.backend != 'false')))
     runs-on: [self-hosted, linux, x64, mbp-ci]
+    timeout-minutes: 30
 
     # 生产是 RDS PostgreSQL 15，这里对齐大版本。
     # 起真库的目的有二：让 test_database.py 的连通性用例有意义，
@@ -96,9 +98,8 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: 安装 uv
+        # 不传 GitHub 缓存（自托管 runner 上 auto 即关闭）；uv 缓存走 runner .env 的 UV_CACHE_DIR，跨 job 持久。
         uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
 
       - name: 安装依赖（按 .python-version + uv.lock）
         run: uv sync --locked
@@ -128,6 +129,7 @@ jobs:
        ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.frontend != 'false')))
     runs-on: [self-hosted, linux, x64, mbp-ci]
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: frontend
@@ -147,8 +149,11 @@ jobs:
           # （`webidl.util.markAsUncloneable is not a function`，vitest 整批 Unhandled
           # Error）。开发机是 22.x，CI 跟上才谈得上"CI 绿等于本地绿"。
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # 不用 setup-node 的 pnpm 缓存：自托管 runner 的 pnpm store 由 runner .env 的 npm_config_store_dir 固定在本机持久目录，
+      # 上传 GitHub 缓存要经代理传几百 MB 到 Azure，曾卡死收尾步骤。
+      - name: 记录 pnpm store 路径（应为 runner 持久目录）
+        run: pnpm store path
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -174,6 +179,7 @@ jobs:
        ((github.event_name == 'push' || !github.event.pull_request.draft) &&
         (needs.changes.result != 'success' || needs.changes.outputs.extension != 'false')))
     runs-on: [self-hosted, linux, x64, mbp-ci]
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: extension
@@ -189,8 +195,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: extension/pnpm-lock.yaml
+
+      - name: 记录 pnpm store 路径（应为 runner 持久目录）
+        run: pnpm store path
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -209,6 +216,7 @@ jobs:
     needs: [changes, backend, frontend, extension]
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/v2'
     runs-on: [self-hosted, linux, x64, mbp-ci]
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
