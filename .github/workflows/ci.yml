@@ -150,7 +150,7 @@ jobs:
           # Error）。开发机是 22.x，CI 跟上才谈得上"CI 绿等于本地绿"。
           node-version: 22
 
-      # 不用 setup-node 的 pnpm 缓存：自托管 runner 的 pnpm store 本就在本地持久，
+      # 不用 setup-node 的 pnpm 缓存：自托管 runner 的 pnpm store 由 runner .env 的 npm_config_store_dir 固定在本机持久目录，
       # 上传 GitHub 缓存要经代理传几百 MB 到 Azure，曾卡死收尾步骤。
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
