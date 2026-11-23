@@ -11,6 +11,7 @@ import {
   setAuthToken,
   setWebOrigin,
 } from './auth';
+import { initAutoSection } from './auto-options';
 import { ensureHostPermission } from './host-permission';
 import { syncTokenFromWeb } from './session-sync';
 
@@ -150,3 +151,4 @@ async function init(): Promise<void> {
 }
 
 void init();
+void initAutoSection();

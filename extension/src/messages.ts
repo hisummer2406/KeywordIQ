@@ -3,6 +3,23 @@
 
 import type { ParsedItem } from './parse-storefront';
 
+/**
+ * 自动采集（试点，#205 阶段 1）的控制消息：设置页发起运行或停止、通知设置变更，
+ * content script 询问自己所在标签页是不是自动采集打开的（是就不渲染人工面板）。
+ */
+export type AutoControlMessage =
+  | { type: 'AUTO_IS_AUTO_TAB' }
+  | { type: 'AUTO_RUN_NOW' }
+  | { type: 'AUTO_STOP' }
+  | { type: 'AUTO_CONFIG_CHANGED' };
+
+export type AutoControlResult = { ok: true; isAutoTab?: boolean } | { ok: false; reason?: string };
+
+/** 后台请 content script 解析当前页（自动采集）。回答形状见 auto-plan.ts 的 PageScan。 */
+export interface AutoScanRequest {
+  type: 'AUTO_SCAN';
+}
+
 export interface CaptureMessage {
   type: 'CAPTURE_REPORT';
   sellerId: string;
