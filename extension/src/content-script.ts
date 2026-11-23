@@ -25,15 +25,19 @@ import { detectBlockedPage, type PageScan } from './auto-plan';
 // 自动采集（试点，#205 阶段 1）：后台在页面加载完成后发来 AUTO_SCAN，这里解析并回答。
 // 只读 DOM，不发网络请求、不碰人工面板的暂存区（本变更 design 决策 7）。
 // 监听器在模块顶层注册，越早越好：后台在 `complete` 后就会来问。
+// 每次页面加载 content script 都会重新注入，这个标识因此天然区分「旧页面」和「新页面」
+const DOC_ID = crypto.randomUUID();
+
 chrome.runtime.onMessage.addListener((message: AutoScanRequest, _sender, sendResponse) => {
   if (message?.type !== 'AUTO_SCAN') return undefined;
   const scan: PageScan = detectBlockedPage(document)
-    ? { kind: 'blocked' }
+    ? { kind: 'blocked', docId: DOC_ID }
     : {
         kind: 'ok',
         items: parseStorefrontPage(document),
         hasNext: hasNextPage(document),
         sellerName: parseSellerName(document),
+        docId: DOC_ID,
       };
   sendResponse(scan);
   return undefined;

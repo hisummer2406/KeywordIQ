@@ -165,6 +165,85 @@ describe('自动采集状态机', () => {
     expect(h.report).toHaveBeenCalledTimes(1);
   });
 
+  it('翻页后旧页面仍在回答：忽略，等新页面的结果（PR #206 Codex P2）', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }], 2);
+    await h.runner.startRun('manual', h.deps);
+
+    let state = (await h.runner.loadRunState())!;
+    state = await h.runner.handleScan(
+      state,
+      { kind: 'ok', items: [{ asin: 'B01' }], hasNext: true, docId: 'doc-page-1' },
+      h.deps,
+    );
+    expect(state.current?.page).toBe(2);
+
+    // 第 1 页的重复 complete 事件：回答者仍是第 1 页的文档
+    state = await h.runner.handleScan(
+      state,
+      { kind: 'ok', items: [{ asin: 'B01' }], hasNext: true, docId: 'doc-page-1' },
+      h.deps,
+    );
+    expect(h.report).not.toHaveBeenCalled();
+    expect(state.current?.phase).toBe('collecting');
+
+    // 真正的第 2 页加载完成
+    await h.runner.handleScan(
+      state,
+      { kind: 'ok', items: [{ asin: 'B02' }], hasNext: true, docId: 'doc-page-2' },
+      h.deps,
+    );
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect((h.report.mock.calls[0]![0] as CaptureMessage).items.map((i) => i.asin)).toEqual(['B01', 'B02']);
+  });
+
+  it('拿不到 content script 回答时不立即停止，交给页面超时', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }]);
+    await h.runner.startRun('manual', h.deps);
+    const tabId = (await h.runner.loadRunState())!.current!.tabId!;
+    const chromeTabs = (globalThis as unknown as { chrome: { tabs: { sendMessage: unknown } } }).chrome.tabs;
+    chromeTabs.sendMessage = async () => {
+      throw new Error('Receiving end does not exist');
+    };
+
+    await h.runner.onTabComplete(tabId, h.deps);
+    expect((await h.runner.loadRunState())?.status).toBe('running');
+    expect(h.alarms.has(h.runner.ALARM_TIMEOUT)).toBe(true);
+  });
+
+  it('看门狗：运行中却没有下一步 alarm 时补建（PR #206 Codex P2）', async () => {
+    const h = await setup([
+      { sellerId: 'S1', site: 'US' },
+      { sellerId: 'S2', site: 'US' },
+    ]);
+    await h.runner.startRun('manual', h.deps);
+    expect(h.alarms.has(h.runner.ALARM_WATCHDOG)).toBe(true);
+    await completeCurrentTab(h); // 第 1 页为空 → 这家失败，进入等待下一家
+
+    // 模拟「状态已保存、下一步 alarm 尚未创建」时被回收
+    h.alarms.delete(h.runner.ALARM_NEXT_STORE);
+    await h.runner.onRunAlarm(h.runner.ALARM_WATCHDOG, h.deps);
+    expect(h.alarms.has(h.runner.ALARM_NEXT_STORE)).toBe(true);
+
+    await h.runner.onRunAlarm(h.runner.ALARM_NEXT_STORE, h.deps);
+    expect(h.openedUrls.at(-1)).toContain('me=S2');
+
+    // 采集中却丢了超时 alarm：看门狗补上
+    h.alarms.delete(h.runner.ALARM_TIMEOUT);
+    await h.runner.onRunAlarm(h.runner.ALARM_WATCHDOG, h.deps);
+    expect(h.alarms.has(h.runner.ALARM_TIMEOUT)).toBe(true);
+  });
+
+  it('一轮结束后看门狗被清除；残留的看门狗触发时自行清除', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }]);
+    await h.runner.startRun('manual', h.deps);
+    await h.runner.stopRun(h.deps);
+    expect(h.alarms.has(h.runner.ALARM_WATCHDOG)).toBe(false);
+
+    h.alarms.set(h.runner.ALARM_WATCHDOG, {});
+    await h.runner.onRunAlarm(h.runner.ALARM_WATCHDOG, h.deps);
+    expect(h.alarms.has(h.runner.ALARM_WATCHDOG)).toBe(false);
+  });
+
   it('上报途中被中断：恢复时用同一个 request_id 重发', async () => {
     const h = await setup([{ sellerId: 'S1', site: 'US' }], 1);
     h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: false });
