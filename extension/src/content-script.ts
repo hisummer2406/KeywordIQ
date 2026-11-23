@@ -11,7 +11,47 @@
 import { hasNextPage, parseSellerName, parseStorefrontPage, type ParsedItem } from './parse-storefront';
 import { resolveSite } from './site-map';
 import { buildPageContext, freezeRequest, mergeItemsWithCap, pendingItemsKey } from './capture-accumulator';
-import type { CaptureMessage, CaptureResult, ConfigMessage, ConfigResult } from './messages';
+import type {
+  AutoControlMessage,
+  AutoControlResult,
+  AutoScanRequest,
+  CaptureMessage,
+  CaptureResult,
+  ConfigMessage,
+  ConfigResult,
+} from './messages';
+import { detectBlockedPage, type PageScan } from './auto-plan';
+
+// 自动采集（试点，#205 阶段 1）：后台在页面加载完成后发来 AUTO_SCAN，这里解析并回答。
+// 只读 DOM，不发网络请求、不碰人工面板的暂存区（本变更 design 决策 7）。
+// 监听器在模块顶层注册，越早越好：后台在 `complete` 后就会来问。
+// 每次页面加载 content script 都会重新注入，这个标识因此天然区分「旧页面」和「新页面」
+const DOC_ID = crypto.randomUUID();
+
+chrome.runtime.onMessage.addListener((message: AutoScanRequest, _sender, sendResponse) => {
+  if (message?.type !== 'AUTO_SCAN') return undefined;
+  const scan: PageScan = detectBlockedPage(document)
+    ? { kind: 'blocked', docId: DOC_ID }
+    : {
+        kind: 'ok',
+        items: parseStorefrontPage(document),
+        hasNext: hasNextPage(document),
+        sellerName: parseSellerName(document),
+        docId: DOC_ID,
+      };
+  sendResponse(scan);
+  return undefined;
+});
+
+async function isAutoCollectTab(): Promise<boolean> {
+  try {
+    const message: AutoControlMessage = { type: 'AUTO_IS_AUTO_TAB' };
+    const result = (await chrome.runtime.sendMessage(message)) as AutoControlResult | undefined;
+    return result?.ok === true && result.isAutoTab === true;
+  } catch {
+    return false;
+  }
+}
 
 function getSellerId(url: URL): string | null {
   if (url.searchParams.get('i') !== 'merchant-items') return null;
@@ -178,6 +218,8 @@ async function init(): Promise<void> {
   const url = new URL(window.location.href);
   const sellerId = getSellerId(url);
   if (!sellerId) return; // 不是 me= 店铺全品列表页，不激活
+  // 自动采集打开的标签页不渲染人工面板，避免两套流程混在同一页（本变更 design 决策 7）
+  if (await isAutoCollectTab()) return;
 
   const panel = createPanel();
   const site = resolveSite(url.href);

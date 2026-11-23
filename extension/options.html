@@ -45,6 +45,30 @@
     <button id="save">保存</button>
     <p id="status" class="status"></p>
 
+    <h2>自动采集（试点）</h2>
+    <p class="hint">
+      开启后，插件每天在设定时刻按关注清单逐店打开「按最新排序」的店铺页，只采前几页，
+      店与店之间间隔 30–60 秒；遇到验证码或访问拒绝会立即停止整轮。电脑和 Chrome 要保持开着（窗口可以最小化）。
+    </p>
+    <p class="hint warn">
+      <strong>试点期间 API 地址必须指向本地或隔离的后端，不要指向生产。</strong>
+      Amazon 已明确表示自动访问违反其使用条款；宿主机的网络出口须与卖家后台分开。
+      这不是后台巡检，也不代表采集了全店商品。
+    </p>
+    <label class="inline"><input id="auto-enabled" type="checkbox" /> 开启每日自动采集</label>
+    <label for="auto-time">每日时刻（本机时区）</label>
+    <input id="auto-time" type="time" />
+    <label for="auto-pages">每家店采集页数（1–5）</label>
+    <input id="auto-pages" type="number" min="1" max="5" />
+    <label for="auto-max-stores">每轮最多店铺数（1–200）</label>
+    <input id="auto-max-stores" type="number" min="1" max="200" />
+    <button id="auto-save">保存自动采集设置</button>
+    <button id="auto-run-now">立即运行一次</button>
+    <button id="auto-stop">停止当前运行</button>
+    <p id="auto-status" class="status"></p>
+    <div id="auto-summary" class="token-state">读取中…</div>
+    <button id="auto-export">导出运行记录（JSON）</button>
+
     <details>
       <summary>手动填写令牌（兜底，通常用不到）</summary>
       <p class="hint">
@@ -56,6 +80,13 @@
       <button id="save-token">保存令牌</button>
     </details>
 
+    <style>
+      label.inline { font-weight: 600; }
+      label.inline input { width: auto; margin-right: 6px; }
+      p.warn { color: #a15c00; }
+      h2 { margin-top: 32px; font-size: 18px; }
+      #auto-summary { white-space: pre-wrap; }
+    </style>
     <script src="options.js"></script>
   </body>
 </html>
