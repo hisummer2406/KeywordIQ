@@ -13,6 +13,11 @@ import type { WatchListOutcome, WatchedSeller } from './watch-client';
 export const ALARM_DAILY = 'kiq-auto-daily';
 export const ALARM_NEXT_STORE = 'kiq-auto-next-store';
 export const ALARM_TIMEOUT = 'kiq-auto-timeout';
+/**
+ * 一轮运行期间每分钟触发一次的看门狗：保证「运行中」的状态始终有唤醒源。保存状态与创建
+ * 下一步 alarm 之间被回收时，否则没有任何事件能再推进这一轮（PR #206 Codex P2）。
+ */
+export const ALARM_WATCHDOG = 'kiq-auto-watchdog';
 
 const STATE_KEY = 'keywordiq_auto_run_state_v1';
 const HISTORY_KEY = 'keywordiq_auto_run_history_v1';
@@ -59,6 +64,8 @@ interface CurrentStore {
   page: number;
   /** 已经处理过解析结果的页码，防止同一页的重复 `complete` 事件被处理两次。 */
   scannedPage: number;
+  /** 上一次被处理的解析结果来自哪个文档；同一文档再次回答说明新页面还没加载，忽略。 */
+  lastDocId?: string;
   items: ParsedItem[];
   sellerName?: string;
   phase: 'collecting' | 'reporting';
@@ -143,6 +150,7 @@ async function closeTab(tabId: number | undefined): Promise<void> {
 async function clearRunAlarms(): Promise<void> {
   await chrome.alarms.clear(ALARM_NEXT_STORE);
   await chrome.alarms.clear(ALARM_TIMEOUT);
+  await chrome.alarms.clear(ALARM_WATCHDOG);
 }
 
 function iso(deps: RunnerDeps): string {
@@ -295,7 +303,10 @@ async function reportCurrent(state: RunState, deps: RunnerDeps): Promise<RunStat
 export async function handleScan(state: RunState, scan: PageScan, deps: RunnerDeps): Promise<RunState> {
   const current = state.current;
   if (!current || current.phase !== 'collecting') return state;
+  // 翻页后旧文档仍在回答（新页面还没加载完）：忽略，等新页面自己的 complete 事件
+  if (scan.docId && scan.docId === current.lastDocId) return state;
   current.scannedPage = current.page;
+  current.lastDocId = scan.docId;
 
   const decision = decideAfterPage({
     scan,
@@ -379,6 +390,8 @@ export function startRun(trigger: RunTrigger, deps: RunnerDeps): Promise<StartOu
       return { started: true };
     }
 
+    // 先建看门狗再落「运行中」状态：中间被回收时，看门狗会发现没有运行中的一轮并自行清除
+    await chrome.alarms.create(ALARM_WATCHDOG, { periodInMinutes: 1 });
     await saveRunState(base);
     await openCurrentStore(base, deps);
     return { started: true };
@@ -425,11 +438,10 @@ export function onTabComplete(tabId: number, deps: RunnerDeps): Promise<void> {
     if (current.scannedPage >= current.page) return; // 同一页的重复 complete 事件
 
     const scan = await requestScan(tabId, deps);
-    // 页面加载完却拿不到 content script 的回答：多半是被重定向到了验证码等不注入的地址
-    if (!scan) {
-      await endRun(state, deps, 'stopped', 'page_timeout', 'no_content_script');
-      return;
-    }
+    // 拿不到 content script 的回答：可能是重复事件恰好落在新旧页面交替之间，也可能被重定向到
+    // 验证码等不注入的地址。这里不下结论，交给已设好的页面超时：新页面加载完会再来一次
+    // complete；一直没有，超时就按访问受限停止整轮。
+    if (!scan) return;
     await handleScan(state, scan, deps);
   });
 }
@@ -450,7 +462,22 @@ export function onTabRemoved(tabId: number, deps: RunnerDeps): Promise<void> {
 export function onRunAlarm(name: string, deps: RunnerDeps): Promise<void> {
   return serial(async () => {
     const state = await loadRunState();
-    if (!state || state.status !== 'running') return;
+    if (!state || state.status !== 'running') {
+      if (name === ALARM_WATCHDOG) await chrome.alarms.clear(ALARM_WATCHDOG); // 残留的看门狗
+      return;
+    }
+
+    if (name === ALARM_WATCHDOG) {
+      // 运行中却没有任何下一步的唤醒源：补上，让这一轮继续推进
+      if (!state.current) {
+        if (!(await chrome.alarms.get(ALARM_NEXT_STORE))) {
+          await chrome.alarms.create(ALARM_NEXT_STORE, { when: deps.now().getTime() });
+        }
+      } else if (!(await chrome.alarms.get(ALARM_TIMEOUT))) {
+        await armPageTimeout(deps);
+      }
+      return;
+    }
 
     if (name === ALARM_NEXT_STORE) {
       if (!state.current) await openCurrentStore(state, deps);

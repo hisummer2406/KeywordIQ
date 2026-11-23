@@ -60,10 +60,14 @@ export function detectBlockedPage(doc: Document): boolean {
   return BLOCKED_TEXT_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-/** content script 对一次解析请求的回答。 */
+/**
+ * content script 对一次解析请求的回答。`docId` 是回答者所在文档的随机标识，每次页面加载
+ * 都不同：翻页后若仍是旧文档在回答（新页面还没加载完），后台据此识别并忽略（PR #206 Codex P2）。
+ * 不用 URL 里的页码核对，因为 Amazon 可能改写翻页后的地址。
+ */
 export type PageScan =
-  | { kind: 'blocked' }
-  | { kind: 'ok'; items: ParsedItem[]; hasNext: boolean; sellerName?: string };
+  | { kind: 'blocked'; docId?: string }
+  | { kind: 'ok'; items: ParsedItem[]; hasNext: boolean; sellerName?: string; docId?: string };
 
 export type StoreFailureReason = 'empty_page' | 'over_cap' | 'bad_site';
 

@@ -18,6 +18,8 @@
 
 2026-11-24 Claude：`pnpm run typecheck` 通过；`pnpm run test` 15 个文件 135 项全部通过（新增 auto-plan 17、auto-runner 11、watch-client 3）；`pnpm run build` 成功；`openspec validate --strict --all` 50 项通过；`git diff --check` 通过。未在真实 Chrome 和 Amazon 页面上运行，content script 的 AUTO_SCAN 应答与拦截页识别只在 3.3、3.4 人工验证。
 
+2026-11-24 Claude（PR #206 Codex 两条 P2）：翻页时按 `docId` 忽略旧文档的回答；新增运行期间看门狗 alarm 补建丢失的唤醒源；拿不到 content script 回答改为交给页面超时判断（design 决策 3）。新增 4 项测试，`pnpm run typecheck` 通过，`pnpm run test` 15 个文件 139 项全部通过。
+
 ## 3. 开跑前检查（人工，代码合并后）
 
 - [ ] 3.1 宿主机网络出口与卖家后台分开
