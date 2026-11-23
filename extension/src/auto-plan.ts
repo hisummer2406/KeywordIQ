@@ -60,6 +60,39 @@ export function detectBlockedPage(doc: Document): boolean {
   return BLOCKED_TEXT_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+// 页头「Deliver to」下面那一行（如 "New York 10001"、"China"）。选择器未在全部站点真实页面验证，
+// 对不上只需要改这里；读不到时返回 undefined，判定为 unknown，不据此停止。
+const DELIVERY_SELECTORS = ['#glow-ingress-line2', '#nav-global-location-popover-link'];
+
+/** 页头显示的配送地址文字，读不到返回 undefined。纯函数，只读 `Document`。 */
+export function parseDeliveryText(doc: Document): string | undefined {
+  for (const selector of DELIVERY_SELECTORS) {
+    const text = doc.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim();
+    if (text) return text.slice(0, 120);
+  }
+  return undefined;
+}
+
+// 各站点的邮编形态：配送地址文字里能找到本国邮编，才算设成了该站点所在国。
+const SITE_POSTCODE: Record<string, RegExp> = {
+  US: /\b\d{5}(?:-\d{4})?\b/,
+  DE: /\b\d{5}\b/,
+  GB: /\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b/i,
+};
+
+/**
+ * 配送地址是否与站点相符（试点 2026-11-24 实测：配送到中国时，多数店铺页显示 No results，
+ * 少数只剩能国际配送的几个商品，会被误当成「店里只有这些」）。
+ * - match：文字里有该站点国家的邮编；
+ * - mismatch：读到了文字，但没有邮编（如 "China"）；
+ * - unknown：读不到配送地址，或站点没有登记邮编形态。
+ */
+export function deliveryMatchesSite(text: string | undefined, site: string): 'match' | 'mismatch' | 'unknown' {
+  const pattern = SITE_POSTCODE[site];
+  if (!text || !pattern) return 'unknown';
+  return pattern.test(text) ? 'match' : 'mismatch';
+}
+
 /**
  * content script 对一次解析请求的回答。`docId` 是回答者所在文档的随机标识，每次页面加载
  * 都不同：翻页后若仍是旧文档在回答（新页面还没加载完），后台据此识别并忽略（PR #206 Codex P2）。
@@ -67,12 +100,20 @@ export function detectBlockedPage(doc: Document): boolean {
  */
 export type PageScan =
   | { kind: 'blocked'; docId?: string }
-  | { kind: 'ok'; items: ParsedItem[]; hasNext: boolean; sellerName?: string; docId?: string };
+  | {
+      kind: 'ok';
+      items: ParsedItem[];
+      hasNext: boolean;
+      sellerName?: string;
+      docId?: string;
+      /** 页头显示的配送地址，用于判断是否设成了站点所在国（见 deliveryMatchesSite）。 */
+      deliveryText?: string;
+    };
 
 export type StoreFailureReason = 'empty_page' | 'over_cap' | 'bad_site';
 
 export type PageDecision =
-  | { action: 'stop_run'; reason: 'blocked' }
+  | { action: 'stop_run'; reason: 'blocked' | 'wrong_delivery' }
   | { action: 'fail_store'; reason: StoreFailureReason }
   | { action: 'next_page'; items: ParsedItem[] }
   | { action: 'report'; items: ParsedItem[] };
@@ -80,6 +121,7 @@ export type PageDecision =
 /**
  * 拿到第 `page` 页的解析结果后该做什么（design 决策 4）：
  * - 拦截页 → 整轮停止；
+ * - 配送地址不是站点所在国 → 整轮停止（否则大量店铺会被读成空或只剩几个商品）；
  * - 第 1 页为空 → 这家店失败，不上报（不能用空结果落定基线）；
  * - 后续页为空 → 视为到底，用已合并的结果上报；
  * - 合并后超过单批上限 → 这家店失败，不截断、不分批；
@@ -91,9 +133,14 @@ export function decideAfterPage(input: {
   maxPages: number;
   accumulated: ParsedItem[];
   cap: number;
+  /** 站点码；不传则不做配送地址检查。 */
+  site?: string;
 }): PageDecision {
-  const { scan, page, maxPages, accumulated, cap } = input;
+  const { scan, page, maxPages, accumulated, cap, site } = input;
   if (scan.kind === 'blocked') return { action: 'stop_run', reason: 'blocked' };
+  if (site && deliveryMatchesSite(scan.deliveryText, site) === 'mismatch') {
+    return { action: 'stop_run', reason: 'wrong_delivery' };
+  }
 
   if (scan.items.length === 0) {
     if (page === 1) return { action: 'fail_store', reason: 'empty_page' };

@@ -1,6 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { buildStorefrontUrl, decideAfterPage, detectBlockedPage, pickStoreGapMs, STORE_GAP_MS } from '../src/auto-plan';
+import {
+  buildStorefrontUrl,
+  decideAfterPage,
+  deliveryMatchesSite,
+  detectBlockedPage,
+  parseDeliveryText,
+  pickStoreGapMs,
+  STORE_GAP_MS,
+} from '../src/auto-plan';
 import { DEFAULT_AUTO_CONFIG, nextDailyRunAt, normalizeAutoConfig } from '../src/auto-config';
 
 const item = (asin: string) => ({ asin });
@@ -104,6 +112,50 @@ describe('decideAfterPage', () => {
       scan: { kind: 'ok', items: [item('B03')], hasNext: false },
     });
     expect(decision).toEqual({ action: 'fail_store', reason: 'over_cap' });
+  });
+});
+
+describe('配送地址检查（试点 2026-11-24：配送到中国时店铺页大多 No results）', () => {
+  it('读取页头配送地址', () => {
+    document.body.innerHTML = '<span id="glow-ingress-line1">Deliver to</span><span id="glow-ingress-line2"> New York 10001 </span>';
+    expect(parseDeliveryText(document)).toBe('New York 10001');
+  });
+
+  it('读不到时返回 undefined', () => {
+    document.body.innerHTML = '<div></div>';
+    expect(parseDeliveryText(document)).toBeUndefined();
+  });
+
+  it('US 邮编算相符，China 算不符，读不到算未知', () => {
+    expect(deliveryMatchesSite('New York 10001', 'US')).toBe('match');
+    expect(deliveryMatchesSite('China', 'US')).toBe('mismatch');
+    expect(deliveryMatchesSite(undefined, 'US')).toBe('unknown');
+    expect(deliveryMatchesSite('London SW1A 1AA', 'GB')).toBe('match');
+    expect(deliveryMatchesSite('Berlin 10115', 'DE')).toBe('match');
+  });
+
+  it('配送地址不符 → 整轮停止；读不到不据此停止', () => {
+    const ok = { kind: 'ok' as const, items: [item('B01')], hasNext: false };
+    expect(
+      decideAfterPage({ scan: { ...ok, deliveryText: 'China' }, page: 1, maxPages: 2, accumulated: [], cap: 1000, site: 'US' }),
+    ).toEqual({ action: 'stop_run', reason: 'wrong_delivery' });
+    expect(decideAfterPage({ scan: ok, page: 1, maxPages: 2, accumulated: [], cap: 1000, site: 'US' })).toEqual({
+      action: 'report',
+      items: [item('B01')],
+    });
+  });
+
+  it('配送地址不符时，即使第 1 页为空也是整轮停止而不是这家店失败', () => {
+    expect(
+      decideAfterPage({
+        scan: { kind: 'ok', items: [], hasNext: false, deliveryText: 'China' },
+        page: 1,
+        maxPages: 2,
+        accumulated: [],
+        cap: 1000,
+        site: 'US',
+      }),
+    ).toEqual({ action: 'stop_run', reason: 'wrong_delivery' });
   });
 });
 

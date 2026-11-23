@@ -7,6 +7,7 @@ import type { AutoControlMessage, AutoControlResult } from './messages';
 
 const STOP_REASON_TEXT: Record<RunStopReason, string> = {
   blocked: '遇到验证码或访问拒绝，已停止',
+  wrong_delivery: '页面配送地址不是站点所在国，已停止（请在 Amazon 页头「Deliver to」设成该国邮编后重试）',
   page_timeout: '页面超时或无法读取（可能被拦截），已停止',
   auth: '令牌缺失或已过期，已停止',
   config_unavailable: '读不到服务端单批上限，未开始',
@@ -33,7 +34,9 @@ export function describeRun(run: RunState | null): string {
   } else {
     lines.push(run.status === 'finished' ? '状态：已完成' : `状态：${STOP_REASON_TEXT[run.stopReason ?? 'manual_stop']}`);
   }
+  if (run.stopReason === 'wrong_delivery' && run.stopDetail) lines.push(`页面显示的配送地址：${run.stopDetail}`);
   lines.push(`成功 ${ok} 家，失败 ${failed} 家，共 ${run.queue.length} 家；新发现合计 ${newAsins} 条`);
+  if (run.deliveryText) lines.push(`采集时的配送地址：${run.deliveryText}`);
   return lines.join('\n');
 }
 

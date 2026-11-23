@@ -298,6 +298,23 @@ describe('自动采集状态机', () => {
     expect(await h.runner.startRun('daily', h.deps)).toEqual({ started: false, reason: 'already_running' });
   });
 
+  it('配送地址不是美国：整轮停止，记录页面上的地址，不上报', async () => {
+    const h = await setup([
+      { sellerId: 'S1', site: 'US' },
+      { sellerId: 'S2', site: 'US' },
+    ]);
+    h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: false, deliveryText: 'China' });
+    await h.runner.startRun('manual', h.deps);
+    await completeCurrentTab(h);
+
+    expect(await h.runner.loadRunState()).toMatchObject({
+      status: 'stopped',
+      stopReason: 'wrong_delivery',
+      stopDetail: 'China',
+    });
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
   it('页面超时：按访问受限停止整轮', async () => {
     const h = await setup([{ sellerId: 'S1', site: 'US' }]);
     await h.runner.startRun('manual', h.deps);
