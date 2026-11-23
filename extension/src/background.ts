@@ -2,11 +2,31 @@
 // script 的采集结果后，组装请求体、发送并分类结果。
 
 import { getApiBaseUrl, getAuthToken, getWebOrigin } from './auth';
+import { getAutoConfig, nextDailyRunAt } from './auto-config';
+import {
+  ALARM_DAILY,
+  isAutoTab,
+  onRunAlarm,
+  onTabComplete,
+  onTabRemoved,
+  resumeAfterStartup,
+  startRun,
+  stopRun,
+  type RunnerDeps,
+} from './auto-runner';
 import { buildReportRequest } from './build-report';
 import { fetchCollectorConfig } from './collector-config';
-import type { CaptureMessage, CaptureResult, ConfigMessage, ConfigResult } from './messages';
+import type {
+  AutoControlMessage,
+  AutoControlResult,
+  CaptureMessage,
+  CaptureResult,
+  ConfigMessage,
+  ConfigResult,
+} from './messages';
 import { sendReport } from './report-client';
 import { syncTokenFromWeb, type SyncOutcome, type SyncResult } from './session-sync';
+import { fetchWatchedSellers } from './watch-client';
 
 // 工具栏按钮点击 → 打开设置页。
 //
@@ -18,7 +38,7 @@ chrome.action?.onClicked.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener(
-  (message: CaptureMessage | ConfigMessage, _sender, sendResponse) => {
+  (message: CaptureMessage | ConfigMessage | AutoControlMessage, sender, sendResponse) => {
     if (message?.type === 'CAPTURE_REPORT') {
       handleCapture(message).then(sendResponse);
       return true; // 告知 Chrome 这是异步响应，保持消息通道打开
@@ -27,9 +47,93 @@ chrome.runtime.onMessage.addListener(
       handleGetConfig().then(sendResponse);
       return true;
     }
+    if (typeof message?.type === 'string' && message.type.startsWith('AUTO_')) {
+      handleAutoControl(message as AutoControlMessage, sender?.tab?.id).then(sendResponse);
+      return true;
+    }
     return undefined;
   },
 );
+
+// ---------- 自动采集（试点，#205 阶段 1；本变更 design 决策 3） ----------
+
+const runnerDeps: RunnerDeps = {
+  now: () => new Date(),
+  random: Math.random,
+  getCap: () => handleGetConfig(),
+  getSellers: async (limit) => {
+    // getCap 已先行一步完成令牌自愈，这里直接读
+    const token = await getAuthToken();
+    const baseUrl = await getApiBaseUrl();
+    if (!token || !baseUrl) return { kind: 'auth_error' };
+    return fetchWatchedSellers(baseUrl, token, limit);
+  },
+  report: (message) => handleCapture(message),
+  getSettings: async () => {
+    const config = await getAutoConfig();
+    return { pages: config.pages, maxStores: config.maxStores };
+  },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+/** 按设置创建或清除每日 alarm。开关关闭时不保留任何每日触发。 */
+export async function ensureDailyAlarm(): Promise<void> {
+  const config = await getAutoConfig();
+  await chrome.alarms.clear(ALARM_DAILY);
+  if (!config.enabled) return;
+  await chrome.alarms.create(ALARM_DAILY, {
+    when: nextDailyRunAt(config.dailyTime, new Date()),
+    periodInMinutes: 24 * 60,
+  });
+}
+
+export async function handleAutoControl(
+  message: AutoControlMessage,
+  tabId: number | undefined,
+): Promise<AutoControlResult> {
+  switch (message.type) {
+    case 'AUTO_IS_AUTO_TAB':
+      return { ok: true, isAutoTab: await isAutoTab(tabId) };
+    case 'AUTO_RUN_NOW': {
+      const outcome = await startRun('manual', runnerDeps);
+      return outcome.started ? { ok: true } : { ok: false, reason: outcome.reason };
+    }
+    case 'AUTO_STOP':
+      return { ok: await stopRun(runnerDeps) };
+    case 'AUTO_CONFIG_CHANGED':
+      await ensureDailyAlarm();
+      return { ok: true };
+  }
+}
+
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === ALARM_DAILY) {
+    void (async () => {
+      const config = await getAutoConfig();
+      if (config.enabled) await startRun('daily', runnerDeps);
+    })();
+    return;
+  }
+  void onRunAlarm(alarm.name, runnerDeps);
+});
+
+chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'complete') void onTabComplete(tabId, runnerDeps);
+});
+
+chrome.tabs?.onRemoved?.addListener((tabId) => {
+  void onTabRemoved(tabId, runnerDeps);
+});
+
+// alarm 不保证跨浏览器重启保留：启动和安装/升级时都重建每日 alarm，并接着做未完成的一轮
+chrome.runtime.onStartup?.addListener(() => {
+  void ensureDailyAlarm();
+  void resumeAfterStartup(runnerDeps);
+});
+
+chrome.runtime.onInstalled?.addListener(() => {
+  void ensureDailyAlarm();
+});
 
 /**
  * 读取服务端单批上限。令牌缺失或过期时与上报同一套自愈（从网页会话同步、至多重试一次）；
