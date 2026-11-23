@@ -1,6 +1,6 @@
 {
   "name": "keywordiq-competitor-collector",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "竞对 Amazon 卖家 ASIN 被动采集插件（issue #56 P3a 客户端半边）",
   "type": "module",

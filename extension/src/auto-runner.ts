@@ -29,6 +29,7 @@ export type RunTrigger = 'daily' | 'manual';
 
 export type RunStopReason =
   | 'blocked' // 验证码或访问拒绝
+  | 'wrong_delivery' // 页头配送地址不是站点所在国（stopDetail 记录页面上显示的文字）
   | 'page_timeout' // 页面超时或 content script 无响应，按访问受限处理
   | 'auth' // 令牌缺失、过期或同步失败
   | 'config_unavailable' // 读不到服务端单批上限
@@ -89,6 +90,8 @@ export interface RunState {
   index: number;
   current?: CurrentStore;
   results: StoreResult[];
+  /** 本轮最近一次读到的页头配送地址，用于事后核对采集时的配送上下文。 */
+  deliveryText?: string;
 }
 
 export interface RunnerDeps {
@@ -314,12 +317,20 @@ export async function handleScan(state: RunState, scan: PageScan, deps: RunnerDe
     maxPages: state.pages,
     accumulated: current.items,
     cap: state.cap,
+    site: state.queue[state.index]?.site,
   });
   if (scan.kind === 'ok' && scan.sellerName && !current.sellerName) current.sellerName = scan.sellerName;
+  if (scan.kind === 'ok' && scan.deliveryText) state.deliveryText = scan.deliveryText;
 
   switch (decision.action) {
     case 'stop_run':
-      return endRun(state, deps, 'stopped', 'blocked');
+      return endRun(
+        state,
+        deps,
+        'stopped',
+        decision.reason,
+        decision.reason === 'wrong_delivery' && scan.kind === 'ok' ? scan.deliveryText : undefined,
+      );
     case 'fail_store':
       recordStore(state, deps, { outcome: 'failed', reason: decision.reason, pages: current.page, items: current.items.length });
       return advance(state, deps);
