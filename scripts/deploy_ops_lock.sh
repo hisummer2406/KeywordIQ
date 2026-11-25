@@ -15,8 +15,10 @@
 
 OPS_ACTION_LOCK_KEY=19279  # 0x4B4F，必须与 import_service._OPS_ACTION_LOCK_KEY 同值
 OPS_LOCK_FD=9
+# 就绪名每次调用唯一：两次发布重叠时，后一次的探测不能把前一次的持锁会话认成自己的
+# （同名时后者会在自己还没拿到锁时误报成功，继续迁移、切容器；PR #214 Codex P1）。
 OPS_LOCK_PENDING_APP="keywordiq-deploy-lock"
-OPS_LOCK_READY_APP="keywordiq-deploy-lock-ready"
+OPS_LOCK_READY_APP=""
 OPS_LOCK_PID=""
 OPS_LOCK_ERR=""
 
@@ -30,6 +32,7 @@ ops_lock_psql() {
 # 成功返回 0 并保持持锁；失败返回非零，原因写到 stderr（锁连接已退出、不会残留）。
 ops_lock_acquire() {
     local fifo i ready
+    OPS_LOCK_READY_APP="keywordiq-deploy-lock-ready-$$-${RANDOM}${RANDOM}"
     fifo="$(mktemp -u "${TMPDIR:-/tmp}/keywordiq-ops-lock.XXXXXX")"
     OPS_LOCK_ERR="$(mktemp "${TMPDIR:-/tmp}/keywordiq-ops-lock-err.XXXXXX")"
     mkfifo "$fifo"

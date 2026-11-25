@@ -22,7 +22,9 @@
 #   ./deploy.sh --skip-frontend  # 只更新后端（镜像 + 迁移）
 #   ./deploy.sh --skip-migrate   # 不跑数据库迁移
 #   ./deploy.sh --yes            # 不交互确认迁移（供 CI / 无人值守）
-#   ./deploy.sh --ops-lock-held  # 调用方已持有运维动作锁（仅飞书执行器用），本脚本不再自取
+#
+# 环境变量 KEYWORDIQ_OPS_LOCK_HELD=1：调用方已持有运维动作锁（仅飞书执行器用），本脚本不再
+# 自取。用环境变量而非参数，是为了让执行器回滚到旧 SHA 时，旧脚本不因未知参数退出。
 #
 # 发布全程持有运维动作锁（0x4B4F，与导入认领、飞书执行器同一把），持锁后复核没有
 # PROCESSING/UPLOADING 的导入才继续；拿不到锁或有进行中导入直接失败，不重试
@@ -50,14 +52,13 @@ LOGROTATE_CONF_DST="${LOGROTATE_CONF_DST:-/etc/logrotate.d/keywordiq-v2}"
 SKIP_FRONTEND=0
 SKIP_MIGRATE=0
 ASSUME_YES=0
-OPS_LOCK_HELD=0
+OPS_LOCK_HELD="${KEYWORDIQ_OPS_LOCK_HELD:-0}"
 
 for arg in "$@"; do
     case "$arg" in
         --skip-frontend) SKIP_FRONTEND=1 ;;
         --skip-migrate)  SKIP_MIGRATE=1 ;;
         --yes|-y)        ASSUME_YES=1 ;;
-        --ops-lock-held) OPS_LOCK_HELD=1 ;;
         # 打印开头的注释块（第 2 行到第一个空行），不写死行号
         --help|-h)       sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo -e "${RED}未知参数: $arg${NC}（--help 查看用法）"; exit 2 ;;
@@ -126,10 +127,10 @@ echo "  WEB_ROOT = $WEB_ROOT"
 
 # ---------- 运维动作锁：与导入互斥，持有到脚本退出 ----------
 # 在改动任何生产状态（迁移、前端产物、容器）之前拿到；trap 保证任何退出路径都释放。
-# --ops-lock-held 只给飞书执行器用：它已在自己的连接上持有同一把锁并在持锁期间复核过
+# KEYWORDIQ_OPS_LOCK_HELD=1 只给飞书执行器用：它已在自己的连接上持有同一把锁并在持锁期间复核过
 # 导入状态（ops_bot/release/flow.py），这里再取会被自己挡住。
-if [ "$OPS_LOCK_HELD" -eq 1 ]; then
-    warn "调用方声明已持有运维动作锁（--ops-lock-held），跳过自取"
+if [ "$OPS_LOCK_HELD" = "1" ]; then
+    warn "调用方声明已持有运维动作锁（KEYWORDIQ_OPS_LOCK_HELD=1），跳过自取"
 else
     info "取得运维动作锁并复核导入状态..."
     # shellcheck source=scripts/deploy_ops_lock.sh
@@ -250,7 +251,7 @@ fi
 # up -d 对已用新镜像 build 过的服务会重建容器；db/netdata 若已在跑且配置未变则不受影响。
 docker compose up -d
 echo "  容器已切换到新镜像（restart: unless-stopped，之后崩溃/宿主机重启由 Docker 自动拉起）"
-if [ "$OPS_LOCK_HELD" -eq 0 ] && ! ops_lock_alive; then
+if [ "$OPS_LOCK_HELD" != "1" ] && ! ops_lock_alive; then
     # 通常是 up -d 重建了 db 容器，持锁连接随之断开；此后导入可能已被认领。
     warn "  ⚠️  运维动作锁连接已中断（db 容器可能被重建），切换期间的导入互斥不再有保证"
 fi

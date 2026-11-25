@@ -47,12 +47,24 @@ def _psql_function() -> str:
     return f"ops_lock_psql() {{ PGAPPNAME=\"$1\" psql {flags} {shlex.quote(TEST_URL)}; }}"
 
 
-def _start_holder() -> subprocess.Popen:
-    """起一个 bash：取锁 → 打印结果 → 等 stdin 一行 → 释放 → 打印 RELEASED。"""
-    script = "\n".join([
+def _start_holder(holder_connect_delay: int = 0) -> subprocess.Popen:
+    """起一个 bash：取锁 → 打印结果 → 等 stdin 一行 → 释放 → 打印 RELEASED。
+
+    ``holder_connect_delay`` 让持锁连接（不含就绪探测）晚几秒才连上，用来稳定复现
+    "自己的连接还没起来，探测就先跑了"的时序。
+    """
+    lines = [
         "set -euo pipefail",
         f". {shlex.quote(str(ROOT / 'scripts/deploy_ops_lock.sh'))}",
         _psql_function(),
+    ]
+    if holder_connect_delay:
+        lines += [
+            "eval \"$(declare -f ops_lock_psql | sed '1s/ops_lock_psql/_real_ops_lock_psql/')\"",
+            "ops_lock_psql() { if [ \"$1\" = \"$OPS_LOCK_PENDING_APP\" ]; then "
+            f"sleep {holder_connect_delay}; fi; _real_ops_lock_psql \"$@\"; }}",
+        ]
+    script = "\n".join(lines + [
         "if ops_lock_acquire; then echo ACQUIRED; else echo FAILED; exit 0; fi",
         "read -r _",
         "ops_lock_release",
@@ -144,6 +156,24 @@ def test_deploy_refuses_when_lock_is_taken(factory):
         other.commit()
     assert out.strip() == "FAILED"
     assert "OPS_LOCK_BUSY" in err
+
+
+def test_overlapping_deploy_does_not_mistake_other_holder_for_its_own(factory):
+    """两次发布重叠：后一次在自己的连接还没拿锁时，不能把前一次的持锁会话当成自己的
+    而误报成功（PR #214 Codex P1）。后一次必须以 OPS_LOCK_BUSY 失败。"""
+    first = _start_holder()
+    try:
+        assert first.stdout.readline().strip() == "ACQUIRED", first.stderr.read()
+        second = _start_holder(holder_connect_delay=3)
+        out, err = second.communicate(timeout=60)
+        assert out.strip() == "FAILED", f"后一次发布未取得锁却报告成功: {err}"
+        assert "OPS_LOCK_BUSY" in err
+        first.stdin.write("\n")
+        first.stdin.flush()
+        assert first.stdout.readline().strip() == "RELEASED"
+    finally:
+        first.kill()
+        first.wait(timeout=10)
 
 
 def test_lock_released_when_deploy_script_dies(factory):
