@@ -48,7 +48,7 @@
     <h2>自动采集（试点）</h2>
     <p class="hint">
       开启后，插件每天在设定时刻按关注清单逐店打开「按最新排序」的店铺页，只采前几页，
-      店与店之间间隔 30–60 秒；遇到验证码或访问拒绝会立即停止整轮。电脑和 Chrome 要保持开着（窗口可以最小化）。
+      店与店之间间隔 30–60 秒；遇到验证码或访问拒绝、页头配送位置不是目标邮编或无法确认时，会立即停止整轮。电脑和 Chrome 要保持开着（窗口可以最小化）。
     </p>
     <p class="hint warn">
       <strong>试点期间 API 地址必须指向本地或隔离的后端，不要指向生产。</strong>
@@ -62,6 +62,8 @@
     <input id="auto-pages" type="number" min="1" max="5" />
     <label for="auto-max-stores">每轮最多店铺数（1–200）</label>
     <input id="auto-max-stores" type="number" min="1" max="200" />
+    <label for="auto-target-us">美国站目标配送邮编（专用 Chrome Profile 里手动设好，插件只核对）</label>
+    <input id="auto-target-us" type="text" inputmode="numeric" maxlength="5" placeholder="10001" />
     <button id="auto-save">保存自动采集设置</button>
     <button id="auto-run-now">立即运行一次</button>
     <button id="auto-stop">停止当前运行</button>

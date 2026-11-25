@@ -20,7 +20,7 @@ import type {
   ConfigMessage,
   ConfigResult,
 } from './messages';
-import { detectBlockedPage, type PageScan } from './auto-plan';
+import { detectBlockedPage, parseDeliveryText, type PageScan } from './auto-plan';
 
 // 自动采集（试点，#205 阶段 1）：后台在页面加载完成后发来 AUTO_SCAN，这里解析并回答。
 // 只读 DOM，不发网络请求、不碰人工面板的暂存区（本变更 design 决策 7）。
@@ -38,6 +38,7 @@ chrome.runtime.onMessage.addListener((message: AutoScanRequest, _sender, sendRes
         hasNext: hasNextPage(document),
         sellerName: parseSellerName(document),
         docId: DOC_ID,
+        deliveryText: parseDeliveryText(document),
       };
   sendResponse(scan);
   return undefined;
