@@ -69,7 +69,12 @@ def _handler(*, catalog_429: dict[int, int] | None = None, rank_429: dict[int, i
                 catalog_429[page] -= 1
                 return _throttled(retry_after)
             if page <= catalog_pages:
-                return httpx.Response(200, text=_fixture("products_page1.json"))
+                # 每页商品 ID 各不相同：同一页喂两次是「分页没前进」，会被判不完整（#209）。
+                payload = json.loads(_fixture("products_page1.json"))
+                for product in payload["products"]:
+                    product["id"] += page
+                    product["handle"] = f"{product['handle']}-{page}"
+                return httpx.Response(200, text=json.dumps(payload))
             return httpx.Response(200, text=_fixture("products_empty_page.json"))
         if path == "/collections/all":
             if rank_429.get(page, 0) > 0:
