@@ -211,6 +211,21 @@ describe('自动采集状态机', () => {
     expect(await h.runner.loadRunState()).toMatchObject({ status: 'stopped', stopReason: 'wrong_delivery' });
   });
 
+  it('第 2 页读不到配送位置：记录清空实际位置，不沿用第 1 页的值（PR #207 Codex P2）', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }]);
+    h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: true });
+    h.scans.set('S1:2', { kind: 'ok', items: [{ asin: 'B02' }], hasNext: false, deliveryText: undefined });
+    await h.runner.startRun('manual', h.deps);
+    await completeCurrentTab(h);
+    expect((await h.runner.loadRunState())?.deliveryText).toBe('New York 10001');
+    await completeCurrentTab(h);
+
+    const state = await h.runner.loadRunState();
+    expect(state).toMatchObject({ status: 'stopped', stopReason: 'delivery_unconfirmed', deliverySite: 'US' });
+    expect(state?.deliveryText).toBeUndefined();
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
   it('没有配置该站点的目标邮编：无法确认，停止', async () => {
     const h = await setup([{ sellerId: 'S1', site: 'US' }]);
     h.deps.getSettings = async () => ({ pages: 2, maxStores: 20, deliveryTargets: {} });
