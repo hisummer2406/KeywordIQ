@@ -1,7 +1,7 @@
 # V2 ECS 持续部署
 
-`Deploy V2 to ECS` 是 V2 的唯一 GitHub Actions 发布入口。仓库管理员在 `v2` 分支的
-Actions 页面手动运行它；工作流会核验当前 SHA 的 v2 push CI 已通过发布门禁：受影响项成功，无关项经范围核验后跳过，再连接
+`Deploy Main to ECS` 是 V2 的唯一 GitHub Actions 发布入口。仓库管理员在 `main` 分支的
+Actions 页面手动运行它；工作流会核验当前 SHA 的 main push CI 已通过发布门禁：受影响项成功，无关项经范围核验后跳过，再连接
 ECS 执行 `./deploy.sh --yes`。
 
 部署脚本的 V2 默认值如下：
@@ -85,7 +85,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## GitHub Secrets
 
-在仓库 **Settings → Secrets and variables → Actions** 新建下列仓库 secrets：
+在仓库 **Settings → Environments → production** 下新建下列环境 secrets（`production` 环境的部署分支只允许 `main`；仓库公开后不要再放仓库级 secret）：
 
 | Secret | 内容 |
 | --- | --- |
@@ -114,6 +114,12 @@ ssh-keyscan -H 120.55.95.30
 
 ## 发布与失败处理
 
-只在 `v2` 分支的 Actions 页面运行 **Deploy V2 to ECS**。工作流拒绝 CI 未成功、非 `v2`
-分支、非 `origin/v2` 历史中的 SHA，或 ECS 中有已跟踪本地修改的情况。失败时 Actions 日志会
+只在 `main` 分支的 Actions 页面运行 **Deploy Main to ECS**。工作流拒绝 CI 未成功、非 `main`
+分支、非 `origin/main` 历史中的 SHA，或 ECS 中有已跟踪本地修改的情况。失败时 Actions 日志会
 停在准确阶段；数据库迁移已经执行时，不会自动反向迁移。
+
+ECS 首发前核对实际运行版本和工作树 HEAD 均为候选 SHA 的祖先。部署会显式获取
+`origin/main`，在 `v2` 工作树上创建本地 `main` 后快进，并保留本地 `v2` 原引用。
+如果本地 `main` 已存在且与当前 `v2` HEAD 不同，部署会拒绝继续；先核对引用，确认它
+属于旧 V1 历史后，再在切换窗口另行归档。首次切换的顺序和中止条件见
+[Issue #208](https://github.com/hisummer2406/KeywordIQ/issues/208)。

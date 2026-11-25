@@ -44,7 +44,7 @@ for (const job of ['backend', 'frontend', 'extension']) {
   conditions[job] = block.match(/    if: >-\n([\s\S]*?)    runs-on:/)[1].trim();
 }
 
-function scheduled({ event = 'pull_request', base = 'v2', ref = 'refs/heads/v2', draft = false,
+function scheduled({ event = 'pull_request', base = 'main', ref = 'refs/heads/main', draft = false,
                      result = 'success', outputs = {}, cancelled = false } = {}) {
   const github = { event_name: event, base_ref: base, ref, event: { pull_request: { draft } } };
   const needs = { changes: { result, outputs } };
@@ -58,14 +58,14 @@ function scheduled({ event = 'pull_request', base = 'v2', ref = 'refs/heads/v2',
 }
 
 
-test('v2 push 与 PR 按范围调度', () => {
+test('main push 与 PR 按范围调度', () => {
   for (const event of ['push', 'pull_request']) {
     assert.deepEqual(scheduled({ event, outputs: { backend: 'false', frontend: 'true', extension: 'false' } }), scope(false, true, false));
   }
 });
-test('main push 与 PR 保持全量', () => {
-  assert.deepEqual(scheduled({ event: 'push', ref: 'refs/heads/main' }), allChecks());
-  assert.deepEqual(scheduled({ base: 'main', draft: true }), allChecks());
+test('CI 只接受 main push 与面向 main 的 PR', () => {
+  assert.deepEqual([...workflow.matchAll(/branches: \[([^\]]+)\]/g)].map(match => match[1]), ['main', 'main']);
+  assert.match(workflow, /github.ref == 'refs\/heads\/main'.*github.base_ref == 'main'/);
 });
 test('草稿不运行；判定失败或缺失时全量；取消后不再启动', () => {
   assert.deepEqual(scheduled({ draft: true }), scope(false, false, false));
@@ -77,6 +77,6 @@ test('纯文档 push 跳过三项测试', () => {
 });
 test('汇总门禁始终核对同一 push 的全部依赖', () => {
   assert.match(workflow, /needs: \[changes, backend, frontend, extension\]/);
-  assert.match(workflow, /if: always\(\) && !cancelled\(\) && github.event_name == 'push'/);
+  assert.match(workflow, /if: always\(\) && !cancelled\(\) && github.event_name == 'push' && github.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /CI_NEEDS: \$\{\{ toJSON\(needs\) \}\}/);
 });

@@ -1,7 +1,6 @@
-name: Deploy V2 to ECS
+name: Deploy Main to ECS
 
 # 仅手动触发（workflow_dispatch），不设自动部署触发器；SHA 与三项 CI 校验见下方 job。
-# 2026-11-13：仅注释改动，用于让独立私有仓库重新识别并登记本工作流，不改变任何行为。
 on:
   workflow_dispatch:
 
@@ -15,16 +14,16 @@ permissions:
 
 jobs:
   deploy:
-    # 工作流页面可选择任意分支；只允许 V2 分支触发，避免误把 main/V1 发到此 ECS 目录。
-    if: github.ref == 'refs/heads/v2'
+    # 工作流页面可选择任意分支；只允许 V2 的 main 分支触发。
+    if: github.ref == 'refs/heads/main'
     # 公开仓库不挂自托管 runner；私钥只落 $RUNNER_TEMP 并在 always() 清理，见下方两步。
     runs-on: ubuntu-latest
-    # 部署密钥放在 production 环境，环境只允许 v2 分支使用。
+    # 部署密钥放在 production 环境，环境只允许 main 分支使用。
     environment: production
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: 核验目标 SHA 的 v2 CI 发布门禁
+      - name: 核验目标 SHA 的 main push CI 发布门禁
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
@@ -67,8 +66,13 @@ jobs:
             "DEPLOY_REF='${GITHUB_REF}' DEPLOY_SHA='${GITHUB_SHA}' bash -s" <<'REMOTE'
           set -euo pipefail
 
-          test "$DEPLOY_REF" = 'refs/heads/v2' || {
-            echo "拒绝非 v2 分支：$DEPLOY_REF" >&2
+          test "$DEPLOY_REF" = 'refs/heads/main' || {
+            echo "拒绝非 main 分支：$DEPLOY_REF" >&2
+            exit 1
+          }
+
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '目标必须是完整的提交 SHA。' >&2
             exit 1
           }
 
@@ -78,13 +82,33 @@ jobs:
             exit 1
           }
 
-          git fetch --quiet origin v2
-          git cat-file -e "${DEPLOY_SHA}^{commit}"
-          git merge-base --is-ancestor "$DEPLOY_SHA" origin/v2 || {
-            echo '目标 SHA 不在 origin/v2 历史中，拒绝部署。' >&2
+          # 显式更新远端跟踪引用，兼容原来只跟踪 v2 的 ECS 克隆。
+          git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$DEPLOY_SHA" refs/remotes/origin/main || {
+            echo '目标 SHA 不在 origin/main 历史中，拒绝部署。' >&2
             exit 1
           }
-          git switch v2
+
+          current_branch="$(git branch --show-current)"
+          case "$current_branch" in
+            v2|main) ;;
+            *) echo "ECS 当前分支不是 v2 或 main，拒绝部署：$current_branch" >&2; exit 1 ;;
+          esac
+          git merge-base --is-ancestor HEAD "$DEPLOY_SHA" || {
+            echo 'ECS 当前提交无法快进到目标 SHA，拒绝部署。' >&2
+            exit 1
+          }
+          if [[ "$current_branch" == 'v2' ]]; then
+            if git show-ref --verify --quiet refs/heads/main; then
+              test "$(git rev-parse refs/heads/main)" = "$(git rev-parse HEAD)" || {
+                echo 'ECS 已有不同的本地 main，拒绝覆盖。请先核实并归档该引用。' >&2
+                exit 1
+              }
+              git switch main
+            else
+              git switch --no-track -c main
+            fi
+          fi
           git merge --ff-only "$DEPLOY_SHA"
           test "$(git rev-parse HEAD)" = "$DEPLOY_SHA" || {
             echo 'ECS 当前提交不等于已核验 SHA，拒绝继续。' >&2

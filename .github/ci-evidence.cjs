@@ -5,19 +5,16 @@ const names = {
   frontend: '前端（lint + tsc + test + build）',
   extension: '竞对采集插件（typecheck + test + build）',
 };
+const releaseBranch = 'main';
 const READY = '发布就绪（按范围校验）';
 const passed = job => job?.status === 'completed' && job.conclusion === 'success';
 
 function verifiedJobs(jobs) {
   const ready = jobs.filter(job => job.name === READY);
   const checks = Object.values(names).map(name => jobs.filter(job => job.name === name));
-  if (checks.some(matches => matches.length !== 1)) return false;
-  // 新策略只认同一运行中的汇总门禁；旧版本仅接受三项全部成功。
-  if (ready.length) {
-    return ready.length === 1 && passed(ready[0]) && checks.every(([job]) =>
-      job.status === 'completed' && ['success', 'skipped'].includes(job.conclusion));
-  }
-  return checks.every(([job]) => passed(job));
+  return ready.length === 1 && passed(ready[0]) && checks.every(matches =>
+    matches.length === 1 && matches[0].status === 'completed' &&
+    ['success', 'skipped'].includes(matches[0].conclusion));
 }
 
 function validateNeeds(needs) {
@@ -35,7 +32,7 @@ async function jobsFor(github, repo, run) {
     ...repo, run_id: run.id, filter: 'latest', per_page: 100,
   });
 }
-const isPushCI = run => run.event === 'push' && run.head_branch === 'v2' &&
+const isPushCI = run => run.event === 'push' && run.head_branch === releaseBranch &&
   run.path === '.github/workflows/ci.yml';
 
 async function resolveScope({ github, context, core }) {
@@ -47,7 +44,7 @@ async function resolveScope({ github, context, core }) {
     } else {
       // 不能只看 push.before：之前失败或被取消的提交也必须累计检查。
       const { data } = await github.rest.actions.listWorkflowRuns({
-        ...context.repo, workflow_id: 'ci.yml', branch: 'v2', event: 'push',
+        ...context.repo, workflow_id: 'ci.yml', branch: releaseBranch, event: 'push',
         status: 'success', per_page: 30,
       });
       for (const run of data.workflow_runs) {
@@ -74,16 +71,19 @@ async function resolveScope({ github, context, core }) {
 }
 
 async function verifyRelease({ github, context }) {
+  if (context.eventName !== 'workflow_dispatch' || context.ref !== `refs/heads/${releaseBranch}`) {
+    throw new Error('发布只能从 main 手动触发');
+  }
   const { data } = await github.rest.actions.listWorkflowRuns({
-    ...context.repo, workflow_id: 'ci.yml', branch: 'v2', event: 'push',
+    ...context.repo, workflow_id: 'ci.yml', branch: releaseBranch, event: 'push',
     head_sha: context.sha, per_page: 100,
   });
-  // 只核对本仓 v2 push 的最新运行，不混用 PR、其他 SHA 或旧重跑结果。
+  // 只核对本仓 main push 的最新运行，不混用 PR、其他 SHA 或旧重跑结果。
   const run = data.workflow_runs.filter(run => isPushCI(run) && run.head_sha === context.sha)
     .sort((a, b) => b.id - a.id || b.run_attempt - a.run_attempt)[0];
   if (!run || run.status !== 'completed' || run.conclusion !== 'success' ||
       !verifiedJobs(await jobsFor(github, context.repo, run))) {
-    throw new Error('目标 SHA 的 v2 CI 尚未验证通过');
+    throw new Error('目标 SHA 的 main push CI 尚未验证通过');
   }
   return run.id;
 }

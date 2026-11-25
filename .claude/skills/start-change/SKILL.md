@@ -1,6 +1,6 @@
 ---
 name: start-change
-description: 开始/接手一个 openspec 变更时用。先认领防止与并行会话重复劳动，再建仓库外的 worktree 隔离索引与工作树，收工时按路径提交、开 PR 回 v2、合并后清理。当要动手实现某个变更、或不确定有没有人已经在做同一件事时使用。
+description: 开始/接手一个 openspec 变更时用。先认领防止与并行会话重复劳动，再建仓库外的 worktree 隔离索引与工作树，收工时按路径提交、开 PR 回 main、合并后清理。当要动手实现某个变更、或不确定有没有人已经在做同一件事时使用。
 ---
 
 # 开一个变更：认领 → 隔离 → 收工
@@ -16,7 +16,7 @@ description: 开始/接手一个 openspec 变更时用。先认领防止与并�
 openspec list                      # 有哪些在飞的变更
 git branch --list 'change/*'       # 谁已经在写代码了 —— 这才是判据
 git worktree list                  # 谁开着工作区
-gh pr list --base v2               # 谁已经写完在等评审
+gh pr list --base main               # 谁已经写完在等评审
 ```
 
 **后两条同时是孤儿扫描。** 会话不是每次都善终（崩了、被关掉、干到一半换了方向），
@@ -34,7 +34,7 @@ gh pr list --base v2               # 谁已经写完在等评审
 
 ```bash
 ID=<变更id>                        # 与 openspec/changes/<id> 同名，通常带连字符
-git worktree add -b "change/$ID" ~/.claude-worktrees/$ID v2
+git worktree add -b "change/$ID" ~/.claude-worktrees/$ID main
 cd ~/.claude-worktrees/$ID
 ```
 
@@ -104,7 +104,7 @@ docker exec pgbase psql -U postgres -tAc \
 
 ## 4. 收工：提交 → 开 PR → 合并后清理
 
-**收工不再是一口气。** 从前是「提交 → 本地 merge 进 v2 → 清理」，中间没有停顿；
+**收工不再是一口气。** 从前是「提交 → 本地 merge 进 main → 清理」，中间没有停顿；
 现在中间隔着一个 PR 和一次评审，**清理必须挪到合并之后**。把它当成两个时刻：
 今天把 PR 开出去，改天等它合并了再回来收拾。
 
@@ -133,11 +133,11 @@ git commit -F <消息文件> -- <只属于本次的路径>
 
 ### 4.2 开 PR
 
-先把 v2 的新提交并进分支、在**分支上**解掉冲突，别把冲突留给 PR 页面：
+先把 main 的新提交并进分支、在**分支上**解掉冲突，别把冲突留给 PR 页面：
 
 ```bash
 git fetch origin
-git merge origin/v2
+git merge origin/main
 ```
 
 **解冲突之前先停前端 dev server**：Umi 的 MFSU 缓存会在冲突标记还在文件里时编译失败，
@@ -148,11 +148,10 @@ git merge origin/v2
 
 ```bash
 git push -u origin "change/$ID"
-gh pr create --base v2 --title "<变更标题>" --body-file <说明文件>
+gh pr create --base main --title "<变更标题>" --body-file <说明文件>
 ```
 
-**`--base v2` 不可省。** 仓库的默认分支是 `main`，而 V2 是完整重建——不传 base
-会开出一个上百提交、根本没法读的 PR。开完立刻 `gh pr view` 核一眼 base 对不对。
+**显式使用 `--base main`。** 开好 PR 后用 `gh pr view` 核对 base 和 head。
 
 PR 说明里放三样，缺一样这个 PR 就不值得开：
 
@@ -168,7 +167,7 @@ PR 说明里放三样，缺一样这个 PR 就不值得开：
 
 **别在开完 PR 后立刻清理。** 两个原因：
 
-1. **CI 会跑你本地跑不到的东西。** `.github/workflows/ci.yml` 在 `pull_request → v2`
+1. **CI 会跑你本地跑不到的东西。** `.github/workflows/ci.yml` 在 `pull_request → main`
    上起真 Postgres，本地因为连不上库而静默跳过的那批集成测试，在这里会真跑。
    「本地绿」不等于「PR 绿」。
 2. **评审意见要有地方改。** worktree 删了，改一行意见就得把第 2 节整套重来。
@@ -182,19 +181,19 @@ gh pr merge --merge --delete-branch=false
 ```
 
 `--merge` 这个选择是有代价约束的：squash 会重写提交，本地 `change/$ID` 的提交
-不再是 v2 的祖先，下面那条 `git branch -d` 会拒绝删——而人在那一刻的反应就是改用
-`-D`，保护随之作废。历史上 `change/*` → `v2` 一直是合并提交（`0b58f4b` 即是），
+不再是 main 的祖先，下面那条 `git branch -d` 会拒绝删——而人在那一刻的反应就是改用
+`-D`，保护随之作废。历史上 `change/*` → `main` 一直是合并提交（`0b58f4b` 即是），
 沿用它就能让 `-d` 继续当那道闸。`--delete-branch=false` 是因为本地分支还要留给
 `-d` 判定，远端分支等清理时一起收。
 
 **4.3 整节在主仓做，不在 worktree 里。** 第 2 节那条「全程不要 cd 回主仓」管的是
-干活期间，到这里已经不适用了：worktree 删不掉自己所在的工作区，`v2` 也已经被主仓
-checkout 占着（在 worktree 里 `git checkout v2` 会直接报
-`fatal: 'v2' is already checked out at ...`）。
+干活期间，到这里已经不适用了：worktree 删不掉自己所在的工作区，`main` 也已经被主仓
+checkout 占着（在 worktree 里 `git checkout main` 会直接报
+`fatal: 'main' is already checked out at ...`）。
 
 ```bash
 cd /Users/stone/Developer/KeywordIQ
-git checkout v2 && git pull --ff-only   # 让本地 v2 含上合并结果，跳过这步 -d 一定拒绝；PR 合在备用库时改拉对应远端
+git checkout main && git pull --ff-only   # 让本地 main 含上合并结果，跳过这步 -d 一定拒绝
 ```
 
 然后清理**三样一起做完，并当场核对**——漏掉任何一样都不算收工：
@@ -222,7 +221,7 @@ git ls-remote --heads origin "change/$ID"
 **改成 PR 之后这一条只会更重要**：合并发生在开 PR 那个会话早就结束之后，4.3 那步
 天生比从前更容易掉——从前它紧跟在提交后面，现在中间隔着一次评审。
 
-**分支还在也分两种，用 `gh pr list --base v2` 区分**：开着 PR 等评审的，worktree
+**分支还在也分两种，用 `gh pr list --base main` 区分**：开着 PR 等评审的，worktree
 该原样留着（评审意见要在那儿改）；没有 PR、也没人在写的，才是有人干到一半走掉了
 ——那种去问，别自己接着做（第 1 节）。
 
@@ -252,7 +251,7 @@ git ls-remote --heads origin "change/$ID"
 
 | 做法 | 后果 |
 |---|---|
-| `gh pr create` 不传 `--base v2` | 仓库默认分支是 `main`，会开出一个上百提交、没法读的 PR |
+| `gh pr create` 不传 `--base main` | 仓库默认分支是 `main`，会开出一个上百提交、没法读的 PR |
 | PR 用 squash 合并 | 提交被重写，`git branch -d` 拒绝，人转手用 `-D`，那道闸就废了 |
 | 开完 PR 立刻清 worktree 和库 | CI 的真库测试红了、或评审提了意见，没有地方改 |
 | PR 里只有代码没有 spec delta | 退化成一次普通 code review，开 PR 的理由整个消失 |

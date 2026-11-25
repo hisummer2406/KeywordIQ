@@ -1,0 +1,68 @@
+# 迁移设计
+
+## D1. 评审与切换顺序
+
+迁移 PR 在现有远端 `v2` 上以 Draft 创建，先审代码、规格和本地测试结果。该 PR 的
+最终工作流只接受目标为 `main` 的 PR，评审期间不改变现有 `v2` 的发布行为。
+先处理同样涉及生产发布的 PR #214 并重核基线，冻结普通合并、GitHub 发布和飞书发布，
+确认已开始或已获确认的运维动作结束。
+
+在主仓按顺序把旧默认分支 `main` 改名为 `v1`，将 `v2` 改名为 `main`，再把
+`main` 设为默认。每一步读取分支及 SHA，检查开放 PR 的 base 和仓库规则。参见
+[GitHub 分支改名规则](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-branches-in-your-repository/renaming-a-branch)。改名后
+重触发迁移 PR 的检查（Draft 转 Ready 或一次正常更新），确认 PR CI 和当前 head 的
+独立审核后，用合并提交合入新 `main`。合并提交的真实 push 是首发候选。只要新分支
+尚无通过「发布就绪」的祖先，CI 就运行三项完整检查。发布证据仅认可该 SHA 最新的
+main push 运行，且发布就绪门禁必须成功。
+
+切换窗口前后核对 Actions 工作流、Environment/分支限制、依赖默认分支的外部自动化
+及开放 PR。Claude 的提及与自动评审来自旧默认分支，迁移到新 `main` 后验证登记和触发；
+自动评审限面向 `main` 的非草稿 PR，延续已有仓库凭据。
+
+2026-11-26 起仓库已公开（历史已改写，所有 SHA 变化），CI 与发布改在 GitHub 托管
+runner `ubuntu-latest`，不再挂自托管 runner。仓库新增 Ruleset「保护 v2/main：禁止强推
+与删除」与 `production` Environment（部署分支限制、存放 `ECS_SSH_*`）。切换时：
+改名前临时停用该 Ruleset，改名后把规则目标改为 `main` 与 `v1` 再启用；`production`
+的部署分支在改名后从 `v2` 改为 `main`；Dependabot 的 `target-branch` 随本 PR 改为
+`main`，改名后旧 `main` 上的 Dependabot PR 会随 base 变成 `v1`，予以关闭由其按新
+默认分支重开。Claude 自动评审仅限同仓库分支发起的 PR（fork PR 取不到 secrets）。
+
+## D2. ECS 与本地分支
+
+冻结前记录旧 `main`、`v2`、ECS HEAD、实际运行版本及容器身份；核对 V2 ECS 和
+飞书机器人同指主仓。确认 V1 跟踪和自动化没有拉取重命名前的 `origin/main`。发现依赖
+则中止并另行确认 V1 隔离步骤。V1 目录、服务和配置不在本轮改动范围内。
+
+ECS 只跟踪 `v2` 的克隆使用显式 refspec fetch `main`。如既在 `v2` 上又已有不同
+的本地 `main`，发布停止并保留引用，窗口内先核对它的 SHA，再另行归档旧引用。
+发布会核验当前 Git HEAD 可快进并保留原 `v2` 引用。实际运行 SHA 与 Git HEAD 单独
+采证，两者均须是首发候选祖先。工作流沿用原文件路径、锁定的目标 SHA 和 `deploy.sh`。
+
+本地逐个记录活动 worktree 的路径、分支、HEAD、修改与 upstream。先归档本地旧
+`main` 到 `v1`（如果本地与远端 V1 不同，保留差异；只在祖先可证时快进），再把
+干净主工作区的 `v2` 改名为 `main`，更新 `origin/HEAD` 和上游。活动开发分支保留
+原提交、索引和修改，只调整受影响的 upstream。发现 worktree 或提交归属不明时先
+保留现场。
+
+## D3. 飞书暂停与首次发布
+
+切换冻结时停止受理飞书发布，确认现有执行已结束。改名后从 ECS 以只读方式确认主仓
+已无 `refs/heads/v2`，计划阶段与执行阶段的旧分支 fetch 都应失败。保持两个默认值
+为 `v2`，切换期间不得重建旧远端分支。飞书恢复另行交付。
+
+用本地 CI/真实 Git 测试验证错误分支、缺失/失败/旧分支/仅 PR 的 CI 证据、历史外 SHA、
+两类本地修改及旧本地 `main`。生产工作流不作为预发布探针。单独获准首次发布后，
+先核对 main push CI、运行 SHA、迁移差异、无进行中导入，以及部署与导入的执行期互斥
+（#214）。然后运行 **Deploy Main to ECS**，核对实际运行版本、V2 健康和机器人状态、
+V1 服务状态。
+
+## D4. 中止与回退
+
+- 分支改名未完成时保持冻结，按预检记录和实际完成步恢复分支与默认分支。恢复完核对
+  PR、分支保护、Environment 和旧发布入口。
+- 切换 PR 已合入时，按 `main → v2`、`v1 → main` 恢复映射与默认分支，经过审核
+  revert **迁移合并提交**，保持后续独立修复。检查 revert 的 `v2` push 有合格 CI 后
+  再解除冻结；遇到 GitHub 临时名称冲突先停止核对，不强推或重置分支。
+- ECS 发布已经开始时，先核对 ECS 工作树、容器版本及数据库迁移状态。分支改名和
+  Git revert 只恢复入口，不恢复运行代码或数据库。按实际状态另行确认生产恢复动作，
+  通过允许的发布路径执行。

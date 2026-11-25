@@ -1,5 +1,5 @@
 ---
-description: 检查当前改动，提交并推送，创建或更新指向 v2 的 PR；保留分支和 worktree，不合并。
+description: 检查当前改动，提交并推送，创建或更新指向 main 的 PR；保留分支和 worktree，不合并。
 argument-hint: "[交付范围或关联 Issue]"
 disable-model-invocation: true
 ---
@@ -15,9 +15,9 @@ disable-model-invocation: true
 1. 读取仓库 `AGENTS.md`、`CLAUDE.md` 与适用的嵌套约定。确认当前仓库、分支、
    `git status --short`、暂存及未暂存差异、相关 Issue/OpenSpec 和现有 PR。
    参数为空时以当前会话范围为准；归属不清时先问清，不能把全部工作区改动当成本次成果。
-2. 在本次开发分支/worktree 中操作，保留无关改动与暂存项。若当前是 `main`、`v2`
-   或 detached HEAD，先按仓库分支/隔离约定准备开发分支；不向 `main` 或 `v2` 直接推送。
-   检查远端开发分支和 `origin/v2` 是否更新，按仓库要求同步；不要覆盖云端修复。
+2. 在本次开发分支/worktree 中操作，保留无关改动与暂存项。若当前是 `main`、`v1`
+   或 detached HEAD，先按仓库分支/隔离约定准备开发分支；不向 `main` 或 `v1` 直接推送。
+   检查远端开发分支和 `origin/main` 是否更新，按仓库要求同步；不要覆盖云端修复。
    工作区有未提交内容时先安全保留，不强行 merge、不丢弃改动、不强推。
 3. 按 `CLAUDE.md`、`AGENTS.md` 和当前 CI 的改动范围运行规定检查。
    Claude Code 提交门禁实际运行的全量检查计入验证，不重复跑相同内容；无门禁的环境必须手动补齐。
@@ -27,11 +27,11 @@ disable-model-invocation: true
 4. 核对最终差异和索引，只按本次文件路径暂存/提交，遵守会话中的提交署名约定。
    已提交且没有新差异时跳过 commit，不制造空提交。确认提交包含的文件正确后推送开发分支。
 5. 根据当前仓库和开发分支查找 PR：已有且仍开放则更新，没有则创建，避免重复。
-   创建必须显式使用 `gh pr create --base v2`；已有 PR 若指向其他基线，先报告而不擅自改其范围。
+   创建必须显式使用 `gh pr create --base main`；已有 PR 若指向其他基线，先报告而不擅自改其范围。
    PR 标题与正文描述最终改动，包含实现摘要、实际验证结果与未覆盖风险；
    关联 Issue 用 `Refs #...`，存在 OpenSpec 时列其路径与 spec delta，不为小改动虚构文档。
    多行正文写入临时文件，再用 `--body-file` 传入，保留已有仍有效的上下文。
-6. 用 `gh pr view` 确认 base 为 `v2`、head 为本次分支、`headRefOid` 等于推送的提交。
+6. 用 `gh pr view` 确认 base 为 `main`、head 为本次分支、`headRefOid` 等于推送的提交。
    只检查该 SHA 的 CI，等其完成并报告结果；超时、失败或无匹配运行都不能写成成功。
    若远端出现新提交，重新核对，不用旧 SHA 的绿灯替代当前状态。
 

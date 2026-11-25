@@ -1,5 +1,5 @@
 ---
-description: 确认 PR 审核及 CI 通过后合并至 v2、归档 OpenSpec、按条件关闭 Issue 并清理本变更。
+description: 确认 PR 审核及 CI 通过后合并至 main、归档 OpenSpec、按条件关闭 Issue 并清理本变更。
 argument-hint: "[PR 编号、URL 或变更 ID，省略则取当前 PR]"
 disable-model-invocation: true
 ---
@@ -18,7 +18,7 @@ disable-model-invocation: true
   未替换的 `$ARGUMENTS` 按无参数处理。
 - 记录 PR 的 `state`、`baseRefName`、`headRefName`、`headRefOid`、head 仓库、
   `mergeCommit`、`reviewDecision`、`mergeStateStatus`、URL，以及关联 Issue/变更目录。
-  base 必须为 `v2`，状态须为 `OPEN` 或 `MERGED`；其他情况停止并报告。
+  base 必须为 `main`，状态须为 `OPEN` 或 `MERGED`；其他情况停止并报告。
 - 用 `git worktree list --porcelain` 确定主工作区与本变更工作区的真实路径，不硬编码用户目录。
   主工作区须干净（含未跟踪文件），混有无关改动时只报告，不暂存、移动、删除或继续 pull/归档。
   不允许工作区删除自身，后续同步/归档/清理在主工作区进行。
@@ -50,11 +50,11 @@ gh pr view <PR号> --json state,mergedAt,mergeCommit
 ```
 
 不使用 squash/rebase、`--admin` 或 `--auto` 绕过条件。结果不是 `MERGED`（包括排队中）
-就停止，不清理。在干净主工作区同步 `v2`：
+就停止，不清理。在干净主工作区同步 `main`：
 
 ```bash
-git switch v2
-git pull --ff-only origin v2
+git switch main
+git pull --ff-only origin main
 git merge-base --is-ancestor <合并提交> HEAD
 ```
 
@@ -62,7 +62,7 @@ git merge-base --is-ancestor <合并提交> HEAD
 
 同步前先看主工作区是否有本项目 dev server 在跑（`lsof` 查 cwd）；`package.json`/`pyproject.toml`
 或锁文件在此次拉取中有变化时，同步后在 `frontend` 重新 `pnpm install`（后端用 `uv sync`），
-否则本地页面会因依赖不匹配而坏。PR 合在备用库时，从备用库对应远端同步，两仓 v2 分叉就报告。
+否则本地页面会因依赖不匹配而坏。本地与主仓 `origin/main` 分叉就报告。
 
 ## 3. 处理验收并归档
 
@@ -81,20 +81,20 @@ openspec validate --strict --all
   若提示旧场景标题缺失，先核对是删除还是改写；改写时保留对应旧标题再重试，不能盲目绕过。
 - 核对归档产生的 archive 目录、原目录删除与主 specs 差异，只按本次路径提交，
   不用 `git add openspec/` 卷入无关内容。遵守提交署名约定，使用简短归档提交说明。
-  验证通过后推送 `v2`，核实提交已在远端；推送失败则报告并保留状态，不强推。
-  这是合并后的文档收尾，不能借此把未审查业务代码推到 `v2`。
+  验证通过后推送 `main`，核实提交已在远端；推送失败则报告并保留状态，不强推。
+  这是合并后的文档收尾，不能借此把未审查业务代码推到 `main`。
 
 ## 4. 关闭已解决的 Issue
 
 仅当原 Issue 的范围已全部兑现、没有后续能力/PR/未完成验收时，才简短注明 PR 与合并结果并
-手动关闭（合并到 `v2` 不会自动处理默认分支的关闭关键字）。尚有范围或判断不明时保持打开。
+手动关闭（交付 PR 使用 `Refs #编号` 关联 Issue）。尚有范围或判断不明时保持打开。
 已关闭则不重复发评论；多行评论用 `--body-file` 或结构化参数，不添加机器人触发提及。
 
 ## 5. 清理本变更的 git 资源
 
 归档成功后，只处理第 1 步核实的本变更资源。目标 worktree 若有 staged、unstaged、未跟踪文件
-或仍有活动会话，保留并报告；不以 `--force` 删除。只删除 head 对应的开发分支，不碰 `main`/`v2`。
-先确认本地开发分支是 `v2` 的祖先、远端开发分支仍指向已合并 head；有新提交则保留。
+或仍有活动会话，保留并报告；不以 `--force` 删除。只删除 head 对应的开发分支，不碰 `main`/`v1`。
+先确认本地开发分支是 `main` 的祖先、远端开发分支仍指向已合并 head；有新提交则保留。
 
 ```bash
 git worktree remove <本变更worktree的真实路径>
