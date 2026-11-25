@@ -26,11 +26,14 @@ def _client(user) -> TestClient:
 
 def test_返回当前生效的上限且随配置变化(monkeypatch):
     client = _client(_StubUser({"competitor:view"}))
+    monkeypatch.setattr(settings, "COMPETITOR_COLLECTOR_SELECTORS_FILE", "")
     assert client.get("/api/competitor/collector-config").json() == {
-        "max_report_items": settings.COMPETITOR_MAX_REPORT_ITEMS
+        "max_report_items": settings.COMPETITOR_MAX_REPORT_ITEMS,
+        "selectors": None,
+        "selectors_version": None,
     }
     monkeypatch.setattr(settings, "COMPETITOR_MAX_REPORT_ITEMS", 800)
-    assert client.get("/api/competitor/collector-config").json() == {"max_report_items": 800}
+    assert client.get("/api/competitor/collector-config").json()["max_report_items"] == 800
 
 
 def test_默认上限是1000():

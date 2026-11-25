@@ -46,6 +46,7 @@ export function describeRun(run: RunState | null): string {
   );
   const site = run.deliverySite;
   const target = site ? run.deliveryTargets?.[site] : undefined;
+  lines.push(`页面选择器：${run.selectorsVersion ? `服务端下发 ${run.selectorsVersion}` : '内置'}`);
   if (site) lines.push(`配送核对：${site} 站，目标 ${target ?? '未设置'}，实际 ${run.deliveryText ?? '读不到'}`);
   else if (run.deliveryText) lines.push(`采集时的配送地址：${run.deliveryText}`);
   return lines.join('\n');

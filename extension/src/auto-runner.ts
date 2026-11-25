@@ -6,7 +6,8 @@
 
 import { pickStoreGapMs, PAGE_TIMEOUT_MS, buildStorefrontUrl, decideAfterPage, type Coverage, type PageScan } from './auto-plan';
 import { freezeRequest } from './capture-accumulator';
-import type { CaptureMessage, CaptureResult, ConfigResult } from './messages';
+import type { AutoScanRequest, CaptureMessage, CaptureResult, ConfigResult } from './messages';
+import type { SelectorOverrides } from './selector-overrides';
 import type { ParsedItem } from './parse-storefront';
 import type { WatchListOutcome, WatchedSeller } from './watch-client';
 
@@ -104,6 +105,9 @@ export interface RunState {
   deliveryTargets?: Record<string, string>;
   /** 最近一次检查配送位置的站点。 */
   deliverySite?: string;
+  /** 开跑时快照的服务端选择器覆盖及版本；本轮一直用这份，恢复时沿用（extension-remote-selectors）。 */
+  selectors?: SelectorOverrides;
+  selectorsVersion?: string;
 }
 
 export interface RunnerDeps {
@@ -428,6 +432,10 @@ export function startRun(trigger: RunTrigger, deps: RunnerDeps): Promise<StartOu
       return { started: false, reason: 'config_unavailable' };
     }
     base.cap = cap.maxReportItems;
+    if (cap.selectors && cap.selectorsVersion) {
+      base.selectors = cap.selectors;
+      base.selectorsVersion = cap.selectorsVersion;
+    }
 
     const sellers = await deps.getSellers(settings.maxStores);
     if (sellers.kind !== 'ok') {
@@ -466,10 +474,11 @@ export async function isAutoTab(tabId: number | undefined): Promise<boolean> {
 }
 
 /** 向 content script 请求解析；它可能还没注册监听器，短暂重试几次。 */
-async function requestScan(tabId: number, deps: RunnerDeps): Promise<PageScan | null> {
+async function requestScan(tabId: number, deps: RunnerDeps, selectors?: SelectorOverrides): Promise<PageScan | null> {
+  const request: AutoScanRequest = selectors ? { type: 'AUTO_SCAN', selectors } : { type: 'AUTO_SCAN' };
   for (let attempt = 0; attempt <= SCAN_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      const response = (await chrome.tabs.sendMessage(tabId, { type: 'AUTO_SCAN' })) as PageScan | undefined;
+      const response = (await chrome.tabs.sendMessage(tabId, request)) as PageScan | undefined;
       if (response && (response.kind === 'ok' || response.kind === 'blocked')) return response;
     } catch {
       // content script 未注入或尚未就绪
@@ -488,7 +497,7 @@ export function onTabComplete(tabId: number, deps: RunnerDeps): Promise<void> {
     if (current.tabId !== tabId || current.phase !== 'collecting') return;
     if (current.scannedPage >= current.page) return; // 同一页的重复 complete 事件
 
-    const scan = await requestScan(tabId, deps);
+    const scan = await requestScan(tabId, deps, state.selectors);
     // 拿不到 content script 的回答：可能是重复事件恰好落在新旧页面交替之间，也可能被重定向到
     // 验证码等不注入的地址。这里不下结论，交给已设好的页面超时：新页面加载完会再来一次
     // complete；一直没有，超时就按访问受限停止整轮。

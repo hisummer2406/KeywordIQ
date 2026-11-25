@@ -112,6 +112,11 @@ class CollectorConfigResponse(BaseModel):
     """采集端配置（competitor-asin-ingest「服务端公布单批上限」）。只含运行时配置，不含任何用户或卖家数据。"""
 
     max_report_items: int = Field(description="单次上报条目数上限；超限整批 422，不截断")
+    selectors: dict[str, list[str]] | None = Field(
+        default=None,
+        description="采集端页面选择器覆盖（CSS 选择器与纯文本），未配置或文件无效时为 null",
+    )
+    selectors_version: str | None = Field(default=None, description="选择器覆盖的版本号，无覆盖时为 null")
 
 
 class RejectedItem(BaseModel):

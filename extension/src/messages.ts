@@ -2,6 +2,7 @@
 // 避免两份手写的形状悄悄漂移。
 
 import type { ParsedItem } from './parse-storefront';
+import type { SelectorOverrides } from './selector-overrides';
 
 /**
  * 自动采集（试点，#205 阶段 1）的控制消息：设置页发起运行或停止、通知设置变更，
@@ -18,6 +19,8 @@ export type AutoControlResult = { ok: true; isAutoTab?: boolean } | { ok: false;
 /** 后台请 content script 解析当前页（自动采集）。回答形状见 auto-plan.ts 的 PageScan。 */
 export interface AutoScanRequest {
   type: 'AUTO_SCAN';
+  /** 本轮开跑时快照的服务端选择器覆盖；没有就用内置。 */
+  selectors?: SelectorOverrides;
 }
 
 export interface CaptureMessage {
@@ -44,7 +47,15 @@ export interface ConfigMessage {
  * `unavailable` 不细分成因（网络、服务端、未配置地址、令牌都同步不到）：面板对它们的
  * 处理完全一样——禁止开始采集并提示，运营去设置页或网页上处理即可。
  */
-export type ConfigResult = { outcome: 'ok'; maxReportItems: number } | { outcome: 'unavailable' };
+export type ConfigResult =
+  | {
+      outcome: 'ok';
+      maxReportItems: number;
+      /** 服务端下发的页面选择器覆盖（只有自动采集使用，人工面板忽略）。 */
+      selectors?: SelectorOverrides;
+      selectorsVersion?: string;
+    }
+  | { outcome: 'unavailable' };
 
 export type CaptureResult =
   | {

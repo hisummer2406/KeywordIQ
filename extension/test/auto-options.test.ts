@@ -40,6 +40,7 @@ describe('describeRun', () => {
     );
     expect(text).toContain('已处理 3 / 3 家：有效 2 家（其中覆盖有限 1 家），失败 1 家');
     expect(text).toContain('配送核对：US 站，目标 10001，实际 New York 10001');
+    expect(text).toContain('页面选择器：内置');
   });
 
   it('配送位置未确认时显示停止原因、停在哪家店和页面文字', () => {
@@ -61,5 +62,9 @@ describe('describeRun', () => {
     expect(text).toContain('停在：US 站卖家 S2（这家店未上报）');
     expect(text).toContain('页面显示的配送位置：Deliver to');
     expect(text).toContain('有效 1 家');
+  });
+
+  it('显示服务端下发的选择器版本', () => {
+    expect(describeRun(run({ selectorsVersion: '2026-11-26a' }))).toContain('页面选择器：服务端下发 2026-11-26a');
   });
 });

@@ -50,6 +50,9 @@ async def submit_asin_report(
 
 
 @asin_router.get("/collector-config", response_model=CollectorConfigResponse)
-async def get_collector_config(_user=Depends(_require_view)) -> CollectorConfigResponse:
-    """插件打开采集面板时读取；取不到就禁止开始采集，不回落到本地默认值（design D4）。"""
+def get_collector_config(_user=Depends(_require_view)) -> CollectorConfigResponse:
+    """插件打开采集面板时读取；取不到就禁止开始采集，不回落到本地默认值（design D4）。
+
+    同步函数：要 stat/读选择器文件（很小，但仍是阻塞 IO），交给线程池而不是事件循环。
+    """
     return service.collector_config()
