@@ -3,6 +3,7 @@
 
 import { mergeItemsWithCap } from './capture-accumulator';
 import type { ParsedItem } from './parse-storefront';
+import { usableSelectors } from './selector-overrides';
 import { DOMAIN_TO_SITE, MARKETPLACE_ID_TO_SITE } from './site-map';
 
 /** 店与店之间的间隔下限/上限（毫秒）。下限 30 秒恰好是 chrome.alarms 的最小间隔。 */
@@ -42,6 +43,8 @@ export function pickStoreGapMs(random: () => number = Math.random): number {
   return STORE_GAP_MS.min + Math.floor(random() * span);
 }
 
+const BLOCKED_SELECTORS = ['form[action*="validateCaptcha"]', '#captchacharacters'];
+
 const BLOCKED_TEXT_PATTERNS = [
   /access restricted/i,
   /unauthorized ai agent/i,
@@ -54,10 +57,16 @@ const BLOCKED_TEXT_PATTERNS = [
  * 页面是否是验证码或访问拒绝页。只用于「停止整轮」的判断，宁可误判为受限也不继续访问。
  * 选择器与文案未在全部站点的真实拦截页上验证（tasks 3.4），对不上只需要改这里。
  */
-export function detectBlockedPage(doc: Document): boolean {
-  if (doc.querySelector('form[action*="validateCaptcha"], #captchacharacters')) return true;
+export function detectBlockedPage(
+  doc: Document,
+  overrides: { selectors?: string[]; texts?: string[] } = {},
+): boolean {
+  if (usableSelectors(overrides.selectors, BLOCKED_SELECTORS, doc).some((s) => doc.querySelector(s))) return true;
   const text = (doc.body?.innerText ?? doc.body?.textContent ?? '').slice(0, 5000);
-  return BLOCKED_TEXT_PATTERNS.some((pattern) => pattern.test(text));
+  if (BLOCKED_TEXT_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  // 下发的拦截文案只当纯文本、不区分大小写，不构造正则
+  const lower = text.toLowerCase();
+  return (overrides.texts ?? []).some((t) => lower.includes(t.toLowerCase()));
 }
 
 // 页头「Deliver to」下面那一行（如 "New York 10001"、"China"）。选择器未在全部站点真实页面验证，
@@ -65,8 +74,8 @@ export function detectBlockedPage(doc: Document): boolean {
 const DELIVERY_SELECTORS = ['#glow-ingress-line2', '#nav-global-location-popover-link'];
 
 /** 页头显示的配送地址文字，读不到返回 undefined。纯函数，只读 `Document`。 */
-export function parseDeliveryText(doc: Document): string | undefined {
-  for (const selector of DELIVERY_SELECTORS) {
+export function parseDeliveryText(doc: Document, selectors?: string[]): string | undefined {
+  for (const selector of usableSelectors(selectors, DELIVERY_SELECTORS, doc)) {
     const text = doc.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim();
     if (text) return text.slice(0, 120);
   }

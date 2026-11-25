@@ -13,6 +13,7 @@ interface Harness {
   openedUrls: string[];
   alarms: Map<string, { when?: number }>;
   removedTabs: number[];
+  scanRequests: unknown[];
 }
 
 const SUCCESS: CaptureResult = { outcome: 'success', accepted: 2, newAsins: 1, baselineEstablished: false, duplicate: false };
@@ -32,6 +33,7 @@ async function setup(sellers: { sellerId: string; site: string }[], pages = 2): 
   const tabUrls = new Map<number, string>();
   const alarms = new Map<string, { when?: number }>();
   const removedTabs: number[] = [];
+  const scanRequests: unknown[] = [];
   let nextTabId = 100;
 
   const chromeGlobal = (globalThis as unknown as { chrome: Record<string, unknown> }).chrome;
@@ -51,7 +53,8 @@ async function setup(sellers: { sellerId: string; site: string }[], pages = 2): 
       removedTabs.push(id);
       tabUrls.delete(id);
     },
-    async sendMessage(id: number) {
+    async sendMessage(id: number, message: unknown) {
+      scanRequests.push(message);
       const url = tabUrls.get(id);
       if (!url) throw new Error('no tab');
       const scan: PageScan = scans.get(scanKey(url)) ?? { kind: 'ok', items: [], hasNext: false };
@@ -82,7 +85,7 @@ async function setup(sellers: { sellerId: string; site: string }[], pages = 2): 
     getSettings: async () => ({ pages, maxStores: 20, deliveryTargets: { US: '10001' } }),
     sleep: async () => undefined,
   };
-  return { runner, deps, report, scans, openedUrls, alarms, removedTabs };
+  return { runner, deps, report, scans, openedUrls, alarms, removedTabs, scanRequests };
 }
 
 /** 模拟当前标签页加载完成。 */
@@ -224,6 +227,42 @@ describe('自动采集状态机', () => {
     expect(state).toMatchObject({ status: 'stopped', stopReason: 'delivery_unconfirmed', deliverySite: 'US' });
     expect(state?.deliveryText).toBeUndefined();
     expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('服务端下发的选择器在开跑时快照，本轮每次 AUTO_SCAN 都带上；中途改了也不影响本轮', async () => {
+    const h = await setup([
+      { sellerId: 'S1', site: 'US' },
+      { sellerId: 'S2', site: 'US' },
+    ], 1);
+    let version = 'v1';
+    h.deps.getCap = async () => ({
+      outcome: 'ok' as const,
+      maxReportItems: 1000,
+      selectors: { result_card: [`.card-${version}`] },
+      selectorsVersion: version,
+    });
+    h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: false });
+    h.scans.set('S2:1', { kind: 'ok', items: [{ asin: 'B02' }], hasNext: false });
+    await h.runner.startRun('manual', h.deps);
+    version = 'v2';
+    await completeCurrentTab(h);
+    await h.runner.onRunAlarm(h.runner.ALARM_NEXT_STORE, h.deps);
+    await completeCurrentTab(h);
+
+    expect(h.scanRequests).toEqual([
+      { type: 'AUTO_SCAN', selectors: { result_card: ['.card-v1'] } },
+      { type: 'AUTO_SCAN', selectors: { result_card: ['.card-v1'] } },
+    ]);
+    expect(await h.runner.loadRunState()).toMatchObject({ status: 'finished', selectorsVersion: 'v1' });
+  });
+
+  it('没有下发选择器：AUTO_SCAN 不带覆盖，运行记录无版本', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }], 1);
+    h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: false });
+    await h.runner.startRun('manual', h.deps);
+    await completeCurrentTab(h);
+    expect(h.scanRequests).toEqual([{ type: 'AUTO_SCAN' }]);
+    expect((await h.runner.loadRunState())?.selectorsVersion).toBeUndefined();
   });
 
   it('没有配置该站点的目标邮编：无法确认，停止', async () => {
