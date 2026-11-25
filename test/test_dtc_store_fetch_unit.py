@@ -39,6 +39,21 @@ def _meta_with_count(count: int | None) -> str:
     return json.dumps(payload)
 
 
+def _page_with_ids(offset: int) -> str:
+    """同一份商品样本，但商品与变体 ID 整体偏移，用来造「真正不同」的一页。
+
+    直接把同一页喂两次只是重复页，不是第二页：那是 #209 要防的形态，不能拿来当正常翻页样本。
+    """
+    payload = json.loads(_fixture("products_page1.json"))
+    for product in payload["products"]:
+        product["id"] += offset
+        product["handle"] = f"{product['handle']}-{offset}"
+        for variant in product.get("variants", []):
+            variant["id"] += offset
+            variant["product_id"] = product["id"]
+    return json.dumps(payload)
+
+
 def _routes(
     *,
     catalog_pages: dict[int, str] | None = None,
@@ -92,10 +107,10 @@ async def test_fetch_store_happy_path_is_complete():
 
 
 async def test_fetch_store_paginates_until_empty_page():
-    pages = {1: _fixture("products_page1.json"), 2: _fixture("products_page1.json")}
+    pages = {1: _fixture("products_page1.json"), 2: _page_with_ids(1)}
     outcome = await _run(_routes(catalog_pages=pages))
 
-    # 两页各 4 个商品，第 3 页空 → 自然终止
+    # 两页各 4 个不同商品，第 3 页空 → 自然终止
     assert len(outcome.products) == 8
     assert outcome.catalog_complete is True
 
@@ -105,7 +120,7 @@ async def test_fetch_store_hitting_page_cap_is_incomplete():
 
     当成正常结束的话，上限之外的商品会被安静地判成下架。
     """
-    always_full = {n: _fixture("products_page1.json") for n in range(1, 10)}
+    always_full = {n: _page_with_ids(n) for n in range(1, 10)}
     outcome = await _run(_routes(catalog_pages=always_full), max_pages=3)
 
     assert outcome.catalog_complete is False
@@ -130,6 +145,48 @@ async def test_fetch_store_more_than_declared_count_stays_complete():
 
     assert outcome.catalog_complete is True
     assert outcome.status == FETCH_OK
+
+
+async def test_fetch_store_repeated_page_does_not_inflate_declared_count():
+    """#209 P2：两页返回同样 4 个商品、站点声称 8 个，不能凭 8 条记录判完整。
+
+    落库按唯一商品 ID 判下架，虚增的计数会让没取到的 4 个被误判下架。
+    """
+    pages = {1: _fixture("products_page1.json"), 2: _fixture("products_page1.json")}
+    outcome = await _run(_routes(catalog_pages=pages, meta=_meta_with_count(8)))
+
+    assert outcome.catalog_complete is False
+    assert outcome.status == FETCH_INCOMPLETE
+    # 见到的商品照常返回（只增永远安全），且每个商品只出现一次
+    assert len(outcome.products) == 4
+    assert len({p.product_id for p in outcome.products}) == 4
+
+
+async def test_fetch_store_repeated_page_without_declared_count_is_incomplete():
+    """站点不报总数时，一页全是已见商品说明分页没有前进，同样不能当完整目录。
+
+    否则会一直翻到页数上限才停，或在空页处误判「自然终止」。
+    """
+    pages = {n: _fixture("products_page1.json") for n in range(1, 10)}
+    outcome = await _run(_routes(catalog_pages=pages, meta=_meta_with_count(None)))
+
+    assert outcome.catalog_complete is False
+    assert outcome.status == FETCH_INCOMPLETE
+    assert "重复" in outcome.error
+    assert len(outcome.products) == 4
+
+
+async def test_fetch_store_partially_overlapping_pages_count_unique_products():
+    """翻页期间商品顺序变动会让相邻页有重叠：去重后计数，有新商品就继续翻。"""
+    page1 = json.loads(_fixture("products_page1.json"))
+    page2 = json.loads(_page_with_ids(1))
+    page2["products"][:2] = page1["products"][2:]  # 前两个与第 1 页重叠，后两个是新的
+    pages = {1: json.dumps(page1), 2: json.dumps(page2)}
+    outcome = await _run(_routes(catalog_pages=pages, meta=_meta_with_count(6)))
+
+    assert outcome.catalog_complete is True
+    assert outcome.status == FETCH_OK
+    assert len(outcome.products) == 6
 
 
 async def test_fetch_store_catalog_api_404_is_its_own_status():
