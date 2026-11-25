@@ -27,7 +27,7 @@ jobs:
       extension: ${{ steps.scope.outputs.extension }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: 验证 CI 范围策略
@@ -143,7 +143,7 @@ jobs:
           # frontend/pnpm-lock.yaml 是 lockfileVersion 9.0
           version: 9
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # 22 不是 20：jsdom 30 依赖的 undici 8 在 Node 20 上起不来
           # （`webidl.util.markAsUncloneable is not a function`，vitest 整批 Unhandled
@@ -187,7 +187,7 @@ jobs:
         with:
           version: 9
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -215,7 +215,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: 核对受影响项成功、未受影响项按规则跳过
