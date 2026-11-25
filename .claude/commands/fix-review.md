@@ -13,7 +13,7 @@ disable-model-invocation: true
 ## 确认目标与读取审核
 
 1. 读取仓库 `AGENTS.md`、`CLAUDE.md` 与适用的嵌套约定。通过 GitHub 获取目标 PR
-   的仓库、状态、base、head 分支、head 仓库和 `headRefOid`，确认是开放且指向 `v2` 的 PR。
+   的仓库、状态、base、head 分支、head 仓库和 `headRefOid`，确认是开放且指向 `main` 的 PR。
    无法唯一定位或仓库/基线不符时先澄清，不猜 PR 编号。
 2. 核对本机分支/worktree 与 PR head。GitHub Actions 的 checkout 可能在默认分支
    或 merge commit，必须先切到目标 PR 的实际 head；不能在那里直接修复并推送。

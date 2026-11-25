@@ -7,7 +7,7 @@ KeywordIQ 使用 FastAPI、PostgreSQL 和 AntD Pro/Umi Max；依赖分别由 uv�
 ## 开始工作
 
 - 先看 `git status --short`、当前分支、`openspec list`、`git worktree list` 和已有 PR，保护其他会话改动。
-- 工作基于 `v2`，PR 显式指定 `--base v2`；`main` 保留 V1，不能当作 V2 基线。
+- V2 开发基于主仓 `main`，PR 显式指定 `--base main`；`v1` 归档 V1。
 - 局部修复直接做；有关键分叉时一次对齐；新子系统、契约或长期决策使用 OpenSpec 四件套和独立 PR。
 - 完整变更先读 [.claude/skills/start-change/SKILL.md](.claude/skills/start-change/SKILL.md)，认领分支并建仓库外 worktree。
 - 同一变更已有分支时先核实归属，不另做一份；不要抢端口、停止他人服务或清理他人 worktree。
@@ -68,13 +68,13 @@ Claude Code 按 `.claude/rules/` 的 `paths` 加载规则；不支持该机制�
 - [close-change](.claude/commands/close-change.md) 管合并、归档、关闭 Issue 与清理；执行前完整读对应文件，摘要不能替代门槛。
 - PR 包含 Issue、OpenSpec/delta、实际验证和剩余风险；审核者独立只读，不直接改实现者工作区。
 - 用户要求本次 `@codex review` 时可代发；先核 base/head SHA、已推送及 CI 状态。未明确要求不发，不代发 `@claude`。
-- 合并、关闭 Issue、发布与后续审核分别依授权执行；合到 v2 不自动关闭 Issue，合并不等于上线。
-- **PR 一经合并（无论是否走 close-change，含只改文档的小 PR），必须当场在干净主工作区 `git pull --ff-only` 同步本地 `v2` 并核对 SHA**；依赖清单变了就重装依赖。主工作区有改动、已有 dev server 在跑或两仓 v2 已分叉时只报告，不强拉、不强推。同步哪个远端取决于 PR 合在哪个仓库（主仓 origin / 备用库 backup）。来源：2026-11-13 手动合并后漏同步，被用户指出。
+- 合并、关闭 Issue、发布与后续审核分别依授权执行；使用 `Refs #编号` 关联 Issue，按验收状态手动关闭；合并不等于上线。
+- **PR 一经合并（无论是否走 close-change，含只改文档的小 PR），必须当场在干净主工作区 `git pull --ff-only` 同步本地主仓 `main` 并核对 SHA**；依赖清单变了就重装依赖。主工作区有改动、已有 dev server 在跑或本地与 `origin/main` 已分叉时只报告，不强拉、不强推。来源：2026-11-13 手动合并后漏同步，被用户指出。
 
 ## 生产操作边界
 
 - 动生产前读 [当前部署交接](docs/ops/v2-ecs-handoff.md) 和 operations 规则，重新验证必要的当前状态。
-- **IMPORTANT：** V1（域名与宿主机 8000）不修改、不停止；V2 只由 `Deploy V2 to ECS` 工作流发布，不用 SSH 绕开。
+- **IMPORTANT：** V1（域名与宿主机 8000）不修改、不停止；V2 只由 `Deploy Main to ECS` 工作流发布，不用 SSH 绕开。
 - **IMPORTANT：** 合并、评审通过都不是发布授权；仅当用户明确要求本次发布时才可代触发，触发前核对项见 operations 规则。
 - 发布失败只报告日志和现象，不自行重试或 SSH 修补。
 - 数据库没有自动备份：不默认存在恢复点，不擅自加回定时备份/逾期告警，不开放机器人恢复指令。

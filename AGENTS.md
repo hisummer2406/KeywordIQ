@@ -114,9 +114,9 @@
 
 ### 部署与运维
 
-- **V2 只经 `Deploy V2 to ECS` 工作流发布**（`.github/workflows/deploy-v2.yml`，手动触发）。
-  三道门不得放宽或绕开：只允许 `refs/heads/v2`；该 SHA 的 v2 push CI 必须通过：受影响项 `completed/success`；未受影响项仅经同一运行的
-  「发布就绪（按范围校验）」门禁核验后允许 skipped，未知范围全量，缺失/失败/取消拒绝；SHA 必须在 `origin/v2` 历史上。工作流、脚本、文档里
+- **V2 只经 `Deploy Main to ECS` 工作流发布**（`.github/workflows/deploy-v2.yml`，手动触发）。
+  三道门不得放宽或绕开：只允许 `refs/heads/main`；该 SHA 的 main push CI 必须通过：受影响项 `completed/success`；未受影响项仅经同一运行的
+  「发布就绪（按范围校验）」门禁核验后允许 skipped，未知范围全量，缺失/失败/取消拒绝；SHA 必须在 `origin/main` 历史上。工作流、脚本、文档里
   不得出现 SSH 私钥、`.env`、AccessKey、飞书 App Secret 等任何密钥。
 - **V1 与 V2 同机隔离，V1 不得被碰。** V1 是裸部署（`amazon.liangtong.online`、8000）；V2 应用
   只绑 `127.0.0.1:8001`（域名 `key.liangtong.online`，Compose 项目 `keywordiq-v2`）。部署

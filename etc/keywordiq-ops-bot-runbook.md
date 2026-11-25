@@ -7,7 +7,7 @@
 
 ## 1. 安装配置步骤
 
-前置：`v2` 分支已部署在 `/var/www/keywordiq`（`docker-compose.yml` 管理的
+前置：V2 应用已部署在 `/var/www/keywordiq`（`docker-compose.yml` 管理的
 `app`/`db` 正常运行）。机器人运行在宿主机，因此还需要宿主机安装 `uv`，并在仓库根执行
 `uv sync --no-dev` 创建 `.venv`。
 
@@ -211,14 +211,12 @@ docker compose exec db psql -U postgres -d "$POSTGRES_DB" \
 按观测到的真实耗时（乘 3-4 倍留余量）调整 `.env` 里的两个阈值，重启
 `keywordiq-ops-bot` 生效。
 
-## 9. 发布分支由 `v2` 切换到 `main`
+## 9. 发布分支切换期间
 
-试运行结束、`v2` 合并进 `main` 后（人工操作，本机器人不参与），只需要：
+迁移 #208 冻结发布时停止受理飞书发布请求，核对已确认的请求和正在执行的动作均已结束。
+旧分支重命名后验证主仓已不再提供 `refs/heads/v2`。机器人计划和执行阶段都仍显式
+fetch `v2`，远端分支缺失时拒绝继续。切换后的生产发布走 **Deploy Main to ECS**。
 
-1. 把 `release/git_ref.py` 里 `is_ancestor_of_branch`/`build_deploy_plan` 默认的
-   `branch: str = "v2"` 改成 `"main"`（或在调用处显式传参，视你届时的调用约定）。
-2. 确认 `.github/workflows/ci.yml` 的三个必需 job 名称未变。
-3. 用第 4 节的 `发布 <sha>` 指令走一次完整确认流程验证。
-
-本机器人不自动判断试运行是否结束，也不自动执行这次切换——按 Issue #90 的非目标，
-分支切换是人工决定的一次性操作。
+恢复飞书发布另行评审。恢复前覆盖 `ops_bot/release/git_ref.py` 和
+`ops_bot/executor/__init__.py` 的分支校验、同一 SHA 和同一次 main push CI 的证据、
+确认卡片与导入互斥，并明确与 Actions 发布入口的关系。

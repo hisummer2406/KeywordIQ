@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, v2]
+    branches: [main]
   pull_request:
-    branches: [main, v2]
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 concurrency:
@@ -14,8 +14,8 @@ concurrency:
 jobs:
   changes:
     name: 判定检查范围
-    # V1 的 main 保持原行为；v2 草稿不分配 runner。
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/v2') || (github.event_name == 'pull_request' && github.base_ref == 'v2' && !github.event.pull_request.draft)
+    # main 的草稿 PR 不分配 runner。
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main' && !github.event.pull_request.draft)
     runs-on: [self-hosted, linux, x64, mbp-ci]
     timeout-minutes: 10
     permissions:
@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: 22
       - name: 验证 CI 范围策略
-        run: node --test .github/ci-scope.test.cjs .github/ci-evidence.test.cjs
+        run: node --test .github/ci-scope.test.cjs .github/ci-evidence.test.cjs .github/deploy-v2.test.cjs
       - name: 按固定 SHA 与已验证基线比较文件
         id: scope
         uses: actions/github-script@v7
@@ -47,12 +47,11 @@ jobs:
   backend:
     name: 后端（pytest + alembic）
     needs: changes
-    # main 全量；v2 按范围，判定失败/输出缺失时全量。
+    # 判定失败或输出缺失时全量。
     if: >-
       always() && !cancelled() &&
-      (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
-       ((github.event_name == 'push' || !github.event.pull_request.draft) &&
-        (needs.changes.result != 'success' || needs.changes.outputs.backend != 'false')))
+      (github.event_name == 'push' || !github.event.pull_request.draft) &&
+      (needs.changes.result != 'success' || needs.changes.outputs.backend != 'false')
     runs-on: [self-hosted, linux, x64, mbp-ci]
     timeout-minutes: 30
 
@@ -125,9 +124,8 @@ jobs:
     needs: changes
     if: >-
       always() && !cancelled() &&
-      (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
-       ((github.event_name == 'push' || !github.event.pull_request.draft) &&
-        (needs.changes.result != 'success' || needs.changes.outputs.frontend != 'false')))
+      (github.event_name == 'push' || !github.event.pull_request.draft) &&
+      (needs.changes.result != 'success' || needs.changes.outputs.frontend != 'false')
     runs-on: [self-hosted, linux, x64, mbp-ci]
     timeout-minutes: 45
     defaults:
@@ -175,9 +173,8 @@ jobs:
     needs: changes
     if: >-
       always() && !cancelled() &&
-      (github.ref == 'refs/heads/main' || github.base_ref == 'main' ||
-       ((github.event_name == 'push' || !github.event.pull_request.draft) &&
-        (needs.changes.result != 'success' || needs.changes.outputs.extension != 'false')))
+      (github.event_name == 'push' || !github.event.pull_request.draft) &&
+      (needs.changes.result != 'success' || needs.changes.outputs.extension != 'false')
     runs-on: [self-hosted, linux, x64, mbp-ci]
     timeout-minutes: 20
     defaults:
@@ -214,7 +211,7 @@ jobs:
   release-ready:
     name: 发布就绪（按范围校验）
     needs: [changes, backend, frontend, extension]
-    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/v2'
+    if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, mbp-ci]
     timeout-minutes: 10
     permissions:
