@@ -119,6 +119,11 @@ jobs:
 
       - name: pytest
         run: uv run pytest test/ -q
+        env:
+          # runner 上没有 psql：发布锁集成测试（test_deploy_ops_lock_integration.py）经
+          # docker exec 进服务容器跑 psql，与生产 deploy.sh 进 db 容器的方式一致；
+          # 不设这个变量时这组测试会整体 skip（#209 / PR #214）。
+          TEST_PSQL_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
 
   frontend:
     name: 前端（lint + tsc + test + build）
