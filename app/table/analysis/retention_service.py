@@ -53,6 +53,9 @@ REASON_NO_ROWS = "no_rows"
 REASON_OBJECT_MISSING = "object_missing"
 REASON_OBJECT_EMPTY = "object_empty"
 REASON_OSS_UNAVAILABLE = "oss_unavailable"
+# 前缀：迁移前同一期多次写入、无法确认当前数据属于哪个批次，且其中一个候选批次的原始
+# 归档不通过（完整原因形如 ``owner_unconfirmed:object_missing``，见 _fact_owner_candidates）。
+REASON_OWNER_UNCONFIRMED = "owner_unconfirmed"
 
 ArchiveStat = Callable[[str], int]
 """给定 object key 返回对象字节数；对象不存在抛 ``OSSObjectNotFound``。"""
@@ -67,14 +70,17 @@ class ArchiveGap:
     period_type: str
     report_date: date
     reason: str
+    # 未通过的那个批次；没有任何批次（no_batch）时为 None。
+    batch_id: int | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int | None]:
         return {
             "month": self.month.strftime("%Y-%m"),
             "site": self.site,
             "period_type": self.period_type,
             "report_date": self.report_date.isoformat(),
             "reason": self.reason,
+            "batch_id": self.batch_id,
         }
 
 
@@ -129,24 +135,49 @@ def _default_archive_stat(object_key: str) -> int:
     return oss_client.stat_object(object_key)
 
 
-def _latest_completed_batches(
-    session: Session, start: date, end: date
-) -> dict[tuple[str, str, date], tuple[str, int]]:
-    """``[start, end)`` 内每个期次最新一次成功批次的 ``(object_key, written_rows)``。
+@dataclass(frozen=True)
+class _Candidate:
+    batch_id: int
+    object_key: str
+    written_rows: int
 
-    重导会先清后写，库内数据对应最后一次成功的批次，较早批次的文件不能代表现有数据。
+
+def _fact_owner_candidates(
+    session: Session, start: date, end: date
+) -> dict[tuple[str, str, date], tuple[bool, list[_Candidate]]]:
+    """``[start, end)`` 内每个期次需要校验的批次：``(写入者已确认, 候选批次)``。
+
+    写入者以**事实提交记录**为准，不以批次 id 或完成时刻为准（#209 P1）：id 在上传时
+    分配，事实提交顺序可以相反；收尾中断后被补完的批次也会晚于真正覆盖数据的批次标成
+    成功。``facts_committed_at`` 与事实同一事务写入，同期次取值最新的批次就是当前数据的
+    写入者，只校验它一个。
+
+    迁移前的批次没有提交记录，无从确认谁最后写入，于是校验**全部可能的写入者**：
+    成功批次，以及写过行的任何批次（事实与计数同一事务提交，写过行即提交过事实，失败
+    状态也可能是收尾失败）。真正的写入者必在其中，全部通过才说明当前数据的原始文件
+    一定在；任一不通过，整月保留。
     """
     rows = session.execute(
         text(
-            f'SELECT DISTINCT ON (site, period_type, report_date) '
-            f'       site, period_type, report_date, object_key, written_rows '
+            f"SELECT site, period_type, report_date, id, object_key, written_rows, "
+            f"       facts_committed_at IS NOT NULL "
             f'FROM "{settings.DATABASE_SCHEMA}".import_batch '
-            f"WHERE status = :status AND report_date >= :start AND report_date < :end "
-            f"ORDER BY site, period_type, report_date, id DESC"
+            f"WHERE report_date >= :start AND report_date < :end "
+            f"  AND (facts_committed_at IS NOT NULL OR status = :completed OR written_rows > 0) "
+            f"ORDER BY site, period_type, report_date, facts_committed_at DESC NULLS LAST, id DESC"
         ),
-        {"status": STATUS_COMPLETED, "start": start, "end": end},
+        {"completed": STATUS_COMPLETED, "start": start, "end": end},
     ).all()
-    return {(r[0], r[1], r[2]): (r[3], r[4]) for r in rows}
+    result: dict[tuple[str, str, date], tuple[bool, list[_Candidate]]] = {}
+    for site, period, day, batch_id, object_key, written_rows, committed in rows:
+        key = (site, period, day)
+        candidate = _Candidate(batch_id, object_key, written_rows)
+        if key not in result:
+            # 排序把有提交记录的排在最前：首行有记录，它就是确认的写入者。
+            result[key] = (bool(committed), [candidate])
+        elif not result[key][0]:
+            result[key][1].append(candidate)
+    return result
 
 
 def _periods_with_data(
@@ -186,40 +217,59 @@ def verify_month_archive(
     对象存储本身不可用时立刻停止：继续只会让每个期次各等一轮超时，而这一条已足以
     拦下整月。
     """
-    batches = _latest_completed_batches(session, month, month_end)
+    owners = _fact_owner_candidates(session, month, month_end)
     gaps: list[ArchiveGap] = []
 
-    def gap(site: str, period: str, day: date, reason: str) -> ArchiveGap:
-        return ArchiveGap(month=month, site=site, period_type=period, report_date=day, reason=reason)
+    def gap(site: str, period: str, day: date, reason: str, batch_id: int | None = None) -> ArchiveGap:
+        return ArchiveGap(
+            month=month, site=site, period_type=period, report_date=day, reason=reason, batch_id=batch_id
+        )
 
     for table_name, period in _ARCHIVE_SOURCE_TABLES:
         partition = source_partitions.get(table_name)
         if partition is None:
             continue
         for site, day in _periods_with_data(session, table_name, partition):
-            batch = batches.get((site, period, day))
-            if batch is None:
+            owner = owners.get((site, period, day))
+            if owner is None:
                 gaps.append(gap(site, period, day, REASON_NO_BATCH))
                 continue
-            object_key, written_rows = batch
-            if not object_key:
-                gaps.append(gap(site, period, day, REASON_EMPTY_OBJECT_KEY))
-                continue
-            if written_rows <= 0:
-                gaps.append(gap(site, period, day, REASON_NO_ROWS))
-                continue
-            try:
-                size = archive_stat(object_key)
-            except oss_client.OSSObjectNotFound:
-                gaps.append(gap(site, period, day, REASON_OBJECT_MISSING))
-                continue
-            except Exception:
-                logger.exception("校验原始归档失败: %s", object_key)
-                gaps.append(gap(site, period, day, REASON_OSS_UNAVAILABLE))
-                return gaps
-            if size <= 0:
-                gaps.append(gap(site, period, day, REASON_OBJECT_EMPTY))
+            confirmed, candidates = owner
+            unconfirmed = not confirmed and len(candidates) > 1
+            for candidate in candidates:
+                reason = _candidate_failure(candidate, archive_stat)
+                if reason is None:
+                    continue
+                if reason == REASON_OSS_UNAVAILABLE:
+                    gaps.append(gap(site, period, day, reason, candidate.batch_id))
+                    return gaps
+                # 写入者未确认时，单个候选不通过意味着「当前数据的原始文件可能不在」，
+                # 原因要说清是归属无法确认，而不是断言那个批次就是当前数据。
+                gaps.append(gap(
+                    site, period, day,
+                    f"{REASON_OWNER_UNCONFIRMED}:{reason}" if unconfirmed else reason,
+                    candidate.batch_id,
+                ))
+                break
     return gaps
+
+
+def _candidate_failure(candidate: _Candidate, archive_stat: ArchiveStat) -> str | None:
+    """一个批次的原始归档不通过的原因；通过返回 ``None``。"""
+    if not candidate.object_key:
+        return REASON_EMPTY_OBJECT_KEY
+    if candidate.written_rows <= 0:
+        return REASON_NO_ROWS
+    try:
+        size = archive_stat(candidate.object_key)
+    except oss_client.OSSObjectNotFound:
+        return REASON_OBJECT_MISSING
+    except Exception:
+        logger.exception("校验原始归档失败: %s", candidate.object_key)
+        return REASON_OSS_UNAVAILABLE
+    if size <= 0:
+        return REASON_OBJECT_EMPTY
+    return None
 
 
 def export_partition_to_csv(session: Session, partition_name: str, dest_path: str) -> None:

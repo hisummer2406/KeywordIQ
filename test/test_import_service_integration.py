@@ -1014,3 +1014,43 @@ def test_completed_at_is_true_instant_when_process_tz_differs_from_session_tz(tm
         engine.dispose()
         monkeypatch.delenv("TZ")
         time.tzset()
+
+
+def _committed_at(factory, batch_id):
+    with factory() as s:
+        return s.execute(
+            text("SELECT facts_committed_at FROM analysis.import_batch WHERE id = :i"), {"i": batch_id}
+        ).scalar_one()
+
+
+def test_facts_commit_is_recorded_on_the_batch_that_actually_wrote(factory, tmp_path, monkeypatch):
+    """#209 P1：事实提交时刻随事实同一事务写入。事实事务里失败的批次不写；收尾失败的批次
+    已提交事实，照样写——它的数据仍在库里。同期次后提交的批次时刻更晚，与 id 先后无关。"""
+    import app.table.upload.import_service as svc
+    from app.table.upload.import_source import LocalFileSource
+
+    bad = tmp_path / "bad.csv"
+    bad.write_text("not,a,valid,report\n", encoding="utf-8")
+    failed = svc.run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                            source=LocalFileSource(str(bad)), original_filename="bad.csv",
+                            session_factory=factory)
+    assert failed.status == "FAILED"
+    assert _committed_at(factory, failed.id) is None
+
+    path = _write_csv(tmp_path, "US_Day_2026_07_15.csv", _three_rows())
+    first = svc.run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                           source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
+                           session_factory=factory)
+    assert first.status == "COMPLETED"
+    first_at = _committed_at(factory, first.id)
+    assert first_at is not None
+
+    def boom(*_a, **_k):
+        raise RuntimeError("site_data_stats 写入失败")
+
+    monkeypatch.setattr(svc, "_update_site_data_stats", boom)
+    finish_failed = svc.run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                                   source=LocalFileSource(path), original_filename="US_Day_2026_07_15.csv",
+                                   session_factory=factory)
+    assert finish_failed.status == "FAILED"
+    assert _committed_at(factory, finish_failed.id) > first_at

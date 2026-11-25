@@ -31,3 +31,8 @@
 - [ ] 5.2 发布后配置 `OPS_RETENTION_MODE=dry_run` 并重启 ops-bot，观察至少 2 天，用 `--retention-months 2` dry-run 验证 9 月闸门结果
 - [ ] 5.3 2026-12-01 前用户确认后切换 `execute`
 - [ ] 5.4 确认首次运行后 9 月分区已移出、OSS 对象仍在、磁盘占用下降
+
+## 6. 写入批次判定修正（#209 P1）
+
+- [x] 6.1 迁移 `b7d2e9a4c1f6` 增加 `import_batch.facts_committed_at`，导入在事实事务内写入；闸门按它取写入批次，历史期次校验全部候选（D4，Requirement「数据按月归档就绪」Scenario「同一期次多次导入以实际写入批次为准」「收尾失败的写入批次仍是写入者」「历史期次归属无法确认」）
+- [x] 6.2 真实库回归：编号乱序、收尾失败、只校验确认的写入者、历史多候选、导入侧写入/回滚，`uv run pytest test/test_retention_archive_gate_integration.py test/test_import_service_integration.py -q`

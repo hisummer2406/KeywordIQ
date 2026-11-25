@@ -173,7 +173,10 @@ opsbot ALL=(root) NOPASSWD: /usr/sbin/nginx -t, /bin/systemctl reload nginx, \
 - 超期月份只有全部日报、周报期次的 OSS 原始文件校验通过才会移出，没有跳过手段。
 - 收到 `retention-gate-blocked`：该月数据已保留。按告警的期次和原因处理：`no_batch`、
   `empty_object_key`、`no_rows` 查 `import_batch`；`object_missing`、`object_empty` 查
-  OSS 对象，能补则重传重导；`oss_unavailable` 查 OSS 配置与网络。处理后次日自动重试。
+  OSS 对象，能补则重传重导；`oss_unavailable` 查 OSS 配置与网络。告警里的批次号是未通过
+  的那个批次。`owner_unconfirmed:<原因>` 表示迁移前同一期多次写入、无法确认当前数据属于
+  哪个批次，其中该批次未通过——对该期重导一次即可确认写入者（新导入会记录事实提交时刻）。
+  处理后次日自动重试。
 - 收到 `retention-job-failed`：当日不会自动重跑，看 ops-bot 日志；手工诊断只用
   `docker compose run --rm app python scripts/prune_retention.py --dry-run`。
 - **`keywordiq-release` 的原始对象不得配置过期规则**：它们是分区移出后唯一的恢复来源，
