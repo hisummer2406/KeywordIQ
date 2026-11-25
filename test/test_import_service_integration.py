@@ -372,6 +372,97 @@ def test_drain_returns_none_when_queue_is_empty(factory, tmp_path):
     ) is None
 
 
+def _queue_one(factory, tmp_path, lock_holder, rows):
+    """造一条排队批次：持锁时提交，留在 QUEUED，随后放锁。"""
+    from app.table.upload.import_service import ImportRejected, run_import
+    from app.table.upload.import_source import LocalFileSource
+    path = _write_csv(tmp_path, "US_Day.csv", rows)
+    with pytest.raises(ImportRejected):
+        run_import(site="US", period="DAY", report_date=date(2026, 7, 15),
+                   source=LocalFileSource(path), original_filename="US_Day.csv",
+                   object_key="imports/US/DAY/2026-07-15/abc_US_Day.csv",
+                   session_factory=factory)
+    lock_holder()
+    return path
+
+
+def test_stale_queue_read_does_not_reclaim_a_batch_another_worker_finished(
+    factory, tmp_path, lock_holder, monkeypatch
+):
+    """#209 P1：两个 worker 轮询同一条排队批次时，读到旧 QUEUED 的一方必须跳过。
+
+    固定交错：worker A 读到 QUEUED → （A 尚未抢锁）worker B 完整接手并提交
+    COMPLETED → A 才拿到锁。修复前 A 沿用旧对象，把已完成批次写回 PROCESSING 再导一遍。
+    交错点借 ``_ops_action_in_progress``：它恰好位于「读队列」与「抢导入锁」之间。
+    """
+    import app.table.upload.import_service as svc
+    from app.table.upload.import_source import LocalFileSource
+
+    path = _queue_one(factory, tmp_path, lock_holder, [_row(1, "a"), _row(2, "b")])
+    builds: list[str] = []
+
+    def source_factory(key):
+        builds.append(key)
+        return LocalFileSource(path)
+
+    real_probe = svc._ops_action_in_progress
+    interleaved = []
+
+    def probe_then_let_worker_b_finish(session):
+        if not interleaved:
+            interleaved.append(True)
+            done = svc.drain_import_queue(source_factory=source_factory, session_factory=factory)
+            assert done is not None and done.status == "COMPLETED"
+        return real_probe(session)
+
+    monkeypatch.setattr(svc, "_ops_action_in_progress", probe_then_let_worker_b_finish)
+    stale = svc.drain_import_queue(source_factory=source_factory, session_factory=factory)
+
+    assert interleaved, "交错点没有生效，测试没有覆盖到竞态"
+    assert stale is None
+    assert len(builds) == 1, "同一批次的数据源被重建了两次，说明它被执行了两次"
+    with factory() as s:
+        status, written = s.execute(
+            text("SELECT status, written_rows FROM analysis.import_batch")
+        ).one()
+        assert (status, written) == ("COMPLETED", 2)
+        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily WHERE site='US' "
+                              "AND report_date='2026-07-15'")).scalar() == 2
+
+
+def test_claim_refuses_a_batch_that_is_no_longer_queued(factory, tmp_path, lock_holder):
+    """转场本身也要按库里的当前状态判定，不信调用方手里的对象。
+
+    覆盖 drain 之外的入口：直传批次同时被 run_import 与回收→drain 两条路推进时，
+    后到的一方手里也是旧对象。库里已不是 QUEUED 就不转 PROCESSING、不执行。
+    """
+    import app.table.upload.import_service as svc
+    from app.table.upload.import_batch_model import ImportBatch
+    from app.table.upload.import_source import LocalFileSource
+
+    path = _queue_one(factory, tmp_path, lock_holder, [_row(1, "a")])
+    with factory() as s:
+        stale = s.execute(text("SELECT id FROM analysis.import_batch")).scalar()
+        batch = s.get(ImportBatch, stale)
+        assert batch.status == "QUEUED"
+        # 另一方已经把它跑完（这里直接改库模拟，持有的 batch 对象仍是 QUEUED）。
+        with factory() as other:
+            other.execute(text("UPDATE analysis.import_batch SET status='COMPLETED', "
+                               "written_rows=7 WHERE id=:i"), {"i": stale})
+            other.commit()
+
+        with svc.import_lock(s) as got:
+            assert got
+            result = svc._execute_locked(s, batch, LocalFileSource(path))
+
+    assert result.status == "COMPLETED"
+    with factory() as s:
+        assert s.execute(text("SELECT status, written_rows FROM analysis.import_batch")).one() \
+            == ("COMPLETED", 7)
+        assert s.execute(text("SELECT count(*) FROM analysis.fact_daily WHERE site='US' "
+                              "AND report_date='2026-07-15'")).scalar() == 0
+
+
 
 # --------------------------------------------------------------------------
 # 掉榜集合：导入收尾时算定
