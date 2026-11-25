@@ -4,7 +4,7 @@
 // 推动（chrome.alarms、tabs.onUpdated、tabs.onRemoved），运行状态每次变化后立即写入
 // chrome.storage.local。事件处理统一经过 `serial()` 串行化，避免两个事件交错推进同一轮。
 
-import { pickStoreGapMs, PAGE_TIMEOUT_MS, buildStorefrontUrl, decideAfterPage, type PageScan } from './auto-plan';
+import { pickStoreGapMs, PAGE_TIMEOUT_MS, buildStorefrontUrl, decideAfterPage, type Coverage, type PageScan } from './auto-plan';
 import { freezeRequest } from './capture-accumulator';
 import type { CaptureMessage, CaptureResult, ConfigResult } from './messages';
 import type { ParsedItem } from './parse-storefront';
@@ -29,6 +29,8 @@ export type RunTrigger = 'daily' | 'manual';
 
 export type RunStopReason =
   | 'blocked' // 验证码或访问拒绝
+  | 'wrong_delivery' // 页头配送位置与目标邮编确认不符（stopDetail 记录页面上显示的文字）
+  | 'delivery_unconfirmed' // 读不到配送位置或无法确认是目标邮编（stopDetail 记录能读到的文字）
   | 'page_timeout' // 页面超时或 content script 无响应，按访问受限处理
   | 'auth' // 令牌缺失、过期或同步失败
   | 'config_unavailable' // 读不到服务端单批上限
@@ -37,6 +39,7 @@ export type RunStopReason =
 
 export type StoreFailReason =
   | 'empty_page'
+  | 'missing_page' // 前一页提示有下一页，后页却没有有效 ASIN：不提交残缺批次
   | 'over_cap'
   | 'bad_site'
   | 'tab_error'
@@ -47,11 +50,15 @@ export type StoreFailReason =
 export interface StoreResult {
   sellerId: string;
   site: string;
-  outcome: 'success' | 'failed';
-  reason?: StoreFailReason;
+  /** stopped：整轮在这家店停止（拦截、配送位置不符或未确认），这家店不上报。 */
+  outcome: 'success' | 'failed' | 'stopped';
+  reason?: StoreFailReason | RunStopReason;
   message?: string;
   pages: number;
+  /** 合并去重后的有效 ASIN 数。 */
   items: number;
+  /** 成功上报时的覆盖情况：complete 自然到达末页；limited 达到 N 页上限但页面仍有下一页。 */
+  coverage?: Coverage;
   newAsins?: number;
   baselineEstablished?: boolean;
   duplicate?: boolean;
@@ -69,6 +76,8 @@ interface CurrentStore {
   items: ParsedItem[];
   sellerName?: string;
   phase: 'collecting' | 'reporting';
+  /** 进入上报阶段时确定，恢复后重发同一请求时沿用。 */
+  coverage?: Coverage;
   requestId?: string;
   capturedAt?: string;
   reportAttempts: number;
@@ -89,6 +98,12 @@ export interface RunState {
   index: number;
   current?: CurrentStore;
   results: StoreResult[];
+  /** 本轮最近一次读到的页头配送地址，用于事后核对采集时的配送上下文。 */
+  deliveryText?: string;
+  /** 开跑时的各站点目标邮编快照（如 { US: '10001' }）。 */
+  deliveryTargets?: Record<string, string>;
+  /** 最近一次检查配送位置的站点。 */
+  deliverySite?: string;
 }
 
 export interface RunnerDeps {
@@ -97,7 +112,7 @@ export interface RunnerDeps {
   getCap: () => Promise<ConfigResult>;
   getSellers: (limit: number) => Promise<WatchListOutcome>;
   report: (message: CaptureMessage) => Promise<CaptureResult>;
-  getSettings: () => Promise<{ pages: number; maxStores: number }>;
+  getSettings: () => Promise<{ pages: number; maxStores: number; deliveryTargets: Record<string, string> }>;
   sleep: (ms: number) => Promise<void>;
 }
 
@@ -279,6 +294,7 @@ async function reportCurrent(state: RunState, deps: RunnerDeps): Promise<RunStat
         outcome: 'success',
         pages,
         items,
+        coverage: current.coverage,
         newAsins: result.newAsins,
         baselineEstablished: result.baselineEstablished,
         duplicate: result.duplicate,
@@ -308,18 +324,36 @@ export async function handleScan(state: RunState, scan: PageScan, deps: RunnerDe
   current.scannedPage = current.page;
   current.lastDocId = scan.docId;
 
+  const site = state.queue[state.index]?.site;
   const decision = decideAfterPage({
     scan,
     page: current.page,
     maxPages: state.pages,
     accumulated: current.items,
     cap: state.cap,
+    site,
+    deliveryTarget: site ? state.deliveryTargets?.[site] : undefined,
   });
   if (scan.kind === 'ok' && scan.sellerName && !current.sellerName) current.sellerName = scan.sellerName;
+  if (scan.kind === 'ok') {
+    // 每页同步覆盖，读不到时清空：不能把上一页／上一家读到的位置当成当前页的实际位置（PR #207 Codex P2）
+    state.deliverySite = site;
+    state.deliveryText = scan.deliveryText;
+  }
 
   switch (decision.action) {
-    case 'stop_run':
-      return endRun(state, deps, 'stopped', 'blocked');
+    case 'stop_run': {
+      // 当前店不上报；之前已成功提交的店保留在 results 里
+      const detail = decision.reason !== 'blocked' && scan.kind === 'ok' ? scan.deliveryText : undefined;
+      recordStore(state, deps, {
+        outcome: 'stopped',
+        reason: decision.reason,
+        message: detail,
+        pages: current.page,
+        items: current.items.length,
+      });
+      return endRun(state, deps, 'stopped', decision.reason, detail);
+    }
     case 'fail_store':
       recordStore(state, deps, { outcome: 'failed', reason: decision.reason, pages: current.page, items: current.items.length });
       return advance(state, deps);
@@ -340,6 +374,7 @@ export async function handleScan(state: RunState, scan: PageScan, deps: RunnerDe
     }
     case 'report':
       current.items = decision.items;
+      current.coverage = decision.coverage;
       await closeTab(current.tabId);
       current.tabId = undefined;
       return reportCurrent(state, deps);
@@ -364,6 +399,7 @@ export function startRun(trigger: RunTrigger, deps: RunnerDeps): Promise<StartOu
       status: 'running',
       startedAt: iso(deps),
       pages: settings.pages,
+      deliveryTargets: settings.deliveryTargets,
       cap: 0,
       queue: [],
       index: 0,
@@ -496,6 +532,7 @@ export function onRunAlarm(name: string, deps: RunnerDeps): Promise<void> {
         await reportCurrent(state, deps);
         return;
       }
+      recordStore(state, deps, { outcome: 'stopped', reason: 'page_timeout', pages: current.page, items: current.items.length });
       await endRun(state, deps, 'stopped', 'page_timeout');
     }
   });
