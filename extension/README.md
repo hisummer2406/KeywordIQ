@@ -134,6 +134,30 @@ v0.3.0 起插件可以每天自动采集关注清单里的 Amazon 店铺，**默
 运行状态存在插件本地，Service Worker 被回收或 Chrome 重启后会接着做；上报中断的店用同一个
 `request_id` 重发。设置页显示最近一轮的汇总，并可导出全部运行记录（JSON，最多 30 轮）。
 
+### 页面选择器由服务端下发（v0.3.3 起）
+
+选择器在真实页面上对不上时，不用重装插件：在后端 `.env` 里把 `COMPETITOR_COLLECTOR_SELECTORS_FILE`
+指向一个 JSON 文件，写好版本号和要覆盖的选择器，保存后**下一轮**自动采集就会用上（后端不用重启）。
+
+```json
+{
+  "version": "2026-11-26a",
+  "selectors": {
+    "result_card": ["[data-component-type=\"s-search-result\"][data-asin]"],
+    "next_page": ["a.s-pagination-next:not(.s-pagination-disabled)"],
+    "seller_name": ["#p_6 li .a-text-bold"],
+    "delivery": ["#glow-ingress-line2"],
+    "blocked_selector": ["form[action*=\"validateCaptcha\"]"],
+    "blocked_text": ["access restricted"]
+  }
+}
+```
+
+- 每个键都可以省略；下发值排在内置默认**之前**，写错了内置仍会兜底。`blocked_text` 只按纯文本匹配，不是正则。
+- 文件不合法（未知键、空数组、超过 10 项或单项超过 200 字符）时整份不下发，后端日志有告警，插件用内置选择器。
+- 每轮开跑时快照一次，跑到一半改文件不影响本轮；设置页「页面选择器」一行显示本轮用的版本（无覆盖显示「内置」）。
+- 只影响自动采集，人工采集面板仍用内置选择器。
+
 ### 试点约束（必须遵守）
 
 - **API 地址只能指向本地或隔离的后端，不要指向生产。** 首次自动采集静默入库要到阶段 2 才实现，
@@ -168,6 +192,7 @@ extension/
     auto-plan.ts              # 自动采集纯逻辑：店铺页 URL、拦截识别、每页之后的决策
     auto-runner.ts            # 自动采集后台状态机（alarms + tabs 事件，可恢复）
     auto-options.ts           # 设置页的自动采集区块
+    selector-overrides.ts     # 服务端下发的选择器覆盖：形状校验、与内置默认合并
     watch-client.ts           # 读取关注清单
   test/                # vitest，覆盖除真机 DOM 结构外的全部逻辑
   scripts/build.mjs    # esbuild 打包脚本

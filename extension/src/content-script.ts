@@ -30,15 +30,16 @@ const DOC_ID = crypto.randomUUID();
 
 chrome.runtime.onMessage.addListener((message: AutoScanRequest, _sender, sendResponse) => {
   if (message?.type !== 'AUTO_SCAN') return undefined;
-  const scan: PageScan = detectBlockedPage(document)
+  const o = message.selectors ?? {};
+  const scan: PageScan = detectBlockedPage(document, { selectors: o.blocked_selector, texts: o.blocked_text })
     ? { kind: 'blocked', docId: DOC_ID }
     : {
         kind: 'ok',
-        items: parseStorefrontPage(document),
-        hasNext: hasNextPage(document),
-        sellerName: parseSellerName(document),
+        items: parseStorefrontPage(document, o.result_card),
+        hasNext: hasNextPage(document, o.next_page),
+        sellerName: parseSellerName(document, o.seller_name),
         docId: DOC_ID,
-        deliveryText: parseDeliveryText(document),
+        deliveryText: parseDeliveryText(document, o.delivery),
       };
   sendResponse(scan);
   return undefined;

@@ -157,7 +157,7 @@ export async function handleGetConfig(): Promise<ConfigResult> {
     }
   }
   return result.kind === 'ok'
-    ? { outcome: 'ok', maxReportItems: result.maxReportItems }
+    ? { outcome: 'ok', maxReportItems: result.maxReportItems, selectors: result.selectors, selectorsVersion: result.selectorsVersion }
     : { outcome: 'unavailable' };
 }
 

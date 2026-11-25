@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     # 事后无法分辨；而超限本身恰恰说明采集端手上的条目比它送出的多。插件经
     # GET /api/competitor/collector-config 读取这个值，不手工镜像。
     COMPETITOR_MAX_REPORT_ITEMS: int = 1000      # 单次 ASIN 上报的条目数上限，单位：条
+    # 采集端页面选择器覆盖文件（JSON：version + selectors，格式见 openspec 变更
+    # extension-remote-selectors 的 design）。经 collector-config 下发给插件自动采集，
+    # 文件改完下一次请求即生效、无需重启；空串表示不下发，插件用内置选择器。
+    COMPETITOR_COLLECTOR_SELECTORS_FILE: str = ""  # 文件路径，空=不下发
 
     # 独立站监控的拉取参数。拉取挂在 import_queue.py 已有的轮询循环上，按站点行的
     # last_fetch_at 状态列认领到期站点，不新开定时器。
