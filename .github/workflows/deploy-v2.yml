@@ -17,8 +17,8 @@ jobs:
   deploy:
     # 工作流页面可选择任意分支；只允许 V2 分支触发，避免误把 main/V1 发到此 ECS 目录。
     if: github.ref == 'refs/heads/v2'
-    # 自托管 runner 跨 job 持久，私钥只落 $RUNNER_TEMP 并在 always() 清理，见下方两步。
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    # 公开仓库不挂自托管 runner；私钥只落 $RUNNER_TEMP 并在 always() 清理，见下方两步。
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
@@ -38,7 +38,7 @@ jobs:
           set -euo pipefail
           test -n "$SSH_PRIVATE_KEY"
           test -n "$SSH_KNOWN_HOSTS"
-          # 不写 ~/.ssh：自托管 runner 的家目录会留给后续任意 CI job 读取。
+          # 不写 ~/.ssh：私钥只放本 job 的临时目录。
           umask 077
           install -d -m 700 "$RUNNER_TEMP/ecs-ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ecs-ssh/id_ed25519"
