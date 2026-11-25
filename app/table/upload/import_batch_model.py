@@ -94,6 +94,10 @@ class ImportBatch(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    facts_committed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="事实与本批次计数同一事务提交的时刻；同期次取值最新者即当前事实的写入批次，NULL 为未写入或迁移前批次",
+    )
     stats_status: Mapped[str | None] = mapped_column(
         String(16), nullable=True,
         comment="查询统计状态：PENDING/READY/FAILED；NULL 为不适用（旧批次或未成功导入）",

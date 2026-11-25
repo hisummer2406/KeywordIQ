@@ -40,9 +40,15 @@ CLI、定时任务都走同一入口。备选是只在 ops job 里预检查，�
 
 **连接池/内存**：单连接串行点查，无大结果集，占用一个同步连接。**执行计划**：2026-11-09 在生产只读 `EXPLAIN`，日报、周报点查均为 Index Only Scan，批次查询为小表 Seq Scan（估算约 62 行），不新增索引。
 
-### D4：每期次以最新成功批次为准
+### D4：每期次以事实的实际写入批次为准
 
-同一 `(site, period, date)` 可能多次导入，重导会先清后写，库内数据对应最后一次 COMPLETED 批次，因此校验 `id` 最大的 COMPLETED 批次。任一失败原因都记录：`no_batch`、`empty_object_key`、`no_rows`、`object_missing`、`object_empty`、`oss_unavailable`。
+同一 `(site, period, date)` 可能多次导入，重导会先清后写，库内数据属于最后一次**提交事实**的批次。原设计校验 `id` 最大的 COMPLETED 批次，#209 复核指出它不成立：`id` 在上传时分配，排队、重试后提交顺序可以相反；收尾中断的批次被 `retry_pending_query_stats` 补完时，可能晚于真正覆盖数据的批次才标成 COMPLETED；收尾失败的批次状态为 FAILED，事实却在库里。
+
+改为在事实事务内写 `import_batch.facts_committed_at`（数据库 `clock_timestamp()`，导入串行锁内写入，同期次先后即提交先后；事务回滚时一并回滚）。闸门取同期次该列最新的批次，只校验它。
+
+迁移前批次不回填：无从确认写入者，猜一个值会把不确定伪装成确定。没有提交记录的期次改为校验全部可能的写入者——COMPLETED 批次，以及 `written_rows > 0` 的任何批次（2026-10-24 起计数与事实同一事务提交）。真正的写入者必在其中，全部通过才放行；多个候选中任一不通过，原因记为 `owner_unconfirmed:<原因>`。2026-10-24 之前收尾失败的批次计数为 0、无法识别，2026-11-25 生产只读核对：全部 6 个失败批次都死在事实事务内或上传阶段，没有这类批次。
+
+任一失败原因都记录，并带上未通过的批次号：`no_batch`、`empty_object_key`、`no_rows`、`object_missing`、`object_empty`、`oss_unavailable`、`owner_unconfirmed:*`。
 
 `stat_object` 的非 404 异常按 `oss_unavailable` 处理，该月保留。`OSS_ENABLED=false` 时存在超期月份则全部判为 `oss_unavailable`。
 

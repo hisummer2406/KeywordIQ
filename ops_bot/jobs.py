@@ -55,7 +55,9 @@ def _retention_blocked_message(result: dict) -> str:
         return "保留清理归档校验"
     shown = gaps[:_RETENTION_ALERT_DETAIL_LIMIT]
     lines = [
-        f"{g['site']} {g['period_type']} {g['report_date']}: {g['reason']}" for g in shown
+        f"{g['site']} {g['period_type']} {g['report_date']}: {g['reason']}"
+        + (f"（批次 #{g['batch_id']}）" if g.get("batch_id") is not None else "")
+        for g in shown
     ]
     more = f"\n另有 {len(gaps) - len(shown)} 条未列出" if len(gaps) > len(shown) else ""
     months = ",".join(result.get("blocked_months", []))
