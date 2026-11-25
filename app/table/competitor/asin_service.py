@@ -42,6 +42,7 @@ from app.table.competitor.asin_schemas import (
     RejectedItem,
     truncate,
 )
+from app.table.competitor.collector_selectors import load_selector_overrides
 from app.table.competitor.seller_model import MAX_SELLER_NAME_LEN
 from config import settings
 
@@ -56,8 +57,17 @@ CODE_SITE_INVALID = CODE_COMPETITOR_SITE_INVALID
 
 
 def collector_config() -> CollectorConfigResponse:
-    """采集端唯一的上限来源：插件据此提前拦截，不再手工镜像（#166 D4）。"""
-    return CollectorConfigResponse(max_report_items=settings.COMPETITOR_MAX_REPORT_ITEMS)
+    """采集端唯一的上限来源：插件据此提前拦截，不再手工镜像（#166 D4）。
+
+    同时下发可选的页面选择器覆盖（extension-remote-selectors）。覆盖无效时只是不下发，
+    上限照常返回。
+    """
+    overrides = load_selector_overrides(settings.COMPETITOR_COLLECTOR_SELECTORS_FILE)
+    return CollectorConfigResponse(
+        max_report_items=settings.COMPETITOR_MAX_REPORT_ITEMS,
+        selectors=overrides.selectors.model_dump(exclude_none=True) if overrides else None,
+        selectors_version=overrides.version if overrides else None,
+    )
 
 
 async def submit_report(
