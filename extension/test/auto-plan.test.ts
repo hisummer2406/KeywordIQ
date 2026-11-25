@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildStorefrontUrl,
   decideAfterPage,
-  deliveryMatchesSite,
+  checkDelivery,
   detectBlockedPage,
   parseDeliveryText,
   pickStoreGapMs,
@@ -78,29 +78,44 @@ describe('decideAfterPage', () => {
     expect(decision).toEqual({ action: 'next_page', items: [item('B01')] });
   });
 
-  it('没有下一页 → 直接上报', () => {
+  it('没有下一页 → 自然到达末页，覆盖完整', () => {
     const decision = decideAfterPage({ ...base, scan: { kind: 'ok', items: [item('B01')], hasNext: false } });
-    expect(decision).toEqual({ action: 'report', items: [item('B01')] });
+    expect(decision).toEqual({ action: 'report', items: [item('B01')], coverage: 'complete' });
   });
 
-  it('到达 N 页 → 合并去重后上报一次', () => {
+  it('到达 N 页且页面仍有下一页 → 合并去重后上报一次，标记覆盖有限', () => {
     const decision = decideAfterPage({
       ...base,
       page: 2,
       accumulated: [item('B01'), item('B02')],
       scan: { kind: 'ok', items: [item('B02'), item('B03')], hasNext: true },
     });
-    expect(decision).toEqual({ action: 'report', items: [item('B01'), item('B02'), item('B03')] });
+    expect(decision).toEqual({ action: 'report', items: [item('B01'), item('B02'), item('B03')], coverage: 'limited' });
   });
 
-  it('第 2 页为空 → 用已合并的第 1 页结果上报', () => {
+  it('恰好在第 N 页到达末页 → 覆盖完整而不是覆盖有限', () => {
+    const decision = decideAfterPage({
+      ...base,
+      page: 2,
+      accumulated: [item('B01')],
+      scan: { kind: 'ok', items: [item('B02')], hasNext: false },
+    });
+    expect(decision).toEqual({ action: 'report', items: [item('B01'), item('B02')], coverage: 'complete' });
+  });
+
+  it('N=1 且第 1 页有下一页 → 覆盖有限', () => {
+    const decision = decideAfterPage({ ...base, maxPages: 1, scan: { kind: 'ok', items: [item('B01')], hasNext: true } });
+    expect(decision).toEqual({ action: 'report', items: [item('B01')], coverage: 'limited' });
+  });
+
+  it('前一页提示有下一页、第 2 页却没有有效 ASIN → 异常缺页，不提交残缺批次', () => {
     const decision = decideAfterPage({
       ...base,
       page: 2,
       accumulated: [item('B01')],
       scan: { kind: 'ok', items: [], hasNext: false },
     });
-    expect(decision).toEqual({ action: 'report', items: [item('B01')] });
+    expect(decision).toEqual({ action: 'fail_store', reason: 'missing_page' });
   });
 
   it('超过单批上限 → 这家店失败，不截断', () => {
@@ -115,47 +130,79 @@ describe('decideAfterPage', () => {
   });
 });
 
-describe('配送地址检查（试点 2026-11-24：配送到中国时店铺页大多 No results）', () => {
+describe('配送位置校验（#205 阶段 1：专用 Profile 手动设 US / 10001，插件只核对）', () => {
   it('读取页头配送地址', () => {
     document.body.innerHTML = '<span id="glow-ingress-line1">Deliver to</span><span id="glow-ingress-line2"> New York 10001 </span>';
     expect(parseDeliveryText(document)).toBe('New York 10001');
   });
 
-  it('读不到时返回 undefined', () => {
+  it('地址行缺失时读外层容器；只剩 Deliver to 提示', () => {
+    document.body.innerHTML = '<a id="nav-global-location-popover-link"><span>Deliver to</span><span></span></a>';
+    expect(parseDeliveryText(document)).toBe('Deliver to');
+  });
+
+  it('什么都读不到时返回 undefined', () => {
     document.body.innerHTML = '<div></div>';
     expect(parseDeliveryText(document)).toBeUndefined();
   });
 
-  it('US 邮编算相符，China 算不符，读不到算未知', () => {
-    expect(deliveryMatchesSite('New York 10001', 'US')).toBe('match');
-    expect(deliveryMatchesSite('China', 'US')).toBe('mismatch');
-    expect(deliveryMatchesSite(undefined, 'US')).toBe('unknown');
-    expect(deliveryMatchesSite('London SW1A 1AA', 'GB')).toBe('match');
-    expect(deliveryMatchesSite('Berlin 10115', 'DE')).toBe('match');
+  it.each([
+    ['New York 10001', 'match'],
+    ['Deliver to Stone - New York 10001‌', 'match'],
+    ['New York 10001-2345', 'match'],
+    ['China', 'mismatch'],
+    ['Deliver to China', 'mismatch'],
+    ['Berlin 10115, Germany', 'mismatch'],
+    ['Beverly Hills 90210', 'mismatch'],
+    ['Deliver to', 'unconfirmed'],
+    ['Deliver to Update location', 'unconfirmed'],
+    ['', 'unconfirmed'],
+    [undefined, 'unconfirmed'],
+    ['Stone', 'unconfirmed'],
+    ['New York', 'unconfirmed'],
+    ['100010', 'unconfirmed'],
+  ] as const)('US 目标 10001：%s → %s', (text, expected) => {
+    expect(checkDelivery(text, 'US', '10001')).toBe(expected);
   });
 
-  it('配送地址不符 → 整轮停止；读不到不据此停止', () => {
-    const ok = { kind: 'ok' as const, items: [item('B01')], hasNext: false };
-    expect(
-      decideAfterPage({ scan: { ...ok, deliveryText: 'China' }, page: 1, maxPages: 2, accumulated: [], cap: 1000, site: 'US' }),
-    ).toEqual({ action: 'stop_run', reason: 'wrong_delivery' });
-    expect(decideAfterPage({ scan: ok, page: 1, maxPages: 2, accumulated: [], cap: 1000, site: 'US' })).toEqual({
-      action: 'report',
-      items: [item('B01')],
+  it('没有配置目标邮编 → 无法确认', () => {
+    expect(checkDelivery('New York 10001', 'US', undefined)).toBe('unconfirmed');
+  });
+
+  it('其它站点按各自目标比较', () => {
+    expect(checkDelivery('London SW1A 1AA', 'GB', 'SW1A 1AA')).toBe('match');
+    expect(checkDelivery('Berlin 10115', 'DE', '10115')).toBe('match');
+    expect(checkDelivery('Munich 80331', 'DE', '10115')).toBe('mismatch');
+  });
+
+  const ok = { kind: 'ok' as const, items: [item('B01')], hasNext: false };
+  const withSite = { page: 1, maxPages: 2, accumulated: [], cap: 1000, site: 'US', deliveryTarget: '10001' };
+
+  it('确认不符 → 整轮停止（wrong_delivery），即使第 1 页为空也不是单店失败', () => {
+    expect(decideAfterPage({ ...withSite, scan: { ...ok, deliveryText: 'China' } })).toEqual({
+      action: 'stop_run',
+      reason: 'wrong_delivery',
+    });
+    expect(decideAfterPage({ ...withSite, scan: { ...ok, items: [], deliveryText: 'Berlin 10115, Germany' } })).toEqual({
+      action: 'stop_run',
+      reason: 'wrong_delivery',
     });
   });
 
-  it('配送地址不符时，即使第 1 页为空也是整轮停止而不是这家店失败', () => {
-    expect(
-      decideAfterPage({
-        scan: { kind: 'ok', items: [], hasNext: false, deliveryText: 'China' },
-        page: 1,
-        maxPages: 2,
-        accumulated: [],
-        cap: 1000,
-        site: 'US',
-      }),
-    ).toEqual({ action: 'stop_run', reason: 'wrong_delivery' });
+  it('读不到或无法确认 → 整轮停止（delivery_unconfirmed）', () => {
+    expect(decideAfterPage({ ...withSite, scan: ok })).toEqual({ action: 'stop_run', reason: 'delivery_unconfirmed' });
+    expect(decideAfterPage({ ...withSite, scan: { ...ok, deliveryText: 'Deliver to' } })).toEqual({
+      action: 'stop_run',
+      reason: 'delivery_unconfirmed',
+    });
+  });
+
+  it('与目标一致 → 照常继续', () => {
+    expect(decideAfterPage({ ...withSite, scan: { ...ok, deliveryText: 'New York 10001' } })).toEqual({
+      action: 'report',
+      items: [item('B01')],
+      coverage: 'complete',
+    });
   });
 });
 
@@ -171,7 +218,14 @@ describe('auto-config', () => {
       dailyTime: '08:00',
       pages: 5,
       maxStores: 1,
+      deliveryTargets: { US: '10001' },
     });
+  });
+
+  it('目标邮编：默认 US 10001，非法值丢弃，清空后保持为空', () => {
+    expect(normalizeAutoConfig({ deliveryTargets: { US: '1000', DE: '10115' } }).deliveryTargets).toEqual({ DE: '10115' });
+    expect(normalizeAutoConfig({ deliveryTargets: {} }).deliveryTargets).toEqual({});
+    expect(normalizeAutoConfig({}).deliveryTargets).toEqual({ US: '10001' });
   });
 
   it('今天的时刻已过 → 明天；未到 → 今天', () => {

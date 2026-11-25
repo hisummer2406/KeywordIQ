@@ -71,7 +71,7 @@ const runnerDeps: RunnerDeps = {
   report: (message) => handleCapture(message),
   getSettings: async () => {
     const config = await getAutoConfig();
-    return { pages: config.pages, maxStores: config.maxStores };
+    return { pages: config.pages, maxStores: config.maxStores, deliveryTargets: config.deliveryTargets };
   },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };

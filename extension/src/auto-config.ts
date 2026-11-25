@@ -11,6 +11,11 @@ export interface AutoConfig {
   pages: number;
   /** 每轮最多处理的店铺数。 */
   maxStores: number;
+  /**
+   * 各站点的目标配送邮编（#205 阶段 1）。专用 Chrome Profile 里手动设好，插件只核对是否生效，
+   * 不自动切换。没有目标的站点无法确认配送位置，自动采集会在该站点的店停止。
+   */
+  deliveryTargets: Record<string, string>;
 }
 
 export const DEFAULT_AUTO_CONFIG: AutoConfig = {
@@ -18,7 +23,28 @@ export const DEFAULT_AUTO_CONFIG: AutoConfig = {
   dailyTime: '08:00',
   pages: 2,
   maxStores: 20,
+  deliveryTargets: { US: '10001' },
 };
+
+/** 各站点目标邮编的合法形态；设置页只开放美国站（单站试点）。 */
+export const POSTCODE_PATTERN: Record<string, RegExp> = {
+  US: /^\d{5}$/,
+  DE: /^\d{5}$/,
+  GB: /^[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}$/i,
+};
+
+export function isValidPostcode(site: string, value: string): boolean {
+  return POSTCODE_PATTERN[site]?.test(value.trim()) ?? false;
+}
+
+function normalizeTargets(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_AUTO_CONFIG.deliveryTargets };
+  const out: Record<string, string> = {};
+  for (const [site, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && isValidPostcode(site, value)) out[site] = value.trim().toUpperCase();
+  }
+  return out;
+}
 
 export const PAGES_RANGE = { min: 1, max: 5 } as const;
 export const MAX_STORES_RANGE = { min: 1, max: 200 } as const;
@@ -48,6 +74,7 @@ export function normalizeAutoConfig(raw: unknown): AutoConfig {
       MAX_STORES_RANGE.max,
       DEFAULT_AUTO_CONFIG.maxStores,
     ),
+    deliveryTargets: normalizeTargets(value.deliveryTargets),
   };
 }
 
