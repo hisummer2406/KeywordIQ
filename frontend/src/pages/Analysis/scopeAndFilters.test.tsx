@@ -157,7 +157,9 @@ describe('分析查询屏 · 作用域与筛选', () => {
   });
 
   it('检索目标由所选搜索方式决定，切换后另一目标不残留', async () => {
-    await renderSettled();
+    // 本用例只走检索框与搜索方式，不需要展开筛选区；输入用一次 change 而不是逐字符键入。
+    // 整页挂载加逐字符输入在慢 runner 上累积到 20 秒超时（PR #216 CI），检索判定与断言不变。
+    await renderSettled(false);
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(1));
     const user = userEvent.setup();
     const box = screen.getByLabelText('搜索内容');
@@ -167,7 +169,7 @@ describe('分析查询屏 · 作用域与筛选', () => {
     };
 
     // 关键词方式下形如 ASIN 的输入仍按关键词查
-    await user.type(box, 'B07Z82895W');
+    fireEvent.change(box, { target: { value: 'B07Z82895W' } });
     await act(async () => {
       await user.click(submit());
     });
@@ -175,17 +177,17 @@ describe('分析查询屏 · 作用域与筛选', () => {
     expect(searchAnalysis.mock.calls[1][0]).toMatchObject({ keyword: 'B07Z82895W', keyword_mode: 'ALL_TERMS' });
     expect(searchAnalysis.mock.calls[1][0].asins).toBeUndefined();
 
+    // 小写 ASIN 与 ISBN-10 批量，用 Enter 提交
     await pickMode('ASIN · 批量');
-    await user.clear(box);
-    await user.type(box, 'b07z82895w, 3161484100{Enter}');
+    fireEvent.change(box, { target: { value: 'b07z82895w, 3161484100' } });
+    await user.type(box, '{Enter}');
     await waitFor(() => expect(searchAnalysis).toHaveBeenCalledTimes(3));
     expect(searchAnalysis.mock.calls[2][0]).toMatchObject({ asins: ['B07Z82895W', '3161484100'] });
     expect(searchAnalysis.mock.calls[2][0].keyword).toBeUndefined();
     expect(searchAnalysis.mock.calls[2][0].keyword_mode).toBeUndefined();
 
     await pickMode('关键词 · 词组');
-    await user.clear(box);
-    await user.type(box, 'coffee maker');
+    fireEvent.change(box, { target: { value: 'coffee maker' } });
     await act(async () => {
       await user.click(submit());
     });
