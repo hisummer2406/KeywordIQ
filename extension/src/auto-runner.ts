@@ -179,8 +179,7 @@ async function endRun(
   reason?: RunStopReason,
   detail?: string,
 ): Promise<RunState> {
-  await clearRunAlarms();
-  await closeTab(state.current?.tabId);
+  const tabId = state.current?.tabId;
   const ended: RunState = {
     ...state,
     status,
@@ -189,9 +188,21 @@ async function endRun(
     finishedAt: iso(deps),
     current: undefined,
   };
+  // 先落终态再清 alarm（#209 P2）：反过来的话，清完 alarm、落盘前被回收，状态停在
+  // running 却没有任何唤醒源，startRun 永远回 already_running。先落盘则最坏只留下残留
+  // alarm——它们触发时看到非运行状态，看门狗自行清除，其余直接返回。
   await saveRunState(ended);
   await appendHistory(ended);
+  await clearRunAlarms();
+  await closeTab(tabId);
   return ended;
+}
+
+/** 运行中必须有看门狗。Chrome 重启可能清空 alarm，旧版本也可能留下没有看门狗的运行状态。 */
+async function ensureWatchdog(): Promise<void> {
+  if (!(await chrome.alarms.get(ALARM_WATCHDOG))) {
+    await chrome.alarms.create(ALARM_WATCHDOG, { periodInMinutes: 1 });
+  }
 }
 
 function recordStore(state: RunState, deps: RunnerDeps, result: Omit<StoreResult, 'sellerId' | 'site' | 'startedAt' | 'finishedAt'>): void {
@@ -390,7 +401,11 @@ export type StartOutcome =
 export function startRun(trigger: RunTrigger, deps: RunnerDeps): Promise<StartOutcome> {
   return serial(async () => {
     const existing = await loadRunState();
-    if (existing?.status === 'running') return { started: false, reason: 'already_running' };
+    if (existing?.status === 'running') {
+      // 不重复开一轮，但补上唤醒源：否则一条丢了看门狗的运行状态会永远挡住新的一轮
+      await ensureWatchdog();
+      return { started: false, reason: 'already_running' };
+    }
 
     const settings = await deps.getSettings();
     const base: RunState = {
@@ -541,11 +556,13 @@ export function onRunAlarm(name: string, deps: RunnerDeps): Promise<void> {
 /**
  * Chrome 重启后接着做（design 决策 3 的恢复规则）：采集阶段的店从第 1 页重来，
  * 上报阶段的用同一个 request_id 重发；当前没有店且等待 alarm 丢失时直接开下一家。
+ * 重启可能清空 alarm，先补看门狗，后续任何一步再丢唤醒源都还能被它接住。
  */
 export function resumeAfterStartup(deps: RunnerDeps): Promise<void> {
   return serial(async () => {
     const state = await loadRunState();
     if (!state || state.status !== 'running') return;
+    await ensureWatchdog();
     const current = state.current;
     if (!current) {
       const pending = await chrome.alarms.get(ALARM_NEXT_STORE);
