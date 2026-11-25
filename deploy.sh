@@ -22,6 +22,11 @@
 #   ./deploy.sh --skip-frontend  # 只更新后端（镜像 + 迁移）
 #   ./deploy.sh --skip-migrate   # 不跑数据库迁移
 #   ./deploy.sh --yes            # 不交互确认迁移（供 CI / 无人值守）
+#   ./deploy.sh --ops-lock-held  # 调用方已持有运维动作锁（仅飞书执行器用），本脚本不再自取
+#
+# 发布全程持有运维动作锁（0x4B4F，与导入认领、飞书执行器同一把），持锁后复核没有
+# PROCESSING/UPLOADING 的导入才继续；拿不到锁或有进行中导入直接失败，不重试
+# （#209 P1，实现见 scripts/deploy_ops_lock.sh）。
 #
 # 可用环境变量覆盖：
 #   WEB_ROOT      SPA 产物发布目录（默认 /var/www/keywordiq-web，须与 nginx root 一致）
@@ -45,12 +50,14 @@ LOGROTATE_CONF_DST="${LOGROTATE_CONF_DST:-/etc/logrotate.d/keywordiq-v2}"
 SKIP_FRONTEND=0
 SKIP_MIGRATE=0
 ASSUME_YES=0
+OPS_LOCK_HELD=0
 
 for arg in "$@"; do
     case "$arg" in
         --skip-frontend) SKIP_FRONTEND=1 ;;
         --skip-migrate)  SKIP_MIGRATE=1 ;;
         --yes|-y)        ASSUME_YES=1 ;;
+        --ops-lock-held) OPS_LOCK_HELD=1 ;;
         # 打印开头的注释块（第 2 行到第一个空行），不写死行号
         --help|-h)       sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo -e "${RED}未知参数: $arg${NC}（--help 查看用法）"; exit 2 ;;
@@ -116,6 +123,27 @@ logrotate_scheduler_running() {
 logrotate_scheduler_running || fail "错误: logrotate 的触发机制未在实际运行——/etc/cron.daily/logrotate 存在但 crond/cron 服务未激活，且 systemd 的 logrotate.timer 也未激活。请先执行 systemctl start crond（或 cron / logrotate.timer）再重新部署"
 
 echo "  WEB_ROOT = $WEB_ROOT"
+
+# ---------- 运维动作锁：与导入互斥，持有到脚本退出 ----------
+# 在改动任何生产状态（迁移、前端产物、容器）之前拿到；trap 保证任何退出路径都释放。
+# --ops-lock-held 只给飞书执行器用：它已在自己的连接上持有同一把锁并在持锁期间复核过
+# 导入状态（ops_bot/release/flow.py），这里再取会被自己挡住。
+if [ "$OPS_LOCK_HELD" -eq 1 ]; then
+    warn "调用方声明已持有运维动作锁（--ops-lock-held），跳过自取"
+else
+    info "取得运维动作锁并复核导入状态..."
+    # shellcheck source=scripts/deploy_ops_lock.sh
+    . scripts/deploy_ops_lock.sh
+    trap ops_lock_release EXIT
+    docker compose up -d db >/dev/null
+    for i in $(seq 1 30); do
+        docker compose exec -T db pg_isready -U postgres -q >/dev/null 2>&1 && break
+        [ "$i" -eq 30 ] && fail "错误: 数据库 60 秒内未就绪，无法取得运维动作锁"
+        sleep 2
+    done
+    ops_lock_acquire || fail "错误: 发布已中止，生产状态未改动"
+    echo "  已持锁，无进行中导入；导入认领将等待本次发布结束"
+fi
 
 # ---------- 2. 构建应用镜像 ----------
 info "2/7 构建应用镜像（docker compose build）..."
@@ -222,13 +250,17 @@ fi
 # up -d 对已用新镜像 build 过的服务会重建容器；db/netdata 若已在跑且配置未变则不受影响。
 docker compose up -d
 echo "  容器已切换到新镜像（restart: unless-stopped，之后崩溃/宿主机重启由 Docker 自动拉起）"
+if [ "$OPS_LOCK_HELD" -eq 0 ] && ! ops_lock_alive; then
+    # 通常是 up -d 重建了 db 容器，持锁连接随之断开；此后导入可能已被认领。
+    warn "  ⚠️  运维动作锁连接已中断（db 容器可能被重建），切换期间的导入互斥不再有保证"
+fi
 
 # ---------- 健康检查 ----------
 info "健康检查..."
 for i in $(seq 1 15); do
     if curl -fsS "$APP_HEALTH_URL" >/dev/null 2>&1; then
         info "✅ 部署完成，后端健康检查通过"
-        exit 0
+        exit 0  # EXIT trap 释放运维动作锁
     fi
     sleep 2
 done

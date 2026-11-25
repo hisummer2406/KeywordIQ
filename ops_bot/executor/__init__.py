@@ -134,7 +134,9 @@ def deploy(plan: DeployPlan) -> ExecutionResult:
         (["git", "fetch", "origin", plan.allowed_branch], "GIT_FETCH"),
         (["git", "checkout", plan.target_sha], "GIT_CHECKOUT"),
     ]
-    deploy_cmd = ["./deploy.sh", "--yes"]
+    # 执行器调用前已在自己的连接上持有运维动作锁（release/flow.py），告诉 deploy.sh 不要再取，
+    # 否则会被自己持有的锁挡住（#209 P1）。
+    deploy_cmd = ["./deploy.sh", "--yes", "--ops-lock-held"]
     if not plan.with_migration:
         deploy_cmd.append("--skip-migrate")
     steps.append((deploy_cmd, "DEPLOY_SH"))
