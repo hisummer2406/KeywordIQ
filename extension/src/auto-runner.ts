@@ -336,8 +336,9 @@ export async function handleScan(state: RunState, scan: PageScan, deps: RunnerDe
   });
   if (scan.kind === 'ok' && scan.sellerName && !current.sellerName) current.sellerName = scan.sellerName;
   if (scan.kind === 'ok') {
+    // 每页同步覆盖，读不到时清空：不能把上一页／上一家读到的位置当成当前页的实际位置（PR #207 Codex P2）
     state.deliverySite = site;
-    if (scan.deliveryText) state.deliveryText = scan.deliveryText;
+    state.deliveryText = scan.deliveryText;
   }
 
   switch (decision.action) {
