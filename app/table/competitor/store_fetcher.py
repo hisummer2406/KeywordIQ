@@ -555,6 +555,10 @@ async def fetch_store(
     await _sleep_between_requests(delay_ms)
 
     products: list[ParsedProduct] = []
+    # 按商品 ID 去重：重复页或翻页期间顺序变动都会让同一商品出现多次。完整性按**唯一**
+    # 商品数判，否则重复记录会把「取到的数量」虚增到声称值，落库再按唯一 ID 判下架时，
+    # 没取到的商品就被误判下架（#209 P2）。
+    seen_ids: set[int] = set()
     catalog_complete = False
     products_json_ok = True
     status = FETCH_OK
@@ -592,7 +596,15 @@ async def fetch_store(
         if parsed.is_empty:
             catalog_complete = True  # 翻到空页 = 自然终止
             break
-        products.extend(parsed.products)
+        fresh = [p for p in parsed.products if p.product_id not in seen_ids]
+        if not fresh:
+            # 整页都是已见商品 = 分页没有前进（有的站点忽略 page 参数、反复返回第 1 页）。
+            # 继续翻只会撞上限，也不能当自然终止：之后的商品根本没被看到。
+            status = FETCH_INCOMPLETE
+            error = f"目录第 {page} 页与已取商品完全重复，分页可能未生效，本次不做下架判定"
+            break
+        seen_ids.update(p.product_id for p in fresh)
+        products.extend(fresh)
         page += 1
         await _sleep_between_requests(delay_ms)
     else:
