@@ -1,8 +1,8 @@
 version: 2
 updates:
-  # 工作流里的 Action 都钉在提交 SHA 上，由 Dependabot 每周提升级 PR。
+  # 工作流里的 Action 都钉在提交 SHA 上，由 Dependabot 每月检查版本更新。
   - package-ecosystem: github-actions
     directory: /
     target-branch: main
     schedule:
-      interval: weekly
+      interval: monthly
