@@ -18,3 +18,10 @@ ECS HEAD 为 `13f58b9`，最近成功发布记录亦为该 SHA；容器对比 15
 V1 服务使用另一远端的 `master` / `origin/master`。可读的服务单元、系统 Cron、
 V1 部署脚本和 `www` Crontab 未见拉取旧主仓 main 的配置；root Crontab 未读取。
 实际改名、合并和首发仍待执行。
+
+2026-11-26 Claude 接手：仓库已公开并改写历史，上方 SHA 均已失效（新旧对照见主仓
+`.git/filter-repo-commit-map-2026-11-26`，旧 ECS `13f58b9` 对应 `87a1a97`）。#214 已合入。
+本分支已变基到 v2 `c0cc4a4`，冲突按托管 runner、Action 钉 SHA、`production`
+Environment 合并；Dependabot 目标改为 `main`。40 项 Node 测试、工作流 YAML 与
+OpenSpec strict 52 项通过。
+

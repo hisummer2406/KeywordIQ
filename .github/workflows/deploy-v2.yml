@@ -16,13 +16,15 @@ jobs:
   deploy:
     # 工作流页面可选择任意分支；只允许 V2 的 main 分支触发。
     if: github.ref == 'refs/heads/main'
-    # 自托管 runner 跨 job 持久，私钥只落 $RUNNER_TEMP 并在 always() 清理，见下方两步。
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    # 公开仓库不挂自托管 runner；私钥只落 $RUNNER_TEMP 并在 always() 清理，见下方两步。
+    runs-on: ubuntu-latest
+    # 部署密钥放在 production 环境，环境只允许 main 分支使用。
+    environment: production
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: 核验目标 SHA 的 main push CI 发布门禁
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const { verifyRelease } = require('./.github/ci-evidence.cjs');
@@ -37,7 +39,7 @@ jobs:
           set -euo pipefail
           test -n "$SSH_PRIVATE_KEY"
           test -n "$SSH_KNOWN_HOSTS"
-          # 不写 ~/.ssh：自托管 runner 的家目录会留给后续任意 CI job 读取。
+          # 不写 ~/.ssh：私钥只放本 job 的临时目录。
           umask 077
           install -d -m 700 "$RUNNER_TEMP/ecs-ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/ecs-ssh/id_ed25519"

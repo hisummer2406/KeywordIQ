@@ -85,7 +85,7 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ## GitHub Secrets
 
-在仓库 **Settings → Secrets and variables → Actions** 新建下列仓库 secrets：
+在仓库 **Settings → Environments → production** 下新建下列环境 secrets（`production` 环境的部署分支只允许 `main`；仓库公开后不要再放仓库级 secret）：
 
 | Secret | 内容 |
 | --- | --- |

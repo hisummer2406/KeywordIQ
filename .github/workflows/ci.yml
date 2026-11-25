@@ -16,7 +16,7 @@ jobs:
     name: 判定检查范围
     # main 的草稿 PR 不分配 runner。
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main' && !github.event.pull_request.draft)
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
@@ -26,15 +26,15 @@ jobs:
       frontend: ${{ steps.scope.outputs.frontend }}
       extension: ${{ steps.scope.outputs.extension }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: 验证 CI 范围策略
         run: node --test .github/ci-scope.test.cjs .github/ci-evidence.test.cjs .github/deploy-v2.test.cjs
       - name: 按固定 SHA 与已验证基线比较文件
         id: scope
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const { resolveScope } = require('./.github/ci-evidence.cjs');
@@ -52,7 +52,7 @@ jobs:
       always() && !cancelled() &&
       (github.event_name == 'push' || !github.event.pull_request.draft) &&
       (needs.changes.result != 'success' || needs.changes.outputs.backend != 'false')
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
 
     # 生产是 RDS PostgreSQL 15，这里对齐大版本。
@@ -94,12 +94,10 @@ jobs:
       TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/keywordiq_test
 
     steps:
-      - uses: actions/checkout@v5
-
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: 安装 uv
-        # 不传 GitHub 缓存（自托管 runner 上 auto 即关闭）；uv 缓存走 runner .env 的 UV_CACHE_DIR，跨 job 持久。
-        uses: astral-sh/setup-uv@v7
-
+        # GitHub 托管 runner：按 uv.lock 自动启用 GitHub 缓存。
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
       - name: 安装依赖（按 .python-version + uv.lock）
         run: uv sync --locked
 
@@ -118,6 +116,11 @@ jobs:
 
       - name: pytest
         run: uv run pytest test/ -q
+        env:
+          # runner 上没有 psql：发布锁集成测试（test_deploy_ops_lock_integration.py）经
+          # docker exec 进服务容器跑 psql，与生产 deploy.sh 进 db 容器的方式一致；
+          # 不设这个变量时这组测试会整体 skip（#209 / PR #214）。
+          TEST_PSQL_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
 
   frontend:
     name: 前端（lint + tsc + test + build）
@@ -126,32 +129,28 @@ jobs:
       always() && !cancelled() &&
       (github.event_name == 'push' || !github.event.pull_request.draft) &&
       (needs.changes.result != 'success' || needs.changes.outputs.frontend != 'false')
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
       run:
         working-directory: frontend
 
     steps:
-      - uses: actions/checkout@v5
-
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: 安装 pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           # frontend/pnpm-lock.yaml 是 lockfileVersion 9.0
           version: 9
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           # 22 不是 20：jsdom 30 依赖的 undici 8 在 Node 20 上起不来
           # （`webidl.util.markAsUncloneable is not a function`，vitest 整批 Unhandled
           # Error）。开发机是 22.x，CI 跟上才谈得上"CI 绿等于本地绿"。
           node-version: 22
-
-      # 不用 setup-node 的 pnpm 缓存：自托管 runner 的 pnpm store 由 runner .env 的 npm_config_store_dir 固定在本机持久目录，
-      # 上传 GitHub 缓存要经代理传几百 MB 到 Azure，曾卡死收尾步骤。
-      - name: 记录 pnpm store 路径（应为 runner 持久目录）
-        run: pnpm store path
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -175,26 +174,24 @@ jobs:
       always() && !cancelled() &&
       (github.event_name == 'push' || !github.event.pull_request.draft) &&
       (needs.changes.result != 'success' || needs.changes.outputs.extension != 'false')
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
         working-directory: extension
 
     steps:
-      - uses: actions/checkout@v5
-
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: 安装 pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 9
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
-
-      - name: 记录 pnpm store 路径（应为 runner 持久目录）
-        run: pnpm store path
+          cache: pnpm
+          cache-dependency-path: extension/pnpm-lock.yaml
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
@@ -212,13 +209,13 @@ jobs:
     name: 发布就绪（按范围校验）
     needs: [changes, backend, frontend, extension]
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, mbp-ci]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: 核对受影响项成功、未受影响项按规则跳过

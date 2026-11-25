@@ -85,14 +85,14 @@ class TestDeploy(unittest.TestCase):
             deploy(DeployPlan(target_sha="a" * 40, with_migration=True))
 
         deploy_call = mock_run.call_args_list[-1].args[0]
-        self.assertEqual(deploy_call, ["./deploy.sh", "--yes"])
+        self.assertEqual(deploy_call, ["env", "KEYWORDIQ_OPS_LOCK_HELD=1", "./deploy.sh", "--yes"])
 
     def test_with_migration_false_passes_skip_flag(self):
         with patch("ops_bot.executor.subprocess.run", return_value=_completed()) as mock_run:
             deploy(DeployPlan(target_sha="a" * 40, with_migration=False))
 
         deploy_call = mock_run.call_args_list[-1].args[0]
-        self.assertEqual(deploy_call, ["./deploy.sh", "--yes", "--skip-migrate"])
+        self.assertEqual(deploy_call, ["env", "KEYWORDIQ_OPS_LOCK_HELD=1", "./deploy.sh", "--yes", "--skip-migrate"])
 
     def test_does_not_restore_checkout_when_deploy_sh_fails(self):
         """`deploy.sh` 失败（例如 `docker compose build` 阶段）时不能自动回退 checkout：

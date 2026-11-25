@@ -19,6 +19,14 @@ main push 运行，且发布就绪门禁必须成功。
 及开放 PR。Claude 的提及与自动评审来自旧默认分支，迁移到新 `main` 后验证登记和触发；
 自动评审限面向 `main` 的非草稿 PR，延续已有仓库凭据。
 
+2026-11-26 起仓库已公开（历史已改写，所有 SHA 变化），CI 与发布改在 GitHub 托管
+runner `ubuntu-latest`，不再挂自托管 runner。仓库新增 Ruleset「保护 v2/main：禁止强推
+与删除」与 `production` Environment（部署分支限制、存放 `ECS_SSH_*`）。切换时：
+改名前临时停用该 Ruleset，改名后把规则目标改为 `main` 与 `v1` 再启用；`production`
+的部署分支在改名后从 `v2` 改为 `main`；Dependabot 的 `target-branch` 随本 PR 改为
+`main`，改名后旧 `main` 上的 Dependabot PR 会随 base 变成 `v1`，予以关闭由其按新
+默认分支重开。Claude 自动评审仅限同仓库分支发起的 PR（fork PR 取不到 secrets）。
+
 ## D2. ECS 与本地分支
 
 冻结前记录旧 `main`、`v2`、ECS HEAD、实际运行版本及容器身份；核对 V2 ECS 和
