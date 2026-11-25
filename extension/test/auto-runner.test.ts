@@ -361,6 +361,67 @@ describe('自动采集状态机', () => {
     expect(h.alarms.has(h.runner.ALARM_WATCHDOG)).toBe(false);
   });
 
+  it('结束时清理中断：终态已先落盘，不会卡在运行中，可以再次开始（#209 P2）', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }]);
+    await h.runner.startRun('manual', h.deps);
+
+    // 模拟结束流程在清理 alarm 时被打断（Service Worker 回收或 API 抛错）
+    const chromeGlobal = (globalThis as unknown as { chrome: { alarms: { clear: unknown } } }).chrome;
+    const realClear = chromeGlobal.alarms.clear;
+    chromeGlobal.alarms.clear = async () => {
+      throw new Error('interrupted');
+    };
+    await expect(h.runner.stopRun(h.deps)).rejects.toThrow('interrupted');
+    chromeGlobal.alarms.clear = realClear;
+
+    expect(await h.runner.loadRunState()).toMatchObject({ status: 'stopped', stopReason: 'manual_stop' });
+    expect((await h.runner.loadRunHistory()).at(-1)).toMatchObject({ status: 'stopped' });
+    // 残留的看门狗触发时自行清除
+    await h.runner.onRunAlarm(h.runner.ALARM_WATCHDOG, h.deps);
+    expect(h.alarms.has(h.runner.ALARM_WATCHDOG)).toBe(false);
+    expect(await h.runner.startRun('manual', h.deps)).toEqual({ started: true });
+  });
+
+  it('Chrome 重启清空 alarm 后恢复：重建看门狗，上报阶段用同一个 request_id 重发（#209 P2）', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }], 1);
+    h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: false });
+    h.report.mockImplementationOnce(() => new Promise<CaptureResult>(() => undefined));
+
+    await h.runner.startRun('manual', h.deps);
+    const tabId = (await h.runner.loadRunState())!.current!.tabId!;
+    void h.runner.onTabComplete(tabId, h.deps);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const firstRequestId = (h.report.mock.calls[0]![0] as CaptureMessage).requestId;
+
+    // Chrome 重启：alarm 全部丢失，模块重新加载
+    h.alarms.clear();
+    vi.resetModules();
+    const fresh = await import('../src/auto-runner');
+    h.report.mockImplementation(async () => SUCCESS);
+    await fresh.resumeAfterStartup(h.deps);
+
+    expect((h.report.mock.calls[1]![0] as CaptureMessage).requestId).toBe(firstRequestId);
+    expect((await fresh.loadRunState())?.status).toBe('finished');
+
+    // 采集阶段被重启打断同样要有唤醒源：没有看门狗，丢一次 alarm 这一轮就永远停在运行中
+    const g = await setup([{ sellerId: 'S2', site: 'US' }]);
+    await g.runner.startRun('manual', g.deps);
+    g.alarms.clear();
+    vi.resetModules();
+    const restarted = await import('../src/auto-runner');
+    await restarted.resumeAfterStartup(g.deps);
+    expect(g.alarms.has(restarted.ALARM_WATCHDOG)).toBe(true);
+  });
+
+  it('运行中却没有看门狗：再次开始时补上看门狗，仍不重复开一轮（#209 P2）', async () => {
+    const h = await setup([{ sellerId: 'S1', site: 'US' }]);
+    await h.runner.startRun('manual', h.deps);
+    h.alarms.clear(); // 旧版本留下的「运行中且无任何 alarm」
+
+    expect(await h.runner.startRun('daily', h.deps)).toEqual({ started: false, reason: 'already_running' });
+    expect(h.alarms.has(h.runner.ALARM_WATCHDOG)).toBe(true);
+  });
+
   it('上报途中被中断：恢复时用同一个 request_id 重发，覆盖有限标记保留', async () => {
     const h = await setup([{ sellerId: 'S1', site: 'US' }], 1);
     h.scans.set('S1:1', { kind: 'ok', items: [{ asin: 'B01' }], hasNext: true });
