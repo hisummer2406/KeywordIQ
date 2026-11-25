@@ -10,7 +10,7 @@
 | V2 正式 PR：`frontend/` | 前端 |
 | V2 正式 PR：`extension/` | 插件 |
 | V2 正式 PR：后端代码、迁移、测试、Python 依赖 | 后端 |
-| V2 正式 PR：`docs/`、`openspec/`、根说明文档 | 只运行范围判定，三项检查按 job 条件跳过 |
+| V2 正式 PR：`docs/`、`openspec/`、`etc/` 下的 Markdown 运维手册、根说明文档 | 只运行范围判定，三项检查按 job 条件跳过 |
 | V2 正式 PR：CI、公共脚本、其他配置或未知路径 | 三项完整检查 |
 
 混合改动取并集；重命名同时检查新旧路径。范围使用事件中的 base/head SHA 比较整个 PR，

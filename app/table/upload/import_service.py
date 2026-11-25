@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.common.errors import CODE_UPLOAD_IMPORT_REJECTED, ConflictError
@@ -499,6 +499,10 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
             notes.append(result.date_warning)
         if notes:
             batch.error_message = "；".join(notes)
+        # 事实写入者的唯一凭据，必须与事实同一事务提交：归档闸门据此找当前数据对应的原始
+        # 文件（#209 P1）。取数据库时钟、在导入串行锁内写，同期次的先后即提交先后；
+        # 事务回滚时它一并回滚，失败批次不会冒充写入者。
+        batch.facts_committed_at = session.execute(select(func.clock_timestamp())).scalar_one()
         session.commit()
 
         # OSS-first：原始文件在入口即持久化于 OSS，OSS 对象即归档，不再做导入后本地归档。

@@ -23,7 +23,9 @@ function selectChecks(files) {
                  ['pyproject.toml', 'uv.lock', '.python-version', 'alembic.ini', 'pytest.ini'].includes(path)) {
         checks.backend = true;
       } else if (/^(docs|openspec)\//.test(path) ||
+                 /^etc\/[^/]+\.md$/.test(path) ||
                  ['README.md', 'CLAUDE.md', 'AGENTS.md', 'LICENSE'].includes(path)) {
+        // etc/ 只放宽 Markdown 运维手册；同目录的 nginx/systemd/logrotate 配置仍按未知文件跑全套。
         // 纯文档 PR 只执行本 job，三个必需 job 用条件跳过，避免一直 Pending。
       } else {
         // CI、scripts、公共配置及新增的未知目录，不能猜测其影响面。
