@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.common.errors import CODE_UPLOAD_IMPORT_REJECTED, ConflictError
@@ -397,8 +397,19 @@ def _ops_action_in_progress(session: Session) -> bool:
         conn.close()
 
 
-def _claim_processing_slot(session: Session, batch: ImportBatch) -> bool:
-    """持有运维动作锁横跨"批次转 PROCESSING 并提交"这一步，返回是否成功转场。
+_CLAIMED = "claimed"
+_OPS_BUSY = "ops_busy"
+_NOT_QUEUED = "not_queued"
+
+
+def _claim_processing_slot(session: Session, batch: ImportBatch) -> str:
+    """持有运维动作锁横跨"批次转 PROCESSING 并提交"这一步，返回转场结果。
+
+    转场是**按库里当前状态的条件更新**（``WHERE status = 'QUEUED'``），不信调用方手里的
+    对象：轮询先读 QUEUED 再抢导入锁，两步之间另一个 worker 可能已经把同一批次跑完；
+    沿用旧对象就会把 COMPLETED 写回 PROCESSING 再导一遍（#209 P1）。两条入口
+    （``run_import`` 与 ``drain_import_queue``）进到这里前都已把批次落成 QUEUED，所以
+    QUEUED 是唯一合法的前态；不是它就返回 ``_NOT_QUEUED``，调用方不执行。
 
     与 :func:`_ops_action_in_progress` 的关键区别：那个函数探测后立即放锁，在
     "探测到空闲"与"真正写入 PROCESSING"之间留了一个窗口，ops-bot 可能在这个窗口
@@ -420,14 +431,20 @@ def _claim_processing_slot(session: Session, batch: ImportBatch) -> bool:
         )
         conn.commit()
         if not got:
-            return False
+            return _OPS_BUSY
         try:
-            batch.status = STATUS_PROCESSING
+            moved = session.execute(
+                update(ImportBatch)
+                .where(ImportBatch.id == batch.id, ImportBatch.status == STATUS_QUEUED)
+                .values(status=STATUS_PROCESSING)
+                .execution_options(synchronize_session=False)
+            ).rowcount
             session.commit()
+            session.refresh(batch)
         finally:
             conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _OPS_ACTION_LOCK_KEY})
             conn.commit()
-        return True
+        return _CLAIMED if moved == 1 else _NOT_QUEUED
     finally:
         conn.close()
 
@@ -446,7 +463,14 @@ def _execute_locked(session: Session, batch: ImportBatch, source: ImportSource) 
     `run_import`（首次直接提交）这条路径。
     """
     started = time.monotonic()
-    if not _claim_processing_slot(session, batch):
+    claim = _claim_processing_slot(session, batch)
+    if claim == _NOT_QUEUED:
+        logger.warning(
+            "批次 #%s 已不在排队（当前 %s），另一方已接手，本次不执行: %s",
+            batch.id, batch.status, batch.file_name,
+        )
+        return batch
+    if claim == _OPS_BUSY:
         logger.info("运维动作（重启/发布）正在进行，批次转入排队等待接手: %s", batch.file_name)
         if batch.object_key:
             batch.status = STATUS_QUEUED
@@ -765,6 +789,16 @@ def drain_import_queue(
         # 先查队列再抢锁：反过来会在队列为空时白拿一次锁。
         with import_lock(session) as got_lock:
             if not got_lock:
+                return None
+
+            # 读队列在抢锁之前，这期间别的 worker 可能已经把它跑完（#209 P1）。拿到锁后
+            # 按库里的当前状态复核，不是 QUEUED 就当这轮没认领到——连数据源也不重建。
+            # 真正的边界仍是 _claim_processing_slot 里的条件转场，这里只是省一次白建。
+            session.refresh(batch)
+            if batch.status != STATUS_QUEUED:
+                logger.info(
+                    "排队批次 #%s 已被其他 worker 处理（当前 %s），跳过", batch.id, batch.status
+                )
                 return None
 
             logger.info("接手排队批次 %s（%s）", batch.file_name, batch.object_key)
